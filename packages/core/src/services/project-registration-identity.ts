@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getGitCheckoutIdentity } from '@archon/git';
@@ -123,6 +123,7 @@ export async function remoteIdentity(url: string, cwd = process.cwd()): Promise<
   if (isAbsolute(url)) {
     const physicalPath = await existingPhysicalPath(url);
     if (!physicalPath) return `file:${url}`;
+    if (!(await stat(physicalPath)).isDirectory()) return `file:${physicalPath}`;
     const { commonGitDir } = await getGitCheckoutIdentity(physicalPath);
     return `file:${await realpath(commonGitDir)}`;
   }

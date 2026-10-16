@@ -149,6 +149,89 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each(['sql', 'file', 'managed-sql'] as const)(
+    'bundle remotes support insertion, lookup and duplicate refusal (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'file'
+          ? (await createFileWorkflowHost(join(root, 'store'))).records.codebases
+          : codebases;
+      const upstream = await gitCheckout(join(root, 'upstream'));
+      execFileSync('git', [
+        '-C',
+        upstream,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'Initial',
+      ]);
+      const bundle = join(root, 'upstream.bundle');
+      execFileSync('git', ['-C', upstream, 'bundle', 'create', bundle, '--all']);
+      const alias = join(root, 'alias.bundle');
+      await symlink(bundle, alias);
+      const firstPath = join(root, 'first');
+      const secondPath = join(root, 'second');
+      execFileSync('git', ['clone', '-q', bundle, firstPath]);
+      execFileSync('git', ['clone', '-q', alias, secondPath]);
+      const insert = backend === 'managed-sql' ? createManagedCodebase : store.createCodebase;
+      const owner = await insert({
+        name: 'acme/bundle',
+        default_cwd: firstPath,
+        repository_url: bundle,
+      });
+      expect((await store.findCodebaseByRepoUrl(pathToFileURL(alias).href))?.id).toBe(owner.id);
+      await expect(registerInStore(store, secondPath)).rejects.toThrow(
+        `Project "${owner.name}" is already registered at ${owner.default_cwd}`
+      );
+      await expect(registerInStore(store, secondPath)).rejects.toThrow('worktrees');
+      await expect(
+        insert({
+          name: 'bypass',
+          default_cwd: secondPath,
+          repository_url: alias,
+        })
+      ).rejects.toThrow(owner.default_cwd);
+      expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    'registers the first clone of a bundle remote (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const upstream = await gitCheckout(join(root, 'upstream'));
+      execFileSync('git', [
+        '-C',
+        upstream,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'Initial',
+      ]);
+      const bundle = join(root, 'upstream.bundle');
+      execFileSync('git', ['-C', upstream, 'bundle', 'create', bundle, '--all']);
+      const checkout = join(root, 'checkout');
+      execFileSync('git', ['clone', '-q', bundle, checkout]);
+      const result = await registerInStore(store, checkout);
+      expect(result.defaultCwd).toBe(checkout);
+      expect((await store.findCodebaseByRepoUrl(bundle))?.id).toBe(result.codebaseId);
+      expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
   test.each(['sql', 'file'] as const)(
     'one local Git repository owns both root and metadata remote URLs (%s)',
     async backend => {
