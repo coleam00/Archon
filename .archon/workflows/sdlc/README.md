@@ -134,7 +134,10 @@ has an empty `GH_TOKEN=` line to remove. The operations still refuse on their ow
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
 request; on a pull request the run continues it only pushes, and `prepare` writes no
-body for it. The description of a continued pull request belongs to `update-pr-body`
+body for it when the caller named the PR or selected no branch. If the caller
+selected a branch without naming a PR, prepare writes a body even if it found an
+existing PR: publish may need to open one from the selected branch. That body is
+used only when opening a PR. The description of a continued pull request belongs to `update-pr-body`
 in delivery, which brings it up to date once the rounds end; a standalone `archon-pr`
 leaves it as its author left it. `publish-review` upserts the one marked review
 comment. Every pack label is declared in `.shared/labels.ts`, and every stage writes

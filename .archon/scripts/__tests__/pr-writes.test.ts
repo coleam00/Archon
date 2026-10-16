@@ -43,9 +43,9 @@ interface Target {
  * first lands and reads back. The fake forge reports that pushed commit as the head.
  */
 function publishPr(
-  options: ScriptOptions & { target?: Target; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
+  options: ScriptOptions & { target?: Target; prepareBody?: boolean; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
 ): ScriptRun & { head: string; cwd: string } {
-  const { target = {}, forgeAt, ...rest } = options;
+  const { target = {}, prepareBody = true, forgeAt, ...rest } = options;
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
@@ -67,7 +67,7 @@ function publishPr(
       TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
     },
-    artifacts: { 'pr-body.md': 'A body', 'listing.json': EMPTY_LISTING, ...rest.artifacts },
+    artifacts: { ...(prepareBody ? { 'pr-body.md': 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
   });
   return { ...run, head, cwd };
 }
@@ -118,13 +118,16 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.forge).toEqual([]);
   });
 
-  it('refuses to open a pull request prepare wrote no body for, leaving no claim', () => {
+  it.each(['gh', 'forge'] as const)('refuses to open a pull request through %s without a body, leaving no claim', source => {
     const result = publishPr({
+      source,
+      forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
       gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
-      inputs: { INPUTS_BODY: '{ARTIFACTS}/absent.md' },
+      prepareBody: false,
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('prepare wrote no body');
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
@@ -249,10 +252,12 @@ describe('publish-pr opens the pull request at most once', () => {
   it('reads back the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       target: { existing: 42 },
+      prepareBody: false,
       gh: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr list'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
@@ -354,6 +359,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
     const result = publishPr({
       target: { head: 'archon/task-local' },
+      prepareBody: false,
       inputs: { INPUTS_BRANCH: 'feature' },
       gh: { pr: { headRefName: 'feature' } },
     });
@@ -376,9 +382,24 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
+  it('refuses a caller-selected branch without a body when an unnamed PR has another head', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      prepareBody: false,
+      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('prepare wrote no body');
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+  });
+
   it('continues a named pull request on its own head even when the caller also selected a branch', () => {
     const result = publishPr({
       target: { existing: 42 },
+      prepareBody: false,
       inputs: { INPUTS_PULL_REQUEST: '42', INPUTS_BRANCH: 'build/7-an-issue-run12345' },
       gh: { pr: { headRefName: 'feature' } },
     });

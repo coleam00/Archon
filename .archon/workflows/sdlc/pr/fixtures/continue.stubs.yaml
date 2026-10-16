@@ -9,4 +9,4 @@ fixture:
   inputs:
     pull_request: "7"
   resolved-text-contains:
-    prepare: "When this run continues an existing pull request, write no body"
+    prepare: "Write no body only when `existing` is a number and either the caller named a pull request or selected no branch."

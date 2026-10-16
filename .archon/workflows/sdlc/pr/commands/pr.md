@@ -31,8 +31,8 @@ You do not look up whether this branch already has a pull request. The publishin
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - Link the issue with a non-closing reference (`Refs #N`), never a closing keyword, even where the template offers a `Closes #` line. A pull request closes its issue only when a review's contract coverage marks the required outcome and every acceptance item met, and no review has judged this work yet; delivery applies the closing keyword after its final review. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.
-- When this run continues an existing pull request, write no body: its description stays as its author left it, and inside delivery `update-pr-body` brings it up to date once the rounds end. Skip the rest of this section except the title.
-- Otherwise, write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository — with your file-writing tool or a quoted heredoc, not by redirecting a command's output: a pipeline whose first command fails can leave the file empty and still exit 0. It is published only when a new pull request opens. Then read the file back. It must hold the whole body, with the template's required sections. If you cannot produce that body, stop and report why; never declare the pointer below for a file you have not read back.
+- Write no body only when `existing` is a number and either the caller named a pull request or selected no branch. A named pull request means `$INPUTS.pull_request` is neither empty nor `null`; no selected branch means `$INPUTS.branch` is empty. In that case, its description stays as its author left it, and inside delivery `update-pr-body` brings it up to date once the rounds end. Skip the rest of this section except the title.
+- Otherwise, write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository — with your file-writing tool or a quoted heredoc, not by redirecting a command's output: a pipeline whose first command fails can leave the file empty and still exit 0. When the caller selected a branch without naming a pull request, write the body even if `existing` is a number: publish may need it to open a new pull request from that branch. It is published only when a new pull request opens. Then read the file back. It must hold the whole body, with the template's required sections. If you cannot produce that body, stop and report why; never declare the pointer below for a file you have not read back.
 
 ## 4. Declare the target
 
@@ -40,9 +40,9 @@ You do not look up whether this branch already has a pull request. The publishin
 - `head_repo`: the same shape for the repository the head branch lives in — `repo` itself unless the head is in a fork.
 - `head`: the head branch name, unqualified: the recorded branch, or the existing pull request's head branch.
 - `base`: the resolved base branch.
-- `existing`: the number of the pull request this run continues, or `null`.
+- `existing`: the number of the pull request found for this work, or `null`. When the caller selected a branch without naming a pull request, publish reuses only an open pull request with that head.
 - `title`: the title you wrote.
-- `body`: `null` when this run continues a pull request (`existing` is a number); otherwise `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body.md"}`, copied exactly.
+- `body`: `null` only when `existing` is a number and either the caller named a pull request or selected no branch, as in section 3; otherwise `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body.md"}`, copied exactly.
 - `summary`: the target in one sentence.
 
 Declare no credential and no raw remote URL.
