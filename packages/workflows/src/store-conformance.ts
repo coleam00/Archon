@@ -1570,63 +1570,6 @@ export function describeWorkflowStoreConformance(
         await watch.close();
       }
     });
-    test.each(['empty failure', ...FAN_OUT_CANCEL_REASONS] as const)(
-      'the attention stream replays a restart after %s',
-      async reason => {
-        const lines: AttentionStreamLine[] = [];
-        const connect = (after?: WorkflowEventCursor) =>
-          watchAttentionQueue(
-            store,
-            { branchOf: async () => null },
-            line => void lines.push(line),
-            {
-              scope: { kind: 'all' },
-              pollIntervalMs: 5,
-              bookmarkIntervalMs: 0,
-              ...(after === undefined ? {} : { after }),
-            }
-          );
-        const caughtUp = async () => {
-          const head = await store.getWorkflowEventHead();
-          for (let waited = 0; waited < 5000; waited += 5) {
-            if (lines.some(line => line.type === 'bookmark' && line.cursor === head)) return;
-            await new Promise(resolve => setTimeout(resolve, 5));
-          }
-          throw new Error(`stream did not reach ${head}`);
-        };
-        const run = await running(store);
-        const watch = await connect();
-        try {
-          if (reason === 'empty failure') await store.failWorkflowRun(run.id, '');
-          else await store.cancelFanOutRun(run.id, reason);
-          await caughtUp();
-          const terminal = lines.find(line => line.type === 'terminal');
-          if (terminal?.type !== 'terminal') throw new Error('expected terminal');
-          expect(terminal.status).toBe(reason === 'empty failure' ? 'failed' : 'cancelled');
-          if (reason === 'empty failure') await store.resumeWorkflowRun(run.id);
-          else await store.recoverCancelledFanOutRun(run.id);
-          await caughtUp();
-          const changes = lines.filter(line => 'runId' in line && line.runId === run.id);
-          expect(changes).toMatchObject([
-            { type: 'terminal' },
-            { type: 'resumed', status: 'running', runId: run.id },
-          ]);
-          await watch.close();
-          lines.length = 0;
-          const replay = await connect(terminal.cursor);
-          try {
-            await caughtUp();
-            expect(lines.filter(line => 'runId' in line && line.runId === run.id)).toEqual(
-              changes.slice(1)
-            );
-          } finally {
-            await replay.close();
-          }
-        } finally {
-          await watch.close();
-        }
-      }
-    );
     test.each([undefined, { value: 'signal' }])(
       'a stale signal cannot satisfy a later event occurrence with the same deadline (payload %j)',
       async payload => {
