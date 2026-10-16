@@ -121,24 +121,29 @@ describe('applyOverlayChanges', () => {
     expect(joined).not.toContain('/tmp/ops:/dest:ro');
   });
 
-  test('a partial apply failure preserves the process evidence and paths landed', async () => {
-    const cause = Object.assign(new Error('cp: No space left on device'), {
-      stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
-      stderr: 'cp: No space left on device',
-      code: 23,
-    });
-    const failure = new IsolationFailure('unclassified', 'docker run failed', cause);
-    const docker = fakeDocker(() => {
-      throw failure;
-    });
-    const error = await applyOverlayChanges(docker, TARGET).catch((error: unknown) => error);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) throw new Error('expected partial apply failure');
-    expect(error.message).toContain('2 path(s) already applied');
-    expect(error.cause).toBe(failure);
-    expect(failure.cause).toBe(cause);
-    expect(failure.cause).toMatchObject({ code: 23, stdout: cause.stdout, stderr: cause.stderr });
-  });
+  test.each([0, 2])(
+    'a partial apply failure reports %s confirmed paths without understating mutations',
+    async count => {
+      const cause = Object.assign(new Error('cp: No space left on device'), {
+        stdout: count ? records(['W', 'a.txt'], ['W', 'b.txt']) : '',
+        stderr: 'cp: No space left on device',
+        code: 23,
+      });
+      const failure = new IsolationFailure('unclassified', 'docker run failed', cause);
+      const docker = fakeDocker(() => {
+        throw failure;
+      });
+      const error = await applyOverlayChanges(docker, TARGET).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error('expected partial apply failure');
+      expect(error.message).toContain(`${count} path(s) confirmed completed`);
+      expect(error.message).toContain('the failing path may already have changed');
+      expect(error.message).toContain('inspect and reconcile manually');
+      expect(error.cause).toBe(failure);
+      expect(failure.cause).toBe(cause);
+      expect(failure.cause).toMatchObject({ code: 23, stdout: cause.stdout, stderr: cause.stderr });
+    }
+  );
 
   test('surfaces helper stderr as warnings', async () => {
     const docker = fakeDocker({

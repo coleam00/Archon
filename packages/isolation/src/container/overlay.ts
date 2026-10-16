@@ -215,12 +215,12 @@ export async function applyOverlayChanges(
       typeof processError.stdout === 'string'
         ? processError.stdout
         : '';
-    const landed = parseRecords(partial).filter(
+    const completed = parseRecords(partial).filter(
       r => r.tag === 'W' || r.tag === 'K' || r.tag === 'D'
     ).length;
     throw new Error(
-      `Write-back apply failed partway (${landed} path(s) already applied to the live ` +
-        `root — inspect and reconcile manually): ${detail}`,
+      `Write-back apply failed partway (${completed} path(s) confirmed completed on the live ` +
+        `root; the failing path may already have changed; inspect and reconcile manually): ${detail}`,
       { cause: err }
     );
   }
