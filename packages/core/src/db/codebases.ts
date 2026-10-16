@@ -396,10 +396,7 @@ export async function listCodebaseClaims(): Promise<readonly Codebase[]> {
 }
 
 export async function listCodebases(): Promise<readonly Codebase[]> {
-  const result = await pool.query<Codebase>(
-    'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
-  );
-  return result.rows.map(validateCodebase);
+  return (await listCodebaseClaims()).map(validateCodebase);
 }
 
 export async function deleteCodebase(
