@@ -865,7 +865,14 @@ describe('cloneRepository', () => {
       expect(cloneCall?.[2]).toEqual({
         credentials: { username: 'x-access-token', password: 'ghp_testtoken123' },
       });
-      for (const log of [mockLogger.info, mockLogger.debug, mockLogger.warn, mockLogger.error]) {
+      for (const log of [
+        mockLogger.info,
+        mockLogger.debug,
+        mockLogger.warn,
+        mockLogger.error,
+        mockLogger.trace,
+        mockLogger.fatal,
+      ]) {
         expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_testtoken123');
         expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_other_identity');
       }

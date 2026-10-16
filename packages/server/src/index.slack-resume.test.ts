@@ -259,8 +259,11 @@ const installationTokenProvider = {
   invalidateRepo: () => {},
 } satisfies IGitHubAppAuthProvider;
 
+const mockGitHubAuth = mock((_auth: GitHubAuth): void => undefined);
 class MockGitHubAdapter {
-  constructor(private readonly auth: GitHubAuth) {}
+  constructor(private readonly auth: GitHubAuth) {
+    mockGitHubAuth(auth);
+  }
   async start(): Promise<void> {}
   getPlatformType(): string {
     return 'github';
@@ -418,6 +421,7 @@ const envKeys = [
   'GITHUB_APP_PRIVATE_KEY_PATH',
   'WEBHOOK_SECRET',
   'GITHUB_TOKEN',
+  'GH_TOKEN',
   'GITLAB_TOKEN',
   'GITLAB_WEBHOOK_SECRET',
   'HOST',
@@ -541,6 +545,45 @@ describe('server conversation admission configuration', () => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test.each([
+    {
+      GH_TOKEN: 'gh-selected-identity',
+      GITHUB_TOKEN: 'github-other-identity',
+      expected: 'gh-selected-identity',
+    },
+    { GH_TOKEN: undefined, GITHUB_TOKEN: 'github-only-identity', expected: 'github-only-identity' },
+    {
+      GH_TOKEN: '',
+      GITHUB_TOKEN: 'github-fallback-identity',
+      expected: 'github-fallback-identity',
+    },
+    { GH_TOKEN: 'gh-only-identity', GITHUB_TOKEN: undefined, expected: undefined },
+  ])('server PAT API auth uses the shared token order after activation: %j', async env => {
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+    }
+    process.env.WEBHOOK_SECRET = 'test-webhook';
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      mockGitHubAuth.mockClear();
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345 });
+      if (env.expected) {
+        expect(mockGitHubAuth).toHaveBeenCalledWith({ kind: 'pat', token: env.expected });
+      } else {
+        expect(mockGitHubAuth).not.toHaveBeenCalled();
+      }
+    } finally {
+      serveSpy.mockRestore();
+      delete process.env.GH_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.WEBHOOK_SECRET;
+    }
+  });
+
   test('server passes its configured App provider to the URL API routes', async () => {
     process.env.GITHUB_APP_ID = '123';
     process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';

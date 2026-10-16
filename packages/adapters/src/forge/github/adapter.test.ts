@@ -31,7 +31,7 @@ import {
   afterEach,
 } from 'bun:test';
 import type { Mock } from 'bun:test';
-import type { Codebase } from '@archon/core';
+import { resolveGitHubTokenFromEnv, type Codebase } from '@archon/core';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -1910,7 +1910,7 @@ describe('GitHubAdapter', () => {
       },
       { GH_TOKEN: '', GITHUB_TOKEN: 'ghp_github_clone_token', expected: 'ghp_github_clone_token' },
       { GH_TOKEN: '', GITHUB_TOKEN: '', expected: undefined },
-    ])('PAT clone selects GH_TOKEN before GITHUB_TOKEN: %j', async env => {
+    ])('PAT API and clone select GH_TOKEN before GITHUB_TOKEN: %j', async env => {
       const savedTokens = {
         GH_TOKEN: process.env.GH_TOKEN,
         GITHUB_TOKEN: process.env.GITHUB_TOKEN,
@@ -1919,6 +1919,12 @@ describe('GitHubAdapter', () => {
         for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
           if (env[key] === undefined) delete process.env[key];
           else process.env[key] = env[key];
+        }
+        const token = resolveGitHubTokenFromEnv();
+        if (token) {
+          testAdapter = new GitHubAdapter({ kind: 'pat', token }, 'fake-secret', mockLockManager);
+          // @ts-expect-error - inspect the real private API client's selected credential
+          expect(await testAdapter.octokit.auth()).toMatchObject({ token: env.expected });
         }
         const repoPath = unclonedPath();
         await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);

@@ -580,8 +580,8 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub personal access token (also used by `gh` CLI) | -- |
-| `GH_TOKEN` | Alias for `GITHUB_TOKEN` (used by GitHub CLI) | -- |
+| `GITHUB_TOKEN` | Required with `WEBHOOK_SECRET` to activate the GitHub adapter in PAT mode. Used for adapter API calls, cloning and forge credentials when `GH_TOKEN` is unset or empty. | -- |
+| `GH_TOKEN` | Preferred token for adapter API calls in PAT mode, cloning, forge credentials and the GitHub CLI. Takes precedence over `GITHUB_TOKEN`; does not activate the adapter by itself. | -- |
 | `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification | -- |
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
