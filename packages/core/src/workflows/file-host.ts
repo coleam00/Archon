@@ -324,7 +324,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   });
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
-    getLiveRunOwningEnv: async id => {
+    getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
       const env = await records.isolation.getById(id);
       const runs = await listRuns(root);
       return (
@@ -332,6 +332,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
           .find(
             row =>
+              row.id !== excludeRunId &&
               (!isTerminalRunStatus(row.status) ||
                 RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
               (row.metadata.isolation_env_id === id ||

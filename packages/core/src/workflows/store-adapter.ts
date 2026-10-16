@@ -257,6 +257,7 @@ const sqlCompletedRunWorktree: NonNullable<WorkflowDeps['completedRunWorktree']>
     ]);
     return cleanup.assessCompletedRunWorktree(run, isolationDb.createIsolationStore(), {
       getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
     });
   },
   release: async run => {

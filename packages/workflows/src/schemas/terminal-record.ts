@@ -27,6 +27,7 @@ export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
       'resumable',
       'cancelled',
       'workspace_retained',
+      'in_use',
       'uncommitted_changes',
       'unpushed_commits',
       'published_branch',

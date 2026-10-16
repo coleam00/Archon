@@ -716,11 +716,15 @@ runs and failures before a reporting node. It contains observed node states and 
 causes, the selected `returns:` value or its explicit unavailability, and an artifact
 manifest. Historical runs without a record and active resumed runs report `null`.
 
+An event-query failure exits non-zero with `error: "workflow_events_unavailable"` in
+JSON; it does not masquerade as a missing historical record.
+
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote and unpublished, so the engine removed it after the
-completion write, keeping the branch; a removal refused because work appeared in the
-meantime leaves the checkout and is logged. Otherwise it is
+was clean, fully on a remote and unpublished, so the engine removes it after the
+completion write, keeping the branch. The record is written before the removal, so a
+removal that is refused because work appeared in the meantime, or that fails, leaves the
+checkout and is logged. Otherwise it is
 `{ "disposition": "retained", "reason": ... }` with an optional `detail`:
 
 | Reason | Meaning |
@@ -728,12 +732,11 @@ meantime leaves the checkout and is logged. Otherwise it is
 | `resumable` | The run failed and can resume; `workflow abandon` or the stale sweep releases it |
 | `cancelled` | The run was cancelled; `workflow abandon` releases it |
 | `workspace_retained` | The originating platform keeps its workspaces |
+| `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
 | `published_branch` | The branch was pushed; `isolation cleanup --merged` removes it after its PR merges |
 | `check_failed` | The check could not run; `detail` gives the error |
-An event-query failure exits non-zero with `error: "workflow_events_unavailable"` in
-JSON; it does not masquerade as a missing historical record.
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
 It survives later file deletion, but does not preserve file contents or contain previews.

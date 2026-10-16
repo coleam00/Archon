@@ -686,6 +686,18 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
 
+  test('the completing run does not hold its own checkout, another claimable run does', async () => {
+    run.id = await seedRunAt(env.working_path, 'running');
+    expect(await assess()).toEqual({ disposition: 'release' });
+
+    const other = await seedRunAt(env.working_path, 'paused');
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'in_use',
+      detail: `run ${other} (paused)`,
+    });
+  });
+
   test('a check that cannot run is reported, not thrown', async () => {
     run.metadata = { owned_worktree: { envId: env.id, creationId: randomUUID() } };
     expect(await assess()).toEqual({

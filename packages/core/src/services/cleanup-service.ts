@@ -1392,7 +1392,7 @@ async function judgeCompletedWorktree(
 export async function assessCompletedRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
-  readers: Pick<WorktreeOwnershipReaders, 'getCodebase'>
+  readers: WorktreeOwnershipReaders
 ): Promise<WorktreeDisposition | null> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof || run.metadata?.isolation === 'container') return null;
@@ -1400,6 +1400,15 @@ export async function assessCompletedRunWorktree(
     const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
     if (retainsWorkspace(env.created_by_platform)) {
       return { disposition: 'retained', reason: 'workspace_retained' };
+    }
+    // The completing run is still claimable here; release refuses any other claimant.
+    const user = await readers.getLiveRunOwningEnv(env.id, undefined, run.id);
+    if (user) {
+      return {
+        disposition: 'retained',
+        reason: 'in_use',
+        detail: `run ${user.id} (${user.status})`,
+      };
     }
     return await judgeCompletedWorktree(env, repo);
   } catch (err) {
