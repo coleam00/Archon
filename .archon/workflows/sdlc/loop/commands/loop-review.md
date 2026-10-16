@@ -10,6 +10,7 @@ The move this run:
 - Work item: $INPUTS.target
 - Pull request chosen up front (may be empty): $INPUTS.pr
 - Builder's report (empty when the shipping pipeline built it): $INPUTS.builder
+- Shipping pipeline's outcome (empty unless the route was complex): $INPUTS.ship
 
 The app check:
 
@@ -22,6 +23,17 @@ If the app check says `NO PR`, nothing was delivered. Leave one comment on the w
 what the builder or pipeline reported). That comment counts as one attempt for the dispatcher. If
 the work item now has $INPUTS.rejections or more of those attempts or send-backs with no merge,
 label it `needs-owner` instead and say what blocks it. Return outcome `nothing` (or `needs-owner`).
+
+A run that delivered nothing may still have learned the most expensive thing about the item. On the
+complex route, read what the shipping pipeline wrote in this run's artifacts before you comment:
+`$ARTIFACTS_DIR/triage.md`, and `$ARTIFACTS_DIR/plan.md` or `$ARTIFACTS_DIR/investigation.md` when
+they exist (the outcome above says which way triage went). Put their conclusion in your comment so
+the next run starts from it instead of paying to find it again: what was measured or tried, what it
+showed, the cause or the plan, and why it stopped short of a pull request. When that conclusion is
+that the item needs a decision only the owner can make (it conflicts with the product document or a
+hard requirement, or every way to meet it changes scope), label it `needs-owner` now, name the
+decision and the options the pipeline found, and return `needs-owner`; do not wait for the attempt
+cap. On the simple and continue routes, do the same with the builder's report.
 
 ## Look
 

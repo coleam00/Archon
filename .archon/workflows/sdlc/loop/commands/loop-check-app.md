@@ -11,6 +11,7 @@ The move this run:
 - Work item: $INPUTS.target
 - Pull request chosen up front (may be empty): $INPUTS.pr
 - Builder's report (empty when the shipping pipeline built it): $INPUTS.builder
+- Shipping pipeline's outcome (empty unless the route was complex): $INPUTS.ship
 
 ## Find what to test
 
@@ -23,12 +24,32 @@ stop.
 Read the work item and its `Contract` comment (or its acceptance criteria). That list, not the
 pull request's description, is what you test.
 
+## Size the check to the change
+
+Your time is the loop's slowest step, so spend it where this change can break something. Decide the
+depth from the work item and the list of changed files (`gh pr diff <n> --name-only`), not the diff
+contents:
+
+- **Retest after a send-back or a default-branch merge.** If an earlier `Loop review:` comment on this
+  pull request reports an app check at an older head, and every commit since that head is a merge of
+  the default branch or a change that review asked for, test only what those commits can affect
+  (`git diff --name-only <old head>..<new head>`) and carry the other lines over, marked
+  `(carried from <old sha>)`.
+- **No user-visible behaviour can change** (only tests, tools, documentation, or a cleanup whose
+  contract says behaviour is unchanged): build, run the project's checks, start the app once and
+  confirm it runs, and check the contract criteria. Run a holdout scenario only if the changed files
+  drive what it exercises.
+- **Anything else:** the full check below.
+
+When unsure, test more, not less.
+
 ## Test
 
 - Check out the pull request's head (`gh pr checkout <n>`; if another worktree holds the branch, `git checkout -B <branch> origin/<branch> --ignore-other-worktrees`). Note the commit.
 - Build it and run the app the way a user would, on its real code path rather than a test shortcut. Where the project has a normal mode and a test or harness mode, check what you can in normal mode too: a feature that only works under the harness is not done. How to run it: $INPUTS.runtime
 - Check every contract criterion against the running app, one by one. Save evidence (command output, screenshots, measured values) in the run's artifacts directory, never inside the repository.
-- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run the scenarios this change could affect: judge from the work item and the list of changed files (`gh pr diff <n> --name-only`), not their contents, and when unsure, run it. List the ones you skipped and why in one line. The manager runs the whole set on the default branch on its own schedule. The holdout is private to the reviewers: never quote it, its scenario text, or its thresholds anywhere public (pull requests, issues, commits). In your report, name each holdout scenario only by its id, and describe a failure as the behaviour a user would see. When a holdout scenario fails, run it on the default branch too and say whether the failure is new with this change or already there (`FAIL (pre-existing)`).
+- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run the scenarios this change could affect: judge from the work item and the list of changed files (`gh pr diff <n> --name-only`), not their contents, and when unsure, run it. List the ones you skipped and why in one line. The manager runs the whole set on the default branch on its own schedule. The holdout is private to the reviewers: never quote it, its scenario text, or its thresholds anywhere public (pull requests, issues, commits). In your report, name each holdout scenario only by its id, and describe a failure as the behaviour a user would see. When a holdout scenario fails, find out whether the failure is new with this change or already there (`FAIL (pre-existing)`). First read `holdout-baseline.md` in the holdout file's directory, if it exists: the manager records there how every scenario ran on the default branch, by commit and date. If it shows the same failure on a default-branch commit from the last 24 hours, cite it and do not rerun the default branch yourself. Otherwise run the scenario on the default branch.
+- A measurement that depends on timing or frame rate, taken while the machine is loaded (other app instances running, the frame rate below what the check expects), is inconclusive, not a FAIL: say so, rerun it once, and report it inconclusive if the load persists.
 - Only then, if a failure needs explaining, look at the diff to locate it.
 
 ## Never

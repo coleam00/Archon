@@ -143,6 +143,7 @@ nodes:
       target: "$pick.output.target"
       pr: "$pick.output.pr"
       builder: { from: "$build.output", if_skipped: "" }
+      ship: { from: "$ship.output", if_skipped: "" }
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
 
@@ -157,6 +158,10 @@ nodes:
       target: "$pick.output.target"
       pr: "$pick.output.pr"
       builder: { from: "$build.output", if_skipped: "" }
+      # A complex lap that stopped short of a pull request still produced a
+      # finding (its triage, plan or investigation in this run's artifacts);
+      # the reviewer posts it so the next lap starts from it.
+      ship: { from: "$ship.output", if_skipped: "" }
       app_check: "$check-app.output"
       runtime: "$INPUTS.runtime"
       merge: "$INPUTS.merge"
