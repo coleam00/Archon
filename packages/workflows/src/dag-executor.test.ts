@@ -12980,6 +12980,83 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(1);
     });
 
+    describe('at max_iterations (#4290)', () => {
+      const runAtCap = async (loopUserInput: string, feedbackGiven: boolean) => {
+        const mockDeps = createMockDeps();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'feedback-at-cap',
+              nodes: [
+                {
+                  id: 'refine',
+                  kind: 'loop',
+                  loop: {
+                    fresh_context: false,
+                    prompt: 'User said: $LOOP_USER_INPUT. Refine.',
+                    until: 'APPROVED',
+                    max_iterations: 1,
+                    interactive: true,
+                    gate_message: 'Review.',
+                  },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('feedback-at-cap-run', {
+              metadata: {
+                approval: {
+                  type: 'interactive_loop',
+                  nodeId: 'refine',
+                  iteration: 1,
+                  sessionId: 'sig-session-1',
+                  message: 'gate',
+                  completionSignaled: false,
+                  signaledOutput: null,
+                },
+                loop_user_input: loopUserInput,
+                loop_feedback_given: feedbackGiven,
+              },
+            }),
+          })
+        );
+        return {
+          completed: persistedEvents(mockDeps.store).find(
+            e => e.event_type === 'node_completed' && e.step_name === 'refine'
+          ),
+          failed: mockDeps.store.persistWorkflowEvent.mock.calls.find(
+            ([e]) => e.event_type === 'node_failed' && e.step_name === 'refine'
+          )?.[0],
+        };
+      };
+
+      beforeEach(() => {
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Fixed. <promise>APPROVED</promise>' };
+          yield { type: 'result', sessionId: 'iter-session-2' };
+        });
+      });
+
+      it('runs one iteration past max_iterations when the final gate is answered with feedback', async () => {
+        const { completed, failed } = await runAtCap('fix indentation', true);
+
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+        expect(mockSendQueryDag.mock.calls[0][0] as string).toContain('fix indentation');
+        expect(completed).toBeDefined();
+        expect(failed).toBeUndefined();
+      });
+
+      it('fails at max_iterations when the final non-completing gate is approved without feedback', async () => {
+        const { completed, failed } = await runAtCap('Approved', false);
+
+        expect(mockSendQueryDag.mock.calls.length).toBe(0);
+        expect(completed).toBeUndefined();
+        expect(failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
+      });
+    });
+
     it('LEGACY: resume with pre-#2074 approval metadata (no completionSignaled/signaledOutput keys) iterates', async () => {
       // Rows paused before #2074 have neither key in metadata.approval and no
       // loop_feedback_given — the finalize path must NOT trigger; the loop runs
@@ -26429,6 +26506,86 @@ describe('executeDagWorkflow -- loop_group node', () => {
     } finally {
       execSpy.mockRestore();
     }
+  });
+
+  describe('legacy interactive group at max_iterations (#4290)', () => {
+    const runGroupAtCap = async (loopUserInput: string, feedbackGiven: boolean) => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Retried. <promise>APPROVED</promise>' };
+        yield { type: 'result', sessionId: 'grp-session-2' };
+      });
+      const mockDeps = createMockDeps();
+      const nodes: DagNode[] = [
+        {
+          id: 'grp',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'APPROVED',
+            max_iterations: 1,
+            fresh_context: true,
+            interactive: true,
+            gate_message: 'Review.',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Feedback: $LOOP_USER_INPUT' },
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ];
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform: createMockPlatform(),
+          conversationId: 'conv-lg-feedback-at-cap',
+          cwd: testDir,
+          workflow: { name: 'lg-feedback-at-cap', nodes },
+          workflowRun: makeWorkflowRun('lg-feedback-at-cap', {
+            metadata: {
+              approval: {
+                type: 'interactive_loop',
+                nodeId: 'grp',
+                iteration: 1,
+                message: 'Review.',
+                completionSignaled: false,
+                signaledOutput: null,
+              },
+              loop_user_input: loopUserInput,
+              loop_feedback_given: feedbackGiven,
+            },
+          }),
+        })
+      );
+      return mockDeps.store;
+    };
+
+    it('runs one iteration past max_iterations when the final gate is answered with feedback', async () => {
+      const store = await runGroupAtCap('retry with X', true);
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(mockSendQueryDag.mock.calls[0][0] as string).toContain('retry with X');
+      expect(
+        persistedEvents(store).some(e => e.event_type === 'node_completed' && e.step_name === 'grp')
+      ).toBe(true);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails at max_iterations when the final non-completing gate is approved without feedback', async () => {
+      const store = await runGroupAtCap('Approved', false);
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(store.persistWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'grp',
+          data: expect.objectContaining({ failure_kind: 'max_iterations' }),
+        })
+      );
+    });
   });
 
   it('delivers $LOOP_USER_INPUT to a resumed body bash node via env (#2725)', async () => {

@@ -208,7 +208,7 @@ Defined under `loop:` inside a node:
 | `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
 | `command` | One of `prompt`/`command` | string | Package-local or shared command whose body is the iteration prompt — exactly one of `prompt` or `command` |
 | `until` | One channel required | string | Deprecated prose completion signal — use `<promise>SIGNAL</promise>` or a final line containing only `SIGNAL`. Omit it for a deterministic or structured loop: with no signal declared, nothing matches prose |
-| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `max_iterations` | Yes | number | Maximum autonomous iterations before the node fails; an [explicit answer](/guides/loop-nodes/#max_iterations) permits one more |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
 | `until_field` | One channel required | string | **`loop:` only.** Names a boolean in the node's `output_format`; the loop ends when its validated value is `true` |
@@ -235,7 +235,7 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Executable nodes, `include:`, and nested `loop_group` are supported; runtime `workflow:` sub-runs are not. `depends_on` is body-scoped; body ids must not shadow outer ids |
 | `until` | One channel required | string | Deprecated prose signal, checked in the iteration's output (the body's terminal-node output, read past a terminal gate or `attention` wait). When it is the sole channel, every node the output can be read from must have an enforced `output_format` that permits strings, or none. Use `until_bash` for structured fields; omit `until` for a deterministic group |
-| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `max_iterations` | Yes | number | Maximum autonomous iterations before the node fails; an [explicit answer](/guides/loop-nodes/#max_iterations) permits one more |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
 | `interactive` | No | boolean | **Deprecated.** Pause after each non-completing iteration. End the body in a `wait: attention` node instead; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) |

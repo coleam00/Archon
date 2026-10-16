@@ -4658,14 +4658,16 @@ async function executeLoopGroupBody(
     : restoredAncestry !== undefined
       ? (enclosingPauseFrame?.iteration ?? 1)
       : 1;
-  // max_iterations bounds autonomous work. An attention wait contributes no work while
-  // paused, so each explicit resume authorizes one fresh iteration even after that bound.
-  // This keeps manual recovery resumable without turning a concluded-red wait into polling.
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
+  // max_iterations bounds autonomous work. An explicit answer authorizes one fresh iteration
+  // even after that bound: resuming an attention wait (which did no work while paused), or
+  // feedback on this group's interactive gate. A bare approve on that gate does not.
   const iterationLimit =
-    isEscalatedWaitResume && loopOwnedWaitMeta?.kind === 'attention'
+    (isEscalatedWaitResume && loopOwnedWaitMeta?.kind === 'attention') ||
+    (isLegacyInteractiveLoopResume && feedbackGiven)
       ? Math.max(group.max_iterations, startIteration)
       : group.max_iterations;
-  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const loopUserInput = isLegacyInteractiveLoopResume
     ? (loopGateRunMeta.loop_user_input ?? '')
     : '';
@@ -4673,7 +4675,6 @@ async function executeLoopGroupBody(
   // Finalize-on-approve (#2074): mirrors executeLoopNode — a completion-bearing gate
   // resumed WITHOUT feedback completes the group from the persisted output instead
   // of re-running the body.
-  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
     // The signaled iteration's structured payload (#2637): attaching it keeps this
@@ -5724,6 +5725,12 @@ async function executeLoopNode(
   // BEFORE prompt-source resolution: a bare approve never needs the prompt, so a
   // command file deleted while the run sat paused cannot fail the finalize.
   const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
+  // Like a loop group: feedback on this node's gate authorizes one fresh iteration past the
+  // autonomous bound; a bare approve does not.
+  const iterationLimit =
+    isLoopResume && feedbackGiven
+      ? Math.max(loop.max_iterations, startIteration)
+      : loop.max_iterations;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
     // The signaled iteration's structured payload (#2637) — attached below so this
@@ -5881,7 +5888,7 @@ async function executeLoopNode(
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
   };
 
-  for (let i = startIteration; i <= loop.max_iterations; i++) {
+  for (let i = startIteration; i <= iterationLimit; i++) {
     const iterationStart = Date.now();
     // Fresh per iteration: this iteration's prompt and until_bash observe the
     // artifacts published before it. Materialization failure is an explicit node
@@ -5922,14 +5929,14 @@ async function executeLoopNode(
       runId: workflowRun.id,
       nodeId: node.id,
       iteration: i,
-      maxIterations: loop.max_iterations,
+      maxIterations: iterationLimit,
     });
     deps.store
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_started',
         step_name: stepName,
-        data: { iteration: i, maxIterations: loop.max_iterations, nodeId: node.id },
+        data: { iteration: i, maxIterations: iterationLimit, nodeId: node.id },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -7062,9 +7069,9 @@ async function executeLoopNode(
   }
 
   // Max iterations exceeded
-  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(loop.max_iterations)}) ${describeUnmetCompletion(loop)}`;
+  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(iterationLimit)}) ${describeUnmetCompletion(loop)}`;
   getLog().warn(
-    { nodeId: node.id, maxIterations: loop.max_iterations, signal: loop.until },
+    { nodeId: node.id, maxIterations: iterationLimit, signal: loop.until },
     'loop_node.max_iterations_reached'
   );
   await safeSendMessage(platform, conversationId, errorMsg, msgContext);
@@ -7074,8 +7081,8 @@ async function executeLoopNode(
     costUsd: loopTotalCostUsd,
     ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
     ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
-    loopIterations: loop.max_iterations,
-    data: { maxIterations: loop.max_iterations },
+    loopIterations: iterationLimit,
+    data: { maxIterations: iterationLimit },
   });
 }
 
