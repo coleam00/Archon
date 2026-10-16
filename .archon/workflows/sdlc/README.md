@@ -389,29 +389,18 @@ are the operator's and stay outside the pack and the repository.
   version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
-  An eval run's `gh` calls go through a lookup server the runner starts for that run
-  (gh's `http_unix_socket`, set in a throwaway `GH_CONFIG_DIR`). It answers a batch
-  issue as it was at creation: its pinned title and body, the labels its author set
-  at creation, no comments, open. A batch issue's comments, events and timeline
-  answer as empty; anything else answers as live. GraphQL label selections must
-  request the complete creation-label set: a smaller limit or a non-null pagination
-  cursor fails the lookup with an explicit error instead of returning a false page.
-  A request that names a batch issue by its REST path, GraphQL `number` or node id
-  but that the server answered live is a leak. Failed lookup requests and server
-  cleanup errors are recorded as row problems, so those rows cannot pass.
-  Eval rows without a recoverable creation body do not run; a pinned current-body
-  fallback is not a creation snapshot. Live scratch runs retain that fallback.
-  Every eval or live line records the merged pull requests on the base that
-  reference the original row's issue. A row whose original issue metadata cannot
-  be read completely does not run, and its line says why. This includes partial
-  GraphQL responses, label histories exceeding the first 20 events or reference
-  histories exceeding the first 100 events. Live scratch runs read that evidence
-  for scoring; their lookups stay live.
-- **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
+  Eval batches are cheap dry checks that the bench works, not fair scored
+  comparisons: an eval run can read the issue's current state, including its outcome.
+- **Live batches.** Use live batches on scratch copies for scored comparisons.
+  `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's.
+  scratch repository may not be the set's own or another version's. Each copy holds
+  the pinned creation text, so lookups need no rewriting. Each live line records
+  merged pull requests on the base that reference the original issue, for scoring.
+  If that evidence is incomplete, the row does not run and its line says why;
+  reference histories exceeding the first 100 events are refused.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
@@ -428,8 +417,8 @@ are the operator's and stay outside the pack and the repository.
   references the issue leaves the close bar pending until the operator marks the
   run right or wrong),
   dispositions matched (a right or wrong mark decides), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a lookup of the judged issue that the
-  creation-time answer did not cover, left out of the accuracy numbers), cost over the runs in
+  with `enhancement` read as `feature`, leaks (a command, fetch or search that
+  looked up the judged issue, left out of the accuracy numbers), cost over the runs in
   which an agent ran (`unreported` when no provider reported one) and wall time, and
   which versions got each disagreement right. A bar with no applicable rows reads
   `not applicable`. It does not choose a winner.

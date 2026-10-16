@@ -9,8 +9,8 @@
  * the scorer can read on its own stand beside them. A mark also overrides the
  * expected answer for false closes and dispositions, but not for `type`, whose ground
  * truth is the human label. A run that did not pass counts against the bars as not
- * right. A row whose batch failed a hard check or whose run looked the issue up past
- * the creation-time answer is left out of the accuracy numbers and counted separately.
+ * right. A row whose batch failed a hard check or whose run looked the issue up is
+ * left out of the accuracy numbers and counted separately.
  * A bar with no applicable rows is not applicable.
  */
 

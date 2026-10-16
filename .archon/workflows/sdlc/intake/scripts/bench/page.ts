@@ -73,9 +73,6 @@ function verdictCell(line: Line, row: Row, outDir: string, mark: MarkValue | und
   const cost = line.cost_usd === null ? 'cost unreported' : `$${line.cost_usd.toFixed(4)}`;
   const time = line.duration_ms === null ? '' : `, ${(line.duration_ms / 1000).toFixed(0)} s`;
   parts.push(`<div class="meta">${escape(cost)}${escape(time)} · run ${escape(line.run_id ?? 'none')}</div>`);
-  if ((line.answered_at_creation ?? []).length > 0) {
-    parts.push(`<div>Looked the issue up; answered as it was at creation: ${(line.answered_at_creation ?? []).map(escape).join('; ')}</div>`);
-  }
   if (line.leak.length > 0) parts.push(`<div class="warn">Looked the issue up (excluded from accuracy): ${line.leak.map(escape).join('; ')}</div>`);
   if (line.problems.length > 0) parts.push(`<div class="warn">${line.problems.map(escape).join('<br>')}</div>`);
   if (line.report !== null && existsSync(join(outDir, line.report))) {

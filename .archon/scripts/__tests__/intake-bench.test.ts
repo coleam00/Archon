@@ -26,19 +26,17 @@ import {
   CHECKS_FILE,
   checkScratch,
   loadLive,
-  findLookups,
+  findLeaks,
   issueTokens,
   type Line,
   postedComments,
   runCost,
-  splitLookups,
   type Snapshot,
   snapshotChanges,
   toVerdict,
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
-import { answerLookup, atCreation, type CreationView, creationLabels, serveLookups } from '../../workflows/sdlc/intake/scripts/bench/lookups';
 import { MARKS_FILE, falseClose, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
@@ -328,12 +326,10 @@ describe('bench run', () => {
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
   function benchLive(scenario: Partial<FakeConfig> = {}) {
-    const { runWith, argv, repo, out, cli } = bench(scenario);
-    const file = join(out, 'set.json');
-    const set = JSON.parse(readFileSync(file, 'utf8')) as BenchSet;
-    writeFileSync(file, JSON.stringify({ ...set, rows: set.rows.map(row => ({ ...row, body_from: 'current' })) }));
+    const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
+    ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the batch base');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
     mkdirSync(join(out, 'bench', 'live'), { recursive: true });
@@ -341,21 +337,26 @@ describe('bench run', () => {
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
     config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
-    return { ...runWith(['--live', join(out, 'live.yaml')], 'base'), argv, scratch, cli };
+    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch };
   }
 
-  it('records original merged-base evidence in live scratch runs without a lookup server', () => {
-    const { status, lines, argv, cli } = benchLive({ issues: [
-      { number: 11, labels: [], comments: 0, refs: [{ url: 'https://github.com/o/r/pull/30', merged: true, oid: 'HEAD' }] },
+  it('records original merged-base evidence in live scratch runs for scoring', () => {
+    const { status, lines, argv } = benchLive({ issues: [
+      { number: 11, labels: [], comments: 0, refs: [
+        { url: 'https://github.com/o/r/pull/30', merged: true, oid: 'HEAD~1' },
+        { connected: true, url: 'https://github.com/o/r/pull/31', merged: true, oid: 'HEAD~1' },
+        { url: 'https://github.com/o/r/pull/32', merged: true, oid: 'HEAD' },
+        { url: 'https://github.com/o/r/pull/33', merged: false, oid: null },
+        { url: 'https://github.com/fork/r/pull/34', merged: true, oid: 'f'.repeat(40) },
+      ] },
       { number: 12, labels: [], comments: 0 },
     ] });
     expect(status).toBe(0);
-    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30']);
+    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30', 'https://github.com/o/r/pull/31']);
     expect(argv(1)).toContain('mode=live');
-    expect(existsSync(join(cli, 'ghconfig-run-1'))).toBe(false);
   });
 
-  it('runs intake live with unrecoverable creation bodies and reads the copy work item', () => {
+  it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
     const { status, stderr, lines, checks, argv, scratch } = benchLive();
     expect(stderr).toBe('');
     expect(status).toBe(0);
@@ -523,199 +524,6 @@ describe('bench run', () => {
     expect(checks[0].checks.posted_text.problems).toEqual(expect.arrayContaining([expect.stringContaining('github.com/o/r#12: 1 comment(s) posted')]));
   });
 
-  it('answers a lookup of the judged issue as it was at creation, and the lookup is not a leak', () => {
-    const { run, cli } = bench({
-      lookupIssue: 11,
-      issues: [
-        {
-          number: 11,
-          labels: ['bug', 'archon-ready'],
-          comments: 1,
-          createdAt: '2026-10-01T10:00:00Z',
-          labelEvents: [
-            { createdAt: '2026-10-01T10:00:01Z', actor: 'someone', label: 'bug' },
-            { createdAt: '2026-10-01T10:00:02Z', actor: 'someone', label: 'removed' },
-            { createdAt: '2026-10-01T10:00:03Z', actor: 'someone', label: 'removed', removed: true },
-            { createdAt: '2026-10-01T11:00:00Z', actor: 'Maintainer', label: 'archon-ready' },
-          ],
-        },
-        { number: 12, labels: ['bug'], comments: 2 },
-      ],
-    });
-    const { status, stderr, lines } = run('base');
-    expect([status, stderr]).toEqual([0, '']);
-    const triaged = lines.find(line => line.row === '11');
-    const n = Number(triaged?.run_id?.slice('run-'.length));
-    const looked = JSON.parse(readFileSync(join(cli, `lookup-run-${String(n)}.json`), 'utf8'));
-    expect(looked.data.repository.issue).toEqual({
-      id: 'I_11',
-      number: 11,
-      title: 'Issue 11 as opened',
-      body: 'The body 11 was opened with.',
-      state: 'OPEN',
-      stateReason: null,
-      closedAt: null,
-      url: 'https://github.com/o/r/issues/11',
-      labels: { nodes: [{ name: 'bug' }], totalCount: 1 },
-      comments: { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } },
-    });
-    expect(triaged?.leak).toEqual([]);
-    expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
-  });
-
-  it('answers literal GraphQL lookups of the judged issue at creation too', () => {
-    const { run, cli } = bench({ lookupIssue: 11, lookupLiteral: true });
-    const { lines } = run('base');
-    const triaged = lines.find(line => line.row === '11');
-    const n = Number(triaged?.run_id?.slice('run-'.length));
-    expect(JSON.parse(readFileSync(join(cli, `lookup-literal-run-${String(n)}.json`), 'utf8'))).toEqual({ data: { repository: { issue: { state: 'OPEN' } } } });
-    expect(triaged?.answered_at_creation).toEqual(['triage: gh issue view 11 --repo o/r --json title,body,state,labels,comments']);
-    expect(triaged?.leak).toEqual([]);
-  });
-
-  for (const lookupFailure of ['throw', 'http', 'graphql', 'partial'] as const) {
-    it(`records a failed snapshot request (${lookupFailure}) even when another lookup succeeds`, () => {
-      const { run } = bench({ lookupIssue: 11, lookupFailure });
-      const { lines, checks } = run('base');
-      const row = lines.find(line => line.row === '11');
-      expect(row?.problems.join('; ')).toContain(lookupFailure === 'throw' ? 'forced lookup failure' : lookupFailure === 'http' ? '503' : 'GraphQL');
-      expect(row?.passed).toBe(false);
-      expect(checks).toHaveLength(1);
-    });
-  }
-
-  it('records lookup cleanup failures and still writes every row and batch checks', () => {
-    const { run } = bench({ cleanupFails: true });
-    const { lines, checks } = run('base');
-    expect(lines).toHaveLength(2);
-    expect(lines.every(line => !line.passed && line.problems.includes('forced cleanup failure'))).toBe(true);
-    expect(checks).toHaveLength(1);
-  });
-
-  it('fails rows with missing or malformed creation history instead of fabricating empty history', () => {
-    const valid: boolean[] = [];
-    for (const connection of ['labelEvents', 'refs']) {
-      for (const value of [null, {}, { nodes: null, pageInfo: { hasNextPage: false } }, { nodes: [], pageInfo: {} }, { nodes: [], pageInfo: { hasNextPage: 'false' } }]) {
-        const { run } = bench({ batchIssueOverrides: { [connection]: value } });
-        const { lines } = run('base');
-        expect(lines).toHaveLength(2);
-        valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes(connection))));
-      }
-    }
-    const { run } = bench({ batchErrors: [{ message: 'partial GraphQL history' }] });
-    valid.push(run('base').lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('partial GraphQL history'))));
-    expect(valid).toEqual(Array(11).fill(true));
-  });
-
-  it('rejects incomplete creation-label identities and timestamps while accepting explicit null identities', () => {
-    const event = { __typename: 'LabeledEvent', createdAt: '2026-01-01T00:00:01Z', actor: { login: 'someone' }, label: { name: 'bug' } };
-    const labels = (node: unknown) => ({ nodes: [node], pageInfo: { hasNextPage: false } });
-    const invalid = [
-      { author: {} }, { author: { login: '' } },
-      { createdAt: 'invalid' },
-      ...[undefined, {}, { login: '' }].map(actor => ({ labelEvents: labels({ ...event, actor }) })),
-      { labelEvents: labels({ ...event, createdAt: 'invalid' }) },
-    ];
-    const rejected = invalid.map(batchIssueOverrides => {
-      const { run } = bench({ batchIssueOverrides });
-      return run('base').lines.every(line => line.status === 'not_started' && line.problems.length > 0);
-    });
-    const { run } = bench({ batchIssueWithoutAuthor: true });
-    rejected.push(run('base').lines.every(line => line.status === 'not_started' && line.problems.length > 0));
-    expect(rejected).toEqual(Array(invalid.length + 1).fill(true));
-    for (const batchIssueOverrides of [{ author: null }, { labelEvents: labels({ ...event, actor: null }) }]) {
-      const { run } = bench({ batchIssueOverrides });
-      expect(run('base').lines.every(line => line.status === 'completed')).toBe(true);
-    }
-  });
-
-  it('refuses unrecoverable creation bodies in eval', () => {
-    const { runWith, out } = bench();
-    const file = join(out, 'set.json');
-    const set = JSON.parse(readFileSync(file, 'utf8')) as BenchSet;
-    writeFileSync(file, JSON.stringify({ ...set, rows: set.rows.map(row => ({ ...row, body_from: 'current' })) }));
-    const { lines } = runWith([], 'base');
-    expect(lines).toHaveLength(2);
-    expect(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('creation body')))).toBe(true);
-  });
-
-  it('rejects incomplete label and merged reference events, retaining unrelated references', () => {
-    const valid: boolean[] = [];
-    for (const event of [null, {}, { __typename: 'LabeledEvent', createdAt: 'x' }, { __typename: 'UnlabeledEvent', label: { name: 'bug' } }]) {
-      const { run } = bench({ batchIssueOverrides: { labelEvents: { nodes: [event], pageInfo: { hasNextPage: false } } } });
-      const { lines } = run('base');
-      expect(lines).toHaveLength(2);
-      valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('label event'))));
-    }
-    for (const key of ['source', 'subject']) {
-      for (const pr of [{ __typename: 'PullRequest' }, { merged: true }, { merged: true, url: 'https://github.com/o/r/pull/1' }, { merged: true, url: 'https://github.com/o/r/pull/1', mergeCommit: {} }]) {
-        const { run } = bench({ batchIssueOverrides: { refs: { nodes: [{ [key]: { __typename: 'PullRequest', ...pr } }], pageInfo: { hasNextPage: false } } } });
-        const { lines } = run('base');
-        expect(lines).toHaveLength(2);
-        valid.push(lines.every(line => line.status === 'not_started' && line.problems.some(problem => problem.includes('reference'))));
-      }
-    }
-    expect(valid).toEqual(Array(12).fill(true));
-    const { run } = bench({ batchIssueOverrides: { refs: { nodes: [{ source: { __typename: 'Issue' } }], pageInfo: { hasNextPage: false } } } });
-    expect(run('base').lines.every(line => line.status === 'completed')).toBe(true);
-  });
-
-  it('records the merged pull requests on the base that reference the row issue', () => {
-    const { runWith, repo, cli } = bench();
-    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the base');
-    const refs = [
-      { url: 'https://github.com/o/r/pull/30', merged: true, oid: ok(repo, 'rev-parse', 'HEAD~1') },
-      { url: 'https://github.com/o/r/pull/31', merged: true, oid: ok(repo, 'rev-parse', 'HEAD') },
-      { url: 'https://github.com/o/r/pull/32', merged: false, oid: null },
-      { connected: true, url: 'https://github.com/o/r/pull/33', merged: true, oid: ok(repo, 'rev-parse', 'HEAD~1') },
-    ];
-    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
-    const { status, lines, checks } = runWith(['--base', 'HEAD~1'], 'base');
-    expect(status).toBe(0);
-    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30', 'https://github.com/o/r/pull/33']);
-    expect(lines.find(line => line.row === '12-outside')?.merged_on_base).toEqual([]);
-    const line = lines.find(line => line.row === '11');
-    if (line === undefined) throw new Error('missing connected row');
-    const set: BenchSet = { bench: 'intake', repo: REPO, selected_at: '', rows: [row(11, { group: 'typed' })] };
-    const out = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
-    appendLine(join(out, CHECKS_FILE), checks[0]);
-    appendLine(join(out, SAMPLES_FILE), { ...line, group: 'typed', verdict: { ...line.verdict, contract: 'NO_ACTION', route: null } });
-    expect(renderScore(score(set, out))).toContain('1 awaiting operator judgment (11): pending');
-  });
-
-  it('refuses an incomplete page of label history before launching the row', () => {
-    const labelEvents = Array.from({ length: 21 }, (_, i) => ({ createdAt: '2026-01-01T00:00:01Z', actor: 'someone', label: String(i) }));
-    const { run } = bench({ issues: [{ number: 11, labels: [], comments: 0, labelEvents }, { number: 12, labels: [], comments: 0 }] });
-    const { lines } = run('base');
-    expect(lines.find(line => line.row === '11')).toMatchObject({ status: 'not_started', problems: [expect.stringContaining('label events')] });
-  });
-
-  it('counts a merged PR whose merge commit this clone lacks, such as another repository\'s, as not on the base', () => {
-    const { run, cli } = bench();
-    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    const refs = [{ url: 'https://github.com/fork/r/pull/7', merged: true, oid: 'f'.repeat(40) }];
-    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
-    const { status, stderr, lines } = run('base');
-    expect([status, stderr]).toEqual([0, '']);
-    const row = lines.find(line => line.row === '11');
-    expect([row?.status, row?.merged_on_base]).toEqual(['completed', []]);
-  });
-
-  it('does not run a row whose issue the bench cannot read in full, and runs the rest', () => {
-    const { run, cli } = bench();
-    const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
-    const refs = Array.from({ length: 101 }, (_, i) => ({ url: `https://github.com/o/r/pull/${String(100 + i)}`, merged: false, oid: null }));
-    writeFileSync(join(cli, 'config.json'), JSON.stringify({ ...config, issues: config.issues.map(issue => (issue.number === 11 ? { ...issue, refs } : issue)) }));
-    const { status, lines, checks } = run('base');
-    expect(status).toBe(1);
-    const unread = lines.find(line => line.row === '11');
-    expect([unread?.run_id, unread?.status, unread?.passed]).toEqual([null, 'not_started', false]);
-    expect(unread?.problems).toEqual([expect.stringContaining('github.com/o/r#11 has more than 100 cross-references')]);
-    expect(lines.find(line => line.row === '12-outside')?.status).toBe('completed');
-    expect(checks[0].checks.finished.ok).toBe(false);
-  });
-
   it('fails the batch when a trust: outside row runs an agent node', () => {
     const { run } = bench({ outsideAgentRuns: true });
     const { status, checks } = run('base');
@@ -740,7 +548,7 @@ describe('hard checks', () => {
   });
 
   it('fail the batch on a posted comment', () => {
-    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '', views: new Map(), unread: new Map(), mergedOnBase: new Map() } as const;
+    const context = { set: { bench: 'intake', repo: REPO, selected_at: '', rows: [] }, batch: 1, batchRun: '1-x', base: 'c', outDir: '' } as const;
     const checks = batchChecks(context, 'eval', ['a'], [], [], ['github.com/o/r#1: 1 comment(s) posted']);
     expect([checks.passed, checks.checks.posted_text]).toEqual([false, { ok: false, problems: ['github.com/o/r#1: 1 comment(s) posted'] }]);
   });
@@ -852,7 +660,7 @@ describe('leaks', () => {
       call('e', 'Write', { file_path: 'triage.md', content: 'See https://github.com/o/r/issues/4' }),
       event({ type: 'text', text: 'issues/4' }),
     ].join('\n');
-    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual([
+    expect(findLeaks(transcript, issueTokens(REPO, 4))).toEqual([
       'triage: gh issue view 4 --repo o/r',
       'triage: https://github.com/o/r/issues/4#issuecomment-1',
       'triage: gh issue view --repo o/r 4 --comments',
@@ -863,703 +671,6 @@ describe('leaks', () => {
       'triage: gh issue view 4>/tmp/i',
       "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'",
     ]);
-  });
-  it('do not flag a shell here-document that writes the report citing the issue', () => {
-    const event = (body: Record<string, unknown>) => JSON.stringify({ type: 'provider_event', step: 'triage', event: body });
-    const heredoc = "cat > /runs/1/triage.md <<'EOF'\n# Triage: o/r#4\nSee https://github.com/o/r/issues/4\nEOF\ncat /runs/1/triage.md";
-    const transcript = [
-      event({ type: 'subtask', taskId: 'command:t:1', taskType: 'command_execution', status: 'completed', description: `/bin/zsh -lc "mkdir -p /runs/1 && ${heredoc}"` }),
-      event({ type: 'tool_call', toolCallId: 'a', name: 'Bash', rawInput: { command: heredoc } }),
-      event({ type: 'tool_call', toolCallId: 'b', name: 'Bash', rawInput: { command: `gh issue view 4 > /tmp/i && ${heredoc}` } }),
-    ].join('\n');
-    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual(["triage: gh issue view 4 > /tmp/i && cat > /runs/1/triage.md <<'EOF'\ncat /runs/1/triage.md"]);
-  });
-  it('flags substitutions expanded by an outer shell in quoted inner heredocs', () => {
-    const counts: number[] = [];
-    for (const writer of ['cat > report', 'tee report']) {
-      for (const delimiter of ["'EOF'", '\\EOF']) {
-        for (const substitution of ['$(curl https://github.com/o/r/issues/4)', '`curl https://github.com/o/r/issues/4`']) {
-          const command = `/bin/zsh -lc "mkdir -p /tmp && ${writer} <<${delimiter}\n${substitution}\nEOF"`;
-          for (const event of [
-            { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
-            { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
-          ]) {
-            const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
-            counts.push(found.length);
-            expect(splitLookups(found, true, []).leak).toEqual(found);
-          }
-        }
-      }
-    }
-    expect(counts).toEqual(Array(16).fill(1));
-  });
-
-  it('flags expanding cat and tee heredocs through tool calls and command subtasks', () => {
-    for (const writer of ['cat > report', 'tee report']) {
-      for (const delimiter of ['EOF', "'EOF'", '"EOF"', '\\EOF']) {
-        const command = `${writer} <<${delimiter}\n$(curl https://github.com/o/r/issues/4)\nEOF`;
-        for (const event of [
-          { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
-          { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
-        ]) {
-          const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
-          expect(found).toHaveLength(delimiter === 'EOF' ? 1 : 0);
-        }
-      }
-    }
-  });
-
-  it('flag a here-document that a command runs, and a lookup after a here-string', () => {
-    const event = (id: string, command: string) => JSON.stringify({ type: 'provider_event', step: 'triage', event: { type: 'tool_call', toolCallId: id, name: 'Bash', rawInput: { command } } });
-    const python = "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['gh', 'api', 'repos/o/r/issues/4'])\nEOF";
-    const piped = 'cat <<EOF | bash\ngh issue view 4\nEOF';
-    const herestring = 'cat <<< done\ngh issue view 4\nEOF';
-    const transcript = [event('a', python), event('b', piped), event('c', herestring)].join('\n');
-    expect(findLookups(transcript, issueTokens(REPO, 4))).toEqual([`triage: ${python}`, `triage: ${piped}`, `triage: ${herestring}`]);
-  });
-});
-
-describe('outer shell expansion accounting', () => {
-  it('flags escaped backticks executed by the inner shell through both transcript routes', () => {
-    for (const argument of ['\\`curl https://github.com/o/r/issues/4\\`', '\\"\\`curl https://github.com/o/r/issues/4\\`\\"']) {
-      const command = `bash -c "gh issue view 4 --json body --jq ${argument}"`;
-      for (const event of [
-        { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
-        { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
-      ]) {
-        const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
-        expect(found).toHaveLength(1);
-        expect(splitLookups(found, true, [])).toEqual({ answered: [], leak: found });
-      }
-    }
-  });
-
-  it('keeps substitutions inert inside inner single quotes after removing outer escapes', () => {
-    for (const argument of ['\\`curl https://github.com/o/r/issues/4\\`', '\\$(curl https://github.com/o/r/issues/4)']) {
-      const lookup = `triage: bash -c "gh issue view 4 --json body --jq '${argument}'"`;
-      expect(splitLookups([lookup], true, [])).toEqual({ answered: [lookup], leak: [] });
-    }
-  });
-
-  it('flags substitutions inside double-quoted wrappers through both transcript routes', () => {
-    for (const substitution of ['$(curl https://github.com/o/r/issues/4)', '`curl https://github.com/o/r/issues/4`']) {
-      const command = `bash -c "gh issue view 4 --json body --jq '${substitution}'"`;
-      for (const event of [
-        { type: 'tool_call', toolCallId: 'a', rawInput: { command } },
-        { type: 'subtask', taskId: 'a', taskType: 'command_execution', description: command },
-      ]) {
-        const found = findLookups(JSON.stringify({ type: 'provider_event', step: 'triage', event }), issueTokens(REPO, 4));
-        expect(found).toHaveLength(1);
-        expect(splitLookups(found, true, [])).toEqual({ answered: [], leak: found });
-      }
-    }
-  });
-});
-
-describe('lookups', () => {
-  const view = (number: number): CreationView => ({
-    number,
-    id: `I_${String(number)}`,
-    url: `https://github.com/o/r/issues/${String(number)}`,
-    title: `Issue ${String(number)} as opened`,
-    body: 'As opened.',
-    labels: ['bug'],
-    created_at: '2026-10-01T10:00:00Z',
-  });
-  const views = new Map([[4, view(4)]]);
-  const closedConnection = { nodes: [{ body: 'Fixed.' }], totalCount: 1 };
-
-  it('rewrite each batch issue in an answer to its creation view, by node id or URL', () => {
-    // gh issue view: IssueByNumber, the issue under an alias of data.repository.
-    const byNumber = atCreation(
-      { data: { repository: { hasIssuesEnabled: true, issue: { _archonBenchIssueId: 'I_4', __typename: 'Issue', number: 4, title: 'Now', body: 'Now.', state: 'CLOSED', stateReason: 'COMPLETED', closedAt: 'x', closed: true, updatedAt: 'later', labels: { nodes: [{ name: 'bug' }, { name: 'archon-ready' }], totalCount: 2 }, comments: closedConnection, milestone: { title: 'v1' } } } } },
-      views
-    );
-    expect(byNumber.value).toEqual({
-      data: {
-        repository: {
-          hasIssuesEnabled: true,
-          issue: {
-            __typename: 'Issue',
-            number: 4,
-            title: 'Issue 4 as opened',
-            body: 'As opened.',
-            state: 'OPEN',
-            stateReason: null,
-            closedAt: null,
-            closed: false,
-            updatedAt: '2026-10-01T10:00:00Z',
-            labels: { nodes: [{ name: 'bug' }], totalCount: 1 },
-            comments: { nodes: [], edges: [], totalCount: 0, pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null } },
-          },
-        },
-      },
-    });
-    expect([...byNumber.answered]).toEqual([4]);
-    // A REST read, by its html_url; another issue in the same answer is left as it is.
-    const rest = atCreation(
-      [
-        { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'closed', state_reason: 'completed', comments: 3, labels: [{ name: 'x' }], assignees: [{ login: 'm' }] },
-        { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
-      ],
-      views
-    );
-    expect(rest.value).toEqual([
-      { number: 4, html_url: 'https://github.com/O/R/issues/4', state: 'open', state_reason: null, comments: 0, labels: [{ name: 'bug' }] },
-      { number: 5, html_url: 'https://github.com/o/r/issues/5', state: 'closed' },
-    ]);
-    // Numbers without identity cannot establish which repository owns a search result.
-    const search = atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } }, views);
-    expect(search.value).toEqual({ data: { search: { nodes: [{ number: 4, state: 'CLOSED', title: 'Now' }, { number: 5, state: 'CLOSED', title: 'Other' }] } } });
-    // Outside the set's repository, a number alone names nothing.
-    expect(atCreation({ data: { search: { nodes: [{ number: 4, state: 'CLOSED' }] } } }, views).answered.size).toBe(0);
-  });
-
-  it('identifies literal, aliased and variable selections without changing sibling issues, PRs or repositories', async () => {
-    const query = `query($owner: String!, $name: String!, $number: Int!) {
-      repository(owner: $owner, name: $name) {
-        judged: issue(number: $number) { body state }
-        sibling: issue(number: 5) { body state }
-        pr: pullRequest(number: $number) { body state }
-      }
-      elsewhere: repository(owner: "other", name: "repo") {
-        issue(number: 4) { body state }
-      }
-    }`;
-    const response = { data: {
-      repository: {
-        judged: { _archonBenchIssueId: 'I_4', body: 'Fixed', state: 'CLOSED' },
-        sibling: { _archonBenchIssueId: 'I_5', body: 'Other issue', state: 'CLOSED' },
-        pr: { body: 'Merged PR', state: 'MERGED' },
-      },
-      elsewhere: { issue: { _archonBenchIssueId: 'I_elsewhere_4', body: 'Another repo', state: 'CLOSED' } },
-    } };
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query, variables: { owner: 'o', name: 'r', number: 4 } }),
-    }), REPO, views, async (_url, init) => {
-      const forwarded = JSON.parse(String(init.body)) as { query: string };
-      expect(forwarded.query.match(/_archonBenchIssueId: id/g)).toHaveLength(3);
-      expect(forwarded.query).toContain('pr: pullRequest(number: $number) { body state }');
-      return Response.json(response);
-    });
-    expect(await answer.response.json()).toEqual({ data: {
-      repository: {
-        judged: { body: 'As opened.', state: 'OPEN' },
-        sibling: { body: 'Other issue', state: 'CLOSED' },
-        pr: { body: 'Merged PR', state: 'MERGED' },
-      },
-      elsewhere: { issue: { body: 'Another repo', state: 'CLOSED' } },
-    } });
-    expect(answer.answered).toEqual([4]);
-
-    // A request to another repository alone must also strip the private identity.
-    const other = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: '{ repository(owner: "other", name: "repo") { issue(number: 4) { state } } }' }),
-    }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_other', state: 'CLOSED' } } } }));
-    expect(await other.response.json()).toEqual({ data: { repository: { issue: { state: 'CLOSED' } } } });
-    expect([other.answered, other.live]).toEqual([[], []]);
-  });
-
-  for (const root of ['node', 'nodes']) {
-    for (const identified of [false, true]) {
-      it(`accounts for each ${root} lookup beside a successful same-issue sibling (identified=${String(identified)})`, async () => {
-        const selection = root === 'node' ? 'node(id: "I_4")' : 'nodes(ids: ["I_4"])';
-        const issue = { body: 'Fixed live', ...(identified ? { _archonBenchIssueId: 'I_4' } : {}) };
-        const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-          method: 'POST', body: JSON.stringify({ query: `{ unresolved: ${selection} { ... on Issue { body } } other: node(id: "I_4") { ... on Issue { body } } }` }),
-        }), REPO, views, async () => Response.json({ data: {
-          unresolved: root === 'node' ? issue : [issue],
-          other: { _archonBenchIssueId: 'I_4', body: 'Fixed live' },
-        } }));
-        expect(answer.answered).toEqual([4]);
-        expect(answer.live).toEqual(identified ? [] : [4]);
-        const expected = { body: identified ? 'As opened.' : 'Fixed live' };
-        expect(await answer.response.json()).toEqual({ data: { unresolved: root === 'node' ? expected : [expected], other: { body: 'As opened.' } } });
-      });
-    }
-  }
-
-  it('reports malformed successful JSON lookup responses on the configured forge', async () => {
-    const body = JSON.stringify({ query: '{ search(query: "repo:o/r", type: ISSUE, first: 5) { nodes { ... on Issue { body } } } }' });
-    for (const host of ['api.github.com', 'other.example']) {
-      const answer = await answerLookup(new Request(`http://${host}/graphql`, { method: 'POST', body }), REPO, views,
-        async () => new Response('{invalid', { headers: { 'content-type': 'application/json' } }));
-      expect(answer.problem).toBe(host === 'api.github.com' ? 'lookup server: response contained invalid JSON' : undefined);
-      expect(await answer.response.text()).toBe('{invalid');
-    }
-  });
-
-  it('identifies interface-only node lookups before returning a creation snapshot', async () => {
-    for (const query of ['{ node(id: "I_4") { ... on Closable { closed } } }', 'query($id: ID!) { node(id: $id) { ...ClosableFields } } fragment ClosableFields on Closable { closed }', '{ ... on Query { node(id: "I_4") { ... on Closable { closed } } } }', 'fragment RootFields on Query { node(id: "I_4") { ... on Closable { closed } } } query { ...RootFields }']) {
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query, variables: { id: 'I_4' } }),
-      }), REPO, views, async (_url, init) => {
-        const forwarded = JSON.parse(String(init.body)) as { query: string };
-        return Response.json({ data: { node: { closed: true, ...(forwarded.query.includes('_archonBenchIssueId: id') ? { _archonBenchIssueId: 'I_4' } : {}) } } });
-      });
-      expect([await answer.response.json(), answer.answered, answer.live]).toEqual([{ data: { node: { closed: false } } }, [4], []]);
-    }
-  });
-
-  it('snapshots implicit issue collection nodes and edge nodes', async () => {
-    for (const edges of [false, true]) {
-      const fields = edges ? 'edges { node { body state } }' : 'nodes { body state }';
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query: `{ repository(owner: "o", name: "r") { issues(first: 10) { ${fields} } } }` }),
-      }), REPO, views, async (_url, init) => {
-        const query = (JSON.parse(String(init.body)) as { query: string }).query;
-        expect(query).toContain(`${edges ? 'node' : 'nodes'} { ... on Issue { _archonBenchIssueId: id }`);
-        const issue = { body: 'Fixed by PR #9', state: 'CLOSED', ...(query.includes('_archonBenchIssueId: id') ? { _archonBenchIssueId: 'I_4' } : {}) };
-        return Response.json({ data: { repository: { issues: edges ? { edges: [{ node: issue }] } : { nodes: [issue] } } } });
-      });
-      const issue = { body: 'As opened.', state: 'OPEN' };
-      expect(await answer.response.json()).toEqual({ data: { repository: { issues: edges ? { edges: [{ node: issue }] } : { nodes: [issue] } } } });
-      expect([answer.answered, answer.live]).toEqual([[4], []]);
-    }
-  });
-
-  it('uses numeric and null label defaults only for omitted variables of the selected operation', async () => {
-    for (const limit of ['first', 'last']) {
-      const query = `query Other($limit: Int = 0) { viewer { login } } query Read($limit: Int = 10, $after: String = null, $before: String = null) { repository(owner: "o", name: "r") { issue(number: 4) { labels(${limit}: $limit, after: $after, before: $before) { nodes { name } } } } }`;
-      for (const variables of [{}, { limit: 10 }]) {
-        const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-          method: 'POST', body: JSON.stringify({ query, operationName: 'Read', variables }),
-        }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [{ name: 'done' }] } } } } }));
-        expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{ name: 'bug' }] } } } } });
-        expect([answer.answered, answer.live]).toEqual([[4], []]);
-      }
-      await expect(answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query, operationName: 'Read', variables: { limit: 0 } }),
-      }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [] } } } } }))).rejects.toThrow('partial labels page');
-    }
-  });
-
-  for (const anotherAnswered of [false, true]) {
-    it(`records a selected batch issue with missing identity as live (another answered: ${String(anotherAnswered)})`, async () => {
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query: `{ repository(owner: "o", name: "r") { issue(number: 4) { body state } ${anotherAnswered ? 'other: issue(number: 4) { body }' : ''} } }` }),
-      }), REPO, views, async () => Response.json({ data: { repository: {
-        issue: { body: 'Fixed live', state: 'CLOSED' },
-        ...(anotherAnswered ? { other: { _archonBenchIssueId: 'I_4', body: 'Fixed live' } } : {}),
-      } } }));
-      expect([answer.answered, answer.live]).toEqual([anotherAnswered ? [4] : [], [4]]);
-    });
-  }
-
-  it('reports an identified batch node answered without its requested identity as live', async () => {
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: 'query($ids: [ID!]!) { nodes(ids: $ids) { ... on Closable { closed } } }', variables: { ids: ['I_4'] } }),
-    }), REPO, views, async () => Response.json({ data: { nodes: [{ closed: true }] } }));
-    expect([answer.answered, answer.live]).toEqual([[], [4]]);
-  });
-
-  it('rewrites and counts both batch issues in one GraphQL response', async () => {
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: '{ nodes(ids: ["I_4", "I_5"]) { ... on Issue { title body state } } }' }),
-    }), REPO, new Map([[4, view(4)], [5, { ...view(5), body: 'Second creation body' }]]), async () => Response.json({ data: { nodes: [
-      { _archonBenchIssueId: 'I_4', title: 'Fixed first', body: 'Closed first', state: 'CLOSED' },
-      { _archonBenchIssueId: 'I_5', title: 'Fixed second', body: 'Closed second', state: 'CLOSED' },
-    ] } }));
-    expect(await answer.response.json()).toEqual({ data: { nodes: [
-      { title: 'Issue 4 as opened', body: 'As opened.', state: 'OPEN' },
-      { title: 'Issue 5 as opened', body: 'Second creation body', state: 'OPEN' },
-    ] } });
-    expect([answer.answered, answer.live]).toEqual([[4, 5], []]);
-  });
-
-  it('retains live evidence for the second requested node despite an answered sibling', async () => {
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: '{ nodes(ids: ["I_4", "I_5"]) { ... on Issue { body state } } sibling: node(id: "I_5") { ... on Issue { body state } } }' }),
-    }), REPO, new Map([[4, view(4)], [5, view(5)]]), async () => Response.json({ data: {
-      nodes: [
-        { _archonBenchIssueId: 'I_4', body: 'Fixed first', state: 'CLOSED' },
-        { body: 'Fixed second', state: 'CLOSED' },
-      ],
-      sibling: { _archonBenchIssueId: 'I_5', body: 'Fixed second', state: 'CLOSED' },
-    } }));
-    expect(await answer.response.json()).toEqual({ data: {
-      nodes: [
-        { body: 'As opened.', state: 'OPEN' },
-        { body: 'Fixed second', state: 'CLOSED' },
-      ],
-      sibling: { body: 'As opened.', state: 'OPEN' },
-    } });
-    expect([answer.answered, answer.live]).toEqual([[4, 5], [5]]);
-  });
-
-  it('respects skip and include directives when projecting synthetic connections', async () => {
-    for (const directive of ['@skip(if: true)', '@include(if: false)', '@skip(if: $omit)', '@include(if: $keep)']) {
-      const query = `query($omit: Boolean!, $keep: Boolean!) { repository(owner: "o", name: "r") { issue(number: 4) {
-        labels(first: 10) { nodes { name ${directive} } edges { cursor ${directive} node { name ${directive} } } pageInfo { hasNextPage ${directive} endCursor } }
-        comments { nodes { body } totalCount ${directive} pageInfo { hasNextPage ${directive} endCursor } }
-      } } }`;
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query, variables: { omit: true, keep: false } }),
-      }), REPO, views, async () => Response.json({ data: { repository: { issue: {
-        _archonBenchIssueId: 'I_4', labels: { nodes: [{}], edges: [{ node: {} }], pageInfo: { endCursor: 'live' } },
-        comments: { nodes: [{ body: 'Fixed' }], pageInfo: { endCursor: 'live' } },
-      } } } }));
-      expect(await answer.response.json()).toEqual({ data: { repository: { issue: {
-        labels: { nodes: [{}], edges: [{ node: {} }], pageInfo: { endCursor: expect.any(String) } },
-        comments: { nodes: [], pageInfo: { endCursor: null } },
-      } } } });
-    }
-  });
-
-  it('uses directive variable defaults and conditional fragment selections for creation labels', async () => {
-    const query = `query($omit: Boolean = true, $keep: Boolean = false) {
-      repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { nodes {
-        ... on Label @skip(if: $omit) { name }
-        ...LabelName @include(if: $keep)
-      } } } }
-    } fragment LabelName on Label { name }`;
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async () => Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: { nodes: [{}] } } } } }));
-    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{}] } } } } });
-  });
-
-  it('returns creation label edges and complete page metadata', async () => {
-    for (const withEdges of [true, false]) {
-      const query = `{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { ${withEdges ? 'edges { cursor node { name } }' : ''} pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } } }`;
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query }),
-      }), REPO, views, async () => Response.json({ data: { repository: { issue: {
-        _archonBenchIssueId: 'I_4', labels: { ...(withEdges ? { edges: [{ cursor: 'live-cursor', node: { name: 'done' } }] } : {}), pageInfo: { hasNextPage: true, hasPreviousPage: false, startCursor: 'live-cursor', endCursor: 'live-cursor' } },
-      } } } }));
-      expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: {
-        ...(withEdges ? { edges: [{ cursor: expect.any(String), node: { name: 'bug' } }] } : {}), pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: expect.any(String), endCursor: expect.any(String) },
-      } } } } });
-      expect([answer.answered, answer.live]).toEqual([[4], []]);
-    }
-  });
-
-  it('refuses partial creation-label pages rather than certifying a false snapshot', async () => {
-    const twoLabels = new Map([[4, { ...view(4), labels: ['bug', 'area: cli'] }]]);
-    for (const args of ['first: 1', 'last: 1', 'first: $limit', 'first: 10, after: "live-cursor"', 'last: 10, before: "live-cursor"']) {
-      for (const selection of ['nodes { name }', 'edges { cursor node { name } }', 'pageInfo { hasNextPage startCursor endCursor }']) {
-        const query = `query Page${args.includes('$limit') ? '($limit: Int)' : ''} { repository(owner: "o", name: "r") { issue(number: 4) { tags: labels(${args}) { ${selection} totalCount } } } }`;
-        await expect(answerLookup(new Request('http://api.github.com/graphql', {
-          method: 'POST', body: JSON.stringify({ query, variables: { limit: 1 } }),
-        }), REPO, twoLabels, async () => Response.json({ data: { repository: { issue: {
-          _archonBenchIssueId: 'I_4', tags: {
-            ...(selection.startsWith('nodes') ? { nodes: [{ name: 'done' }] } : {}),
-            ...(selection.startsWith('edges') ? { edges: [{ cursor: 'live-cursor', node: { name: 'done' } }] } : {}),
-            ...(selection.startsWith('pageInfo') ? { pageInfo: { hasNextPage: true, startCursor: 'live-cursor', endCursor: 'live-cursor' } } : {}),
-            totalCount: 5,
-          },
-        } } } }))).rejects.toThrow('the bench cannot answer a partial labels page from the creation snapshot');
-      }
-    }
-  });
-
-  it('projects only the selected operation and its reachable fragments', async () => {
-    const query = 'query A { repository(owner: "o", name: "r") { issue(number: 4) { ...Body } } } query B { repository(owner: "o", name: "r") { issue(number: 4) { x: id } } } fragment Body on Issue { x: body }';
-    for (const operationName of ['A', 'B']) {
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query, operationName }),
-      }), REPO, views, async (_url, init) => {
-        const forwarded = JSON.parse(String(init.body)) as { query: string; operationName: string };
-        expect(forwarded.operationName).toBe(operationName);
-        const bodyKey = /(\w+): body/.exec(forwarded.query)?.[1] ?? 'x';
-        return Response.json({ data: { repository: { issue: {
-          _archonBenchIssueId: 'I_4', [operationName === 'A' ? bodyKey : 'x']: operationName === 'A' ? 'Live body' : 'I_4',
-        } } } });
-      });
-      expect(await answer.response.json()).toEqual({ data: { repository: { issue: { x: operationName === 'A' ? 'As opened.' : 'I_4' } } } });
-      expect([answer.answered, answer.live]).toEqual([[4], []]);
-    }
-    const unselected = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: 'query A { viewer { login } } query B { repository(owner: "o", name: "r") { issue(number: 4) { id } } }', operationName: 'A' }),
-    }), REPO, views, async () => new Response('not json'));
-    expect([unselected.answered, unselected.live]).toEqual([[], []]);
-  });
-
-  it('recognizes selected canonical identity through node interfaces and aliases', async () => {
-    for (const [field, identity] of [['id', 'I_4'], ['url', 'https://github.com/o/r/issues/4']]) {
-      const selection = field === 'id' ? 'identity: id' : '... on UniformResourceLocatable { identity: url }';
-      const query = `{ node(id: "I_4") { ${selection} ... on Closable { state } } }`;
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query }),
-      }), REPO, views, async (_url, init) => {
-        const forwarded = JSON.parse(String(init.body)) as { query: string };
-        const identityKey = /(\w+): url/.exec(forwarded.query)?.[1] ?? 'identity';
-        return Response.json({ data: { node: { [identityKey]: identity, state: 'CLOSED' } } });
-      });
-      expect(await answer.response.json()).toEqual({ data: { node: { identity, state: 'OPEN' } } });
-      expect([answer.answered, answer.live]).toEqual([[4], []]);
-    }
-  });
-
-  it('unions same-field selections from two Issue fragments', async () => {
-    const query = '{ repository(owner: "o", name: "r") { issue(number: 4) { ...Names ...Count } } } fragment Names on Issue { labels(first: 10) { nodes { name } } } fragment Count on Issue { labels(first: 10) { totalCount } }';
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async () => Response.json({ data: { repository: { issue: {
-      _archonBenchIssueId: 'I_4', labels: { nodes: [{ name: 'done' }], totalCount: 7 },
-    } } } }));
-    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { nodes: [{ name: 'bug' }], totalCount: 1 } } } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('merges restored aliases on issues and unrelated objects', async () => {
-    const query = `{ repository(owner: "o", name: "r") {
-      owner { profile: avatarUrl profileOwner: login }
-      who: owner { login }
-      ...Repo
-      issue(number: 4) { tags: labels(first: 10) { count: totalCount } ...Tags }
-    } }
-    fragment Repo on Repository { who: owner { avatarUrl } }
-    fragment Tags on Issue { tags: labels(first: 10) { items: nodes { text: name ...Label } } }
-    fragment Label on Label { text: name }`;
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async (_url, init) => {
-      const forwarded = JSON.parse(String(init.body)) as { query: string };
-      const keyOf = (name: string) => new RegExp(`(_archonBenchIssueIdField\\w*): ${name}\\b`).exec(forwarded.query)?.[1] ?? 'missing';
-      return Response.json({ data: { repository: {
-        owner: { profile: 'avatar', profileOwner: 'operator' },
-        who: { login: 'operator' }, [keyOf('owner')]: { avatarUrl: 'avatar' },
-        issue: { _archonBenchIssueId: 'I_4', tags: { count: 7 }, [keyOf('labels')]: { [keyOf('nodes')]: [{ [keyOf('name')]: 'done' }] } },
-      } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { repository: {
-      owner: { profile: 'avatar', profileOwner: 'operator' }, who: { login: 'operator', avatarUrl: 'avatar' },
-      issue: { tags: { count: 1, items: [{ text: 'bug' }] } },
-    } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('rewrites aliased issue fields by schema name and preserves caller-owned private aliases', async () => {
-    const keptAliases = ['id', 'node_id', 'number', 'url', 'html_url', 'repository_url', '__typename', 'databaseId', 'author', 'user', 'author_association', 'authorAssociation', 'createdAt', 'created_at'];
-    const query = `{ repository(owner: "o", name: "r") {
-      issue(number: 4) { ${keptAliases.map(key => `${key}: body`).join(' ')} text: title status: state tags: labels(first: 10) { items: nodes { text: name } count: totalCount } }
-      pullRequest(number: 4) { _archonBenchIssueId: id }
-    } }`;
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async (_url, init) => {
-      const forwarded = JSON.parse(String(init.body)) as { query: string };
-      const identity = /on Issue \{ (\w+): id/.exec(forwarded.query)?.[1];
-      expect(identity).toBeDefined();
-      return Response.json({ data: { repository: {
-        issue: { [identity ?? 'missing']: 'I_4', ...Object.fromEntries(keptAliases.map(key => [key, 'Live outcome'])), text: 'Current title', status: 'CLOSED', tags: { items: [{ text: 'done' }], count: 1 } },
-        pullRequest: { _archonBenchIssueId: 'PR_4' },
-      } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { repository: {
-      issue: { ...Object.fromEntries(keptAliases.map(key => [key, 'As opened.'])), text: 'Issue 4 as opened', status: 'OPEN', tags: { items: [{ text: 'bug' }], count: 1 } },
-      pullRequest: { _archonBenchIssueId: 'PR_4' },
-    } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('keeps alias ownership separate across disjoint Issue and PR fragments', async () => {
-    const query = '{ search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ... on Issue { id: body writer: author { name: login } } ... on PullRequest { id } } } }';
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, views, async (_url, init) => {
-      const forwarded = JSON.parse(String(init.body)) as { query: string };
-      const keyOf = (name: string) => new RegExp(`(\\w+): ${name}\\b`).exec(forwarded.query)?.[1] ?? 'missing';
-      return Response.json({ data: { search: { nodes: [
-        { _archonBenchIssueId: 'I_4', [keyOf('body')]: 'Live outcome', [keyOf('author')]: { [keyOf('login')]: 'opener' } },
-        { id: 'PR_4' },
-      ] } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { search: { nodes: [
-      { id: 'As opened.', writer: { name: 'opener' } },
-      { id: 'PR_4' },
-    ] } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('merges aliases inside a projected creation connection', async () => {
-    const query = '{ repository(owner: "o", name: "r") { issue(number: 4) { labels(first: 10) { items: nodes { text: name } ...Connection } } } } fragment Connection on LabelConnection { items: nodes { name } }';
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query }),
-    }), REPO, new Map([[4, { ...view(4), labels: ['bug', 'area: cli'] }]]), async (_url, init) => {
-      const forwarded = JSON.parse(String(init.body)) as { query: string };
-      const itemsKey = /(_archonBenchIssueIdField\w*): nodes/.exec(forwarded.query)?.[1] ?? 'missing';
-      return Response.json({ data: { repository: { issue: { _archonBenchIssueId: 'I_4', labels: {
-        items: [{ text: 'done' }, { text: 'later' }], [itemsKey]: [{ name: 'done' }, { name: 'later' }],
-      } } } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { repository: { issue: { labels: { items: [{ text: 'bug', name: 'bug' }, { text: 'area: cli', name: 'area: cli' }] } } } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('does not count issue syntax inside GraphQL strings or comments as a selection', async () => {
-    for (const query of [
-      '{ search(query: "issue(number: 4)", type: ISSUE, first: 1) { issueCount } }',
-      '{ viewer { login } # issue(number: 4) { body }\n }',
-    ]) {
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query }),
-      }), REPO, views, async (_url, init) => {
-        expect(JSON.parse(String(init.body)).query).toBe(query);
-        return Response.json({ data: {} });
-      });
-      expect([answer.answered, answer.live]).toEqual([[], []]);
-    }
-  });
-
-  it('identifies issueOrPullRequest only through the requested private identity', async () => {
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-      method: 'POST', body: JSON.stringify({ query: '{ repository(owner: "o", name: "r") { issueOrPullRequest(number: 4) { ... on Issue { body state } } } }' }),
-    }), REPO, views, async (_url, init) => {
-      const { query } = JSON.parse(String(init.body)) as { query: string };
-      // The field selection itself must request identity, independently of Issue fragments.
-      const identified = /issueOrPullRequest\(number: 4\) \{ \.\.\. on Issue \{ _archonBenchIssueId: id \}/.test(query);
-      return Response.json({ data: { repository: { issueOrPullRequest: { ...(identified ? { _archonBenchIssueId: 'I_4' } : {}), body: 'Fixed', state: 'CLOSED' } } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { repository: { issueOrPullRequest: { body: 'As opened.', state: 'OPEN' } } } });
-    expect([answer.answered, answer.live]).toEqual([[4], []]);
-  });
-
-  it('identifies issues in named and inline fragments used by search queries', async () => {
-    for (const query of [
-      'fragment issue on Issue { number state title } query { search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ...issue } } }',
-      '{ search(query: "repo:o/r", type: ISSUE, first: 10) { nodes { ... on Issue @include(if: true) { number state title } } } }',
-    ]) {
-      const answer = await answerLookup(new Request('http://api.github.com/graphql', {
-        method: 'POST', body: JSON.stringify({ query }),
-      }), REPO, views, async (_url, init) => {
-        const forwarded = JSON.parse(String(init.body)) as { query: string };
-        expect(forwarded.query).toContain('_archonBenchIssueId: id');
-        return Response.json({ data: { search: { nodes: [
-          { _archonBenchIssueId: 'I_4', number: 4, state: 'CLOSED', title: 'Now' },
-          { _archonBenchIssueId: 'I_other', number: 4, state: 'CLOSED', title: 'Other repository' },
-        ] } } });
-      });
-      expect(await answer.response.json()).toEqual({ data: { search: { nodes: [
-        { number: 4, state: 'OPEN', title: 'Issue 4 as opened' },
-        { number: 4, state: 'CLOSED', title: 'Other repository' },
-      ] } } });
-      expect(answer.answered).toEqual([4]);
-    }
-  });
-
-  it('forwards a PR-only query unchanged without treating its number as a batch issue read', async () => {
-    const body = JSON.stringify({ query: 'query($number: Int!) { repository(owner: "o", name: "r") { pullRequest(number: $number) { state } } }', variables: { number: 4 } }, null, 2);
-    const answer = await answerLookup(new Request('http://api.github.com/graphql', { method: 'POST', body }), REPO, views, async (_url, init) => {
-      expect(init.body).toBe(body);
-      return Response.json({ data: { repository: { pullRequest: { state: 'MERGED' } } } });
-    });
-    expect(await answer.response.json()).toEqual({ data: { repository: { pullRequest: { state: 'MERGED' } } } });
-    expect([answer.answered, answer.live]).toEqual([[], []]);
-  });
-
-  it('answer a batch issue history locally and forward anything else unchanged', async () => {
-    const calls: string[] = [];
-    const upstream = async (url: string): Promise<Response> => {
-      calls.push(url);
-      return new Response('{"number": 5, "state":"closed"}', { headers: { 'content-type': 'application/json' } });
-    };
-    const comments = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/comments', { headers: { host: 'api.github.com' } }), REPO, views, upstream);
-    expect([await comments.response.json(), comments.answered, calls]).toEqual([[], [4], []]);
-    const labels = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/labels'), REPO, views, upstream);
-    expect(await labels.response.json()).toEqual([{ name: 'bug' }]);
-    const other = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/5?x=1', { headers: { host: 'api.github.com' } }), REPO, views, upstream);
-    expect([await other.response.text(), other.answered, calls]).toEqual(['{"number": 5, "state":"closed"}', [], ['https://api.github.com/repos/o/r/issues/5?x=1']]);
-  });
-
-  it('read the labels the author set at creation, not those added later or by others', () => {
-    const at = (seconds: number) => new Date(Date.parse('2026-10-01T10:00:00Z') + seconds * 1000).toISOString();
-    const events = [
-      { createdAt: at(1), actor: 'a', label: 'bug', removed: false },
-      { createdAt: at(2), actor: 'a', label: 'area: cli', removed: false },
-      { createdAt: at(3), actor: 'a', label: 'area: cli', removed: true },
-      { createdAt: at(5), actor: 'm', label: 'archon-ready', removed: false },
-      { createdAt: at(14 * 3600), actor: 'a', label: 'enhancement', removed: false },
-    ];
-    expect(creationLabels('a', '2026-10-01T10:00:00Z', events)).toEqual(['bug']);
-    expect(creationLabels(null, '2026-10-01T10:00:00Z', events)).toEqual([]);
-  });
-
-  it('count a gh lookup as answered only when the run reached the server, and a fetch never', () => {
-    const lookups = ['triage: gh issue view 4 --repo o/r', 'triage: gh api repos/o/r/issues/4/events', 'triage: https://github.com/o/r/issues/4'];
-    const wrapped = "triage: /bin/zsh -lc 'gh issue view 4 --repo o/r'";
-    expect(splitLookups([wrapped], true, [])).toEqual({ answered: [wrapped], leak: [] });
-    expect(splitLookups(lookups, true, [])).toEqual({ answered: lookups.slice(0, 2), leak: lookups.slice(2) });
-    expect(splitLookups(lookups, false, [])).toEqual({ answered: [], leak: lookups });
-    expect(splitLookups(lookups.slice(0, 1), true, ['POST /graphql'])).toEqual({ answered: lookups.slice(0, 1), leak: ['lookup server: POST /graphql was answered live'] });
-  });
-
-  it('keeps mixed commands flagged even when gh reached the snapshot server', () => {
-    for (const separator of ['; ', ' && ', '\n', ' | ']) {
-      const command = `triage: gh issue view 4${separator}curl https://github.com/o/r/issues/4`;
-      expect(splitLookups([command], true, []).leak).toEqual([command]);
-    }
-  });
-
-  it('keeps executable process substitutions flagged through both transcript routes', () => {
-    for (const redirect of ['< <', '> >']) {
-      const command = `gh issue view 4 ${redirect}(curl https://github.com/o/r/issues/4)`;
-      for (const event of [
-        { type: 'tool_call', toolCallId: 'lookup', rawInput: { command } },
-        { type: 'subtask', taskType: 'command_execution', taskId: 'lookup', description: command },
-      ]) {
-        const transcript = JSON.stringify({ type: 'provider_event', step: 'triage', event });
-        const lookups = findLookups(transcript, issueTokens(REPO, 4));
-        expect(lookups).toHaveLength(1);
-        expect(splitLookups(lookups, true, [])).toEqual({ answered: [], leak: lookups });
-      }
-    }
-  });
-
-  it('covers a single gh command whose quoted jq expression contains a pipe', () => {
-    const command = "triage: gh issue view 4 --json body --jq '.body | length'";
-    expect(splitLookups([command], true, [])).toEqual({ answered: [command], leak: [] });
-  });
-
-  it('preserves stored gh credentials in the socket configuration', () => {
-    const operator = track(mkdtempSync(join(tmpdir(), 'bench-gh-auth-')));
-    writeFileSync(join(operator, 'hosts.yml'), 'bench-auth.invalid:\n    oauth_token: bench-stored-token\n    user: bench-test\n    git_protocol: https\n');
-    const previous = process.env.GH_CONFIG_DIR;
-    process.env.GH_CONFIG_DIR = operator;
-    const server = serveLookups({ ...REPO, host: 'bench-auth.invalid' }, views);
-    try {
-      const result = spawnSync('gh', ['auth', 'token', '--hostname', 'bench-auth.invalid'], {
-        encoding: 'utf8',
-        env: { ...process.env, ...server.env, GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '' },
-      });
-      expect(result.status).toBe(0);
-      expect(result.stdout.trim() === 'bench-stored-token').toBe(true);
-    } finally {
-      server.stop();
-      if (previous === undefined) delete process.env.GH_CONFIG_DIR;
-      else process.env.GH_CONFIG_DIR = previous;
-    }
-  });
-
-  it('does not rewrite another forge host, even with the same repository, number and id', async () => {
-    for (const path of ['/repos/o/r/issues/4/comments', '/graphql']) {
-      const upstream = async () => Response.json({ id: 'I_4', number: 4, state: 'CLOSED' });
-      const result = await answerLookup(new Request(`http://enterprise.example${path}`, {
-        method: path === '/graphql' ? 'POST' : 'GET',
-        ...(path === '/graphql' ? { body: JSON.stringify({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { state } } }' }) } : {}),
-      }), REPO, views, upstream);
-      expect([await result.response.json(), result.answered, result.live]).toEqual([{ id: 'I_4', number: 4, state: 'CLOSED' }, [], []]);
-    }
-  });
-
-  it('report a request that names a batch issue but is answered live', async () => {
-    const upstream = async (_url: string, init: RequestInit): Promise<Response> => {
-      const asked = JSON.parse(String(init.body)) as { query: string };
-      const issue = { ...(asked.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: 'I_4' } : {}), state: 'CLOSED' };
-      return Response.json({ data: { repository: { issue } } });
-    };
-    const graphql = (body: unknown) => new Request('http://api.github.com/graphql', { method: 'POST', headers: { host: 'api.github.com' }, body: JSON.stringify(body) });
-    const scoped = await answerLookup(graphql({ query: 'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue(number: $number) { state } } }', variables: { owner: 'o', repo: 'r', number: 4 } }), REPO, views, upstream);
-    expect([scoped.answered, scoped.live]).toEqual([[4], []]);
-    const literal = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { state } } }' }), REPO, views, upstream);
-    expect([await literal.response.json(), literal.answered, literal.live]).toEqual([{ data: { repository: { issue: { state: 'OPEN' } } } }, [4], []]);
-    const rest = await answerLookup(new Request('http://api.github.com/repos/o/r/issues/4/reactions'), REPO, views, async () => Response.json([{ content: '+1' }]));
-    expect([rest.answered, rest.live]).toEqual([[], [4]]);
-    const refused = await answerLookup(graphql({ query: '{ repository(owner: "o", name: "r") { issue(number: 4) { projectItems { id } } } }' }), REPO, views, async () =>
-      Response.json({ errors: [{ type: 'INSUFFICIENT_SCOPES' }] })
-    );
-    expect([refused.answered, refused.live]).toEqual([[], []]);
   });
 });
 
@@ -1716,10 +827,21 @@ describe('score', () => {
     expect([a.false_closes, b.false_closes]).toEqual([['22'], ['2']]);
   });
 
-  it('keeps reference-only closes pending until the operator judges the fix', () => {
+  function liveOut(): string {
     const out = benchOut();
+    const samples = readLines(join(out, SAMPLES_FILE));
+    writeFileSync(join(out, SAMPLES_FILE), '');
+    for (const sample of samples) appendLine(join(out, SAMPLES_FILE), { ...sample, mode: 'live', workflow: 'intake' });
+    const records = readLines(join(out, CHECKS_FILE));
+    writeFileSync(join(out, CHECKS_FILE), '');
+    for (const record of records) appendLine(join(out, CHECKS_FILE), { ...record, mode: 'live' });
+    return out;
+  }
+
+  it('keeps reference-only closes pending until the operator judges the fix', () => {
+    const out = liveOut();
     const fixedOnBase = { merged_on_base: ['https://github.com/o/r/pull/40'] };
-    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', fixedOnBase));
+    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', { ...fixedOnBase, mode: 'live', workflow: 'intake' }));
     const pending = score(set, out).versions[1];
     expect([pending.false_closes, pending.pending_closes]).toEqual([[], ['2']]);
     expect(renderScore(score(set, out))).toContain('0, 1 awaiting operator judgment (2): pending');
@@ -1737,23 +859,23 @@ describe('score', () => {
 
   it('lets a wrong operator mark overturn an open close disposition, retaining closed rows', () => {
     const disposed = row(21, { group: 'dispositioned', known: { disposition: { contract: 'NO_ACTION' } } });
-    const proposed = line('a', disposed, '2-y');
+    const proposed = line('a', disposed, '2-y', { mode: 'live', workflow: 'intake' });
     expect(([undefined, 'right', 'wrong', 'partly'] as const).map(mark => falseClose(disposed, proposed, mark))).toEqual([false, false, true, false]);
-    expect(falseClose(fixed, line('a', fixed, '2-y'), 'wrong')).toBe(false);
-    const out = benchOut();
+    expect(falseClose(fixed, line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }), 'wrong')).toBe(false);
+    const out = liveOut();
     appendLine(join(out, SAMPLES_FILE), proposed);
     appendLine(join(out, MARKS_FILE), { run_id: proposed.run_id, batch: 2, row: disposed.id, label: 'a', mark: 'wrong', note: '' });
     expect(score({ ...set, rows: [...set.rows, disposed] }, out).versions[0].false_closes).toEqual(['21']);
   });
 
   it('lets a mark override the expected answer for closes and dispositions, but not for type', () => {
-    const out = benchOut();
+    const out = liveOut();
     expect(renderPage(set, out, 1)).toContain('Counts as a false close unless you mark it right.');
     appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: '' });
     const blocked = row(10, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
     const ready = { verdict: { ...line('a', blocked, '2-y').verdict!, contract: 'READY' as const, route: 'plan' as const } };
-    appendLine(join(out, SAMPLES_FILE), line('a', blocked, '2-y', ready));
-    appendLine(join(out, SAMPLES_FILE), line('b', blocked, '2-y', { verdict: { ...ready.verdict, contract: 'BLOCKED', route: null } }));
+    appendLine(join(out, SAMPLES_FILE), line('a', blocked, '2-y', { ...ready, mode: 'live', workflow: 'intake' }));
+    appendLine(join(out, SAMPLES_FILE), line('b', blocked, '2-y', { mode: 'live', workflow: 'intake', verdict: { ...ready.verdict, contract: 'BLOCKED', route: null } }));
     const withBlocked: BenchSet = { ...set, rows: [...set.rows, blocked] };
     const before = score(withBlocked, out).versions;
     expect([before[0].dispositions.agree, before[1].dispositions.agree]).toEqual([0, 1]);
@@ -1767,13 +889,13 @@ describe('score', () => {
   });
 
   it('reads a bar with no applicable rows as not applicable', () => {
-    const out = benchOut();
+    const out = liveOut();
     const result = score(set, out);
     expect(renderScore(result)).toContain('| every `trust: outside` row ran no agent node | 0 of 0 ran one: not applicable |');
     expect(result.versions[0].bars.not_planned.status).toBe('not applicable');
     const empty = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
-    appendLine(join(empty, SAMPLES_FILE), line('a', fixed, '2-y'));
-    appendLine(join(empty, CHECKS_FILE), checks('2-y', true));
+    appendLine(join(empty, SAMPLES_FILE), line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }));
+    appendLine(join(empty, CHECKS_FILE), { ...checks('2-y', true), mode: 'live' });
     const closedOnly = renderScore(score(set, empty));
     expect(closedOnly).toContain('| false closes (none allowed) | 0: not applicable |');
     expect(closedOnly).toContain('| `type` agreement (at least 80%) | -: not applicable |');

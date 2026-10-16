@@ -10,16 +10,7 @@
  * dry run resolves, the tracker's issues and searches, whether a launched run writes a
  * label to its issue, and whether an outside row's triage agent runs anyway. Each
  * launch's arguments land in `argv-<n>.json`.
- *
- * A run whose launch named a `GH_CONFIG_DIR` acts as an agent that looks an issue up:
- * on `workflow wait` it sends gh's `issue view` query to that directory's
- * `http_unix_socket` and keeps the answer in `lookup-run-<n>.json`; with
- * `lookupLiteral` it then asks for the issue's state with a literal GraphQL query, as
- * `gh api graphql` would, and keeps that answer in `lookup-literal-run-<n>.json`.
- * Upstream of that socket, `fetch` to the tracker answers each issue as it is now.
  */
-import { mock } from 'bun:test';
-import * as fs from 'node:fs';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -30,9 +21,6 @@ export interface FakeIssue {
   /** Defaults to closed. */
   readonly state?: 'open' | 'closed';
   readonly author?: string;
-  readonly createdAt?: string;
-  /** Label history, oldest first, as the per-row read reports it. */
-  readonly labelEvents?: readonly { createdAt: string; actor: string; label: string; removed?: true }[];
   /** Pull requests that reference the issue. */
   readonly refs?: readonly { connected?: boolean; url: string; merged: boolean; oid: string | null }[];
 }
@@ -68,15 +56,6 @@ export interface FakeConfig {
   readonly launchFails?: true;
   /** Issue numbers a tracker search answers, by a fragment of its query. */
   readonly searches?: Record<string, number[]>;
-  /** Every run's agent runs `gh issue view` on this issue. */
-  readonly lookupIssue?: number;
-  /** After that lookup, the agent asks for the issue's state with literals only. */
-  readonly lookupLiteral?: true;
-  readonly lookupFailure?: 'throw' | 'http' | 'graphql' | 'partial';
-  readonly cleanupFails?: true;
-  readonly batchIssueWithoutAuthor?: true;
-  readonly batchIssueOverrides?: Record<string, unknown>;
-  readonly batchErrors?: readonly { message: string }[];
 }
 
 const verdict = {
@@ -147,72 +126,7 @@ function events(nodes: readonly FakeNode[]) {
   });
 }
 
-/** Look the configured issue up as gh's `issue view` does, through the socket the run's gh config names. */
-async function lookUp(dir: string, runId: string, config: FakeConfig): Promise<void> {
-  const ghConfig = join(dir, `ghconfig-${runId}`);
-  if (config.lookupIssue === undefined || !existsSync(ghConfig)) return;
-  const settings = Bun.YAML.parse(readFileSync(join(readFileSync(ghConfig, 'utf8'), 'config.yml'), 'utf8')) as { http_unix_socket: string };
-  const [owner, repo] = config.repo.path.split('/');
-  const request = () => fetch('http://api.github.com/graphql', {
-    unix: settings.http_unix_socket,
-    method: 'POST',
-    headers: { host: 'api.github.com', 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: 'query IssueByNumber($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue: issueOrPullRequest(number: $number) { __typename ... on Issue { id number title body state stateReason closedAt url labels(first: 100) { nodes { name } totalCount } comments(first: 100) { nodes { body } totalCount pageInfo { hasNextPage endCursor } } } } } }',
-      variables: { owner, repo, number: config.lookupIssue },
-    }),
-  });
-  if (config.lookupFailure) await (await request()).text();
-  const response = await request();
-  writeFileSync(join(dir, `lookup-${runId}.json`), await response.text());
-  if (config.lookupLiteral !== true) return;
-  const literal = await fetch('http://api.github.com/graphql', {
-    unix: settings.http_unix_socket,
-    method: 'POST',
-    headers: { host: 'api.github.com', 'content-type': 'application/json' },
-    body: JSON.stringify({ query: `{ repository(owner: "${owner}", name: "${repo}") { issue(number: ${String(config.lookupIssue)}) { state } } }` }),
-  });
-  writeFileSync(join(dir, `lookup-literal-${runId}.json`), await literal.text());
-}
-
-/** The tracker as it is now, as the lookup server forwards to it. */
-function upstream(dir: string, url: string, body: string | undefined): Response | undefined {
-  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
-  if (config.lookupFailure && !existsSync(join(dir, 'lookup-failed'))) {
-    writeFileSync(join(dir, 'lookup-failed'), 'yes');
-    if (config.lookupFailure === 'http') return Response.json({ message: 'forced lookup failure' }, { status: 503 });
-    if (config.lookupFailure !== 'throw') return Response.json({ data: config.lookupFailure === 'partial' ? { repository: null } : null, errors: [{ message: 'forced lookup failure' }] });
-    throw new Error('forced lookup failure');
-  }
-  const now = (number: number) => {
-    const issue = config.issues.find(entry => entry.number === number);
-    if (issue === undefined) return undefined;
-    return {
-      id: `I_${String(number)}`,
-      number,
-      title: `Issue ${String(number)}`,
-      body: 'body',
-      state: 'CLOSED',
-      stateReason: 'COMPLETED',
-      closedAt: '2026-10-01T00:00:00Z',
-      url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
-      labels: { nodes: issue.labels.map(name => ({ name })), totalCount: issue.labels.length },
-      comments: { nodes: [{ body: 'Fixed by the merged pull request.' }], totalCount: 1 },
-    };
-  };
-  const { pathname } = new URL(url);
-  if (pathname === '/graphql') {
-    const request = JSON.parse(body ?? '{}') as { query: string; variables?: { number?: number } };
-    // A query with literals gets only the field it asks for, as the tracker answers it.
-    const literal = /number: (\d+)\)/.exec(request.query);
-    if (literal !== null) return Response.json({ data: { repository: { issue: { ...(request.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: `I_${literal[1]}` } : {}), state: now(Number(literal[1]))?.state ?? null } } } });
-    return Response.json({ data: { repository: { issue: { ...now(Number(request.variables?.number)), ...(request.query.includes('_archonBenchIssueId') ? { _archonBenchIssueId: `I_${String(request.variables?.number)}` } : {}) } } } });
-  }
-  const rest = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(pathname);
-  return rest === null ? undefined : Response.json(now(Number(rest[1])) ?? {}, { status: now(Number(rest[1])) === undefined ? 404 : 200 });
-}
-
-function answer(dir: string, args: readonly string[], env?: Record<string, string | undefined>): string {
+function answer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
   const save = (): void => writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
   if (args[0] === 'state' && args[1] === 'list') {
@@ -234,7 +148,6 @@ function answer(dir: string, args: readonly string[], env?: Record<string, strin
     const n = (existsSync(count) ? Number(readFileSync(count, 'utf8')) : 0) + 1;
     writeFileSync(count, String(n));
     writeFileSync(join(dir, `argv-${n}.json`), JSON.stringify(args));
-    if (env?.GH_CONFIG_DIR !== undefined) writeFileSync(join(dir, `ghconfig-run-${n}`), env.GH_CONFIG_DIR);
     const given = inputs(args);
     if (config.issueReadsFailAfterRun === true) {
       config.issues.length = 0;
@@ -268,8 +181,7 @@ function answer(dir: string, args: readonly string[], env?: Record<string, strin
     if (config.unreadableTranscript === true) transcriptPath = dir;
     else if (config.noTranscript !== true) {
       transcriptPath = join(dir, `transcript-run-${n}.jsonl`);
-      const lookup = config.lookupIssue === undefined ? '' : `${JSON.stringify({ type: 'provider_event', step: intake ? 'triage__triage' : 'triage', event: { type: 'tool_call', toolCallId: 'look', name: 'Bash', rawInput: { command: `gh issue view ${String(config.lookupIssue)} --repo ${config.repo.path} --json title,body,state,labels,comments` } } })}\n`;
-      writeFileSync(transcriptPath, lookup);
+      writeFileSync(transcriptPath, '');
     }
     const nodes: FakeNode[] = intake
       ? [
@@ -310,31 +222,17 @@ function answer(dir: string, args: readonly string[], env?: Record<string, strin
 function ghAnswer(dir: string, args: readonly string[]): string {
   const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
   if (args.includes('graphql') && args.some(arg => arg.includes('CROSS_REFERENCED_EVENT'))) {
-    const query = args.find(arg => arg.startsWith('query=')) ?? '';
     const number = Number(args.find(arg => arg.startsWith('number='))?.slice('number='.length));
     const issue = config.issues.find(entry => entry.number === number);
     if (issue === undefined) throw new Error(`fake gh: no issue ${String(number)}`);
-    const event = (entry: NonNullable<FakeIssue['labelEvents']>[number]) => ({
-      __typename: entry.removed === true ? 'UnlabeledEvent' : 'LabeledEvent',
-      createdAt: entry.createdAt,
-      actor: { login: entry.actor },
-      label: { name: entry.label },
-    });
     return JSON.stringify({
-      ...(config.batchErrors ? { errors: config.batchErrors } : {}),
       data: {
         repository: {
           issue: {
-            id: `I_${String(number)}`,
-            url: `https://${config.repo.host}/${config.repo.path}/issues/${String(number)}`,
-            createdAt: issue.createdAt ?? '2026-01-01T00:00:00Z',
-            ...(config.batchIssueWithoutAuthor ? {} : { author: { login: issue.author ?? 'someone' } }),
-            labelEvents: { ...(/labelEvents:[^{]+\{\s*pageInfo\s*\{\s*hasNextPage\s*\}/.test(query) ? { pageInfo: { hasNextPage: (issue.labelEvents ?? []).length > 20 } } : {}), nodes: (issue.labelEvents ?? []).slice(0, 20).map(event) },
             refs: {
               pageInfo: { hasNextPage: (issue.refs ?? []).length > 100 },
               nodes: (issue.refs ?? []).slice(0, 100).map(ref => ({ [ref.connected ? 'subject' : 'source']: { __typename: 'PullRequest', url: ref.url, merged: ref.merged, mergeCommit: ref.oid === null ? null : { oid: ref.oid } } })),
             },
-            ...config.batchIssueOverrides,
           },
         },
       },
@@ -370,46 +268,15 @@ function ghAnswer(dir: string, args: readonly string[]): string {
 }
 
 export function install(dir: string): void {
-  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig;
-  if (config.cleanupFails) {
-    const remove = fs.rmSync;
-    mock.module('node:fs', () => ({ ...fs, rmSync: (path: Parameters<typeof remove>[0], options: Parameters<typeof remove>[1]) => {
-      remove(path, options);
-      if (String(path).includes('archon-bench-')) throw new Error('forced cleanup failure');
-    } }));
-  }
   const spawn = Bun.spawn;
   const spawnSync = Bun.spawnSync;
-  const realFetch = globalThis.fetch;
   const fake = (cmd: string[], options?: Parameters<typeof spawn>[1]) => {
     if (cmd[0] !== 'archon') return spawn(cmd, options);
-    const args = cmd.slice(1);
-    // A wait answers only after the run's lookup, which the bench's own server answers,
-    // so its output comes from an async producer that leaves the event loop free.
-    const produce = async (): Promise<string> => {
-      if (args[0] === 'workflow' && args[1] === 'wait') await lookUp(dir, args[2], JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as FakeConfig);
-      return answer(dir, args, options?.env);
-    };
-    const stdout = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        controller.enqueue(new TextEncoder().encode(await produce()));
-        controller.close();
-      },
-    });
-    return { stdout, stderr: new Response('').body, exited: Promise.resolve(0) };
-  };
-  const fakeFetch = async (input: string | URL | Request, init?: RequestInit & { unix?: string }): Promise<Response> => {
-    if (init?.unix !== undefined) return realFetch(input, init);
-    const url = input instanceof Request ? input.url : String(input);
-    const body = init?.body === undefined || init.body === null ? undefined : String(init.body);
-    const answered = upstream(dir, url, body);
-    if (answered === undefined) throw new Error(`fake fetch: unexpected request ${url}`);
-    return answered;
+    return { stdout: new Response(answer(dir, cmd.slice(1))).body, stderr: new Response('').body, exited: Promise.resolve(0) };
   };
   const fakeSync = (cmd: string[], options?: Parameters<typeof spawnSync>[1]) => {
     if (cmd[0] !== 'gh') return spawnSync(cmd, options);
     return { exitCode: 0, stdout: Buffer.from(ghAnswer(dir, cmd.slice(1))), stderr: Buffer.from('') };
   };
   Object.assign(Bun, { spawn: fake, spawnSync: fakeSync });
-  Object.assign(globalThis, { fetch: fakeFetch });
 }
