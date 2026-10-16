@@ -371,11 +371,11 @@ describe('watchAttentionQueue', () => {
     expect(second.lines.filter(attentionOf(late.runId))).toHaveLength(1);
   });
 
-  test.each([false, true])(
-    'a failed run resumes on the cursor feed (batched: %s)',
-    async batched => {
+  test.each(['live', 'resume and complete', 'fail and resume'] as const)(
+    'a failed run resumes on the cursor feed (%s)',
+    async batch => {
       const store = await makeStore();
-      let held = false;
+      let held = batch === 'fail and resume';
       const holding: IWorkflowStore = Object.create(store);
       holding.readWorkflowEventsAfter = (cursor, options) =>
         held
@@ -385,11 +385,11 @@ describe('watchAttentionQueue', () => {
       const runId = await running(store);
       try {
         await store.failWorkflowRun(runId, 'node failed');
-        const terminal = await stream.next(ofRun(runId, 'terminal'));
-        if (terminal.type !== 'terminal') throw new Error('expected terminal');
-        held = batched;
+        if (batch !== 'fail and resume') await stream.next(ofRun(runId, 'terminal'));
+        held = batch !== 'live';
         await store.resumeWorkflowRun(runId);
-        if (batched) await store.completeWorkflowRun(runId, { duration_ms: 1 });
+        if (batch === 'resume and complete')
+          await store.completeWorkflowRun(runId, { duration_ms: 1 });
         const row = await store.getWorkflowRun(runId);
         const head = await store.getWorkflowEventHead();
         held = false;
@@ -398,8 +398,10 @@ describe('watchAttentionQueue', () => {
         expect(changes).toMatchObject([
           { type: 'terminal', status: 'failed' },
           { type: 'resumed', status: 'running', runId, project: { key: '_cwd/alpha' } },
-          ...(batched ? [{ type: 'terminal', status: 'completed' }] : []),
+          ...(batch === 'resume and complete' ? [{ type: 'terminal', status: 'completed' }] : []),
         ]);
+        const terminal = changes[0];
+        if (terminal.type !== 'terminal') throw new Error('expected terminal');
         const resumed = changes[1];
         expect(resumed).toHaveProperty('cursor');
         expect(resumed).not.toHaveProperty('cursor', terminal.cursor);

@@ -150,7 +150,7 @@ host on the same database.
 | `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
-| `resumed` | A failed run resumed | `cursor`, `project`, `runId`, `status: "running"` |
+| `resumed` | A failed run resumed or an engine-cancelled fan-out child recovered | `cursor`, `project`, `runId`, `status: "running"` |
 | `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
 | `ready` | The snapshot is complete | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |

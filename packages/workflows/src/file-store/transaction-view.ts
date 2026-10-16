@@ -399,11 +399,15 @@ export function createTransactionView(
     resumeWorkflowRun: async (id, cursor) => {
       const run = resumableRun(id, cursor);
       const scheduled = run.metadata.scheduled_resume;
-      if (typeof run.metadata.error === 'string' && run.metadata.error !== '')
+      const error =
+        typeof run.metadata.error === 'string' && run.metadata.error !== ''
+          ? run.metadata.error
+          : null;
+      if (run.status === 'failed' || error !== null)
         record({
           workflow_run_id: id,
           event_type: 'workflow_resumed',
-          data: { error: run.metadata.error },
+          data: error === null ? {} : { error },
         });
       if (run.status === 'paused') record(workflowUnpausedEvent(id));
       // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
@@ -725,6 +729,7 @@ export function createTransactionView(
         )
           events.splice(index, 1);
       }
+      record({ workflow_run_id: id, event_type: 'workflow_resumed' });
       return structuredClone(run);
     },
     pauseWorkflowRunForWait: async (id, wait, pause) => {

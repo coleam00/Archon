@@ -966,7 +966,7 @@ exits `1`. The item shape is described in the [guide](/guides/attention-queue/#q
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
 item in scope, then `ready`, then a line for every change any process commits, as
-`attention`, `resolved`, `unmatched`, `terminal`, `owner_lost` and idle `bookmark` lines.
+`attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 With `--json` each line is one compact JSON object; without it, a short sentence per
 change. Scope and `--label` work as for the list; `--sort`, `--count-by` and a run id are
 refused. **`--after <cursor>`** takes the `cursor` of an earlier line and, after the
