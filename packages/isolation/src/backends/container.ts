@@ -25,6 +25,7 @@ import { isAbsolute, sep } from 'path';
 import type { BranchName } from '@archon/git';
 import { createLogger, isInsideArchonHome } from '@archon/paths';
 import type {
+  OverlayMode,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
 } from '@archon/workflows/container-context';
@@ -59,16 +60,6 @@ const READY_SENTINEL = '/mnt/upper/.ready';
 const READY_TIMEOUT_MS = 20_000;
 /** Poll interval while waiting for the ready sentinel. */
 const READY_POLL_INTERVAL_MS = 250;
-
-/**
- * Overlay mount modes, in PREFERENCE order (least-privileged first). `fuse` runs
- * with only `--device /dev/fuse` (no CAP_SYS_ADMIN — closes the remount escape,
- * but only mounts on rootless/userns daemons); `native` grants CAP_SYS_ADMIN
- * and permits the remount escape (see SECURITY.md). Native fallback requires
- * the runner's dedicated FUSE mount failure status (78).
- */
-export const OVERLAY_MODES = ['fuse', 'native'] as const;
-type OverlayMode = (typeof OVERLAY_MODES)[number];
 
 // The runner reserves this exit status for a failed fuse-overlayfs mount.
 // Older runner images have no such signal and fail without escalating privileges.
