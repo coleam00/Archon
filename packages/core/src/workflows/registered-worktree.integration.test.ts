@@ -390,6 +390,88 @@ test('a worktree whose record cannot be written is removed and the insert error 
   expect(await isolation.countActiveByCodebase(codebaseId)).toBe(0);
 });
 
+for (const persistence of ['sql', 'file'] as const) {
+  test(`${persistence}: an older workflow row does not retain a newly created unregistered checkout`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const stale = await store.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'restart',
+      working_path: join(root, 'missing-checkout'),
+      branch_name: toBranchName('old-branch'),
+      metadata: { worktree_creation_id: 'old-creation' },
+    });
+    const failure = new Error('registration rejected');
+    await expect(
+      createRegisteredWorktree(
+        {
+          findActiveByWorkflow: store.findActiveByWorkflow,
+          create: async () => {
+            throw failure;
+          },
+        },
+        {
+          request: {
+            workflowType: 'task',
+            identifier: 'restart-new',
+            codebaseId,
+            codebaseName: 'test/repo',
+            canonicalRepoPath: toRepoPath(repo),
+          },
+          workflowId: 'restart',
+          createdByPlatform: 'cli',
+        }
+      )
+    ).rejects.toBe(failure);
+    expect(git('worktree', 'list', '--porcelain')).not.toContain('restart-new');
+    expect(git('branch', '--list')).not.toContain('restart-new');
+    expect(await store.getById(stale.id)).toEqual(stale);
+  });
+
+  test(`${persistence}: a recovered adoption retains the checkout after a failed create`, async () => {
+    const store =
+      persistence === 'sql'
+        ? isolation
+        : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store'))).records
+            .isolation;
+    const failure = new Error('create finalization failed');
+    let registered: Awaited<ReturnType<typeof store.create>> | undefined;
+    await expect(
+      createRegisteredWorktree(
+        {
+          findActiveByWorkflow: store.findActiveByWorkflow,
+          create: async input => {
+            registered = await store.create({
+              ...input,
+              metadata: { adopted: true, worktree_creation_id: null },
+            });
+            throw failure;
+          },
+        },
+        {
+          request: {
+            workflowType: 'task',
+            identifier: 'recovered-adoption',
+            codebaseId,
+            codebaseName: 'test/repo',
+            canonicalRepoPath: toRepoPath(repo),
+          },
+          createdByPlatform: 'cli',
+        }
+      )
+    ).rejects.toBe(failure);
+    if (!registered) throw new Error('expected registration');
+    expect(await store.getById(registered.id)).toEqual(registered);
+    expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+      toWorktreePath(registered.working_path)
+    );
+  });
+}
+
 test('a reused worktree stays when its re-registration cannot be written', async () => {
   const input = {
     request: {

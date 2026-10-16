@@ -1,4 +1,9 @@
-import { toRepoPath, toWorktreePath, verifyWorktreeOwnership } from '@archon/git';
+import {
+  isSameWorktreePath,
+  toRepoPath,
+  toWorktreePath,
+  verifyWorktreeOwnership,
+} from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { worktreeRegistrationMetadata } from './types';
@@ -62,9 +67,10 @@ export async function recordWorktreeAdoption(
  * Register a worktree the provider just returned, so `isolation list`, `cleanup` and
  * `complete` see it. Every path that creates a worktree registers it through here.
  *
- * After a failed insert, remove a created checkout only when the store confirms no
- * active registration remains. A commit may reject after writing, so an unreadable
- * store must preserve the checkout. Rethrow the insert error even if cleanup fails.
+ * A failed insert may have committed. Preserve a checkout with a matching active
+ * registration, or when the store cannot be read. The lookup is a snapshot, not
+ * an ownership claim: concurrent adoption and registration are not serialized
+ * with rollback. Rethrow the insert error even if cleanup fails.
  */
 export async function registerWorktree(
   deps: {
@@ -110,7 +116,11 @@ export async function registerWorktree(
         );
         throw storeError;
       }
-      if (registered) throw storeError;
+      // Adoption clears creation provenance, so the path, not the creation token,
+      // determines whether the recovered registration still needs this checkout.
+      if (registered && isSameWorktreePath(registered.working_path, env.workingPath)) {
+        throw storeError;
+      }
       await removeCreatedWorktree(deps.provider, env.workingPath, {
         canonicalRepoPath,
         creationId: env.metadata.creationId,
