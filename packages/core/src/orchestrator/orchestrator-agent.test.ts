@@ -59,6 +59,7 @@ import type * as MessageDb from '../db/messages';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as UserProviderKeyStore from '../db/user-provider-key-store';
+import type { ResolvedCredential } from '../credentials/delivery';
 import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
@@ -156,6 +157,8 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
   await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  BUNDLED_IS_BINARY: false,
+  BUNDLED_VERSION: 'test',
   getProjectStoragePaths,
   resolveProjectStorageKey,
   captureApprovalResolved: mockCaptureApprovalResolved,
@@ -431,19 +434,34 @@ const providerRegistry: ProviderRegistry = {
   list: () => [],
 };
 
+// The vendor a chat turn's provider needs; per-test overrides pick another.
+const mockChatVendor = mock((_model?: string): string | undefined => 'anthropic');
+const mockIsRegisteredProvider = mock((_provider: string): boolean => true);
 mock.module('@archon/providers', () => ({
   providerRegistry,
-  getRegistration: () => ({
-    parseConfig: (raw: Record<string, unknown>) => raw,
-    credentials: { vendorFor: () => 'anthropic' },
-  }),
+  getRegistration: (provider: string) => {
+    // The real registry throws for an unknown id.
+    if (!mockIsRegisteredProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+    return {
+      parseConfig: (raw: Record<string, unknown>) => raw,
+      credentials: {
+        kind: 'static',
+        specs: ['anthropic', 'openai'].map(vendor => ({
+          vendor,
+          displayName: vendor,
+          kinds: ['api_key', 'subscription'],
+        })),
+        vendorFor: (model?: string) => mockChatVendor(model),
+      },
+    };
+  },
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
   getProviderCapabilities: mockGetProviderCapabilities,
-  isRegisteredProvider: mock(() => true),
+  isRegisteredProvider: (provider: string) => mockIsRegisteredProvider(provider),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (the chat inject tests deliver through it).
@@ -663,7 +681,9 @@ mock.module('../utils/workflow-source-root', () => ({
   resolveWorkflowSourceRoot: mockResolveWorkflowSourceRoot,
 }));
 
+const mockGetCurrentBranchStrict = mock(async (): Promise<string | null> => 'feature/adopted');
 mock.module('@archon/git', () => ({
+  getCurrentBranchStrict: mockGetCurrentBranchStrict,
   verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
@@ -699,17 +719,36 @@ mock.module('../credentials/config', () => ({
   isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
 }));
 
-const mockListDecryptedUserProviderCredentials = mock<
-  typeof UserProviderKeyStore.listDecryptedUserProviderCredentials
->(async () => []);
+// The user's stored credentials: a usable credential, or the status a broken one reports.
+type StoredFixture =
+  | { provider: string; cred: ResolvedCredential }
+  | {
+      provider: string;
+      status: Exclude<UserProviderKeyStore.StoredCredential, { state: 'usable' }>;
+    };
+const mockStoredProviderCredentials = mock<(userId: string) => Promise<StoredFixture[]>>(
+  async () => []
+);
+const mockListUserProviderKeys = mock(async (userId: string) =>
+  (await mockStoredProviderCredentials(userId)).map(row => ({
+    provider: row.provider,
+    kind: 'cred' in row ? row.cred.kind : ('api_key' as const),
+    label: null,
+  }))
+);
 mock.module('../db/user-provider-key-store', () => ({
-  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
   saveUserProviderKey: mock(() => Promise.resolve()),
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
-  listUserProviderKeys: mock(() => Promise.resolve([])),
+  listUserProviderKeys: mockListUserProviderKeys,
   deleteUserProviderKey: mock(() => Promise.resolve()),
-  getDecryptedProviderCredential: mock(() =>
-    Promise.resolve({ state: 'not_connected', source: 'archon' })
+  getDecryptedProviderCredential: mock(
+    async (userId: string, provider: string): Promise<UserProviderKeyStore.StoredCredential> => {
+      const row = (await mockStoredProviderCredentials(userId)).find(r => r.provider === provider);
+      if (!row) return { state: 'not_connected', source: 'archon' };
+      return 'cred' in row
+        ? { state: 'usable', source: 'archon', credential: row.cred }
+        : row.status;
+    }
   ),
 }));
 
@@ -1516,8 +1555,6 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
     defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
@@ -2582,7 +2619,7 @@ describe('workflow dispatch routing', () => {
     ).toHaveLength(1);
   });
 
-  test.each(['missing', 'mismatched', 'replaced'] as const)(
+  test.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
     'foreground adoption refuses a %s environment before capture',
     async reason => {
       mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -2595,6 +2632,9 @@ describe('workflow dispatch routing', () => {
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       });
+      if (reason === 'switched' || reason === 'detached') {
+        mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
+      }
       mockAdoptedEnvironment.mockResolvedValueOnce(
         reason === 'missing'
           ? null
@@ -2603,7 +2643,9 @@ describe('workflow dispatch routing', () => {
                 working_path: '/wt/adopted',
                 metadata: { worktree_registration_id: 'replacement' },
               })
-            : makeIsolationEnvironment()
+            : makeIsolationEnvironment({
+                working_path: reason === 'mismatched' ? '/wt/from-branch' : '/wt/adopted',
+              })
       );
       mockPrepareWorkflowSource.mockClear();
       mockAdoptionMetadata.mockClear();
@@ -2620,7 +2662,9 @@ describe('workflow dispatch routing', () => {
             ? 'Isolation environment env-1 not found'
             : reason === 'replaced'
               ? 'changed during adoption'
-              : 'does not match'
+              : reason === 'switched' || reason === 'detached'
+                ? 'expected branch'
+                : 'does not match'
         )
       );
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
@@ -4387,7 +4431,7 @@ describe('workflow dispatch routing', () => {
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
 
-  describe('typed chat tools (Claude, Pi)', () => {
+  describe('typed chat tools', () => {
     const task = 'Fix the "login" bug and add tests';
     let capsMock: ReturnType<typeof mock>;
 
@@ -4428,6 +4472,154 @@ describe('workflow dispatch routing', () => {
     }
 
     const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
+
+    test.each(['stream', 'batch'] as const)(
+      'Codex launches through item/tool/call after the turn; prose cannot launch (%s)',
+      async mode => {
+        const { CodexProvider } = await import('@archon/providers/codex/provider');
+        const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+        const { createFakeAppServer, THREAD_ID, TURN_ID, agentMessage } =
+          await import('../../../providers/src/test/codex-app-server-fake');
+        capsMock.mockReturnValue(CODEX_CAPABILITIES);
+        const prose =
+          '/invoke-workflow test-workflow --project test-repo --prompt "prose must not launch"';
+        const server = createFakeAppServer(() => ({
+          toolCalls: [
+            {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              callId: 'launch',
+              namespace: null,
+              tool: 'invoke_workflow',
+              arguments: launch,
+            },
+          ],
+          notifications: [agentMessage(prose)],
+        }));
+        const provider = new CodexProvider(server, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce(async function* (prompt, cwd, sessionId, options) {
+          for await (const chunk of provider.sendQuery(prompt, cwd, sessionId, options)) {
+            expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+            yield chunk;
+          }
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'fix the login bug', { actor: operator });
+        expect(server.processes[0].toolResponses[0].result).toMatchObject({
+          success: true,
+          contentItems: [{ text: expect.stringContaining('Queued test-workflow') }],
+        });
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+          expect.objectContaining({ originalMessage: task }),
+          expect.anything()
+        );
+
+        mockDispatchBackgroundWorkflow.mockClear();
+        const proseServer = createFakeAppServer(() => ({ notifications: [agentMessage(prose)] }));
+        const proseProvider = new CodexProvider(proseServer, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce((...args) => proseProvider.sendQuery(...args));
+        await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      }
+    );
+
+    test('a legacy Codex chat visibly asks for a new chat before invoking a model', async () => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeConversation({ ai_assistant_type: 'codex' })
+      );
+      mockTransitionSession.mockResolvedValueOnce(
+        makeSession({ assistant_session_id: 'legacy-thread' })
+      );
+      const server = createFakeAppServer();
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Start a new chat')
+      );
+      expect(server.processes).toHaveLength(0);
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    });
+
+    test('Codex registration uses the shared primitive and manage_run preserves actor and project authorization', async () => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      const run = makeRun({
+        id: 'aaaaaaaa-1111-2222-3333-444444444444',
+        status: 'running',
+        user_id: 'another-user',
+      });
+      mockGetWorkflowRunDb.mockResolvedValue(run);
+      mockFindWorkflowRunsByIdPrefix.mockResolvedValue([run]);
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeConversation({
+          ai_assistant_type: 'codex',
+          codebase_id: 'codebase-1',
+          cwd: '/repos/test-repo',
+        })
+      );
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockRegisterFolder.mockClear();
+      const server = createFakeAppServer(() => ({
+        toolCalls: [
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'register',
+            namespace: null,
+            tool: 'register_project',
+            arguments: { name: 'new-folder', path: '/', folder: true },
+          },
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'cancel',
+            namespace: null,
+            tool: 'manage_run',
+            arguments: { action: 'cancel', runId: run.id, confirm: true },
+          },
+        ],
+      }));
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      await handleMessage(makePlatform(), 'conv-1', 'register my folder and cancel the run', {
+        actor: { kind: 'unidentified' },
+      });
+      expect(mockRegisterFolder).toHaveBeenCalledWith(
+        await canonicalizeProjectPath('/'),
+        'new-folder'
+      );
+      expect(server.processes[0].toolResponses[0].result.contentItems).toEqual([
+        { type: 'inputText', text: expect.stringContaining('registered successfully') },
+      ]);
+      expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith(run.id, 'codebase-1');
+      expect(server.processes[0].toolResponses[1].result.contentItems).toEqual([
+        {
+          type: 'inputText',
+          text: expect.stringContaining('Only the user who started this run or an admin'),
+        },
+      ]);
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    });
 
     test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
       await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
@@ -4781,7 +4973,7 @@ describe('paused approval gate routing', () => {
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('missing or malformed');
-    expect(prompt).toContain('/workflow status run-1');
+    expect(prompt).toContain('/workflow get run-1');
     expect(prompt).not.toContain('/workflow approve run-1');
     expect(prompt).toContain('/workflow reject run-1 <reason>');
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
@@ -4939,6 +5131,68 @@ describe('paused approval gate routing', () => {
     );
   });
 
+  test.each([
+    { action: 'approve', decision: undefined },
+    { action: 'reject', decision: undefined },
+    { action: 'respond', decision: 'reject' },
+    { action: 'respond', decision: 'approve' },
+  ])(
+    'Codex drains an in-flight gate decision after process exit: %j',
+    async ({ action, decision }) => {
+      const { CodexProvider } = await import('@archon/providers/codex/provider');
+      const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+      const { createFakeAppServer, THREAD_ID, TURN_ID } =
+        await import('../../../providers/src/test/codex-app-server-fake');
+      capsMock.mockReturnValue(CODEX_CAPABILITIES);
+      arrangeGatedChat({
+        metadata: { approval: { nodeId: 'gate-1', message: 'Review', onRejectPrompt: 'Rework' } },
+      });
+      const entered = Promise.withResolvers<void>();
+      const commit = Promise.withResolvers<void>();
+      mockResolveApprovalGate.mockImplementationOnce(async () => {
+        entered.resolve();
+        await commit.promise;
+        return { resolved: true };
+      });
+      const server = createFakeAppServer(() => ({
+        toolCalls: [
+          {
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'gate',
+            namespace: null,
+            tool: 'manage_run',
+            arguments: { action, decision, runId: 'run-1', confirm: true, message: 'feedback' },
+          },
+        ],
+      }));
+      const provider = new CodexProvider(server, 1);
+      mockSendQuery.mockImplementationOnce((...args) => provider.sendQuery(...args));
+      const platform = makePlatform();
+      let returned = false;
+      const handling = handleMessage(platform, 'conv-1', 'resolve the gate', {
+        actor: operator,
+      }).finally(() => {
+        returned = true;
+      });
+      await entered.promise;
+      server.processes[0].exit(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const returnedBeforeCommit = returned;
+      commit.resolve();
+      await handling;
+      expect(returnedBeforeCommit).toBe(false);
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Continuation requested')
+      );
+      expect(server.processes[0].toolResponses).toHaveLength(0);
+    }
+  );
+
   test('a container run is resolved but not resumed from chat', async () => {
     // Chat cannot rewire the container, so the executor would refuse the resume.
     arrangeGatedChat({
@@ -5048,7 +5302,7 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       'Which project should this workflow run on?\n\n- test-repo\n\n' +
-        'Reply with the project name, or use: /workflow run assist --project <name> "test prompt"'
+        'Reply with the project name, or choose one with `/setproject <name>` and then use: /workflow run assist "test prompt"'
     );
   });
 
@@ -5071,7 +5325,7 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
-      'Choose a project for this conversation, then retry `/workflow resume paused-run`.\n\n- test-repo'
+      'Choose a project for this conversation with `/setproject <name>`, then retry `/workflow resume paused-run`.\n\n- test-repo'
     );
   });
 });
@@ -5833,8 +6087,13 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     );
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
-    mockListDecryptedUserProviderCredentials.mockReset();
-    mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+    mockStoredProviderCredentials.mockReset();
+    mockStoredProviderCredentials.mockImplementation(async () => []);
+    mockChatVendor.mockReset();
+    mockListUserProviderKeys.mockClear();
+    mockChatVendor.mockImplementation(() => 'anthropic');
+    mockIsRegisteredProvider.mockReset();
+    mockIsRegisteredProvider.mockImplementation(() => true);
     mockIsPerUserProviderKeysEnabled.mockReset();
     mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
     mockGenerateAndSetTitle.mockReset();
@@ -5842,7 +6101,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('injects api_key env vars from a connected provider', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
@@ -5851,13 +6110,15 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as {
       env?: Record<string, string>;
       protectedEnvKeys?: readonly string[];
+      userCredentialEnvKeys?: readonly string[];
     };
+    expect(requestOptions?.userCredentialEnvKeys).toEqual(['OPENROUTER_API_KEY']);
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
     expect(requestOptions?.protectedEnvKeys).toEqual(['OPENROUTER_API_KEY']);
   });
 
   test('a Claude subscription reaches chat only as CLAUDE_CODE_OAUTH_TOKEN; Pi gets no ANTHROPIC_OAUTH_TOKEN', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'anthropic',
         cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
@@ -5877,7 +6138,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     mockGetOrCreateConversation.mockImplementation(() =>
       Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
     );
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'anthropic',
         cred: { kind: 'oauth', oauthApiKey: 'sk-ant-oat01-x', rawCreds: {} },
@@ -5894,7 +6155,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   });
 
   test('a ChatGPT subscription reaches chat as the in-memory Codex login env, with no CODEX_HOME', async () => {
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       {
         provider: 'openai',
         cred: { kind: 'oauth', oauthApiKey: 'tok', rawCreds: { access: 'tok', accountId: 'acct' } },
@@ -5918,7 +6179,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
 
   test('skips one broken credential but includes remaining providers', async () => {
     // 'mystery-broken' is not in KNOWN_PROVIDERS → deliverCredential throws.
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'mystery-broken', cred: { kind: 'api_key', apiKey: 'x' } },
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
@@ -5928,39 +6189,146 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
   });
 
-  test('does not throw when listDecryptedUserProviderCredentials rejects', async () => {
-    mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+  test('refuses the turn when the connected credentials cannot be listed', async () => {
+    // Without the list, the turn cannot tell whether the user has a credential of their
+    // own, and running it would use the host login.
+    mockStoredProviderCredentials.mockRejectedValue(new Error('db gone'));
     const platform = makePlatform();
     await expect(
       handleMessage(platform, 'conv-1', 'hello', { actor: operator })
     ).resolves.toBeUndefined();
+    expect(mockSendQuery).not.toHaveBeenCalled();
+  });
+
+  const sentText = (platform: ReturnType<typeof makePlatform>): string =>
+    platform.sendMessage.mock.calls.map(call => String(call[1])).join('\n');
+
+  test('refuses a Codex turn whose connected subscription cannot be delivered (#4245)', async () => {
+    mockChatVendor.mockReturnValue('openai');
+    // No ChatGPT account id: delivery throws, and the turn would otherwise run Codex on
+    // the host's own login.
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: 'sub-access', rawCreds: { access: 'sub-access' } },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    const sent = sentText(platform);
+    expect(sent).toContain('Your connected openai credential cannot be used');
+    expect(sent).toContain('reconnect it with `archon ai login openai`');
+    expect(sent).not.toContain('sub-access');
+  });
+
+  test('refuses a turn whose connected credential is unusable', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        status: {
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'The vendor rejected the refresh.',
+        },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(sentText(platform)).toContain(
+      'Your connected anthropic credential cannot be used: The vendor rejected the refresh.'
+    );
+  });
+
+  test('a credential check that could not decide asks the user to retry, not reconnect', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        status: { state: 'check_failed', source: 'archon', evidence: 'The vendor timed out.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(sentText(platform)).toContain('The vendor timed out. Try again in a moment');
+  });
+
+  test('skips the title when the title model’s credential failed, and still runs the turn', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    // The chat model is on anthropic; the `small` title model is on openai.
+    mockChatVendor.mockReturnValueOnce('anthropic').mockReturnValueOnce('openai');
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('a title tier on an unregistered provider keeps its fallback when a credential failed', async () => {
+    // Title generation falls back to a truncated title for an unknown provider; the
+    // credential check must not throw first and fail the user's turn.
+    mockIsRegisteredProvider.mockImplementation(provider => provider !== 'ghost');
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'u-test', title: null }))
+    );
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({ tiers: { small: { provider: 'ghost', model: 'ghost-model' } } })
+    );
+    mockStoredProviderCredentials.mockResolvedValue([
+      { provider: 'openai', status: { state: 'unusable', source: 'archon', evidence: 'Revoked.' } },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
+    expect(mockGenerateAndSetTitle.mock.calls[0]?.[2]).toBe('ghost');
+  });
+
+  test('runs on the host login when the user connected nothing for the turn vendor', async () => {
+    mockStoredProviderCredentials.mockResolvedValue([
+      {
+        provider: 'openai',
+        status: { state: 'unusable', source: 'archon', evidence: 'Unrelated vendor.' },
+      },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
   test('skips injection when feature is disabled', async () => {
     // Persistent (not Once): the flag is install-level and read more than once
     // per turn (creator-fallback warn guard + the env seam itself).
     mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
+    expect(mockListUserProviderKeys).not.toHaveBeenCalled();
   });
 
   test('resolves credentials from the SENDER, not the conversation creator (#1976)', async () => {
     // beforeEach sets the conversation row's user_id to 'u-test' (the creator).
     // A different sender on this turn must use their OWN credentials — never
     // the creator's.
-    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+    mockStoredProviderCredentials.mockResolvedValue([
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'sender-key' } },
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', {
       actor: { kind: 'user', userId: 'sender-2' },
     });
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
-    expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalledWith('u-test');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('sender-2');
+    expect(mockListUserProviderKeys).not.toHaveBeenCalledWith('u-test');
   });
 
   test('falls back to the conversation creator for credentials when no sender (S1)', async () => {
@@ -5969,7 +6337,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     // `undefined` would slip through the mock unnoticed.
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('u-test');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('u-test');
   });
 
   test('prefs and credentials resolve to the SAME identity in a single turn (S1)', async () => {
@@ -5981,7 +6349,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       actor: { kind: 'user', userId: 'sender-2' },
     });
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
-    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
+    expect(mockListUserProviderKeys).toHaveBeenCalledWith('sender-2');
   });
 });
 
@@ -6486,6 +6854,37 @@ describe('chat turn telemetry', () => {
       })
     );
   });
+
+  test.each(['batch', 'stream'] as const)(
+    'sums cost and tokens over every result of a %s turn',
+    async mode => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ codebase_id: null }))
+      );
+      mockSendQuery.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'answer' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 100, output: 10 } };
+        yield { type: 'result', cost: 0.2, tokens: { input: 200, output: 20 } };
+      });
+      const platform = {
+        ...makePlatform(),
+        getStreamingMode: mock<IPlatformAdapter['getStreamingMode']>(() => mode),
+        sendResultFooter: mock<NonNullable<IPlatformAdapter['sendResultFooter']>>(() =>
+          Promise.resolve()
+        ),
+      };
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+
+      const footer = platform.sendResultFooter.mock.calls[0]?.[1];
+      expect(footer?.cost).toBeCloseTo(0.3);
+      expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
+      expect(mockCaptureChatTurn.mock.calls[0]?.[0]).toMatchObject({
+        tokensIn: 300,
+        tokensOut: 30,
+      });
+      expect(mockCaptureChatTurn.mock.calls[0]?.[0]?.costUsd).toBeCloseTo(0.3);
+    }
+  );
 
   test('omits usage on the chat turn capture when the provider reports none', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
@@ -7587,7 +7986,7 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
         makeSlackPlatform(),
         new TerminalStatusWriteError(new Error('db is gone'))
       );
-      expect(messages.some(m => m.includes('`/archon-workflow status run-gated`'))).toBe(true);
+      expect(messages.some(m => m.includes('`/archon-workflow get run-gated`'))).toBe(true);
       expectSlackSpelling(messages);
     });
 

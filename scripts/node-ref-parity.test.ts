@@ -53,7 +53,11 @@ import {
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
 import { dagNodeSchema } from '../packages/workflows/src/schemas';
-import { validateStructural } from '../packages/web/src/experiments/console/builder/validation/structural';
+import {
+  MAX_DURABLE_WAIT_MS as BUILDER_MAX_DURABLE_WAIT_MS,
+  validateStructural,
+} from '../packages/web/src/experiments/console/builder/validation/structural';
+import { MAX_DURABLE_WAIT_MS } from '../packages/workflows/src/schemas/durable-wait';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 // OUTPUT_REF_SOURCE moved from loader.ts to output-ref.ts (#2637) so the loader
@@ -570,4 +574,10 @@ describe('loop until_field schema parity', () => {
       }
     });
   }
+});
+
+describe('durable wait bound parity', () => {
+  test("the builder's wait bound is the engine's", () => {
+    expect(BUILDER_MAX_DURABLE_WAIT_MS).toBe(MAX_DURABLE_WAIT_MS);
+  });
 });

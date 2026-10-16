@@ -87,11 +87,11 @@ Archon ships with bundled default commands for common operations like investigat
 
 ## Isolation (Worktrees)
 
-Every workflow run gets its own **git worktree** by default -- an isolated copy of your repository. This gives you three things:
+Repository workflows use **git worktrees** by default unless disabled by workflow policy or `--no-worktree`. Runs can reuse an existing worktree, including on resume or adoption. Folder projects run in place instead.
 
-1. **Your working branch stays clean.** Workflow changes happen in a separate directory.
-2. **Multiple workflows run in parallel** without conflicting with each other.
-3. **Failed runs don't leave a mess.** Clean up with `archon isolation cleanup`.
+Worktrees separate repository changes from your checkout and let work on different branches proceed in parallel. They are not an execution or security sandbox.
+
+Failed runs can retain resumable worktrees. Use `archon workflow resume <id>` to continue or `archon workflow abandon <id>` to cancel and remove the worktree while keeping the branch. `archon isolation cleanup` removes eligible merged or stale environments, preserving live runs and failed runs that still hold a cleanup lock. See [cleanup rules](/reference/cli/#isolation-cleanup-days).
 
 Worktrees live at `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Each worktree gets its own branch, so you can inspect the work, create a PR from it, or discard it.
 

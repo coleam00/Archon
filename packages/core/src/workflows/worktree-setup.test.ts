@@ -166,7 +166,11 @@ for (const background of [false, true]) {
           deps,
           run,
           {}
-        )(input([command], process.platform === 'win32' ? 1000 : 200))
+        )(
+          // The timeout runs from process spawn, so it must outlast a loaded machine's spawn
+          // of the nested shell that creates `ready`.
+          input([command], 1500)
+        )
       ).rejects.toBeInstanceOf(WorktreePostCreateError);
       expect(await Bun.file(join(root, 'ready')).exists()).toBe(true);
       expect(rows[1].data?.failureKind).toBe('timeout');

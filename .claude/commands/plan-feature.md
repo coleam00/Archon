@@ -21,8 +21,7 @@ Restate the feature request in your own words. Identify:
 1. **Problem being solved** — What user pain point or capability gap does this address?
 2. **Success criteria** — What does "done" look like? How will we verify it works?
 3. **Scope boundaries** — What is explicitly in scope vs. out of scope?
-4. **Package impact** — Which of the 8 packages are affected? (`paths`, `git`, `isolation`,
-   `workflows`, `core`, `adapters`, `server`, `web`)
+4. **Package impact** — Which workspace packages are affected? Read the root `package.json` and `.archon/architecture.md` for the current package map and boundaries.
 5. **Interface changes** — Does this touch `IPlatformAdapter`, `IAgentProvider`,
    `IDatabase`, or `IWorkflowStore`? New interfaces needed?
 

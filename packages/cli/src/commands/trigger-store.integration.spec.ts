@@ -14,6 +14,7 @@ import { PostgresAdapter } from '@archon/core/db/adapters/postgres';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import {
   drainResourceStartHost,
+  ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -22,6 +23,7 @@ import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import type {
   ResourceStartBindingIntent,
+  ResourceStartIntent,
   SourceReceiptAcceptance,
   PreparedWorkflowLaunch,
 } from '@archon/workflows/schemas/resource-start';
@@ -496,6 +498,208 @@ test('preparation passes event-mapped inputs to a workflow that declares them', 
   );
   expect(error).toBeUndefined();
   expect(prepared?.launch.run.metadata).toMatchObject({ inputs: { order_id: 'from-the-event' } });
+});
+
+/** A registered project, a user, and a timer config that fires `portable` on host `host`. */
+async function fireFixture(): Promise<{
+  host: WorkflowHost;
+  project: string;
+  userId: string;
+  configPath: string;
+  inputsPath: string;
+  restore: () => void;
+}> {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
+  const project = join(await realpath(root), 'project');
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(join(project, '.archon/workflows/portable.yaml'), undeclaredWorkflow);
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  const host = hostForTest();
+  await registerFolder(host.records.codebases, project, 'portable');
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
+  const configPath = join(root, 'timer.json');
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'timer',
+      binding: {
+        bindingId: 'fired',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: user.id,
+        resource: 'portable',
+        capacity: 1,
+        overlap: 'queue',
+        launch: {
+          cwd: project,
+          workflowName: 'portable',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+      schedule: { intervalSeconds: 60, runAtLoad: false },
+    })
+  );
+  return {
+    host,
+    project,
+    userId: user.id,
+    configPath,
+    inputsPath: join(root, 'inputs.json'),
+    restore: () => {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    },
+  };
+}
+
+const noDispatch = async (): Promise<void> => {};
+
+test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
+  const { host, configPath, inputsPath, restore } = await fireFixture();
+  await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
+  try {
+    const failure = await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, inputs: inputsPath },
+      noDispatch
+    ).then(
+      () => undefined,
+      (error: unknown) => error as Error
+    );
+    expect(failure?.message).toContain(
+      "Workflow 'portable' declares no inputs; a trigger cannot pass event-mapped input 'order_id'"
+    );
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.bindings[0]).toMatchObject({
+      status: 'rejected',
+      error: 'launch_preparation_failed',
+    });
+    expect(JSON.stringify(stored)).not.toContain('declares no inputs');
+  } finally {
+    restore();
+  }
+});
+
+test('fire redacts credential values from the refusal it prints', async () => {
+  const { host, configPath, inputsPath, restore } = await fireFixture();
+  // The refusal names the offending input, so a credential-valued name reaches the message.
+  const secret = 'sk-test-credential-value-123';
+  await writeFile(inputsPath, JSON.stringify({ [secret]: 'x' }));
+  process.env.TRIGGER_TEST_API_TOKEN = secret;
+  try {
+    const failure = await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, inputs: inputsPath },
+      noDispatch
+    ).then(
+      () => undefined,
+      (error: unknown) => error as Error
+    );
+    expect(failure?.message).toContain('declares no inputs');
+    expect(failure?.message).not.toContain(secret);
+    expect(failure?.message).toContain('[REDACTED]');
+  } finally {
+    delete process.env.TRIGGER_TEST_API_TOKEN;
+    restore();
+  }
+});
+
+test("fire does not blame its receipt for another binding's preparation failure", async () => {
+  const { host, userId, project, configPath, restore } = await fireFixture();
+  // A different receipt already pending on the same host whose preparation will fail.
+  await host.deps.store.acceptStartReceipt(
+    acceptance(
+      {
+        bindingId: 'other',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: userId,
+        resource: 'other-resource',
+        capacity: 1,
+        overlap: 'queue',
+        launch: {
+          cwd: project,
+          workflowName: 'portable',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+        eventInputs: { order_id: 'from-the-event' },
+      },
+      'other'
+    )
+  );
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    // The fired binding prepares and admits; only the other one fails.
+    await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+    const written = stderr.mock.calls.map(call => String(call[0])).join('');
+    expect(written).toContain("cannot pass event-mapped input 'order_id'");
+    const receipts = await host.deps.store.listStartReceipts(10);
+    const fired = receipts.find(receipt => receipt.sourceInstanceId === 'timer');
+    const stored = fired ? await host.deps.store.getStartReceipt(fired.id) : undefined;
+    expect(stored?.bindings[0]?.status).not.toBe('rejected');
+  } finally {
+    stderr.mockRestore();
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a queued start that fails is attributed to the receipt that requested it', async () => {
+  const host = hostForTest();
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'portable',
+    default_cwd: '/portable',
+  });
+  const holder = launch(codebase.id);
+  const queued = launch(codebase.id);
+  queued.run.metadata = { resource_start: { receiptId: 'receipt-of-queued', bindingId: 'b' } };
+  const intent = (prepared: PreparedWorkflowLaunch): ResourceStartIntent => ({
+    resource: 'one',
+    capacity: 1,
+    hostId: 'host',
+    overlap: 'queue',
+    launch: prepared,
+  });
+  expect((await store.admitResourceStart(intent(holder))).status).toBe('admitted');
+  expect((await store.admitResourceStart(intent(queued))).status).toBe('queued');
+  await store.claimPendingWorkflowRun(holder.run.id);
+  await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+
+  const error = await drainResourceStartHost({
+    ...host,
+    hostId: 'host',
+    startAdmitted: async () => {
+      throw new Error('start refused');
+    },
+  }).then(
+    () => undefined,
+    (caught: unknown) => caught
+  );
+
+  expect(error).toBeInstanceOf(ResourceStartDrainError);
+  expect((error as ResourceStartDrainError).failures).toMatchObject([
+    { receiptId: 'receipt-of-queued' },
+  ]);
 });
 
 test('preparation preserves both failures when rejection cannot be persisted', async () => {

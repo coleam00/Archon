@@ -149,6 +149,69 @@ describe('watchAttentionQueue', () => {
     ).toEqual([beta.runId, 'ready']);
   });
 
+  test.each([
+    ['usage_limit', 'usage_limit'],
+    ['usage_limit', 'unreadable'],
+    ['unreadable', 'usage_limit'],
+  ] as const)('a batched %s to %s transition emits the changed item', async (from, to) => {
+    const store = await makeStore();
+    const runId = await running(store);
+    const pause = async (kind: 'usage_limit' | 'unreadable', hours: number): Promise<void> => {
+      if (kind === 'usage_limit') {
+        await store.pauseWorkflowRunForWait(
+          runId,
+          {
+            owner: 'node',
+            nodeId: 'work',
+            kind: 'quota',
+            pauseId: randomUUID(),
+            waitingSince: new Date().toISOString(),
+            resumeAt: new Date(Date.now() + hours * 3_600_000).toISOString(),
+          },
+          { kind: 'started', stepName: 'work' }
+        );
+      } else {
+        await store.pauseWorkflowRun(runId, gate(), undefined, {
+          workflow_run_id: runId,
+          event_type: 'node_suspended',
+          step_name: 'work',
+          data: {},
+        });
+        await store.updateWorkflowRun(runId, {
+          metadata: { wait: undefined, approval: undefined },
+        });
+      }
+    };
+    await pause(from, 1);
+    let held = true;
+    const holding: IWorkflowStore = Object.create(store);
+    holding.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : store.readWorkflowEventsAfter(cursor, options);
+    const stream = await watch(holding, { bookmarkIntervalMs: 0 });
+    try {
+      await store.resumeWorkflowRun(runId);
+      await pause(to, 2);
+      const expected = await readAttentionQueueItem({ store, branchOf: host.branchOf }, runId);
+      const head = await store.getWorkflowEventHead();
+      held = false;
+      await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+      const items = stream.lines.filter(line => line.type === 'attention');
+      expect(items).toHaveLength(2);
+      expect(items[1]).toMatchObject({ snapshot: false, item: expected });
+      expect(items[0]).toMatchObject({ snapshot: true, item: { kind: from } });
+      expect(items[1]).toMatchObject({ item: { kind: to } });
+      await store.resumeWorkflowRun(runId);
+      expect(await stream.next(ofRun(runId, 'resolved'))).toMatchObject({
+        occurrence: null,
+        reason: 'withdrawn',
+      });
+    } finally {
+      await stream.close();
+    }
+  });
+
   test('a pause, an answer and a completion after the start arrive in order, and no row changes', async () => {
     const store = await makeStore();
     const stream = await watch(store);

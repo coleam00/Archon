@@ -27,6 +27,7 @@ mock.module('@archon/paths', () => ({
 
 const {
   registerGiteaWebhookRoute,
+  registerGitlabWebhookRoute,
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
   MAX_WEBHOOK_BODY_BYTES,
@@ -679,6 +680,61 @@ describe('POST /webhooks/gitea', () => {
     const response = await app.request('/webhooks/gitea', {
       method: 'POST',
       headers: { 'x-gitea-signature': 'signed' },
+      body: stream.body,
+    });
+    expect(response.status).toBe(413);
+    expect(stream.cancelled).toBe(true);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /webhooks/gitlab', () => {
+  function setup() {
+    const app = new OpenAPIHono();
+    const handleWebhook = mock(async (_payload: string, _token: string) => undefined);
+    registerGitlabWebhookRoute(app, { handleWebhook });
+    return { app, handleWebhook };
+  }
+
+  test('hands the adapter the body and token', async () => {
+    const { app, handleWebhook } = setup();
+    const response = await app.request('/webhooks/gitlab', {
+      method: 'POST',
+      headers: { 'x-gitlab-token': 'secret' },
+      body: '{"a":1}',
+    });
+    expect(response.status).toBe(200);
+    expect(handleWebhook).toHaveBeenCalledWith('{"a":1}', 'secret');
+  });
+
+  test('rejects a request without a token header before reading the body', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitlab', { method: 'POST', body: stream.body });
+    expect(response.status).toBe(400);
+    expect(stream.pulls).toBe(0);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+
+  test('returns 413 on a declared oversize body before pulling', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitlab', {
+      method: 'POST',
+      headers: { 'x-gitlab-token': 'any', 'content-length': String(bodyLimit + 1) },
+      body: stream.body,
+    });
+    expect(response.status).toBe(413);
+    expect(stream.pulls).toBe(0);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+
+  test('stops and cancels a streamed body on the chunk that crosses the limit', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array(bodyLimit), new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitlab', {
+      method: 'POST',
+      headers: { 'x-gitlab-token': 'any' },
       body: stream.body,
     });
     expect(response.status).toBe(413);

@@ -123,7 +123,7 @@ Your main repo was never touched.
 
 Notice that the stages hand each other files, not conversation history. This is deliberate.
 
-Each AI node runs inside a Claude Code session. That session accumulates context — files read, tool calls made, conversation history. After investigating a complex codebase issue, that context can be thousands of tokens long, with lots of detail that's irrelevant to the next phase.
+Each AI node runs in a session managed by its selected provider. That session accumulates context — files read, tool calls made, conversation history. After investigating a complex codebase issue, that context can be thousands of tokens long, with lots of detail that's irrelevant to the next phase.
 
 A node with `context: fresh` starts a fresh session. The review lenses inside `archon-review` all use it. The AI comes in without the baggage of previous nodes — just the task instructions and whatever artifacts it reads explicitly.
 

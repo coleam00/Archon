@@ -3725,8 +3725,8 @@ async function runWorkflowWithOwnedSource(
 
     // Check result and exit appropriately
     if (result.success && 'paused' in result && result.paused) {
-      // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
-      // `attention` pause has no deadline and stays with whoever resolves it.
+      // A durable wait with a deadline (time, event or usage limit) is this process's own
+      // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
       if (result.waitCursor !== undefined) {
         const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
         if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
@@ -3806,7 +3806,7 @@ export interface PendingWaitContinuation {
 /**
  * Read the wait this process owns off a run row, if any.
  *
- * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * `undefined` means the run is not paused on a time, event or usage-limit wait — a terminal
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
@@ -4421,6 +4421,8 @@ export async function workflowStatusCommand(
     console.log(`  Status: ${run.status}`);
     const attention = runAttention(run);
     if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
+    if (attention?.kind === 'usage_limit')
+      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
     console.log(`  Age:    ${age}`);
     if (run.active_nodes.length > 0) {
@@ -4439,6 +4441,10 @@ export async function workflowStatusCommand(
 
     console.log('');
   }
+}
+
+function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
+  return `  Wait:   provider usage limit at '${nodeId}' — continues after it resets at ${resumeAt}`;
 }
 
 function formatToolAttention(
@@ -4502,6 +4508,11 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
     case 'blocked_on_children':
       // Unreachable through the waiter, which resolves every child before returning.
       return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
+    case 'usage_limit':
+      return (
+        `Run ${watchedRunId} is waiting for a provider usage limit to reset at ` +
+        `${attention.resumeAt}, then continues by itself.`
+      );
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -4690,6 +4701,12 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       lines.push(
         `    gate '${item.node}': ${item.message}`,
         `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
+      );
+      break;
+    case 'usage_limit':
+      lines.push(
+        `    ${item.node}: provider usage limit reached; continues by itself after it resets at ${item.resetAt}`,
+        `    Stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
       );
       break;
     case 'unreadable':
@@ -5536,7 +5553,9 @@ export async function workflowGetCommand(
       console.log(
         waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
-          : `  Wait:   until ${waitMeta.resumeAt}`
+          : waitMeta.kind === 'quota'
+            ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
+            : `  Wait:   until ${waitMeta.resumeAt}`
       );
     }
   }
@@ -5794,7 +5813,7 @@ export async function workflowRunsCommand(
     open?: boolean;
     verbose?: boolean;
   } = {}
-): Promise<void> {
+): Promise<number> {
   // Open-work inbox (#2747): terminal failed runs nothing has adopted or
   // superseded — the operator's "what ended with work on the table" query.
   // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
@@ -5803,7 +5822,7 @@ export async function workflowRunsCommand(
       const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5825,11 +5844,11 @@ export async function workflowRunsCommand(
         total: runs.length,
         scopeFallback: !opts.all && !codebase,
       });
-      return;
+      return 0;
     }
     if (runs.length === 0) {
       console.log('No open workflow runs — nothing ended with work on the table.');
-      return;
+      return 0;
     }
     console.log(`\nOpen work (${String(runs.length)}):\n`);
     for (const run of runs) {
@@ -5839,7 +5858,7 @@ export async function workflowRunsCommand(
       );
     }
     console.log('');
-    return;
+    return 0;
   }
 
   let statusFilter: WorkflowRunStatus | undefined;
@@ -5850,7 +5869,7 @@ export async function workflowRunsCommand(
       // --json never throws — emit one parseable {ok:false} line (write-command contract).
       if (opts.json) {
         await writeJsonLine({ ok: false, error: msg });
-        return;
+        return 1;
       }
       throw new Error(msg);
     }
@@ -5888,7 +5907,7 @@ export async function workflowRunsCommand(
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
     if (opts.json) {
       await writeJsonLine({ ok: false, error: err.message });
-      return;
+      return 1;
     }
     throw new Error(`Failed to list workflow runs: ${err.message}`);
   }
@@ -5902,12 +5921,12 @@ export async function workflowRunsCommand(
   if (opts.json) {
     if (!opts.verbose) {
       await writeJsonLine({ ...result, scopeFallback });
-      return;
+      return 0;
     }
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
     await writeJsonLine({ ...result, runs: await withRunDetail(host, result.runs), scopeFallback });
-    return;
+    return 0;
   }
 
   if (scopeFallback) {
@@ -5916,7 +5935,7 @@ export async function workflowRunsCommand(
 
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
-    return;
+    return 0;
   }
 
   console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
@@ -5929,6 +5948,7 @@ export async function workflowRunsCommand(
     );
   }
   console.log('');
+  return 0;
 }
 
 /**
@@ -6203,6 +6223,7 @@ export async function workflowResumeCommand(
       });
     } catch (error) {
       await printJsonWriteError(runId, 'resume', error);
+      return 1;
     }
     return 0;
   }
@@ -6264,7 +6285,7 @@ export async function workflowAbandonCommand(
   runId: string,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const { abandonWorkflow } = host.operations;
 
   // The container reclaim (M2) and the live-owner stop both live in the shared
@@ -6303,10 +6324,11 @@ export async function workflowAbandonCommand(
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'abandon', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6318,6 +6340,7 @@ export async function workflowAbandonCommand(
   for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
+  return 0;
 }
 
 function printRunTreeCancellationWarnings(
@@ -6351,7 +6374,7 @@ export async function workflowCancelCommand(
   runId: string,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const { cancelWorkflow } = host.operations;
 
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
@@ -6392,10 +6415,11 @@ export async function workflowCancelCommand(
           ? { blockedParentRunId: result.blockedParentRunId }
           : {}),
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'cancel', error);
+      return 1;
     }
-    return;
   }
 
   const { resolvedId, result } = await cancel();
@@ -6403,13 +6427,14 @@ export async function workflowCancelCommand(
     console.log(`Cancelled workflow run: ${resolvedId}`);
     console.log(`Workflow: ${result.run.workflow_name}`);
     console.log("It runs inside its parent run's process and stops at its next status check.");
-    return;
+    return 0;
   }
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
   for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
+  return 0;
 }
 
 /**

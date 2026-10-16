@@ -50,8 +50,12 @@ mock.module('../auth', () => ({
 // `X-Archon-User: alice` resolves to `user-alice`. `usersDown` simulates the
 // database failing during identity resolution.
 let usersDown = false;
+let identityCalls = 0;
+let firstIdentityLookupFails = false;
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async (_platform: string, platformUserId: string) => {
+    identityCalls++;
+    if (firstIdentityLookupFails && identityCalls === 1) throw new Error('transient failure');
     if (usersDown) throw new Error('connection refused');
     return {
       id: `user-${platformUserId}`,
@@ -105,13 +109,16 @@ function conversation(overrides: Partial<ConversationRow> = {}): ConversationRow
 }
 
 // Platform ids are unique per platform only, so two rows can share one. The
-// platform-agnostic lookup returns whichever row it meets first, as the real one may.
+// platform-agnostic lookup must reject collisions.
 let rows: ConversationRow[] = [conversation()];
 let mockArchonHome = '/tmp/.archon';
 
-const mockFindConversationByPlatformId = mock(
-  async (platformId: string) => rows.find(r => r.platform_conversation_id === platformId) ?? null
-);
+async function findUniqueConversation(platformId: string): Promise<ConversationRow | null> {
+  const matches = rows.filter(r => r.platform_conversation_id === platformId);
+  if (matches.length > 1) throw new Error('Ambiguous conversation platform ID');
+  return matches[0] ?? null;
+}
+const mockFindConversationByPlatformId = mock(findUniqueConversation);
 const mockGetConversationByPlatformId = mock(
   async (platformType: string, platformId: string) =>
     rows.find(r => r.platform_type === platformType && r.platform_conversation_id === platformId) ??
@@ -151,8 +158,8 @@ mock.module('@archon/core/db/workflows', () => ({
   isRunTranscriptConversation: mockIsRunTranscriptConversation,
 }));
 
-const mockHandleMessage = mock(async () => {});
-const mockAddMessage = mock(async () => ({ id: 'msg-1' }));
+const mockHandleMessage = mock(async (..._args: unknown[]) => {});
+const mockAddMessage = mock(async (..._args: unknown[]) => ({ id: 'msg-1' }));
 const mockListMessages = mock(async () => []);
 
 mock.module('@archon/core', () => ({
@@ -169,7 +176,7 @@ mock.module('@archon/core', () => ({
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {},
-  generateAndSetTitle: mock(async () => {}),
+  generateTitleForUser: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   isPerUserGitHubEnabled: () => false,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
@@ -395,10 +402,20 @@ beforeEach(() => {
   ownershipEnforced = false;
   apiGateEnabled = false;
   usersDown = false;
+  identityCalls = 0;
+  firstIdentityLookupFails = false;
   authInstance = null;
   runTranscript = false;
   rows = [conversation()];
   mockArchonHome = '/tmp/.archon';
+  mockFindConversationByPlatformId.mockReset();
+  mockFindConversationByPlatformId.mockImplementation(findUniqueConversation);
+  mockGetConversationByPlatformId.mockReset();
+  mockGetConversationByPlatformId.mockImplementation(
+    async (platform, platformId) =>
+      rows.find(r => r.platform_type === platform && r.platform_conversation_id === platformId) ??
+      null
+  );
   clearEffects();
 });
 
@@ -650,6 +667,73 @@ describe('dispatch to an unknown conversation id', () => {
     test(`${ingress.name}: a solo install still dispatches`, async () => {
       expect((await ingress.call(makeApp())).status).toBe(200);
       expect(mockHandleMessage).toHaveBeenCalled();
+    });
+  }
+});
+
+describe('conversation identity collisions', () => {
+  for (const ingress of INGRESSES.filter(i => !i.web && i.name !== 'node-session reset')) {
+    test(`${ingress.name}: a bare id cannot select a row from colliding platforms`, async () => {
+      ownershipEnforced = true;
+      const web = conversation();
+      const slack = conversation({ id: 'internal-slack', platform_type: 'slack', user_id: null });
+      for (const collision of [
+        [web, slack],
+        [slack, web],
+      ]) {
+        rows = collision;
+        expect((await ingress.call(makeApp(), 'alice')).status).toBe(500);
+        expectNoEffects(ingress);
+      }
+    });
+  }
+
+  test('the SSE fallback refuses two non-web rows sharing an id', async () => {
+    ownershipEnforced = true;
+    rows = [
+      conversation({ platform_type: 'slack', user_id: null }),
+      conversation({ id: 'internal-discord', platform_type: 'discord', user_id: null }),
+    ];
+    const stream = INGRESSES.find(i => i.name === 'stream')!;
+    expect((await stream.call(makeApp(), 'alice')).status).toBe(500);
+  });
+
+  for (const ingress of INGRESSES.filter(i => i.web === 'only')) {
+    test(`${ingress.name}: solo dispatch persists into the web row on collision`, async () => {
+      rows = [
+        conversation({ id: 'internal-slack', platform_type: 'slack', user_id: null }),
+        conversation(),
+      ];
+      expect((await ingress.call(makeApp())).status).toBe(200);
+      expect(mockAddMessage.mock.calls[0]?.[0]).toBe(INTERNAL_ID);
+    });
+  }
+});
+
+describe('dispatch identity and lookup failures', () => {
+  for (const ingress of INGRESSES.filter(i => i.web === 'only')) {
+    test(`${ingress.name}: a transient identity failure cannot accept an unattributed action`, async () => {
+      ownershipEnforced = true;
+      firstIdentityLookupFails = true;
+      expect((await ingress.call(makeApp(), 'alice')).status).toBe(503);
+      expectNoEffects(ingress);
+    });
+
+    test(`${ingress.name}: authorization and attribution use one identity lookup`, async () => {
+      ownershipEnforced = true;
+      expect((await ingress.call(makeApp(), 'alice')).status).toBe(200);
+      expect(identityCalls).toBe(1);
+      expect(mockAddMessage.mock.calls[0]?.[4]).toBe('user-alice');
+      expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({
+        actor: { kind: 'user', userId: 'user-alice' },
+      });
+    });
+
+    test(`${ingress.name}: a solo lookup outage refuses dispatch`, async () => {
+      mockFindConversationByPlatformId.mockRejectedValueOnce(new Error('database down'));
+      mockGetConversationByPlatformId.mockRejectedValueOnce(new Error('database down'));
+      expect((await ingress.call(makeApp())).status).toBe(500);
+      expectNoEffects(ingress);
     });
   }
 });

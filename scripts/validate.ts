@@ -21,7 +21,7 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'package-edges',
-    label: 'Declared @archon dependencies',
+    label: 'Declared @archon dependencies match the package layering',
     commands: [['bun', 'run', 'check:package-edges']],
   },
   {

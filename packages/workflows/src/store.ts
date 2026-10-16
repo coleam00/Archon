@@ -50,7 +50,6 @@ import type {
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   WorkflowWaitResult,
-  ScheduledWorkflowResume,
   WorkflowNodeSession,
   WorkflowRunNodeSession,
 } from './schemas';
@@ -298,7 +297,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'approval_requested',
   'approval_received',
   // A paused run's inline notice could not be delivered. The run stays paused; the
-  // attention queue is where it is answered. `data` carries `nodeId` and `platform`.
+  // attention queue is where it is answered. `data` carries `nodeId`, `platform` and the
+  // pause `occurrence` (absent on events from before it was recorded), which the push router matches.
   'pause_notice_undelivered',
   'wait_started',
   // A resumed run paused again at the same wait, which has not fired or been answered:
@@ -860,11 +860,7 @@ export interface IWorkflowStore
   failWorkflowRun(
     id: string,
     error: string,
-    options?: {
-      scheduledResume?: ScheduledWorkflowResume;
-      exitReason?: RunExitReason;
-      signal?: RunStopSignal;
-    }
+    options?: { exitReason?: RunExitReason; signal?: RunStopSignal }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

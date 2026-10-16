@@ -127,6 +127,16 @@ export function findInstalledSkillNames(roots: string[], skillNames: string[]): 
 export const SETTING_SOURCES = ['project', 'user'] as const;
 
 /**
+ * Claude's effective setting sources when neither the node nor the install config
+ * names any. Workflow validation and the Claude provider both read this, so the
+ * skill roots validation checks are the ones a run actually loads.
+ */
+export const DEFAULT_SETTING_SOURCES: readonly (typeof SETTING_SOURCES)[number][] = [
+  'project',
+  'user',
+];
+
+/**
  * Normalize a raw `settingSources` value to the recognized entries, in order.
  * Undefined when raw is not an array.
  *

@@ -84,6 +84,7 @@ import {
   attentionForm,
   attentionOccurrence,
   attentionOptions,
+  gateOccurrence,
   type WorkflowAttentionWaitContext,
 } from './schemas/workflow-run';
 import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
@@ -119,7 +120,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
-  ScheduledWorkflowResume,
+  WorkflowUsageLimitWaitContext,
   NodeMcp,
 } from './schemas';
 import {
@@ -137,7 +138,6 @@ import {
   loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
-  isScheduledWorkflowResume,
   isHaltNode,
   isIncludeDirective,
   isOutputFormatEnforced,
@@ -740,7 +740,7 @@ interface WorkflowLevelOptions {
   webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
-  workflowTier?: 'small' | 'medium' | 'large';
+  workflowTier?: TierName;
 }
 
 /**
@@ -1684,6 +1684,20 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Substitute an attention wait's message: node outputs, enclosing loop scopes and
+ * `$INPUTS`, and no other workflow variable. The dry run renders the same field through
+ * this function so its preview cannot drift from what the operator receives.
+ */
+export function substituteWaitMessage(
+  text: string,
+  sources: TemplateSources,
+  inputs: Record<string, JsonValue> | undefined
+): string {
+  const { before, after } = nodeTemplateReferences(text, sources);
+  return substituteTemplate(text, [...before, inputRefToken(inputs), ...after]);
+}
+
+/**
  * Collect the static ids of every node in a loop_group body, recursing into nested
  * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
  * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
@@ -1991,6 +2005,7 @@ async function resolveNodeProviderAndModel(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
+  baseOptions.userCredentialEnvKeys = config.userCredentialEnvKeys;
   if (config.protectedEnvKeys && config.protectedEnvKeys.length > 0) {
     baseOptions.protectedEnvKeys = config.protectedEnvKeys;
   }
@@ -3348,7 +3363,12 @@ function providerReportedFailure(
       message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
       break;
     case 'quota_exhausted':
-      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      // With a reported reset the run usually waits for it and continues by itself, so the
+      // text gives no resume advice: resuming before the reset spends a provider call.
+      message =
+        failure.resetAt !== undefined
+          ? `${subject} failed: the provider's usage or credit limit is used up until ${failure.resetAt}: ${failure.evidence}`
+          : `${subject} failed: the provider's usage or credit limit is used up. Resume the run once it reopens: ${failure.evidence}`;
       break;
     default:
       message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
@@ -3394,7 +3414,7 @@ function execStdoutPreview(stdout: string, credentialValues: readonly string[]):
  *
  * @throws ExecOutputContractError when stdout is not JSON, or fails the declared schema.
  */
-function certifyExecOutput(
+export function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
@@ -5311,6 +5331,7 @@ async function executeLoopGroupBody(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6877,6 +6898,7 @@ async function executeLoopNode(
         conversationId,
         workflowRun.id,
         node.id,
+        gateOccurrence(paused),
         stepName,
         gateMsg
       );
@@ -6918,7 +6940,8 @@ async function executeLoopNode(
  * queue is where it is answered, so a notice the platform cannot deliver leaves the run
  * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
  * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
- * can see that nobody was told.
+ * can see that nobody was told. It names the pause `occurrence` so the push router can
+ * treat that pause as unannounced and notify the owner itself.
  */
 async function sendPauseNotice(
   deps: WorkflowDeps,
@@ -6926,6 +6949,7 @@ async function sendPauseNotice(
   conversationId: string,
   workflowRunId: string,
   nodeId: string,
+  occurrence: string,
   stepName: string,
   notice: string
 ): Promise<void> {
@@ -6941,7 +6965,7 @@ async function sendPauseNotice(
       workflow_run_id: workflowRunId,
       event_type: 'pause_notice_undelivered',
       step_name: stepName,
-      data: { nodeId, platform: platform.getPlatformType() },
+      data: { nodeId, occurrence, platform: platform.getPlatformType() },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -7090,14 +7114,8 @@ async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string => {
-    const { before, after } = nodeTemplateReferences(text, ctx);
-    return substituteTemplate(text, [
-      ...before,
-      inputRefToken(resolveRunInputs(workflowRun)),
-      ...after,
-    ]);
-  };
+  const resolveEventText = (text: string): string =>
+    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;
@@ -7207,6 +7225,7 @@ async function executeWaitNode(
         conversationId,
         workflowRun.id,
         node.id,
+        attentionOccurrence(context),
         stepNamePrefix + node.id,
         attentionNotification(platform, workflowRun.id, context)
       );
@@ -7553,6 +7572,7 @@ async function executeApprovalNode(
     conversationId,
     workflowRun.id,
     node.id,
+    gateOccurrence(paused),
     stepName,
     approvalMsg
   );
@@ -11431,7 +11451,7 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  await pauseGateRespectingExternalTransition(
+  const paused = await pauseGateRespectingExternalTransition(
     deps,
     runId,
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
@@ -11454,7 +11474,18 @@ async function raiseWriteBackGate(
     phase: 'writeback_requested',
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  await sendPauseNotice(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    WRITEBACK_GATE_NODE_ID,
+    gateOccurrence(paused),
+    'container',
+    message
+  );
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */
@@ -11894,74 +11925,79 @@ export async function executeDagWorkflow(
       });
   };
 
-  const scheduleQuotaResume = async (): Promise<ScheduledWorkflowResume | undefined> => {
-    const policy = config.workflows;
-    if (policy?.autoResumeOnQuotaReset !== true) return undefined;
-    if (execContext.kind === 'container') {
+  /**
+   * The wait a failed pass takes instead of failing, when every failed node hit a provider
+   * usage limit whose reset the provider reported and that is still ahead. The run then
+   * cannot progress before the last of those resets, so it waits for it. Any other failure,
+   * a limit without a reported reset, or a container run (the continuation host does not
+   * continue one) leaves the run to fail. Only the typed class says a limit is spent; the
+   * error text never does.
+   */
+  const usageLimitWait = async (): Promise<WorkflowUsageLimitWaitContext | undefined> => {
+    const skip = async (
+      nodeId: string,
+      reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'
+    ): Promise<undefined> => {
       await deps.store.createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'quota_resume_skipped',
-        data: { reason: 'container_unsupported' },
+        step_name: nodeId,
+        data: { reason },
       });
       return undefined;
-    }
-    const prior = isScheduledWorkflowResume(workflowRun.metadata?.scheduled_resume)
-      ? workflowRun.metadata.scheduled_resume
-      : undefined;
-    // Only a provider's typed class says a quota window is spent; the error text never does.
-    const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      (
-        output
-      ): output is Extract<NodeOutput, { state: 'failed' }> & {
-        providerFailure: ProviderFailure;
-      } => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
-    );
-    if (quotaFailure === undefined) return undefined;
-    const quotaResetAt = quotaFailure.providerFailure.resetAt;
-    const now = new Date();
-    const maxAttempts = policy.quotaMaxAttempts;
-    const attempt = (prior?.attempt ?? 0) + 1;
-    const deadlineMs = policy.quotaDeadlineMs;
-    const deadlineAt = prior?.deadlineAt ?? new Date(now.getTime() + deadlineMs).toISOString();
-    if (attempt > maxAttempts) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { attempt, max_attempts: maxAttempts },
-      });
-      return undefined;
-    }
-
-    let resumeAt: Date | null = quotaResetAt !== undefined ? new Date(quotaResetAt) : null;
-    if (resumeAt === null || resumeAt.getTime() <= now.getTime()) {
-      const fallback = policy.quotaFallbackDelayMs;
-      resumeAt = fallback !== undefined ? new Date(now.getTime() + fallback) : null;
-    }
-    if (resumeAt === null) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_skipped',
-        data: { reason: 'reset_unavailable' },
-      });
-      return undefined;
-    }
-    if (resumeAt.getTime() > Date.parse(deadlineAt)) {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'quota_resume_exhausted',
-        data: { reason: 'deadline', deadline_at: deadlineAt },
-      });
-      return undefined;
-    }
-
-    const scheduled: ScheduledWorkflowResume = {
-      reason: 'quota',
-      resumeAt: resumeAt.toISOString(),
-      deadlineAt,
-      attempt,
-      maxAttempts,
     };
-    return scheduled;
+    let latest: { nodeId: string; resetAt: number } | undefined;
+    for (const [nodeId, output] of runCtx.nodeOutputs) {
+      if (output.state !== 'failed') continue;
+      if (output.providerFailure?.class !== 'quota_exhausted') return undefined;
+      const resetAt = output.providerFailure.resetAt;
+      if (resetAt === undefined) return skip(nodeId, 'reset_unavailable');
+      if (latest === undefined || Date.parse(resetAt) > latest.resetAt)
+        latest = { nodeId, resetAt: Date.parse(resetAt) };
+    }
+    if (latest === undefined) return undefined;
+    if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
+    const now = Date.now();
+    if (latest.resetAt <= now) return skip(latest.nodeId, 'reset_passed');
+    if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
+    return {
+      owner: 'node',
+      nodeId: latest.nodeId,
+      kind: 'quota',
+      pauseId: randomUUID(),
+      waitingSince: new Date(now).toISOString(),
+      resumeAt: new Date(latest.resetAt).toISOString(),
+    };
+  };
+
+  /** Pause the run on a usage-limit wait. False when the pass must fail instead. */
+  const pauseForUsageLimit = async (): Promise<boolean> => {
+    const wait = await usageLimitWait();
+    if (wait === undefined) return false;
+    try {
+      await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
+        kind: 'started',
+        stepName: wait.nodeId,
+      });
+    } catch (pauseError) {
+      // A run cancelled or paused meanwhile keeps that status, exactly as the failure
+      // branches below leave it.
+      if ((await deps.store.getWorkflowRunStatus(workflowRun.id)) === 'running') throw pauseError;
+      getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
+      return true;
+    }
+    getLog().info(
+      { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt },
+      'dag.usage_limit_wait_started'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
+        `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
+      { workflowId: workflowRun.id }
+    );
+    return true;
   };
 
   /**
@@ -12132,6 +12168,7 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (anyFailed && (await pauseForUsageLimit())) return;
     const failedNodes: string[] = [];
     for (const [nodeId, o] of nodeOutputs) {
       if (o.state === 'failed') failedNodes.push(nodeId);
@@ -12145,10 +12182,6 @@ export async function executeDagWorkflow(
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe. (Usage IS
     // stored: persistRunUsage wrote it at the run tail, before this branch — #2469.)
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12174,7 +12207,6 @@ export async function executeDagWorkflow(
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
         // A first-node failure completes nothing, but it is still a node failure.
         exitReason: anyFailed ? 'node_error' : 'no_nodes_completed',
       }),
@@ -12188,15 +12220,12 @@ export async function executeDagWorkflow(
 
   if (anyFailed) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (await pauseForUsageLimit()) return;
     const failedNodes = [...nodeOutputs.entries()]
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
     const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
-    const scheduledResume = await scheduleQuotaResume().catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
-      return undefined;
-    });
     await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
       (logErr: Error) => {
         getLog().error(
@@ -12221,10 +12250,7 @@ export async function executeDagWorkflow(
     // or the user's notification. Terminal telemetry is reported by the run store
     // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        scheduledResume,
-        exitReason: 'node_error',
-      }),
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
       { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
     );
     // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
