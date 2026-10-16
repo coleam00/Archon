@@ -893,6 +893,22 @@ describe('the intake scripts', () => {
     ]);
   }, 60_000);
 
+  test("archon-issue, the investigate route's old name, is removed when intake next writes the item", () => {
+    const at = install();
+    const stale = { issueLabels: ['archon-issue'] };
+    const decided = facts(at, { ...stale, runId: 'run-1' }).output;
+    const investigate = {
+      ...READY_VERDICT,
+      INPUTS_ROUTE: 'investigate',
+      INPUTS_LABELS: '["archon-investigate","archon-size-s","archon-type-feature"]',
+    };
+    const applied = outcome(at, { ...stale, runId: 'run-1' }, decided, investigate);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-investigate --add-label archon-size-s --add-label archon-type-feature --remove-label archon-issue',
+    ]);
+  }, 60_000);
+
   test('a request label on an outside item waits one pickup for its request, then is removed', () => {
     const at = install();
     const stale = { author: 'stranger', issueLabels: ['archon-plan'] };

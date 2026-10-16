@@ -18,7 +18,7 @@ interface LabelSpec {
 export const PACK_LABELS = {
   'archon-ready': { color: '0E8A16', description: 'Triage: ready to deliver' },
   'archon-plan': { color: '1D76DB', description: 'Triage: ready; a plan comes before delivery' },
-  'archon-issue': {
+  'archon-investigate': {
     color: 'C5DEF5',
     description: 'Triage: ready; an investigation comes before delivery',
   },
@@ -63,8 +63,9 @@ export function isPackLabel(name: string): name is PackLabel {
 }
 
 // Labels an earlier version of the pack wrote. A write removes them from the item
-// and never creates them, so re-triaging an item clears its old size label.
-const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large'] as const;
+// and never creates them, so re-triaging an item clears its old size label, and
+// intake's next write on an item clears archon-issue, the investigate route's old name.
+const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large', 'archon-issue'] as const;
 
 /** A label the pack owns on an item: one it writes now, or one it retired. */
 export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
@@ -85,8 +86,8 @@ export type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
 
 // Exactly one state label per item. A READY item's label names the route the run
 // takes on it: archon-ready delivers (a new pull request, or the open one it
-// continues), archon-plan plans then delivers, and archon-issue investigates then
-// delivers.
+// continues), archon-plan plans then delivers, and archon-investigate investigates
+// then delivers.
 export const STATE_LABEL = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
@@ -96,7 +97,7 @@ export const ROUTE_LABEL = {
   deliver: 'archon-ready',
   continue: 'archon-ready',
   plan: 'archon-plan',
-  investigate: 'archon-issue',
+  investigate: 'archon-investigate',
 } as const satisfies Record<Route, PackLabel>;
 // Of triage's five fields only type and size become labels, the two a person
 // filters by; complexity, importance and urgency stay in the verdict.

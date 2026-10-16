@@ -388,9 +388,9 @@ it; both share one resource so runs queue rather than overlap:
 
 The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
-"in": ["archon-triage", "archon-ready", "archon-plan", "archon-issue"]}]}`, and two
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
-The predicate only saves runs; intake ignores any other label.
+The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
 ### The backlog bench
 
@@ -564,7 +564,7 @@ changes its checkout, so every run needs its own worktree:
 
 To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
-(`archon-ready`, `archon-plan`, `archon-issue`) and the same launch.
+(`archon-ready`, `archon-plan`, `archon-investigate`) and the same launch.
 
 ## Discoveries
 
