@@ -18,6 +18,7 @@ import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import type { WorkflowDefinition } from '../../../packages/workflows/src/schemas';
 import { type RunDetail, SAMPLES_FILE, appendLine, readLines, returnedValue } from '../../workflows/sdlc/.shared/bench';
+import { closeComments } from '../../workflows/sdlc/.shared/close';
 import { postMark, renderPage } from '../../workflows/sdlc/intake/scripts/bench/page';
 import {
   type BatchChecks,
@@ -434,20 +435,20 @@ describe('bench run', () => {
     const config = join(dir, 'binding.yaml');
     writeFileSync(config, Bun.YAML.stringify({ tiers: { medium: baseline } }));
     const rows = [row(11, { known: { canonical: 'https://github.com/o/r/issues/9' } }), row(12, { id: '12-outside', workflow: 'intake', trust: 'outside' })];
+    const issues = [
+      ...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })),
+      ...[101, 102, 103].map(number => ({ number, repo: scratchRepo, labels: [], comments: 0 })),
+    ];
     const run = async (scenario: Partial<FakeConfig>) => {
       writeFileSync(join(dir, 'config.json'), JSON.stringify({
-        baseline, repo: REPO, projectKey: 'o/r',
-        issues: [
-          ...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })),
-          ...[101, 102, 103].map(number => ({ number, repo: scratchRepo, labels: [], comments: 0 })),
-        ],
+        baseline, repo: REPO, projectKey: 'o/r', issues,
         ...scenario,
       } satisfies FakeConfig));
       return runBatch({
         set: { bench: 'intake', repo: REPO, selected_at: '2026-10-15T00:00:00Z', rows },
         rows, batch: 1, base: 'base', outDir: dir, repoRoot: dir,
         versions: [{ resolved: { version, source: dir, config }, checkout: () => dir }],
-        live: new Map([['base', { scratch: { repo: scratchRepo, checkout: dir }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103 } }]]),
+        live: new Map([['base', { scratch: { repo: scratchRepo, checkout: dir }, copies: { '11': 101, '12-outside': 102, 'canonical:https://github.com/o/r/issues/9': 103, 'old-row': 999, 'canonical:https://github.com/o/r/issues/8': 998 } }]]),
       });
     };
     const { spawn, spawnSync } = Bun;
@@ -480,6 +481,11 @@ describe('bench run', () => {
           const rejected = await run({ declaredClosure, posted: changed });
           expect([rejected.checks.passed, rejected.checks.checks.posted_text.ok]).toEqual([false, false]);
         }
+      }
+      for (const missing of [101, 103]) {
+        await expect(run({ issues: issues.filter(issue => issue.number !== missing) })).rejects.toThrow(
+          `github.com/me/scratch-base#${String(missing)} is missing from the repository snapshot`
+        );
       }
     } finally {
       Object.assign(Bun, { spawn, spawnSync });
@@ -808,6 +814,31 @@ describe('hard checks', () => {
     expect(snapshotChanges(empty, created)).toEqual(['github.com/o/r#2: issue added']);
     expect(snapshotChanges(created, empty)).toEqual(['github.com/o/r#2: issue removed']);
     expect(postedComments(empty, created)).toEqual(['github.com/o/r#2: 1 comment(s) posted or edited outside declared closure']);
+  });
+
+  it('spends each closure allowance on its surviving comment before checking new retry comments', () => {
+    const item = { repo: REPO, number: 1 };
+    const itemUrl = 'https://github.com/o/r/issues/1';
+    const original = { repo: REPO, number: 2 };
+    const comments = [
+      ...closeComments(item, itemUrl, { kind: 'delivered', url: 'https://github.com/o/r/pull/3' }),
+      ...closeComments(item, itemUrl, { kind: 'duplicate', url: 'https://github.com/o/r/issues/2', original }),
+    ];
+    const problems: string[][] = [];
+    const expected: string[][] = [];
+    for (const { item: target, body } of comments) {
+      const key = `github.com/o/r#${String(target.number)}`;
+      const existing = { id: 'old', body };
+      const was: Snapshot = { issues: { [key]: { ...facts, comments: [existing] } }, state: {} };
+      const allowed = new Map([[key, [body]]]);
+      expect(postedComments(was, was, allowed)).toEqual([]);
+      for (const copies of [[existing, { id: 'new', body }], [{ id: 'new', body }, existing]]) {
+        const now: Snapshot = { issues: { [key]: { ...facts, comments: copies } }, state: {} };
+        problems.push(postedComments(was, now, allowed));
+        expected.push([`${key}: 1 comment(s) posted or edited outside declared closure`]);
+      }
+    }
+    expect(problems).toEqual(expected);
   });
 
   it('rejects edits, marker-only imitations, and repeated copies of an allowed comment', () => {

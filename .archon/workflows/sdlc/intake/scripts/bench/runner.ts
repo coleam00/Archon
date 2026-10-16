@@ -449,6 +449,11 @@ export function postedComments(before: Snapshot, after: Snapshot, allowed: Reado
     const was = before.issues[key];
     const earlier = new Map((was?.comments ?? []).map(comment => [comment.id, comment.body]));
     const expected = [...(allowed.get(key) ?? [])];
+    const unchanged = now.comments.filter(comment => earlier.get(comment.id) === comment.body);
+    for (const comment of unchanged) {
+      const index = expected.indexOf(comment.body);
+      if (index !== -1) expected.splice(index, 1);
+    }
     const unexpected = now.comments.filter(comment => {
       if (earlier.get(comment.id) === comment.body) return false;
       const index = expected.indexOf(comment.body);
@@ -1024,7 +1029,10 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
   const originals = rows.map(row => ({ repo: set.repo, number: row.number }));
   const requiredIssues = [
     ...originals,
-    ...(live === undefined ? [] : [...live.values()].flatMap(({ scratch, copies }) => Object.values(copies).map(number => ({ repo: scratch.repo, number })))),
+    ...runs.flatMap(versionRuns => versionRuns.flatMap(({ live }) => live === undefined ? [] : [
+      { repo: live.repo, number: live.number },
+      ...(live.canonical === undefined ? [] : [{ repo: live.repo, number: live.canonical }]),
+    ])),
   ];
   // The state documents of the set's project, from the operator's checkout and from
   // each eval checkout; a live batch writes its scratch projects by design.
