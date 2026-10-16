@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { inspectChat, type ChatPluginDescriptor } from '@archon/chat-contract';
 import { terminateTree, validateCommand } from '@archon/paths/plugin-process';
+import { PluginProtocolMismatchError } from '@archon/provider-contract/plugin';
 
 export async function inspectChatPlugin(executable: string): Promise<ChatPluginDescriptor> {
   const failure = (): Error => new Error(`Chat plugin ${executable} failed initialize`);
@@ -60,7 +61,8 @@ export async function inspectChatPlugin(executable: string): Promise<ChatPluginD
       processFailure,
       timeout,
     ]);
-  } catch {
+  } catch (error) {
+    if (error instanceof PluginProtocolMismatchError) throw error;
     // Remote errors and transport diagnostics can contain credentials or user messages.
     throw failure();
   } finally {

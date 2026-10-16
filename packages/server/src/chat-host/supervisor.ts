@@ -6,7 +6,11 @@ import {
   type ConnectedChat,
   type ChatRunEvent,
 } from '@archon/chat-contract';
-import { PluginProtocolError, PluginRemoteError } from '@archon/provider-contract/plugin';
+import {
+  PluginProtocolError,
+  PluginProtocolMismatchError,
+  PluginRemoteError,
+} from '@archon/provider-contract/plugin';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import { terminateTree, validateCommand } from '@archon/paths/plugin-process';
 import { createLogger } from '@archon/paths';
@@ -217,7 +221,16 @@ export class ChatSupervisor implements ChatConnection {
         retryable =
           !(error instanceof ChatStartError && !error.retryable) &&
           !(error instanceof PluginProtocolError && error.reason === 'invalid_message');
-        this.log.error({ plugin: descriptor.id, retryable }, 'chat.plugin.failed');
+        this.log.error(
+          {
+            plugin: descriptor.id,
+            retryable,
+            ...(error instanceof PluginProtocolMismatchError
+              ? { hostProtocol: error.hostProtocol, pluginProtocol: error.pluginProtocol }
+              : {}),
+          },
+          'chat.plugin.failed'
+        );
       } finally {
         this.connection = undefined;
         this.onState(this.stopping ? 'stopped' : retryable ? 'starting' : 'failed');

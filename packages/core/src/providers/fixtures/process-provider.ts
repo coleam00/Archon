@@ -1,7 +1,12 @@
 import { closeSync, writeSync, existsSync, writeFileSync } from 'node:fs';
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { spawn } from 'node:child_process';
-import { PluginRemoteError, serveProvider } from '@archon/provider-contract/plugin';
+import {
+  PROVIDER_PLUGIN_PROTOCOL,
+  PluginRemoteError,
+  PluginRpc,
+  serveProvider,
+} from '@archon/provider-contract/plugin';
 import type {
   ProviderChunk,
   CredentialStatus,
@@ -34,6 +39,23 @@ async function closeOutput(): Promise<never> {
   } else closeSync(1);
   setInterval(() => undefined, 1000);
   return await new Promise<never>(() => undefined);
+}
+if (mode === 'protocol') {
+  // serveProvider only serves its own protocol, so a plugin from another one is a raw peer.
+  const rpc = new PluginRpc({
+    readable: Readable.toWeb(process.stdin),
+    writable: Writable.toWeb(process.stdout),
+  });
+  rpc.handle('initialize', () => ({
+    protocolVersion: 1,
+    agentCapabilities: {
+      _meta: { archon: { ...descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 } },
+    },
+    authMethods: [],
+  }));
+  await rpc.done.catch(() => undefined);
+  await rpc.close();
+  process.exit(0);
 }
 await serveProvider(
   {

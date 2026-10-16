@@ -6,7 +6,11 @@ import * as paths from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { buildProviderSubprocessEnv, type ProviderChunk } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
-import { PluginRemoteError } from '@archon/provider-contract/plugin';
+import {
+  PROVIDER_PLUGIN_PROTOCOL,
+  PluginProtocolMismatchError,
+  PluginRemoteError,
+} from '@archon/provider-contract/plugin';
 import { ProviderPluginExitedError } from './process-provider';
 import { processProviderRegistration } from './process-registration';
 import { descriptor, chunks } from './fixtures/process-provider-data';
@@ -430,6 +434,17 @@ test('diagnostic hook errors withhold plugin prose and stderr', async () => {
   } finally {
     debug.mockRestore();
   }
+});
+
+test('a plugin on another protocol fails naming both versions', async () => {
+  const error: unknown = await collect(provider('protocol').sendQuery('turn', '/')).catch(
+    (error: unknown) => error
+  );
+  expect(error).toBeInstanceOf(PluginProtocolMismatchError);
+  expect(error).toMatchObject({
+    hostProtocol: PROVIDER_PLUGIN_PROTOCOL,
+    pluginProtocol: PROVIDER_PLUGIN_PROTOCOL + 1,
+  });
 });
 
 test.each(['models', 'diagnose'] as const)(
