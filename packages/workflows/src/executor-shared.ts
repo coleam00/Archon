@@ -73,17 +73,26 @@ export function rateLimitResumeAt(failure: ProviderFailure, now: number): number
   return now + Math.round(RATE_LIMIT_PAUSE_DELAY_MS * (0.5 + Math.random()));
 }
 
+/** A provider failure the provider-limit wait can pause a run on: a rate or usage limit. */
+export type ProviderLimitFailure = ProviderFailure & { class: 'rate_limited' | 'quota_exhausted' };
+
+export function isProviderLimit(
+  failure: ProviderFailure | undefined
+): failure is ProviderLimitFailure {
+  return failure?.class === 'rate_limited' || failure?.class === 'quota_exhausted';
+}
+
 /**
  * When the provider-limit wait would try a failed limit again, in epoch ms: a rate limit's
  * {@link rateLimitResumeAt}, a usage limit's reported reset. Undefined for a usage limit
- * without a reported reset, which the run cannot wait on, and for any other failure.
+ * without a reported reset, which the run cannot wait on.
  */
-export function providerLimitResumeAt(failure: ProviderFailure, now: number): number | undefined {
+export function providerLimitResumeAt(
+  failure: ProviderLimitFailure,
+  now: number
+): number | undefined {
   if (failure.class === 'rate_limited') return rateLimitResumeAt(failure, now);
-  if (failure.class === 'quota_exhausted' && failure.resetAt !== undefined) {
-    return Date.parse(failure.resetAt);
-  }
-  return undefined;
+  return failure.resetAt === undefined ? undefined : Date.parse(failure.resetAt);
 }
 
 /**
@@ -100,9 +109,9 @@ export function aggregateProviderFailure(
   now: number
 ): ProviderFailure | undefined {
   if (failures.length <= 1) return failures[0];
-  const limits: { failure: ProviderFailure; resumeAt: number | undefined }[] = [];
+  const limits: { failure: ProviderLimitFailure; resumeAt: number | undefined }[] = [];
   for (const failure of failures) {
-    if (failure?.class !== 'rate_limited' && failure?.class !== 'quota_exhausted') return undefined;
+    if (!isProviderLimit(failure)) return undefined;
     limits.push({ failure, resumeAt: providerLimitResumeAt(failure, now) });
   }
   const unwaitable = limits.find(limit => limit.resumeAt === undefined);

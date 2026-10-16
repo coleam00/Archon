@@ -269,6 +269,8 @@ import {
   getRetryDelayMs,
   effectiveRetryMaxRetries,
   providerLimitResumeAt,
+  isProviderLimit,
+  type ProviderLimitFailure,
   aggregateProviderFailure,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -12200,7 +12202,7 @@ export async function executeDagWorkflow(
    * error text never does.
    */
   const usageLimitWait = async (): Promise<
-    { wait: WorkflowUsageLimitWaitContext; cause: 'quota_exhausted' | 'rate_limited' } | undefined
+    { wait: WorkflowUsageLimitWaitContext; cause: ProviderLimitFailure['class'] } | undefined
   > => {
     const skip = async (
       nodeId: string,
@@ -12216,14 +12218,12 @@ export async function executeDagWorkflow(
     };
     const now = Date.now();
     let latest:
-      | { nodeId: string; resumeAt: number; cause: 'quota_exhausted' | 'rate_limited' }
+      | { nodeId: string; resumeAt: number; cause: ProviderLimitFailure['class'] }
       | undefined;
     for (const [nodeId, output] of runCtx.nodeOutputs) {
       if (output.state !== 'failed') continue;
       const failure = output.providerFailure;
-      if (failure?.class !== 'rate_limited' && failure?.class !== 'quota_exhausted') {
-        return undefined;
-      }
+      if (!isProviderLimit(failure)) return undefined;
       const resumeAt = providerLimitResumeAt(failure, now);
       if (resumeAt === undefined) return skip(nodeId, 'reset_unavailable');
       if (latest === undefined || resumeAt > latest.resumeAt)
