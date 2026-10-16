@@ -409,8 +409,9 @@ export async function execOwnedProcessGroup(
       : (): void => undefined;
     recorder.roots.set(rootPid, disarm);
     // The node is in flight until `close`: a root that exits while a background job still
-    // holds its output has not settled. Its group stays endable by the root PID, which
-    // the kernel does not reuse while a process group with that ID exists.
+    // holds its output has not settled. `stop` does not signal that group, but the owner's
+    // interrupt (`end()`) still can: the kernel does not reuse the root PID while its group
+    // exists.
     child.once('close', () => {
       recorder.roots.delete(rootPid);
       disarm();

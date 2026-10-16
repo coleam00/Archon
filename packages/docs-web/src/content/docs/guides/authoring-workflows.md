@@ -273,7 +273,8 @@ the local `docker exec` client, so the command inside the container may keep run
 Archon does not confirm that the tree is gone, so some work outlives a reported timeout:
 
 - On macOS and Linux, a process that ignores or handles `SIGTERM` without exiting. Archon
-  sends no `SIGKILL` after it.
+  sends no `SIGKILL` after it. When that process is the node's own process, the node does
+  not report the timeout until the process exits.
 - On macOS and Linux, a process that left the node's group, for example with `setsid`.
 - On every OS, background work still running when the node's own process had already exited
   before the deadline. Archon does not signal a tree whose root has exited.
