@@ -31,6 +31,7 @@
     "./platforms/chat-plugins": "./src/platforms/chat-plugins.ts",
     "./platforms/registry": "./src/platforms/registry.ts",
     "./platforms/types": "./src/platforms/types.ts",
+    "./github-auth/config": "./src/github-auth/config.ts",
     "./handlers/clone": "./src/handlers/clone.ts",
     "./config/config-loader": "./src/config/config-loader.ts",
     "./config/store-selection": "./src/config/store-selection.ts"
