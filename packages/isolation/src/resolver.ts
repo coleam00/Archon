@@ -32,7 +32,7 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
-import { worktreeRegistrationMetadata } from './types';
+import { WorktreeRegistrationChangedError, worktreeRegistrationMetadata } from './types';
 import {
   recordWorktreeAdoption,
   registerWorktree,
@@ -472,12 +472,13 @@ export class IsolationResolver {
 
   /**
    * Best-effort retire the observed registration of a worktree whose path is gone.
-   * Logs errors but never throws - stale cleanup should not block resolution.
+   * Registration conflicts must stop resolution before it clears or replaces live state.
    */
   private async markDestroyedBestEffort(env: IsolationEnvironmentRow): Promise<void> {
     try {
       await this.store.markWorktreeDestroyed(env);
     } catch (cleanupError) {
+      if (cleanupError instanceof WorktreeRegistrationChangedError) throw cleanupError;
       const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       getLog().error(
         { err, errorType: err.constructor.name, isolationEnvId: env.id },

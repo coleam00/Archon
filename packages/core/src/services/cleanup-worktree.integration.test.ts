@@ -717,16 +717,19 @@ describe('cleanup retires only the registration it observed', () => {
       await git(repo, 'worktree', 'remove', '--force', env.working_path);
       const { store: racing, afterRetire, replacement } = racingStore();
       const resolver = new IsolationResolver({ store: racing, provider: getIsolationProvider() });
-      await resolver.resolve({
-        existingEnvId: lookup === 'existing' ? env.id : null,
-        codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
-        hints:
-          lookup === 'linked'
-            ? { workflowType: 'task', workflowId: 'linking', linkedIssues: [42] }
-            : { workflowType: env.workflow_type, workflowId: env.workflow_id },
-        platformType: 'cli',
-      });
+      await expect(
+        resolver.resolve({
+          existingEnvId: lookup === 'existing' ? env.id : null,
+          codebase: { id: codebaseId, name: 'test/repo', defaultCwd: repo },
+          hints:
+            lookup === 'linked'
+              ? { workflowType: 'task', workflowId: 'linking', linkedIssues: [42] }
+              : { workflowType: env.workflow_type, workflowId: env.workflow_id },
+          platformType: 'cli',
+        })
+      ).rejects.toBeInstanceOf(WorktreeRegistrationChangedError);
       expectReplacementActive(afterRetire(), replacement());
+      expect(await isolationDb.getById(env.id)).toEqual(replacement() ?? null);
     });
   }
 
