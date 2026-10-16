@@ -586,7 +586,9 @@ describe('bundled-defaults', () => {
         validateStructuredOutput({ head_matches: true, pr: null, report: scopeReport }, scopeSchema)
           .valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(false);
+      expect(validateStructuredOutput({ head_matches: true, pr: null }, scopeSchema).valid).toBe(
+        false
+      );
       expect(
         validateStructuredOutput(
           {
@@ -600,9 +602,10 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: {}, report: scopeReport }, scopeSchema).valid).toBe(
-        false
-      );
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: {}, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(false);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
@@ -992,11 +995,16 @@ describe('bundled-defaults', () => {
         discoveries: [],
         contract_left: [],
       };
-      for (const published of [verdict, null]) {
+      for (const { published, headMatches } of [
+        { published: verdict, headMatches: true },
+        { published: null, headMatches: false },
+        { published: null, headMatches: true },
+      ]) {
         const child = Bun.spawn([process.execPath, '-e', result.script], {
           env: {
             ...process.env,
             INPUTS_VERDICT: JSON.stringify(published),
+            INPUTS_HEAD_MATCHES: JSON.stringify(headMatches),
             INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
             ARTIFACTS_DIR: root,
           },
@@ -1008,16 +1016,20 @@ describe('bundled-defaults', () => {
         expect(await child.exited, error).toBe(0);
         const actual: unknown = JSON.parse(output);
         expect(actual).toEqual(
-          published ?? {
-            ready: false,
-            action: 'none',
-            findings_summary: message,
-            report: scopeReport,
-            discoveries: [],
-            contract_left: [],
-          }
+          headMatches
+            ? published
+            : {
+                ready: false,
+                action: 'none',
+                findings_summary: message,
+                report: scopeReport,
+                discoveries: [],
+                contract_left: [],
+              }
         );
-        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(true);
+        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(
+          !headMatches || published !== null
+        );
       }
     });
 
