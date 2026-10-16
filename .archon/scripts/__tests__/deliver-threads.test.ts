@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+import { PACK, PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -159,10 +159,49 @@ describe("deliver's review threads", () => {
     expect(calls(result)).toEqual([{ op: 'read' }]);
   });
 
+  it('puts a ready pull request back to draft when it fails', () => {
+    const result = run({ threads: [], unreadable: true, isDraft: false });
+    expect(result.code).not.toBe(0);
+    expect(result.gh).toContain(`pr ready 42 --repo ghe.example.com/example/repo --undo`);
+  });
+
   it('fails rather than reading clear when the threads cannot be read in full', () => {
     expect(run({ threads: [], unreadable: true }).code).not.toBe(0);
     const partial = run({ threads: [{ id: 'T1', body: 'x' }], total: 101 });
     expect(partial.code).not.toBe(0);
     expect(partial.stderr).toContain('there are 101 review threads');
+  });
+});
+
+describe("deliver's thread wiring", () => {
+  interface Node {
+    id: string;
+    when?: string;
+    depends_on?: string[];
+    with?: Record<string, unknown>;
+    output_format?: { properties: Record<string, unknown> };
+    loop_group?: { nodes: Node[] };
+  }
+  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'deliver/archon-deliver.yaml'), 'utf8')) as { nodes: Node[] };
+  const round = workflow.nodes.find(node => node.id === 'rounds')?.loop_group?.nodes ?? [];
+  const node = (id: string): Node => {
+    const found = round.find(candidate => candidate.id === id);
+    if (found === undefined) throw new Error(`the round has no ${id} node`);
+    return found;
+  };
+
+  // Script tests stub this chain on both ends; without it delivery never replies or resolves.
+  it("posts settle-threads' answers, and settles once the previous round read an open thread", () => {
+    const threads = node('threads');
+    const settle = node('settle-threads');
+    expect(threads.with?.answers).toEqual({ from: '$settle-threads.output.answers', if_skipped: null });
+    expect(threads.depends_on).toContain('settle-threads');
+    expect(Object.keys(settle.output_format?.properties ?? {})).toContain('answers');
+    expect(settle.when).toBe('$LOOP_PREV.threads.output.open > 0');
+    expect(Object.keys(threads.output_format?.properties ?? {})).toContain('open');
+  });
+
+  it('runs CI after settle-threads, so a failed settle never leaves the pull request ready', () => {
+    expect(node('ci').depends_on).toContain('settle-threads');
   });
 });
