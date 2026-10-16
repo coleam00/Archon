@@ -1,3 +1,4 @@
+import { isSourceReadFailure } from './workflow-source';
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes, INCLUDE_MAX_DEPTH } from './include-expander';
 import { resolvedBodyNodes } from './graph-plan';
@@ -100,6 +101,33 @@ function blockWorkflow(): WorkflowDefinition {
 // ---------------------------------------------------------------------------
 // Namespacing + edge rewiring
 // ---------------------------------------------------------------------------
+
+describe('missing include discovery errors', () => {
+  const root = wf('root', [{ id: 'wrapped', include: 'Missing' }]);
+  const cause = Object.assign(new Error('source unavailable'), { code: 'EIO', syscall: 'open' });
+
+  test('an unreadable declaration makes the missing target a read failure', () => {
+    const result = expandWorkflowIncludes(mapOf(root), undefined, [
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
+    ]);
+    expect(result.errors[0]?.errorType).toBe('read_error');
+    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(true);
+  });
+
+  test('the target is looked up the way every other load-error consumer looks it up', () => {
+    const result = expandWorkflowIncludes(mapOf(root), undefined, [
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
+      {
+        filename: 'invalid.yaml',
+        workflowName: 'missing',
+        error: 'invalid definition',
+        errorType: 'validation_error',
+      },
+    ]);
+    expect(result.errors[0]?.error).toBe("Node 'wrapped': invalid definition");
+    expect(result.errors[0]?.errorType).toBe('validation_error');
+  });
+});
 
 describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
   test('leaves an include+fan_out node unexpanded but validates the target exists', () => {

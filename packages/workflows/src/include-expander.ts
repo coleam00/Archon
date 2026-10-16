@@ -41,6 +41,7 @@ import type {
   WorkflowRequirement,
   ResolvedWorkflow,
 } from './schemas';
+import { findWorkflowLoadError } from './schemas/workflow';
 import {
   isIncludeDirective,
   isAgentNode,
@@ -1122,7 +1123,8 @@ function materializeBlockCommandPrompts(
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
-  commandContents?: ReadonlyMap<string, IncludeCommandContent>
+  commandContents?: ReadonlyMap<string, IncludeCommandContent>,
+  loadErrors: readonly WorkflowLoadError[] = []
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
@@ -1302,7 +1304,26 @@ export function expandWorkflowIncludes(
     if (!raw) {
       // Top-level names always exist (they come from rawByName.keys()); this only
       // fires when the name was reached as an unresolvable include TARGET.
-      throw new IncludeExpansionError(`include target '${name}' not found`);
+      // An unreadable declaration has no known workflow name. Until every declaration
+      // is readable, a missing include cannot be distinguished from that read failure.
+      const named = findWorkflowLoadError(loadErrors, name);
+      const unreadable =
+        named ??
+        loadErrors.find(
+          error =>
+            error.workflowName === undefined &&
+            error.errorType === 'read_error' &&
+            error.cause !== undefined
+        );
+      const missing = `include target '${name}' not found`;
+      throw new IncludeExpansionError(
+        named?.error ??
+          (unreadable === undefined
+            ? missing
+            : `${missing}; it may be declared in an unreadable source (${unreadable.filename}: ${unreadable.error})`),
+        unreadable?.errorType,
+        { cause: unreadable?.cause }
+      );
     }
 
     // Collapse this workflow's own node-affecting scope onto its own nodes BEFORE
@@ -1367,7 +1388,12 @@ export function expandWorkflowIncludes(
     } catch (e) {
       if (e instanceof IncludeExpansionError) {
         failed.add(name);
-        errors.push({ filename: name, error: e.message, errorType: e.errorType });
+        errors.push({
+          filename: name,
+          error: e.message,
+          errorType: e.errorType,
+          ...(e.cause !== undefined ? { cause: e.cause } : {}),
+        });
       } else {
         throw e;
       }

@@ -274,7 +274,7 @@ Defined under `retry:` inside a node. Without a declaration, AI nodes and loop i
 
 Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` (including zero on loops) does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter, keeping the larger budget for the rest of the iteration or node attempt sequence. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
 
-> **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
+> **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable checkout or provider MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message. A host-local read failure in captured home MCP config pauses the run for continuation on a readable host; see [MCP servers](/guides/mcp-servers/).
 
 ---
 
