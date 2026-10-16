@@ -12,8 +12,10 @@ and leaves everything else to a person.
 - The project's steering documents, where it has them: its direction document, its
   architecture and engineering documents, and its contributor guidance for agents.
 - Its rulings document (`rulings.md`, read as this pack reads policy).
-- The dated "Current scope" sections of the issue the question concerns, which
-  override what they rule on.
+- The issue the question concerns: its desired outcome, invariants and acceptance,
+  which a person accepted when the work was admitted, and its dated "Current scope"
+  sections, which override what they rule on. A choice the issue already makes is
+  settled, even when what it changes is itself risky.
 
 ## Answer
 
@@ -25,9 +27,11 @@ it rests on.
 
 - A question no source settles, or one the sources disagree on.
 - A choice between designs the sources leave open.
-- A risky question: possible data loss; security, credentials or permissions; a public
-  or persisted contract; a hard-to-reverse action such as approving a merge or
-  publishing; spend.
+- A risky question that no source settles: possible data loss; security, credentials or
+  permissions; a new or changed public or persisted contract; a hard-to-reverse action
+  such as approving a merge or publishing; spend beyond the workflow's ordinary work.
+  Parking an item, waiting, or letting a workflow take its ordinary next step is not
+  risky in itself: a person can undo it by re-triaging.
 - A check only a person can make.
 - Low confidence.
 
