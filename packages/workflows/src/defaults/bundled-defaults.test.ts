@@ -1,6 +1,10 @@
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { evaluateCondition } from '../condition-evaluator';
+import type { NodeOutput } from '../schemas';
 import { join } from 'path';
 import {
   isBinaryBuild,
@@ -29,6 +33,7 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();
+const track = trackTempRoots();
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -548,6 +553,7 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
+          head_matches: { type: 'boolean' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -573,16 +579,18 @@ describe('bundled-defaults', () => {
             required: ['type', 'run_id', 'path'],
           },
         },
-        required: ['pr', 'report'],
+        required: ['head_matches', 'pr', 'report'],
       });
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
-      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
-        true
-      );
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: null, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(true);
       expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(false);
       expect(
         validateStructuredOutput(
           {
+            head_matches: true,
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -927,6 +935,92 @@ describe('bundled-defaults', () => {
       expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
+    it('gates every review stage on the head in full and light rounds', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const lenses = ['seams', 'code', 'tests', 'errors', 'docs'];
+      for (const light of [false, true]) {
+        for (const head_matches of [false, true]) {
+          const selected = Object.fromEntries(lenses.map(lens => [lens, true]));
+          const outputs = new Map<string, NodeOutput>([
+            ['scope', { state: 'completed', output: JSON.stringify({ head_matches }) }],
+            ['mode', { state: 'completed', output: JSON.stringify({ light, ...selected }) }],
+          ]);
+          // Light rounds and mismatched heads skip route: evaluating a lens must
+          // short-circuit before trying to read its absent output.
+          if (!light && head_matches)
+            outputs.set('route', { state: 'completed', output: JSON.stringify(selected) });
+          for (const id of ['route', ...lenses, 'review-complete', 'synthesize', 'publish']) {
+            const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+            if (!node?.when) throw new Error(`${id} has no head gate`);
+            expect(evaluateCondition(node.when, outputs).result).toBe(
+              head_matches && (id !== 'route' || !light)
+            );
+          }
+        }
+      }
+      expect(parsed.workflow.nodes.find(node => node.id === 'route')?.depends_on).toContain(
+        'scope'
+      );
+    });
+
+    it('returns the published verdict or the scope message through the terminal adapter', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const result = parsed.workflow.nodes.find(node => node.id === 'result');
+      if (result?.kind !== 'exec' || !result.output_format)
+        throw new Error('result is not a typed exec');
+      const root = track(mkdtempSync(join(tmpdir(), 'archon-review-result-')));
+      mkdirSync(join(root, 'review'));
+      const message =
+        'Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature\n';
+      writeFileSync(join(root, 'review/scope.md'), message);
+      const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
+      const verdict = {
+        ready: true,
+        action: 'none',
+        findings_summary: 'clean',
+        report: { ...scopeReport, path: 'review/report.md' },
+        discoveries: [],
+        contract_left: [],
+      };
+      for (const published of [verdict, null]) {
+        const child = Bun.spawn([process.execPath, '-e', result.script], {
+          env: {
+            ...process.env,
+            INPUTS_VERDICT: JSON.stringify(published),
+            INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
+            ARTIFACTS_DIR: root,
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const output = await new Response(child.stdout).text();
+        const error = await new Response(child.stderr).text();
+        expect(await child.exited, error).toBe(0);
+        const actual: unknown = JSON.parse(output);
+        expect(actual).toEqual(
+          published ?? {
+            ready: false,
+            action: 'none',
+            findings_summary: message,
+            report: scopeReport,
+            discoveries: [],
+            contract_left: [],
+          }
+        );
+        expect(validateStructuredOutput(actual, result.output_format).valid).toBe(true);
+      }
+    });
+
     it('publishes the review report from a deterministic node, not the reviewer', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-review'],
@@ -934,7 +1028,7 @@ describe('bundled-defaults', () => {
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      expect(parsed.workflow.returns).toBe('publish');
+      expect(parsed.workflow.returns).toBe('result');
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({
         kind: 'exec',

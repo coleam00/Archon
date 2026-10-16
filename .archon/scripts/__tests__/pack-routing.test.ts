@@ -330,11 +330,11 @@ describe('review lens gating', () => {
     expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual([...ids, 'reason'].sort());
     const mode = Object.keys(workflow.nodes.find(node => node.id === 'mode')?.output_format?.properties ?? {});
     expect(mode).toEqual(expect.arrayContaining(ids));
-    // Only a light round skips route; every other round unions its selection.
-    expect(route?.when).toBe('$mode.output.light == false');
+    // A matching head routes unless the round is light.
+    expect(route?.when).toBe('$scope.output.head_matches == true && $mode.output.light == false');
     for (const lens of lenses) {
       expect(lens.when).toBe(
-        `$mode.output.light == false && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
+        `$scope.output.head_matches == true && $mode.output.light == false && $route.output.${lens.id} == true || $scope.output.head_matches == true && $mode.output.${lens.id} == true`
       );
     }
   });

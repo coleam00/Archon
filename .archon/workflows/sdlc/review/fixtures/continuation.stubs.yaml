@@ -6,6 +6,7 @@ policy: { defaults: "fixture-policy-defaults" }
 mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: false, tests: false, errors: false, docs: false, reason: "stub: S1, a seams finding, is still open in findings.json" }
 scope:
+  head_matches: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
@@ -19,13 +20,14 @@ synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
-publish:
+publish: &published_verdict
   ready: true
   action: none
   findings_summary: "stub: prior findings resolved or validly declined; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+result: *published_verdict
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed

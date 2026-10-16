@@ -4,6 +4,7 @@
 mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
 scope:
+  head_matches: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
@@ -17,13 +18,14 @@ synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
-publish:
+publish: &published_verdict
   ready: false
   action: correct
   findings_summary: "stub: a selected lens did not complete"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+result: *published_verdict
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 policy: { defaults: "fixture-policy-defaults" }
 fixture:

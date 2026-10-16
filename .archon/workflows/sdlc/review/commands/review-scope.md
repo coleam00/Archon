@@ -40,6 +40,8 @@ $ARGUMENTS
 - A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. The PR's head must be the commit under review; when it is not, stop and say so rather than reviewing either one. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
 
+For every PR target (including a recorded PR or one found from empty scope), read its current head commit and head ref from the forge and compare that commit with the commit under review. Set `head_matches` to `true` for a matching head or a working-diff target. On a mismatch, set it to `false`, write only the mismatch explanation and the exact rerun command in `$ARTIFACTS_DIR/review/scope.md` (`archon workflow run archon-review --input scope=<PR URL> --branch <PR head ref>`, with actual values, shell-quoted and preserving this run's other supplied inputs), then declare `pr`, `head_matches` and `report` below and stop; do not resolve the contract or prepare a diff.
+
 ## Resolve the accepted contract
 
 The review judges the change against what the contract says completion looks like, so resolve the contract in full, in every mode, including light mode.
@@ -78,5 +80,6 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
 
+- `head_matches`: the head comparison above.
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/scope.md"}`. The engine refuses this node if that file is missing or empty, so write it before you declare.

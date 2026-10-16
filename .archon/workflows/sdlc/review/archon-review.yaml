@@ -63,7 +63,7 @@ inputs:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
-returns: publish
+returns: result
 outcome_field: ready
 
 nodes:
@@ -144,6 +144,7 @@ nodes:
     output_format:
       type: object
       properties:
+        head_matches: { type: boolean }
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -169,9 +170,9 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [pr, report]
+      required: [head_matches, pr, report]
 
-  # The lens decision is quick and separate from scope: a small model reads the diff
+  # After scope checks the head, a small model reads the diff
   # summary and the work order and answers, with seams on by default. Every round
   # but a light one routes; on a continuation route adds to the code lens every lens
   # whose finding the previous report leaves open or whose area the delta touches.
@@ -180,8 +181,8 @@ nodes:
     model: small
     context: fresh
     mutates_checkout: false
-    depends_on: [mode]
-    when: "$mode.output.light == false"
+    depends_on: [mode, scope]
+    when: "$scope.output.head_matches == true && $mode.output.light == false"
     output_format:
       type: object
       properties:
@@ -206,7 +207,7 @@ nodes:
     depends_on: [scope, route]
     # A light round skips route; scope alone must have succeeded.
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.light == false && $route.output.seams == true || $mode.output.seams == true"
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.seams == true || $scope.output.head_matches == true && $mode.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -216,7 +217,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.light == false && $route.output.code == true || $mode.output.code == true"
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.code == true || $scope.output.head_matches == true && $mode.output.code == true"
 
   - id: tests
     output_type: review-lens
@@ -225,7 +226,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.light == false && $route.output.tests == true || $mode.output.tests == true"
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.tests == true || $scope.output.head_matches == true && $mode.output.tests == true"
 
   - id: errors
     output_type: review-lens
@@ -234,7 +235,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.light == false && $route.output.errors == true || $mode.output.errors == true"
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.errors == true || $scope.output.head_matches == true && $mode.output.errors == true"
 
   - id: docs
     output_type: review-lens
@@ -243,7 +244,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.light == false && $route.output.docs == true || $mode.output.docs == true"
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.docs == true || $scope.output.head_matches == true && $mode.output.docs == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted. The deciding
@@ -253,6 +254,7 @@ nodes:
     bash: "true"
     depends_on: [scope, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
+    when: "$scope.output.head_matches == true"
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
   # the review: synthesize detects the missing completion for a selected lens and
@@ -277,11 +279,12 @@ nodes:
     mutates_checkout: false
     output_type: review-report
     depends_on: [policy, scope, review-complete]
+    when: "$scope.output.head_matches == true"
     with:
       policy_defaults: "$policy.output.defaults"
     output_format: &review_verdict
       type: object
-      properties:
+      properties: &verdict_properties
         ready:
           type: boolean
         action:
@@ -292,9 +295,9 @@ nodes:
         # The report the verdict rests on, as a certified artifact pointer: the
         # engine refuses the verdict at this node when the file is missing or
         # empty, so a caller that continues over it never has to check.
-        report:
+        report: &report_pointer
           type: object
-          properties:
+          properties: &report_properties
             type: { type: string, enum: [archon_artifact] }
             run_id: { type: string }
             path: { type: string, enum: [review/report.md] }
@@ -328,6 +331,7 @@ nodes:
     script: publish-review
     runtime: bun
     depends_on: [synthesize]
+    when: "$scope.output.head_matches == true"
     with:
       # Delivery's verified record, when it passed one, is the write target;
       # the scope agent's declaration names it only for a standalone review.
@@ -354,3 +358,26 @@ nodes:
     with:
       lens: ""
 
+  - id: result
+    depends_on: [scope, publish]
+    trigger_rule: none_failed_min_one_success
+    with:
+      verdict: { from: "$publish.output", if_skipped: null }
+      scope_report: { from: "$scope.output.report" }
+    runtime: bun
+    script: |
+      const verdict = JSON.parse(process.env.INPUTS_VERDICT);
+      console.log(JSON.stringify(verdict ?? {
+        ready: false, action: "none",
+        findings_summary: require("node:fs").readFileSync(process.env.ARTIFACTS_DIR + "/review/scope.md", "utf8"),
+        report: JSON.parse(process.env.INPUTS_SCOPE_REPORT), discoveries: [], contract_left: []
+      }));
+    output_format:
+      <<: *review_verdict
+      properties:
+        <<: *verdict_properties
+        report:
+          <<: *report_pointer
+          properties:
+            <<: *report_properties
+            path: { type: string, enum: [review/report.md, review/scope.md] }
