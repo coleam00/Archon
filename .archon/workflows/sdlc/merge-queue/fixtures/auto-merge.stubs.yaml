@@ -1,0 +1,40 @@
+# Dry-run fixture, a clear auto-merge: a small bug fix whose gate passes. The sweep
+# merges it through the gate, the default branch stays green, and nothing is asked.
+# The queue's scripts reach the state store and the forge, so they are stubbed here
+# and proved by .archon/scripts/__tests__/merge-queue.test.ts.
+facts:
+  path: sweep
+  base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  items:
+    - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+      pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+      url: "https://github.com/example/repo/pull/42"
+      facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
+      record: null
+      prior_report: "/stub/merge/42/review/report.md"
+      recorded: null
+  settled: []
+  gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--receipts' '/stub/receipts'"
+  policy_defaults: "/stub/policy"
+sweep:
+  decisions:
+    - { number: 42, action: merged, class: clear, head: "1111111", synced: false, reran: false, reason: "stub: a bug fix with its test; the gate passed", brief: "", attention: null }
+  review_url: ""
+  review_prior: ""
+  dev: { state: green, rerun: none, summary: "stub: dev green after the batch", attention: null }
+  summary: "stub: merged PR 42"
+record:
+  merged: [42]
+  summary: "stub: merged PR 42"
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, sweep, record]
+  resolved-text-contains:
+    sweep: "'bun' '/stub/gate.ts' '--method' 'squash'"
+exec-code: true

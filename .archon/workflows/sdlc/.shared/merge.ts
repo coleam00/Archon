@@ -1,0 +1,377 @@
+/**
+ * The merge queue's record on an item's work item, `facts.merge`, and the pull-request
+ * facts its gate reads before every merge.
+ *
+ * The merge queue takes the items the build queue finished: a work item whose
+ * `facts.build` is `ready` names its pull request in its last round. The queue claims
+ * them with intake's claim, so an item has one owner at a time across the three queues.
+ *
+ * Every forge read here goes through the GitHub CLI. The forge contract has no read of
+ * a pull request's review threads, and the gate cannot be answered without one, so the
+ * merge queue refuses the forge source instead of gating on less.
+ */
+
+import { forgeSource, record, type QualifiedPr } from './forge.ts';
+import { ghIssueComments } from './pr.ts';
+import type { Attention, DecisionEntry } from './queue.ts';
+import { readReviewStamp } from './review-comment.ts';
+import type { Pickup, WorkItem } from './workitem.ts';
+
+/** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
+export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
+export type MergeEffect = (typeof MERGE_EFFECTS)[number];
+export type MergeAttention = Attention<MergeEffect>;
+/** The one answer to a red default branch: the queue holds merges until it is green again. */
+export const DEV_EFFECTS = ['hold'] as const;
+export type DevAttention = Attention<(typeof DEV_EFFECTS)[number]>;
+
+/** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
+export const SWEEP_ACTIONS = ['merged', 'review', 'return', 'ask', 'wait'] as const;
+export type SweepAction = (typeof SWEEP_ACTIONS)[number];
+export const POLICY_CLASSES = ['clear', 'unclear'] as const;
+export const DEV_STATES = ['unchecked', 'green', 'red'] as const;
+export const RERUNS = ['none', 'green', 'red'] as const;
+export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
+/** Which attention item a run raised: its class label, which the YAML also declares. */
+export const MERGE_ASKED_BY = ['pr', 'dev'] as const;
+export type MergeAskedBy = (typeof MERGE_ASKED_BY)[number];
+export const MERGE_METHODS = ['squash', 'merge'] as const;
+export type MergeMethod = (typeof MERGE_METHODS)[number];
+
+/**
+ * `waiting`: the next sweep decides it. `asking`: a run is paused on its attention item.
+ * `merged`: done. `returned`: handed back to the build queue, which owns it until it is
+ * ready again. `parked`: the queue stopped working it until the build queue readies it
+ * again.
+ */
+export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked';
+
+export interface MergeRecord {
+  readonly status: MergeStatus;
+  readonly pr: QualifiedPr | null;
+  /** A maintainer's approval to merge, pinned to the head they approved. */
+  readonly approval: { readonly head: string; readonly at: string } | null;
+  readonly decisions: readonly DecisionEntry[];
+  /** When the queue last decided the item. */
+  readonly at: string;
+}
+
+const KEPT_DECISIONS = 20;
+const KEPT_TEXT = 1500;
+
+/**
+ * Whether an unclaimed item waits for the merge queue: the build queue finished it,
+ * and the merge queue has not settled it since. An item left asking by a run that
+ * ended without an answer waits again once the pickup releases that run's claim.
+ */
+export function mergeWaits(doc: WorkItem): boolean {
+  const build = doc.facts.build;
+  if (build?.status !== 'ready') return false;
+  const merge = doc.facts.merge;
+  if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
+  return build.at > merge.at;
+}
+
+export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
+
+/** The pull request the build queue's last round delivered on the item, or null. */
+export function itemPr(doc: WorkItem): QualifiedPr | null {
+  const url = [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url;
+  return url === undefined ? null : prFromUrl(url);
+}
+
+/** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */
+export function prFromUrl(url: string): QualifiedPr {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`"${url}" is not a pull request URL`);
+  }
+  const [owner, name, kind, number, ...rest] = parsed.pathname.split('/').filter(part => part !== '');
+  const value = Number(number);
+  if (owner === undefined || name === undefined || kind !== 'pull' || rest.length > 0 || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`"${url}" is not a pull request URL`);
+  }
+  return { repo: { host: parsed.host, path: `${owner}/${name}` }, number: value };
+}
+
+export interface MergeChange {
+  readonly at: string;
+  readonly run_id: string;
+  readonly entry: DecisionEntry;
+  readonly status: MergeStatus;
+  readonly pr: QualifiedPr | null;
+  /** Undefined keeps the approval already recorded. */
+  readonly approval?: MergeRecord['approval'];
+  /** Clear the claim in the same write: nothing is left for this run to do. */
+  readonly release: boolean;
+}
+
+/** The work item with one merge decision recorded on it. */
+export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
+  const prior = doc.facts.merge;
+  const reason = change.entry.reason;
+  const merge: MergeRecord = {
+    status: change.status,
+    pr: change.pr,
+    approval: change.approval === undefined ? (prior?.approval ?? null) : change.approval,
+    decisions: [
+      ...(prior?.decisions ?? []),
+      { ...change.entry, reason: reason.length <= KEPT_TEXT ? reason : `${reason.slice(0, KEPT_TEXT)}…` },
+    ].slice(-KEPT_DECISIONS),
+    at: change.at,
+  };
+  return {
+    ...doc,
+    claim: change.release ? null : doc.claim,
+    facts: { ...doc.facts, merge },
+    links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
+  };
+}
+
+// --- the facts the gate reads -----------------------------------------------------
+
+export const CHECK_STATES = ['none', 'pending', 'green', 'red'] as const;
+export interface Checks {
+  readonly state: (typeof CHECK_STATES)[number];
+  readonly failing: readonly string[];
+  readonly pending: readonly string[];
+}
+
+/**
+ * `none`: no trusted review comment. `unstamped`: published before the verdict was
+ * stamped, so it carries no verdict a script can read. `duplicate`: more than one
+ * trusted review comment, so none of them is the canonical one.
+ */
+export const VERDICT_STATES = ['none', 'unstamped', 'duplicate', 'ready', 'not_ready'] as const;
+export interface Verdict {
+  readonly state: (typeof VERDICT_STATES)[number];
+  /** The commit the verdict is about. */
+  readonly reviewed: string | null;
+  readonly url: string | null;
+}
+
+export interface PrFacts {
+  readonly pr: QualifiedPr;
+  readonly url: string;
+  readonly title: string;
+  readonly state: 'open' | 'closed' | 'merged';
+  readonly is_draft: boolean;
+  readonly base: string;
+  readonly default_branch: string;
+  readonly head: string;
+  readonly head_revision: string;
+  readonly merge_commit: string | null;
+  readonly mergeable: 'clean' | 'conflict' | 'unknown';
+  readonly size: { readonly additions: number; readonly deletions: number; readonly files: number };
+  readonly checks: Checks;
+  readonly threads: { readonly unresolved: number; readonly urls: readonly string[] };
+  readonly verdict: Verdict;
+}
+
+/** The facts with the trusted review report's text, which the facts node hands to a delta review. */
+export interface PrRead {
+  readonly facts: PrFacts;
+  readonly report: string | null;
+}
+
+function gh(...args: string[]): string {
+  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
+  if (result.exitCode !== 0) {
+    throw new Error(`gh ${args.slice(0, 2).join(' ')} failed: ${result.stderr.toString().trim()}`);
+  }
+  return result.stdout.toString();
+}
+
+function graphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
+  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
+  for (const [key, value] of Object.entries(fields)) {
+    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
+  }
+  const parsed = record(JSON.parse(gh(...args)));
+  const repository = record(record(parsed?.data)?.repository);
+  if (repository === undefined) throw new Error('gh api graphql returned no repository');
+  return repository;
+}
+
+/** The merge queue reads the forge through gh; the forge source cannot answer the gate. */
+export function requireGh(): void {
+  if (forgeSource() !== 'gh') {
+    throw new Error(
+      'the merge queue gates every merge on unresolved review threads, which the forge contract does not report; run it with ARCHON_SDLC_FORGE=gh'
+    );
+  }
+}
+
+const ROLLUP = `statusCheckRollup { contexts(first: 100) { totalCount nodes {
+  __typename
+  ... on CheckRun { name status conclusion }
+  ... on StatusContext { context state }
+} } }`;
+
+const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+
+/** Every check context on one commit, as the forge reports its machine states. */
+export function checksOf(rollup: unknown): Checks {
+  const contexts = record(record(rollup)?.contexts);
+  const nodes = Array.isArray(contexts?.nodes) ? contexts.nodes : [];
+  if (typeof contexts?.totalCount === 'number' && contexts.totalCount > nodes.length) {
+    throw new Error(`the commit has ${String(contexts.totalCount)} checks; the gate reads at most 100`);
+  }
+  const failing: string[] = [];
+  const pending: string[] = [];
+  for (const node of nodes) {
+    const check = record(node);
+    if (check?.__typename === 'CheckRun') {
+      const name = String(check.name);
+      if (check.status !== 'COMPLETED') pending.push(name);
+      else if (!PASSED.has(String(check.conclusion))) failing.push(name);
+    } else if (check?.__typename === 'StatusContext') {
+      const name = String(check.context);
+      if (check.state === 'PENDING' || check.state === 'EXPECTED') pending.push(name);
+      else if (check.state !== 'SUCCESS') failing.push(name);
+    }
+  }
+  const state = failing.length > 0 ? 'red' : pending.length > 0 ? 'pending' : nodes.length === 0 ? 'none' : 'green';
+  return { state, failing, pending };
+}
+
+/** The default branch, its head commit and the checks on it. */
+export function readBase(repo: QualifiedPr['repo']): { branch: string; head: string; checks: Checks } {
+  const [owner, name] = repo.path.split('/');
+  const repository = graphql(
+    repo.host,
+    `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
+      defaultBranchRef { name target { ... on Commit { oid ${ROLLUP} } } }
+    } }`,
+    { owner: owner ?? '', name: name ?? '' }
+  );
+  const ref = record(repository.defaultBranchRef);
+  const target = record(ref?.target);
+  if (typeof ref?.name !== 'string' || typeof target?.oid !== 'string') {
+    throw new Error(`${repo.path} reports no default branch`);
+  }
+  return { branch: ref.name, head: target.oid, checks: checksOf(target.statusCheckRollup) };
+}
+
+/**
+ * The trusted review comment: the one marked comment a listed maintainer wrote. A
+ * marked comment anyone else wrote is ignored, so an outside commenter cannot forge a
+ * verdict on a public repository.
+ */
+function trustedReview(pr: QualifiedPr, maintainers: ReadonlySet<string>): { verdict: Verdict; report: string | null } {
+  const reviews = ghIssueComments(pr).flatMap(comment => {
+    const stamp = readReviewStamp(comment.body);
+    const trusted = comment.author !== null && maintainers.has(comment.author.toLowerCase());
+    return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
+  });
+  const [review, ...others] = reviews;
+  if (review === undefined) return { verdict: { state: 'none', reviewed: null, url: null }, report: null };
+  if (others.length > 0) return { verdict: { state: 'duplicate', reviewed: null, url: null }, report: null };
+  const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
+  return { verdict: { state, reviewed: review.stamp.reviewed, url: review.url }, report: review.stamp.report };
+}
+
+const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
+  defaultBranchRef { name }
+  pullRequest(number: $number) {
+    url title state isDraft baseRefName headRefName headRefOid mergeable
+    additions deletions changedFiles
+    mergeCommit { oid }
+    commits(last: 1) { nodes { commit { oid ${ROLLUP} } } }
+    reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { url } } } }
+  }
+} }`;
+
+/** One snapshot of everything the gate and the sweep read about a pull request. */
+export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRead {
+  const [owner, name] = pr.repo.path.split('/');
+  const repository = graphql(pr.repo.host, PR_QUERY, { owner: owner ?? '', name: name ?? '', number: pr.number });
+  const row = record(repository.pullRequest);
+  const defaultBranch = record(repository.defaultBranchRef)?.name;
+  if (row === undefined || typeof row.headRefOid !== 'string' || typeof defaultBranch !== 'string') {
+    throw new Error(`${pr.repo.path} has no pull request ${String(pr.number)}`);
+  }
+  const commit = record(record((record(row.commits)?.nodes as unknown[] | undefined)?.[0])?.commit);
+  if (commit?.oid !== row.headRefOid) throw new Error(`the checks read for ${String(row.url)} are not on its head`);
+  const threads = record(row.reviewThreads);
+  const threadNodes = Array.isArray(threads?.nodes) ? threads.nodes.map(node => record(node)) : [];
+  if (typeof threads?.totalCount === 'number' && threads.totalCount > threadNodes.length) {
+    throw new Error(`${String(row.url)} has ${String(threads.totalCount)} review threads; the gate reads at most 100`);
+  }
+  const unresolved = threadNodes.filter(thread => thread?.isResolved !== true);
+  const review = trustedReview(pr, maintainers);
+  const state = String(row.state).toLowerCase();
+  return {
+    facts: {
+      pr,
+      url: String(row.url),
+      title: String(row.title),
+      state: state === 'merged' || state === 'closed' ? state : 'open',
+      is_draft: row.isDraft === true,
+      base: String(row.baseRefName),
+      default_branch: defaultBranch,
+      head: String(row.headRefName),
+      head_revision: row.headRefOid,
+      merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
+      mergeable: row.mergeable === 'MERGEABLE' ? 'clean' : row.mergeable === 'CONFLICTING' ? 'conflict' : 'unknown',
+      size: { additions: Number(row.additions), deletions: Number(row.deletions), files: Number(row.changedFiles) },
+      checks: checksOf(commit.statusCheckRollup),
+      threads: {
+        unresolved: unresolved.length,
+        urls: unresolved.map(thread => String(record((record(thread?.comments)?.nodes as unknown[] | undefined)?.[0])?.url ?? '')),
+      },
+      verdict: review.verdict,
+    },
+    report: review.report,
+  };
+}
+
+/**
+ * Why the pull request may not merge at `head`; empty when it may. The three facts the
+ * queue's contract names are the verdict, CI and the threads, each at the head; the
+ * rest keep the merge on an open, non-draft pull request into the default branch at
+ * exactly the commit that was judged.
+ */
+export function gateRefusals(facts: PrFacts, head: string): string[] {
+  const refusals: string[] = [];
+  if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
+  if (facts.is_draft) refusals.push('it is a draft');
+  if (facts.base !== facts.default_branch) {
+    refusals.push(`it targets ${facts.base}, not the default branch ${facts.default_branch}`);
+  }
+  if (facts.head_revision !== head) refusals.push(`its head is ${facts.head_revision}, not ${head}`);
+  const { verdict } = facts;
+  if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
+  else if (verdict.reviewed !== facts.head_revision) {
+    refusals.push(`its Ready verdict is for ${verdict.reviewed ?? 'no commit'}, not its head`);
+  }
+  if (facts.checks.state !== 'green') {
+    const named = [...facts.checks.failing, ...facts.checks.pending];
+    refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
+  }
+  if (facts.threads.unresolved > 0) refusals.push(`${String(facts.threads.unresolved)} review threads are unresolved`);
+  return refusals;
+}
+
+/** What the gate writes beside the run's artifacts for every merge it made. */
+export interface Receipt {
+  readonly pr: string;
+  readonly head: string;
+  readonly merge_commit: string;
+  readonly at: string;
+}
+
+/**
+ * Merge at exactly `head`, then read the pull request back: it must be merged with that
+ * head. The forge refuses the merge when the head has moved since it was read.
+ */
+export function mergePinned(pr: QualifiedPr, head: string, method: MergeMethod, maintainers: ReadonlySet<string>): string {
+  gh('pr', 'merge', String(pr.number), '--repo', `${pr.repo.host}/${pr.repo.path}`, `--${method}`, '--match-head-commit', head);
+  const after = readPr(pr, maintainers).facts;
+  if (after.state !== 'merged' || after.head_revision !== head || after.merge_commit === null) {
+    throw new Error(`${after.url} does not read back merged at ${head}; it is ${after.state} at ${after.head_revision}`);
+  }
+  return after.merge_commit;
+}
