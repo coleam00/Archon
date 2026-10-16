@@ -766,49 +766,21 @@ async function spawnDetachedWorkflowRun(
 }
 
 /**
- * Parses the "Source symlink at X already points to Y, expected Z" error
- * thrown by `createProjectSourceSymlink` in @archon/paths. Cross-package
- * string contract — if that throw site changes wording, this parser silently
- * stops matching. Returns the workspace dir (parent of the `source` link) so
- * the caller can emit an exact cleanup path, or null if unrecognized.
- */
-export function extractStaleWorkspaceEntry(message: string): string | null {
-  const prefix = 'Source symlink at ';
-  const delimiter = ' already points to ';
-  if (!message.startsWith(prefix)) return null;
-
-  const remainder = message.slice(prefix.length);
-  const delimiterIndex = remainder.indexOf(delimiter);
-  if (delimiterIndex === -1) return null;
-
-  const sourcePath = remainder.slice(0, delimiterIndex).trim();
-  const lastSeparator = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'));
-  return lastSeparator === -1 ? null : sourcePath.slice(0, lastSeparator);
-}
-
-/**
  * Wraps a codebase auto-registration failure. Preserves the original error message;
- * a refusal already says what to do, other failures get a hint from
- * `extractStaleWorkspaceEntry`, or a workspace-root pointer when the error shape is
- * unrecognized.
+ * a refusal already says what to do, other failures get a workspace-root pointer.
  */
 function buildRegistrationFailureError(error: Error): Error {
   let hint = '';
   if (!(error instanceof ProjectRegistrationError)) {
-    const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
-    if (staleWorkspaceEntry) {
-      hint = `\nHint: Inspect the source link at ${join(staleWorkspaceEntry, 'source')} and repair the registration. Preserve the workspace state, artifacts and logs.`;
-    } else {
-      // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
-      // the registration error we're wrapping is the load-bearing one — we'd
-      // rather lose the exact path in the hint than replace it with a secondary
-      // home-resolution error that masks the root cause.
-      try {
-        const workspacesPath = join(getArchonHome(), 'workspaces');
-        hint = `\nHint: Check your Archon workspace registration under ${workspacesPath} and retry.`;
-      } catch {
-        hint = '\nHint: Check your Archon workspace registration and retry.';
-      }
+    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
+    // the registration error we're wrapping is the load-bearing one — we'd
+    // rather lose the exact path in the hint than replace it with a secondary
+    // home-resolution error that masks the root cause.
+    try {
+      const workspacesPath = join(getArchonHome(), 'workspaces');
+      hint = `\nHint: Check your Archon workspace registration under ${workspacesPath} and retry.`;
+    } catch {
+      hint = '\nHint: Check your Archon workspace registration and retry.';
     }
   }
 
@@ -1627,7 +1599,6 @@ async function resolveRunCodebase(
   try {
     if (options.codebaseId) {
       codebase = await host.records.codebases.getCodebase(options.codebaseId);
-      if (!codebase) throw new Error(`Project "${options.codebaseId}" no longer exists.`);
     } else if (options.folder) {
       codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
     } else {
@@ -1651,6 +1622,8 @@ async function resolveRunCodebase(
       cause: err,
     });
   }
+  if (options.codebaseId && !codebase)
+    throw new Error(`Project "${options.codebaseId}" no longer exists.`);
 
   if (options.registrationBaseBranch !== undefined) {
     if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')

@@ -1,6 +1,7 @@
 import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
+import type { Codebase } from '../schemas/codebase';
 import {
   remoteIdentity,
   resolveRegistrationUrl,
@@ -100,47 +101,34 @@ async function readableRemoteIdentity(project: ProjectIdentity): Promise<string 
   }
 }
 
-/** The project that owns a remote; registration refuses a remote that several rows claim. */
-export async function findRegisteredRemote<T extends ProjectIdentity>(
+type RemoteOwnerCandidate = ProjectIdentity & Pick<Codebase, 'created_at'>;
+
+/**
+ * The project that owns a remote. Older binaries could register one remote
+ * several times; those rows keep routing to the oldest one, and registration
+ * refuses the remote as owned by it.
+ */
+export async function findRemoteOwner<T extends RemoteOwnerCandidate>(
   registered: readonly T[],
   remoteUrl: string,
   cwd = process.cwd()
 ): Promise<T | null> {
-  return soleRemoteIdentityOwner(registered, await remoteIdentity(remoteUrl, cwd));
+  return remoteIdentityOwner(registered, await remoteIdentity(remoteUrl, cwd));
 }
 
-/**
- * Routing fallback after an exact stored-URL match missed. Older binaries could
- * register one remote twice, so a remote several rows claim routes nowhere
- * rather than failing every event; registering it again is then refused.
- */
-export async function findRoutableRemoteOwner<T extends ProjectIdentity>(
-  registered: readonly T[],
-  remoteUrl: string
-): Promise<T | null> {
-  const owners = await remoteIdentityOwners(registered, await remoteIdentity(remoteUrl));
-  return owners.length === 1 ? (owners[0] ?? null) : null;
-}
-
-async function remoteIdentityOwners<T extends ProjectIdentity>(
+async function remoteIdentityOwner<T extends RemoteOwnerCandidate>(
   registered: readonly T[],
   identity: string
-): Promise<T[]> {
+): Promise<T | null> {
   const owners: T[] = [];
   for (const project of registered) {
     if ((await readableRemoteIdentity(project)) === identity) owners.push(project);
   }
-  return owners;
-}
-
-async function soleRemoteIdentityOwner<T extends ProjectIdentity>(
-  registered: readonly T[],
-  identity: string
-): Promise<T | null> {
-  const owners = await remoteIdentityOwners(registered, identity);
+  owners.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   if (owners.length > 1) {
-    throw new ProjectRegistrationError(
-      `Multiple projects own this remote: ${owners.map(project => `"${project.name}" at ${project.default_cwd}`).join(', ')}. Remove the duplicate registrations with /remove-project before continuing.`
+    createLogger('registration.remote').warn(
+      { owners: owners.map(project => ({ name: project.name, path: project.default_cwd })) },
+      'registration.remote_duplicate_owners'
     );
   }
   return owners[0] ?? null;
@@ -148,7 +136,7 @@ async function soleRemoteIdentityOwner<T extends ProjectIdentity>(
 
 export async function assertProjectRegistrationAvailable(
   project: ProjectIdentity,
-  registered: readonly ProjectIdentity[]
+  registered: readonly RemoteOwnerCandidate[]
 ): Promise<void> {
   const identity =
     project.kind === 'folder'
@@ -157,7 +145,7 @@ export async function assertProjectRegistrationAvailable(
         ? await remoteIdentity(project.repository_url, project.default_cwd)
         : await readableRemoteIdentity(project);
   if (identity) {
-    const existing = await soleRemoteIdentityOwner(registered, identity);
+    const existing = await remoteIdentityOwner(registered, identity);
     if (existing) {
       throw new ProjectRegistrationError(
         `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +

@@ -3840,43 +3840,8 @@ describe('workflowRunCommand', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Stale workspace source-symlink → truthful CLI error
+  // Auto-registration failure → truthful CLI error
   // -------------------------------------------------------------------------
-
-  it('surfaces auto-registration failures instead of claiming the repo is invalid', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { registerRepository } = await import('@archon/core');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const gitModule = await import('@archon/git');
-
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-123',
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
-    (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error(
-        'Source symlink at /home/test/.archon/workspaces/acme/widget/source already points to ' +
-          '/home/test/.archon/workspaces/widget, expected /test/path'
-      )
-    );
-
-    const error = await captureError(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {})
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('Cannot run workflow: project registration failed.');
-    expect(error.message).toContain(
-      'Inspect the source link at /home/test/.archon/workspaces/acme/widget/source and repair the registration'
-    );
-    expect(error.message).not.toContain('not in a git repository');
-  });
 
   it('surfaces auto-registration failures on --resume instead of claiming the repo is invalid', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -3895,10 +3860,7 @@ describe('workflowRunCommand', () => {
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
     (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error(
-        'Source symlink at /home/test/.archon/workspaces/acme/widget/source already points to ' +
-          '/home/test/.archon/workspaces/widget, expected /test/path'
-      )
+      new Error("EACCES: permission denied, mkdir '/home/test/.archon/workspaces/acme'")
     );
 
     const error = await captureError(
@@ -3909,9 +3871,7 @@ describe('workflowRunCommand', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot run workflow: project registration failed.');
-    expect(error.message).toContain(
-      'Inspect the source link at /home/test/.archon/workspaces/acme/widget/source and repair the registration'
-    );
+    expect(error.message).toContain('EACCES: permission denied');
     expect(error.message).not.toContain('Not in a git repository');
   });
 
@@ -3946,7 +3906,6 @@ describe('workflowRunCommand', () => {
     // on POSIX to `/`. Assert the hint prefix + the final segment separately.
     expect(error.message).toContain('Check your Archon workspace registration under');
     expect(error.message).toMatch(/workspaces\b/);
-    expect(error.message).not.toContain('Inspect the source link');
   });
 
   // -------------------------------------------------------------------------
@@ -13516,54 +13475,6 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// extractStaleWorkspaceEntry — parser edge cases
-// ---------------------------------------------------------------------------
-
-describe('extractStaleWorkspaceEntry', () => {
-  it('extracts the workspace dir from a POSIX source-symlink error', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(
-      extractStaleWorkspaceEntry(
-        'Source symlink at /home/user/.archon/workspaces/acme/widget/source already points to /other, expected /here'
-      )
-    ).toBe('/home/user/.archon/workspaces/acme/widget');
-  });
-
-  it('extracts the workspace dir from a Windows source-symlink error (backslash sep)', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(
-      extractStaleWorkspaceEntry(
-        'Source symlink at C:\\Users\\me\\.archon\\workspaces\\acme\\widget\\source already points to D:\\x, expected D:\\y'
-      )
-    ).toBe('C:\\Users\\me\\.archon\\workspaces\\acme\\widget');
-  });
-
-  it('returns null when the prefix does not match (unrelated error)', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(extractStaleWorkspaceEntry('ENOENT: no such file or directory')).toBeNull();
-  });
-
-  it('returns null when the prefix matches but the delimiter is missing', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(
-      extractStaleWorkspaceEntry('Source symlink at /some/path (truncated message)')
-    ).toBeNull();
-  });
-
-  it('returns null when the source path has no path separator at all', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(
-      extractStaleWorkspaceEntry('Source symlink at bareword already points to /x, expected /y')
-    ).toBeNull();
-  });
-
-  it('returns null on an empty input', async () => {
-    const { extractStaleWorkspaceEntry } = await import('./workflow');
-    expect(extractStaleWorkspaceEntry('')).toBeNull();
-  });
-});
-
 describe('workflowResetSessionsCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
   let stdoutSpy: ReturnType<typeof spyOn>;
@@ -15444,15 +15355,13 @@ describe('run codebase resolution', () => {
 
   it('a registration failure is fatal instead of running unregistered', async () => {
     (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('Source symlink at /w/_local/child/source already points to /a, expected /b')
+      new Error("EACCES: permission denied, mkdir '/w/_local/child'")
     );
     const error = await captureError(
       workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', { noWorktree: true })
     );
     expect(error.message).toContain('Cannot run workflow: project registration failed.');
-    expect(error.message).toContain(
-      'Inspect the source link at /w/_local/child/source and repair the registration.'
-    );
+    expect(error.message).toContain('Check your Archon workspace registration');
     expect(executor.executeWorkflow).not.toHaveBeenCalled();
   });
 

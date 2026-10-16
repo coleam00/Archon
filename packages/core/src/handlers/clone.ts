@@ -28,7 +28,7 @@ import {
 import {
   ProjectRegistrationError,
   assertCheckoutRemote,
-  findRegisteredRemote as findRemoteOwner,
+  findRemoteOwner,
   effectiveRegistrationUrl,
   registrationRemote,
   registrationRemotes,
@@ -52,6 +52,7 @@ import {
   getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
   parseOwnerRepo,
   resolveRepoProjectIdentity,
   slugifyFolderName,
@@ -259,6 +260,15 @@ function rejectExistingChoice(options: RegistrationOptions): void {
     );
 }
 
+function refuseOccupiedSource(error: unknown): never {
+  if (!(error instanceof ProjectSourceOccupiedError)) throw error;
+  throw new ProjectRegistrationError(
+    `${error.message}. Inspect ${error.sourcePath} and repair the registration. ` +
+      'Preserve the workspace state, artifacts and logs.',
+    { cause: error }
+  );
+}
+
 async function claimProjectName(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   project: ProjectIdentity
@@ -361,8 +371,11 @@ async function loadRepositoryCommands(
     try {
       await access(commandPath);
     } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
-      throw error;
+      // The project is already registered; an unreadable command folder only skips its commands.
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        getLog().warn({ err: error, path: commandPath }, 'registration.command_folder_unavailable');
+      }
+      continue;
     }
     const markdownFiles = await findCommandFiles(commandPath);
     if (markdownFiles.length > 0) {
@@ -484,7 +497,7 @@ export async function cloneRepository(
           `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
         );
       const credentials = await repositoryCredentials(workingUrl, options);
-      await ensureProjectStructure(identity.owner, identity.repo);
+      await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
       await cloneCheckout(workingUrl, existing.default_cwd, credentials);
     } else if (existing.repository_url) {
       await assertCheckoutRemote(
@@ -520,7 +533,7 @@ export async function cloneRepository(
     // A missing checkout can be cloned; git reports other destination failures.
   }
   if (directoryExists) {
-    throw new Error(
+    throw new ProjectRegistrationError(
       `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
     );
   }
@@ -536,7 +549,7 @@ export async function cloneRepository(
   }
 
   const credentials = await repositoryCredentials(workingUrl, options);
-  await ensureProjectStructure(ownerName, repoName);
+  await ensureProjectStructure(ownerName, repoName).catch(refuseOccupiedSource);
   await cloneCheckout(workingUrl, targetPath, credentials);
 
   let codebase: Codebase;
@@ -672,8 +685,8 @@ export async function registerRepository(
   if (!identity)
     throw new ProjectRegistrationError(`Cannot derive project storage for ${localPath}`);
   const { owner: projOwner, repo: projRepo } = identity;
-  await ensureProjectStructure(projOwner, projRepo);
-  await createProjectSourceSymlink(projOwner, projRepo, localPath);
+  await ensureProjectStructure(projOwner, projRepo).catch(refuseOccupiedSource);
+  await createProjectSourceSymlink(projOwner, projRepo, localPath).catch(refuseOccupiedSource);
   getLog().info(
     { owner: projOwner, repo: projRepo, path: getProjectSourcePath(projOwner, projRepo) },
     'project_structure_created'

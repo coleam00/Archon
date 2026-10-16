@@ -63,6 +63,7 @@ import {
   isInsideArchonHome,
   ensureProjectStructure,
   createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
   findMarkdownFilesRecursive,
 } from './archon-paths';
 
@@ -1302,6 +1303,17 @@ describe('ensureProjectStructure', () => {
 
     const sourcePath = getProjectSourcePath('acme', 'widget');
     expect((await lstat(sourcePath)).isDirectory()).toBe(true);
+  });
+
+  test('reports a file at the source path as an occupied source', async () => {
+    const sourcePath = getProjectSourcePath('acme', 'widget');
+    await mkdir(dirname(sourcePath), { recursive: true });
+    await writeFile(sourcePath, 'foreign');
+
+    const error = await ensureProjectStructure('acme', 'widget').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ProjectSourceOccupiedError);
+    expect(error).toMatchObject({ sourcePath });
   });
 });
 

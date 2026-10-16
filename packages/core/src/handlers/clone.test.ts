@@ -114,6 +114,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
   ),
   createProjectSourceSymlink: mockCreateProjectSourceSymlink,
+  ProjectSourceOccupiedError: class extends Error {},
   isInsideArchonWorkspaces: (p: string) => isPathInside('/home/test/.archon/workspaces', p),
   parseOwnerRepo: mock((name: string) => {
     const parts = name.split('/');
@@ -148,6 +149,7 @@ import {
   registerRepository,
   registerFolder,
   inspectProjectBaseBranch,
+  ProjectRegistrationError,
 } from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
@@ -1210,10 +1212,12 @@ describe('cloneRepository', () => {
       expect(result.codebaseId).toBe('found-via-git-suffix');
     });
 
-    test('throws when directory exists but no matching codebase is found', async () => {
-      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-        'Directory already exists'
+    test('refuses registration when directory exists but no matching codebase is found', async () => {
+      const refusal = await cloneRepository('https://github.com/owner/repo').catch(
+        (error: unknown) => error
       );
+      expect(refusal).toBeInstanceOf(ProjectRegistrationError);
+      expect(refusal instanceof Error && refusal.message).toContain('Directory already exists');
     });
   });
 
@@ -1318,7 +1322,7 @@ describe('cloneRepository', () => {
   // ── Command auto-loading ───────────────────────────────────────────────
   describe('command auto-loading', () => {
     test.each(['EACCES', 'EIO'])(
-      'propagates command-directory access failure %s for a saved checkout',
+      'reports command-directory access failure %s and keeps the saved checkout',
       async code => {
         const existing = makeCodebase();
         mockListCodebases.mockResolvedValueOnce([existing]);
@@ -1326,7 +1330,12 @@ describe('cloneRepository', () => {
         spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
           if (!String(path).endsWith('.git')) throw error;
         });
-        await expect(cloneRepository('https://github.com/owner/repo')).rejects.toBe(error);
+        const result = await cloneRepository('https://github.com/owner/repo');
+        expect(result).toMatchObject({ codebaseId: existing.id, commandCount: 0 });
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: error }),
+          'registration.command_folder_unavailable'
+        );
         expect(mockFindCommandFiles).not.toHaveBeenCalled();
         expect(spyFsRm).not.toHaveBeenCalled();
       }

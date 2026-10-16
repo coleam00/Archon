@@ -24,7 +24,7 @@ import {
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import {
-  findRoutableRemoteOwner,
+  findRemoteOwner,
   assertProjectRegistrationAvailable,
 } from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
@@ -190,7 +190,7 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
     [repoUrl]
   );
   const row = result.rows[0];
-  return row ? validateCodebase(row) : findRoutableRemoteOwner(await listCodebases(), repoUrl);
+  return row ? validateCodebase(row) : findRemoteOwner(await listCodebases(), repoUrl);
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {

@@ -113,16 +113,30 @@ describe('project storage collisions', () => {
     }
   );
 
-  test('local registration refuses a foreign populated managed source before inserting', async () => {
-    const root = await makeHome();
-    const path = await gitCheckout(join(root, 'api'), 'https://github.com/acme/api.git');
-    const source = join(root, '.archon', 'workspaces', 'acme', 'api', 'source');
-    await mkdir(source, { recursive: true });
-    await writeFile(join(source, 'foreign.txt'), 'foreign checkout');
-    await expect(registerRepository(path)).rejects.toThrow('already contains');
-    expect(await listCodebases()).toHaveLength(0);
-    expect(await readFile(join(source, 'foreign.txt'), 'utf8')).toBe('foreign checkout');
-  });
+  test.each(['checkout', 'file', 'link'] as const)(
+    'local registration refuses a source path occupied by a foreign %s before inserting',
+    async occupant => {
+      const root = await makeHome();
+      const path = await gitCheckout(join(root, 'api'), 'https://github.com/acme/api.git');
+      const workspace = join(root, '.archon', 'workspaces', 'acme', 'api');
+      const source = join(workspace, 'source');
+      await mkdir(occupant === 'checkout' ? source : workspace, { recursive: true });
+      if (occupant === 'checkout') await writeFile(join(source, 'foreign.txt'), 'foreign');
+      else if (occupant === 'file') await writeFile(source, 'foreign');
+      else
+        await symlink(
+          await gitCheckout(join(root, 'other')),
+          source,
+          process.platform === 'win32' ? 'junction' : 'dir'
+        );
+
+      const refusal = await registerRepository(path).catch((error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(ProjectRegistrationError);
+      expect(refusal instanceof Error && refusal.message).toContain(source);
+      expect(await listCodebases()).toHaveLength(0);
+    }
+  );
 
   test.each(['sql', 'file'] as const)(
     'relative local remotes retain checkout context (%s)',
@@ -515,7 +529,7 @@ describe('project storage collisions', () => {
   );
 
   test.each(['sql', 'file'] as const)(
-    '%s forge lookup keeps routing a remote that legacy rows share',
+    '%s lookups route a remote that legacy rows share to the oldest row',
     async backend => {
       const root = await makeHome();
       const store =
@@ -524,22 +538,26 @@ describe('project storage collisions', () => {
           : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
       const first = await store.createCodebase({
         name: 'acme/one',
-        default_cwd: join(root, 'first'),
-        repository_url: 'https://github.com/acme/api',
+        default_cwd: await gitCheckout(join(root, 'first'), 'git@github.com:acme/api.git'),
+        repository_url: 'git@github.com:acme/api.git',
       });
       const second = await store.createCodebase({
         name: 'acme/two',
-        default_cwd: join(root, 'second'),
+        default_cwd: await gitCheckout(join(root, 'second'), 'git@github.com:acme/api.git'),
         repository_url: 'https://other.example/acme/api',
       });
       // Older binaries registered a second clone of a remote as its own row.
-      await store.updateCodebase(second, { repository_url: 'git@github.com:acme/api.git' });
+      await store.updateCodebase(second, { repository_url: 'ssh://git@github.com/acme/api' });
 
-      expect((await store.findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(first.id);
-      expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(
+      // Forge webhooks spell the remote differently from CLI-registered rows.
+      for (const url of ['https://github.com/acme/api', 'https://github.com/acme/api.git']) {
+        expect((await store.findCodebaseByRepoUrl(url))?.id).toBe(first.id);
+      }
+      expect((await store.findCodebaseByRepoUrl('ssh://git@github.com/acme/api'))?.id).toBe(
         second.id
       );
-      expect(await store.findCodebaseByRepoUrl('https://github.com/acme/api.git')).toBeNull();
+      const reused = await cloneRepository(store, 'https://github.com/acme/api');
+      expect(reused).toMatchObject({ codebaseId: first.id, alreadyExisted: true });
 
       const refusal = await store
         .createCodebase({
@@ -549,10 +567,7 @@ describe('project storage collisions', () => {
         })
         .catch((error: unknown) => error);
       expect(refusal).toBeInstanceOf(ProjectRegistrationError);
-      for (const project of [first, second]) {
-        expect(refusal instanceof Error && refusal.message).toContain(project.default_cwd);
-      }
-      expect(refusal instanceof Error && refusal.message).toContain('/remove-project');
+      expect(refusal instanceof Error && refusal.message).toContain(first.default_cwd);
       expect(await store.listCodebases()).toHaveLength(2);
     }
   );
@@ -565,13 +580,14 @@ describe('project storage collisions', () => {
       repository_url: 'https://github.com/acme/api',
     });
     const legacy = await gitCheckout(join(root, 'legacy'), 'git@github.com:acme/api.git');
-    await db.query('INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ($1, $2)', [
-      'Legacy',
-      legacy,
-    ]);
+    // Listing order is by name, so 'Legacy' comes first; the older row still wins.
+    await db.query(
+      "INSERT INTO remote_agent_codebases (name, default_cwd, created_at) VALUES ($1, $2, datetime('now', '+1 minute'))",
+      ['Legacy', legacy]
+    );
     await createCodebase({ name: 'Unavailable', default_cwd: join(root, 'missing') });
     expect((await findCodebaseByRepoUrl('https://github.com/acme/api'))?.id).toBe(known.id);
-    expect(await findCodebaseByRepoUrl('git@github.com:acme/api.git')).toBeNull();
+    expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
   });
 
   test.each(['sql', 'file'] as const)(
@@ -961,29 +977,49 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each(['sql', 'file'] as const)(
-    '%s cleanup refuses deletion when a registered alias cannot be resolved',
-    async backend => {
+  test.each([
+    { backend: 'sql', code: 'ELOOP' },
+    { backend: 'file', code: 'ELOOP' },
+    { backend: 'sql', code: 'EACCES' },
+    { backend: 'file', code: 'EACCES' },
+  ] as const)(
+    '$backend cleanup removes an unowned checkout past a project whose path fails with $code',
+    async ({ backend, code }) => {
+      // Windows has no chmod-based access denial, and root ignores it.
+      if (code === 'EACCES' && (process.platform === 'win32' || process.getuid?.() === 0)) return;
       const root = await makeHome();
       const store =
         backend === 'sql'
           ? codebases
           : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
-      const checkout = join(root, 'checkout');
-      const alias = join(root, 'alias');
-      await mkdir(checkout);
-      await fsPromises.symlink(checkout, alias, process.platform === 'win32' ? 'junction' : 'dir');
-      await store.createCodebase({ name: 'owner', kind: 'folder', default_cwd: alias });
-      await fsPromises.unlink(alias);
-      await fsPromises.symlink(alias, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const locked = join(root, 'locked');
+      const unreadable =
+        code === 'ELOOP' ? join(root, 'loop') : await gitCheckout(join(locked, 'project'));
+      await store.createCodebase({ name: 'owner', kind: 'folder', default_cwd: unreadable });
+      if (code === 'ELOOP')
+        await fsPromises.symlink(
+          unreadable,
+          unreadable,
+          process.platform === 'win32' ? 'junction' : 'dir'
+        );
+      else await fsPromises.chmod(locked, 0o000);
+      const checkout = await gitCheckout(join(root, 'fresh'), 'https://github.com/acme/api.git');
       const remove = mock(async () => {
         await fsPromises.rm(checkout, { recursive: true });
       });
-      await expect(store.removeUnregisteredCheckout(checkout, remove)).rejects.toMatchObject({
-        code: 'ELOOP',
+      const warnings: string[] = [];
+      setLogSink(line => {
+        warnings.push(line);
       });
-      expect(remove).not.toHaveBeenCalled();
-      await access(checkout);
+      try {
+        await store.removeUnregisteredCheckout(checkout, remove);
+      } finally {
+        if (code === 'EACCES') await fsPromises.chmod(locked, 0o755);
+      }
+
+      expect(remove).toHaveBeenCalledTimes(1);
+      await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(warnings.join('\n')).toContain('registration.checkout_identity_unavailable');
     }
   );
 

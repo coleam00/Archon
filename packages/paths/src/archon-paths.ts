@@ -1063,19 +1063,41 @@ export async function ensureFolderProjectStructure(slug: string): Promise<void> 
   await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 }
 
+/** A project's `source` path already holds something other than the requested checkout. */
+export class ProjectSourceOccupiedError extends Error {
+  constructor(
+    readonly sourcePath: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectSourceOccupiedError';
+  }
+}
+
 /**
  * Create the project directory structure (source/, worktrees/, artifacts/, logs/).
  * Safe to call multiple times - uses recursive mkdir.
  */
 export async function ensureProjectStructure(owner: string, repo: string): Promise<void> {
+  const source = getProjectSourcePath(owner, repo);
   const dirs = [
-    getProjectSourcePath(owner, repo),
     getProjectWorktreesPath(owner, repo),
     getProjectArtifactsPath(owner, repo),
     getProjectLogsPath(owner, repo),
   ];
 
-  await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
+  await Promise.all([
+    mkdir(source, { recursive: true }).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        throw new ProjectSourceOccupiedError(
+          source,
+          `Source path at ${source} already contains a file`
+        );
+      }
+      throw error;
+    }),
+    ...dirs.map(dir => mkdir(dir, { recursive: true })),
+  ]);
 }
 
 /**
@@ -1097,18 +1119,23 @@ export async function createProjectSourceSymlink(
   if (stats?.isSymbolicLink()) {
     const existing = await readlink(linkPath);
     if (normalize(existing) === normalize(targetPath)) return;
-    throw new Error(
+    throw new ProjectSourceOccupiedError(
+      linkPath,
       `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
     );
   }
   if (stats) {
     if (!stats.isDirectory()) {
-      throw new Error(`Source path at ${linkPath} already contains a file; expected ${targetPath}`);
+      throw new ProjectSourceOccupiedError(
+        linkPath,
+        `Source path at ${linkPath} already contains a file; expected ${targetPath}`
+      );
     }
     const entries = await readdir(linkPath);
     if (entries.length > 0) {
       if ((await realpath(linkPath)) === (await realpath(targetPath))) return;
-      throw new Error(
+      throw new ProjectSourceOccupiedError(
+        linkPath,
         `Source directory at ${linkPath} already contains another checkout; expected ${targetPath}`
       );
     }

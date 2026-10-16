@@ -25,7 +25,7 @@ import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
 import { isCheckoutRegistered } from '../services/project-registration-identity';
 import {
-  findRoutableRemoteOwner,
+  findRemoteOwner,
   assertProjectRegistrationAvailable,
 } from '../services/registration-remote';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
@@ -125,7 +125,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
       findCodebaseByRepoUrl: async url => {
         const rows = await readPublicCodebases();
-        return rows.find(row => row.repository_url === url) ?? findRoutableRemoteOwner(rows, url);
+        return rows.find(row => row.repository_url === url) ?? findRemoteOwner(rows, url);
       },
       removeUnregisteredCheckout: async (path, remove) => {
         await commit(root, [], async () => {

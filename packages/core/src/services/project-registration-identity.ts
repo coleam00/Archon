@@ -29,11 +29,11 @@ async function existingPhysicalPath(path: string): Promise<string | null> {
 
 export async function isCheckoutRegistered(
   path: string,
-  registered: readonly Pick<ProjectIdentity, 'kind' | 'default_cwd'>[]
+  registered: readonly Pick<ProjectIdentity, 'kind' | 'name' | 'default_cwd'>[]
 ): Promise<boolean> {
   const checkout = (await existingPhysicalPath(path)) ?? resolve(path);
   for (const project of registered) {
-    const physicalCwd = await existingPhysicalPath(project.default_cwd);
+    const physicalCwd = await readablePhysicalPath(project);
     const cwd = physicalCwd ?? resolve(project.default_cwd);
     if (
       isPathInside(checkout, cwd, { includeRoot: true }) ||
@@ -47,6 +47,24 @@ export async function isCheckoutRegistered(
     }
   }
   return false;
+}
+
+/**
+ * A registered project's physical path. An unreadable path is compared lexically
+ * instead: one broken project must not block cleanup for every other checkout.
+ */
+async function readablePhysicalPath(
+  project: Pick<ProjectIdentity, 'name' | 'default_cwd'>
+): Promise<string | null> {
+  try {
+    return await existingPhysicalPath(project.default_cwd);
+  } catch (error) {
+    createLogger('registration.identity').warn(
+      { err: error, project: project.name, path: project.default_cwd },
+      'registration.checkout_identity_unavailable'
+    );
+    return null;
+  }
 }
 
 /** A registered checkout's Git directories, which a linked worktree keeps outside itself. */

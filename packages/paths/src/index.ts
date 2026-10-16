@@ -57,6 +57,7 @@ export {
   ensureFolderProjectStructure,
   ensureProjectStructure,
   createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
   findMarkdownFilesRecursive,
   findCommandFiles,
   getWebDistDir,
