@@ -357,10 +357,23 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$n.output.score >= '0.9'", outputs).result).toBe(true);
   });
 
-  it('numeric operator: fail-closed when actual is not numeric', () => {
-    const res = evaluateCondition("$n.output > '5'", new Map([['n', makeOutput('hello')]]));
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(false);
+  it('treats a nonnumeric runtime value as false and permits OR fallback', () => {
+    const outputs = new Map([
+      ['a', makeOutput('N/A')],
+      ['b', makeOutput('ok')],
+    ]);
+    expect(evaluateCondition('$a.output > 50', outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output > 50 && $b.output == 'ok'", outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output > 50 || $b.output == 'ok'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
   });
 
   it('numeric operator: a non-numeric literal is a parse failure, not a comparison', () => {
