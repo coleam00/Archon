@@ -5517,7 +5517,8 @@ async function executeLoopGroupBody(
     error: errorMsg,
     failureKind: 'max_iterations',
     ...usage,
-    loopIterations: iterationLimit,
+    // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
+    loopIterations: Math.max(iterationLimit, startIteration - 1),
   };
 }
 
@@ -7081,7 +7082,8 @@ async function executeLoopNode(
     costUsd: loopTotalCostUsd,
     ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
     ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
-    loopIterations: iterationLimit,
+    // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
+    loopIterations: Math.max(iterationLimit, startIteration - 1),
     data: { maxIterations: iterationLimit },
   });
 }

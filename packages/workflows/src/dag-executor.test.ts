@@ -6,6 +6,7 @@ import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { inspectResumableRun } from './executor';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
+import * as nodeEventWrite from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
 import { buildRunTerminalTelemetry } from './run-terminal-telemetry';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
@@ -810,6 +811,23 @@ function deliveredMessages(platform: MockWorkflowPlatform): string[] {
 /** The workflow events the run persisted, in call order. */
 function persistedEvents(store: MockWorkflowStore) {
   return store.createWorkflowEvent.mock.calls.map(([event]) => event);
+}
+
+/** `loopIterations` lives only on the in-memory record, so read it where the record is written. */
+async function failedLoopIterations(nodeId: string, run: () => Promise<unknown>) {
+  const recordSpy = spyOn(nodeEventWrite, 'recordNodeState');
+  try {
+    await run();
+    const failed = recordSpy.mock.calls
+      .map(([, record]) => record)
+      .find(
+        record =>
+          !('cache' in record) && record.lifecycle.status === 'failed' && record.node.id === nodeId
+      );
+    return failed && !('cache' in failed) ? failed.diagnostics?.loopIterations : undefined;
+  } finally {
+    recordSpy.mockRestore();
+  }
 }
 
 const minimalConfig: WorkflowConfig = {
@@ -13079,10 +13097,17 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         ).toMatchObject({ iteration: 2, maxIterations: 2 });
 
         mockSendQueryDag.mockClear();
-        const approved = await runAtCap('Approved', false, 2);
+        let approved: Awaited<ReturnType<typeof runAtCap>> | undefined;
+        const loopIterations = await failedLoopIterations('refine', async () => {
+          approved = await runAtCap('Approved', false, 2);
+        });
         expect(mockSendQueryDag.mock.calls.length).toBe(0);
-        expect(approved.completed).toBeUndefined();
-        expect(approved.failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
+        expect(approved?.completed).toBeUndefined();
+        expect(approved?.failed?.data).toMatchObject({
+          failure_kind: 'max_iterations',
+          maxIterations: 1,
+        });
+        expect(loopIterations).toBe(2);
       });
     });
 
@@ -26636,15 +26661,19 @@ describe('executeDagWorkflow -- loop_group node', () => {
       ).toMatchObject({ iteration: 2, maxIterations: 2 });
 
       mockSendQueryDag.mockClear();
-      const approved = await runGroupAtCap('Approved', false, { iteration: 2 });
+      let approved: MockWorkflowStore | undefined;
+      const loopIterations = await failedLoopIterations('grp', async () => {
+        approved = await runGroupAtCap('Approved', false, { iteration: 2 });
+      });
       expect(mockSendQueryDag.mock.calls.length).toBe(0);
-      expect(approved.persistWorkflowEvent).toHaveBeenCalledWith(
+      expect(approved?.persistWorkflowEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           event_type: 'node_failed',
           step_name: 'grp',
           data: expect.objectContaining({ failure_kind: 'max_iterations' }),
         })
       );
+      expect(loopIterations).toBe(2);
     });
   });
 
