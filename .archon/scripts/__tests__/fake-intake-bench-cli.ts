@@ -17,6 +17,7 @@ import type { Closure } from '../../workflows/sdlc/.shared/close';
 
 export interface FakeIssue {
   readonly number: number;
+  readonly repo?: { host: string; path: string };
   readonly title?: string;
   readonly url?: string;
   readonly body?: string;
@@ -281,6 +282,22 @@ function ghAnswer(dir: string, args: readonly string[]): string {
     created.push(issue);
     writeFileSync(file, JSON.stringify(created));
     return JSON.stringify(issue);
+  }
+  const repo = endpoint.split('/').slice(1, 3).join('/');
+  const inRepo = config.issues.filter(issue => (issue.repo?.path ?? config.repo.path).toLowerCase() === repo.toLowerCase());
+  if (endpoint.includes('/issues?')) {
+    const page = Number(new URL(`https://fake/${endpoint}`).searchParams.get('page'));
+    return JSON.stringify(inRepo.slice((page - 1) * 100, page * 100).map(issue => ({
+      ...issue, title: issue.title ?? `Issue ${String(issue.number)}`, body: issue.body ?? 'body',
+      state: issue.state ?? 'closed', labels: issue.labels.map(name => ({ name })),
+    })));
+  }
+  if (endpoint.includes('/issues/comments?')) {
+    const page = Number(new URL(`https://fake/${endpoint}`).searchParams.get('page'));
+    const comments = inRepo.flatMap(issue => (issue.commentBodies ?? Array.from({ length: issue.comments }, (_, i) => ({ id: `old-${i}`, body: 'Old comment' }))).map(comment => ({
+      ...comment, issue_url: `https://${config.repo.host}/repos/${repo}/issues/${issue.number}`,
+    })));
+    return JSON.stringify(comments.slice((page - 1) * 100, page * 100));
   }
   if (endpoint.includes('/comments?')) {
     const number = Number(endpoint.split('/')[4]);

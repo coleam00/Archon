@@ -396,7 +396,10 @@ are the operator's and stay outside the pack and the repository.
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. `posted_text` permits only
   the exact comments of that run's declared closure on scratch copies, including
-  a duplicate's canonical backlink. Any other new or edited comment fails it; eval
+  a duplicate's backlink to that row's mapped canonical copy. A duplicate destination
+  elsewhere fails the check. The bench snapshots all issues and issue comments in the
+  source and scratch repositories, so concurrent changes there can invalidate a batch.
+  Any other new or edited comment fails `posted_text`; eval
   permits no posted text. Recorded batches retain their recorded check values and
   need a rerun to measure this behavior. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A

@@ -8,7 +8,7 @@
  * with a config layer pinning that tier, so a config edit mid-bench cannot move it.
  *
  * Eval batches read the set's own repository and must write nothing to it: its batch
- * issues and its state documents are read before and after, and any difference fails
+ * issues, comments and state documents are read before and after; any difference fails
  * the batch. Live batches run intake for real, but only on scratch repositories that
  * hold copies of the batch's issues, one repository per version.
  */
@@ -39,9 +39,8 @@ import {
   waitRun,
 } from '../../../.shared/bench.ts';
 import { issueAtCreation, viewIssue } from '../../../.shared/issue.ts';
-import { ghIssueComments } from '../../../.shared/pr.ts';
 import { closeComments, type Closure } from '../../../.shared/close.ts';
-import { sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
+import { samePr, sameRepo, type QualifiedPr } from '../../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../../.shared/git.ts';
 import type { Contract, Route } from '../../../.shared/labels.ts';
 import { remoteFor, urlRepo } from '../../../.shared/remote.ts';
@@ -348,27 +347,48 @@ export interface Snapshot {
 }
 
 export function issueKey(repo: Repo, number: number): string {
-  return `${repo.host}/${repo.path}#${String(number)}`;
+  return `${repo.host}/${repo.path}`.toLowerCase() + `#${String(number)}`;
 }
 
-function readIssueFacts(repo: Repo, number: number): IssueFacts {
-  const result = Bun.spawnSync(['gh', 'api', '--hostname', repo.host, `repos/${repo.path}/issues/${String(number)}`], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  if (result.exitCode !== 0) throw new Error(`reading ${issueKey(repo, number)} failed: ${result.stderr.toString().trim()}`);
-  const issue: unknown = JSON.parse(result.stdout.toString());
-  if (!isObject(issue) || typeof issue.title !== 'string' || typeof issue.state !== 'string' || typeof issue.comments !== 'number') {
-    throw new Error(`${issueKey(repo, number)} answered without its facts`);
+function* repositoryPages(repo: Repo, endpoint: string): Generator<unknown> {
+  for (let page = 1; ; page++) {
+    const result = Bun.spawnSync(['gh', 'api', '--hostname', repo.host, `repos/${repo.path}/${endpoint}&per_page=100&page=${String(page)}`], {
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    if (result.exitCode !== 0) throw new Error(`reading ${repo.path}/${endpoint} failed: ${result.stderr.toString().trim()}`);
+    const rows: unknown = JSON.parse(result.stdout.toString());
+    if (!Array.isArray(rows)) throw new Error(`${repo.path}/${endpoint} answered without a list`);
+    yield* rows;
+    if (rows.length < 100) return;
   }
-  const labels = Array.isArray(issue.labels) ? issue.labels : [];
-  return {
-    labels: labels.flatMap(label => (isObject(label) && typeof label.name === 'string' ? [label.name] : [])).sort(),
-    state: issue.state,
-    title: issue.title,
-    body_digest: createHash('sha256').update(typeof issue.body === 'string' ? issue.body : '').digest('hex'),
-    comments: ghIssueComments({ repo, number }),
-  };
+}
+
+function repositoryFacts(repo: Repo): Record<string, IssueFacts> {
+  const facts: Record<string, IssueFacts> = {};
+  for (const issue of repositoryPages(repo, 'issues?state=all')) {
+    if (!isObject(issue) || typeof issue.number !== 'number' || typeof issue.title !== 'string' || typeof issue.state !== 'string') {
+      throw new Error(`${repo.path} answered without issue facts`);
+    }
+    const labels = Array.isArray(issue.labels) ? issue.labels : [];
+    facts[issueKey(repo, issue.number)] = {
+      labels: labels.flatMap(label => (isObject(label) && typeof label.name === 'string' ? [label.name] : [])).sort(),
+      state: issue.state,
+      title: issue.title,
+      body_digest: createHash('sha256').update(typeof issue.body === 'string' ? issue.body : '').digest('hex'),
+      comments: [],
+    };
+  }
+  for (const comment of repositoryPages(repo, 'issues/comments?sort=created&direction=asc')) {
+    if (!isObject(comment) || typeof comment.issue_url !== 'string' || (typeof comment.id !== 'number' && typeof comment.id !== 'string')) {
+      throw new Error(`${repo.path} answered without comment facts`);
+    }
+    const number = Number(comment.issue_url.slice(comment.issue_url.lastIndexOf('/') + 1));
+    const key = issueKey(repo, number);
+    const issue = facts[key];
+    if (issue === undefined) throw new Error(`${key}: comment has no issue in the repository snapshot`);
+    facts[key] = { ...issue, comments: [...issue.comments, { id: String(comment.id), body: typeof comment.body === 'string' ? comment.body : '' }] };
+  }
+  return facts;
 }
 
 async function readState(cwd: string): Promise<[string, Record<string, number>]> {
@@ -387,9 +407,13 @@ async function readState(cwd: string): Promise<[string, Record<string, number>]>
   return [scope.key, documents];
 }
 
-export async function snapshot(issues: readonly { repo: Repo; number: number }[], stateDirs: readonly string[]): Promise<Snapshot> {
+export async function snapshot(requiredIssues: readonly { repo: Repo; number: number }[], stateDirs: readonly string[]): Promise<Snapshot> {
   const facts: Record<string, IssueFacts> = {};
-  for (const { repo, number } of issues) facts[issueKey(repo, number)] = readIssueFacts(repo, number);
+  const repos = requiredIssues.map(item => item.repo).filter((repo, index, all) => all.findIndex(other => sameRepo(repo, other)) === index);
+  for (const repo of repos) Object.assign(facts, repositoryFacts(repo));
+  for (const { repo, number } of requiredIssues) {
+    if (facts[issueKey(repo, number)] === undefined) throw new Error(`${issueKey(repo, number)} is missing from the repository snapshot`);
+  }
   const state: Record<string, Record<string, number>> = {};
   for (const dir of stateDirs) {
     const [key, documents] = await readState(dir);
@@ -401,9 +425,13 @@ export async function snapshot(issues: readonly { repo: Repo; number: number }[]
 /** Every difference between two snapshots, each named. */
 export function snapshotChanges(before: Snapshot, after: Snapshot): string[] {
   const changes: string[] = [];
-  for (const [key, was] of Object.entries(before.issues)) {
+  for (const key of new Set([...Object.keys(before.issues), ...Object.keys(after.issues)])) {
+    const was = before.issues[key];
     const now = after.issues[key];
-    if (now === undefined) continue;
+    if (was === undefined || now === undefined) {
+      changes.push(`${key}: issue ${was === undefined ? 'added' : 'removed'}`);
+      continue;
+    }
     for (const field of ['labels', 'state', 'title', 'body_digest', 'comments'] as const) {
       if (canonical(was[field]) !== canonical(now[field])) {
         changes.push(field === 'comments' ? `${key}: comments changed` : `${key}: ${field} changed from ${JSON.stringify(was[field])} to ${JSON.stringify(now[field])}`);
@@ -421,10 +449,9 @@ export function snapshotChanges(before: Snapshot, after: Snapshot): string[] {
 
 /** Added or edited comments, except the exact comments of live runs' declared closures. */
 export function postedComments(before: Snapshot, after: Snapshot, allowed: ReadonlyMap<string, readonly string[]> = new Map()): string[] {
-  return Object.entries(before.issues).flatMap(([key, was]) => {
-    const now = after.issues[key];
-    if (now === undefined) return [];
-    const earlier = new Map(was.comments.map(comment => [comment.id, comment.body]));
+  return Object.entries(after.issues).flatMap(([key, now]) => {
+    const was = before.issues[key];
+    const earlier = new Map((was?.comments ?? []).map(comment => [comment.id, comment.body]));
     const expected = [...(allowed.get(key) ?? [])];
     const unexpected = now.comments.filter(comment => {
       if (earlier.get(comment.id) === comment.body) return false;
@@ -702,8 +729,8 @@ export interface RowRun {
   readonly resolved: ResolvedVersion<Version>;
   /** Where the run executes: the eval checkout, or the version's scratch checkout. */
   readonly cwd: string;
-  /** The scratch repository and the row's copy number there; absent in eval. */
-  readonly live?: { readonly repo: Repo; readonly number: number };
+  /** The scratch repository, row copy and expected canonical copy; absent in eval. */
+  readonly live?: { readonly repo: Repo; readonly number: number; readonly canonical?: number };
 }
 
 export interface BatchContext {
@@ -752,7 +779,7 @@ async function readDecision(run: RowRun, detail: RunDetail): Promise<{ path: Int
 }
 
 /** Launch one row on one version, wait for it, and record its line, whatever happened. */
-export async function runRow(run: RowRun, context: BatchContext): Promise<{ line: Line; comments: ReturnType<typeof closeComments> }> {
+export async function runRow(run: RowRun, context: BatchContext): Promise<{ line: Line; comments: ReturnType<typeof closeComments>; closureProblems: string[] }> {
   const { row, resolved } = run;
   const { version } = resolved;
   const workflow = workflowOf(run);
@@ -821,6 +848,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
     fail(error);
   }
   let comments: ReturnType<typeof closeComments> = [];
+  const closureProblems: string[] = [];
   try {
     const live = run.live;
     const declaration = detail?.nodes.find(node => node.nodeId === TRIAGE_VERDICT_NODE && node.state === 'completed')?.structuredOutput;
@@ -828,14 +856,17 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
     if (live !== undefined && closure != null && runId !== null) {
       const recorded = status === 'completed' ? decided.verdict : liveVerdict((await archonJson(['state', 'get', `work/${String(live.number)}`], run.cwd)).value, runId);
       if (recorded?.contract === 'NO_ACTION') {
+        if (closure.kind === 'duplicate' && (live.canonical === undefined || !samePr(closure.original, { repo: live.repo, number: live.canonical }))) {
+          throw new Error(`${version.label} ${row.id}: duplicate destination is not the row's mapped scratch canonical`);
+        }
         const checked = closure.kind === 'duplicate' ? { ...closure, url: viewIssue(closure.original).url } : closure;
         comments = closeComments(live, viewIssue(live).url, checked)
-          .filter(comment => sameRepo(comment.item.repo, live.repo))
           .map(comment => ({ ...comment, item: { repo: live.repo, number: comment.item.number } }));
       }
     }
   } catch (error) {
     fail(error);
+    closureProblems.push(error instanceof Error ? error.message : String(error));
   }
   const ended = detail?.completed_at == null ? NaN : Date.parse(detail.completed_at) - Date.parse(detail.started_at);
 
@@ -867,7 +898,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
   };
   appendLine(join(context.outDir, SAMPLES_FILE), line);
 
-  return { line, comments };
+  return { line, comments, closureProblems };
 }
 
 // --- the batch's hard checks ----------------------------------------------------------
@@ -990,7 +1021,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       if (scratch === undefined) return { row, resolved, cwd };
       const number = scratch.copies[row.id];
       if (number === undefined) throw new Error(`${resolved.version.label}: row ${row.id} has no copy; run copy first`);
-      return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number } };
+      return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number, canonical: scratch.copies[`canonical:${String(row.known.canonical)}`] } };
     })
   );
   const originals = [
@@ -1000,14 +1031,14 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       return item === undefined ? [] : [item];
     }),
   ];
-  const watched = [
+  const requiredIssues = [
     ...originals,
     ...(live === undefined ? [] : [...live.values()].flatMap(({ scratch, copies }) => Object.values(copies).map(number => ({ repo: scratch.repo, number })))),
   ];
   // The state documents of the set's project, from the operator's checkout and from
   // each eval checkout; a live batch writes its scratch projects by design.
   const stateDirs = [options.repoRoot, ...(live === undefined ? runs.flat().map(run => run.cwd) : [])];
-  const before = await snapshot(watched, stateDirs);
+  const before = await snapshot(requiredIssues, stateDirs);
 
   const results =
     live === undefined
@@ -1026,17 +1057,17 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       allowed.set(key, [...(allowed.get(key) ?? []), comment.body]);
     }
   }
-  const setKeys = new Set(originals.map(item => issueKey(item.repo, item.number)));
+  const setPrefixes = originals.map(item => `${item.repo.host}/${item.repo.path}#`.toLowerCase());
   const onSet = (snap: Snapshot): Snapshot => ({
-    issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setKeys.has(key))),
+    issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setPrefixes.some(prefix => key.startsWith(prefix)))),
     state: snap.state,
   });
   let writes: string[];
   let posted: string[];
   try {
-    const after = await snapshot(watched, stateDirs);
+    const after = await snapshot(requiredIssues, stateDirs);
     writes = snapshotChanges(onSet(before), onSet(after));
-    posted = postedComments(before, after, allowed);
+    posted = [...results.flatMap(result => result.closureProblems), ...postedComments(before, after, allowed)];
   } catch (error) {
     const unproven = `the after-read failed, so the batch is unproven: ${error instanceof Error ? error.message : String(error)}`;
     writes = [unproven];

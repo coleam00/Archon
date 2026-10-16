@@ -344,6 +344,9 @@ describe('bench run', () => {
     for (const number of [9, 101, 102, 103]) {
       if (!config.issues.some(issue => issue.number === number)) config.issues.push({ number, labels: [], comments: 0 });
     }
+    for (const [index, issue] of config.issues.entries()) {
+      if ([101, 102, 103].includes(issue.number)) config.issues[index] = { ...issue, repo: { host: 'github.com', path: 'me/scratch-base' } };
+    }
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
     return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch, remote, packSha };
   }
@@ -442,9 +445,40 @@ describe('bench run', () => {
     const declaredClosure = { kind: 'duplicate' as const, url: 'https://github.com/o/r/issues/9', original: { repo: REPO, number: 9 } };
     const result = benchLive({ declaredClosure, posted: [{ number: 9, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' }] });
     expect(result.checks[0].checks.writes.ok).toBe(false);
-    expect(result.checks[0].checks.posted_text.problems).toEqual([expect.stringContaining('github.com/o/r#9')]);
+    expect(result.checks[0].checks.posted_text.problems).toEqual([
+      expect.stringContaining('not the row\'s mapped scratch canonical'),
+      expect.stringContaining('github.com/o/r#9'),
+    ]);
     const scratch = benchLive({ posted: [{ number: 103, body: 'Unrelated text' }] });
     expect(scratch.checks[0].checks.posted_text.problems).toEqual([expect.stringContaining('github.com/me/scratch-base#103')]);
+  });
+
+  it('rejects duplicate destinations outside the row mapped canonical', () => {
+    for (const repo of [REPO, { host: 'github.com', path: 'me/scratch-base' }, { host: 'github.com', path: 'other/repo' }]) {
+      const number = 77;
+      const url = `https://${repo.host}/${repo.path}/issues/${number}`;
+      const result = benchLive({
+        issues: [...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })), { number, repo, labels: [], comments: 0 }],
+        declaredClosure: { kind: 'duplicate', url, original: { repo, number } },
+        posted: [
+          { number: 101, body: `<!-- archon-close -->\nClosing as a duplicate of ${url}; follow the work there.` },
+          { number, body: '<!-- archon-duplicate github.com/me/scratch-base#101 -->\nhttps://github.com/me/scratch-base/issues/101 was closed as a duplicate of this issue.' },
+        ],
+      });
+      expect([repo.path, result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([repo.path, 1, false]);
+      if (repo.path === REPO.path) expect(result.checks[0].checks.writes.ok).toBe(false);
+    }
+  });
+
+  it('detects independent comments on unlisted source and scratch issues', () => {
+    for (const repo of [REPO, { host: 'github.com', path: 'me/scratch-base' }]) {
+      const result = benchLive({
+        issues: [...[9, 11, 12, ...Array.from({ length: 100 }, (_, i) => i + 200)].map(number => ({ number, repo: REPO, labels: [], comments: 0 })), { number: 77, repo, labels: [], comments: 0 }],
+        posted: [{ number: 77, body: 'Unlisted write' }],
+      });
+      expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([1, false]);
+      if (repo.path === REPO.path) expect(result.checks[0].checks.writes.ok).toBe(false);
+    }
   });
 
   it('checks comments beyond the first page', () => {
@@ -697,6 +731,14 @@ describe('hard checks', () => {
     ]);
     expect(postedComments(before, after)).toEqual(['github.com/o/r#1: 1 comment(s) posted or edited outside declared closure']);
     expect([snapshotChanges(before, before), postedComments(before, before)]).toEqual([[], []]);
+  });
+
+  it('detects added or removed issues and comments on newly created issues', () => {
+    const empty: Snapshot = { issues: {}, state: {} };
+    const created: Snapshot = { issues: { 'github.com/o/r#2': { ...facts, comments: [{ id: 'new', body: 'New issue comment' }] } }, state: {} };
+    expect(snapshotChanges(empty, created)).toEqual(['github.com/o/r#2: issue added']);
+    expect(snapshotChanges(created, empty)).toEqual(['github.com/o/r#2: issue removed']);
+    expect(postedComments(empty, created)).toEqual(['github.com/o/r#2: 1 comment(s) posted or edited outside declared closure']);
   });
 
   it('rejects edits, marker-only imitations, and repeated copies of an allowed comment', () => {
