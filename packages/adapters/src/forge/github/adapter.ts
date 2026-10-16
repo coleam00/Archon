@@ -30,6 +30,7 @@ import {
   getCommandFolderSearchPaths,
   getProjectSourcePath,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
 } from '@archon/paths';
 import {
   isWorktreePath,
@@ -713,11 +714,19 @@ export class GitHubAdapter implements IPlatformAdapter {
     owner: string,
     repo: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    const key = resolve(repoPath);
-    const prepare = () => this.prepareRepository(owner, repo, defaultBranch, repoPath, shouldSync);
+    const key = resolve(codebase.default_cwd);
+    const prepare = () =>
+      this.prepareRepository(
+        owner,
+        repo,
+        defaultBranch,
+        codebase.default_cwd,
+        codebase.name,
+        shouldSync
+      );
     const previous = repositoryReadiness.get(key) ?? Promise.resolve();
     const pending = previous.then(prepare, prepare).finally(() => {
       if (repositoryReadiness.get(key) === pending) repositoryReadiness.delete(key);
@@ -731,6 +740,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     repo: string,
     defaultBranch: string,
     repoPath: string,
+    projectName: string,
     shouldSync: boolean
   ): Promise<void> {
     let repositoryExists = false;
@@ -774,7 +784,9 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Resolve the right auth token per mode. App mode talks to the auth
     // provider (installation token, ~1h validity); PAT mode reads env directly.
@@ -1293,7 +1305,7 @@ ${userComment}`;
     }
 
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
 
     const existingConv = await db.getOrCreateConversation(
       githubPolicy.id,

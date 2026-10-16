@@ -26,6 +26,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
@@ -34,6 +35,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
   logArchonPaths: mock(() => undefined),
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
@@ -261,11 +263,17 @@ describe('GiteaAdapter', () => {
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/forgejo-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/forgejo-repo' },
+        false
+      );
 
       const [url, , options] = mockCloneRepository.mock.calls.at(-1)!;
       expect(url).toBe('https://forgejo.example.test:8443/owner/repo.git');
@@ -285,11 +293,17 @@ describe('GiteaAdapter', () => {
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/gitea-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/gitea-repo' },
+        false
+      );
     }
 
     test('preserves the clone destination when disk space is exhausted', async () => {
@@ -524,7 +538,13 @@ describe('GiteaAdapter', () => {
           utf8(createCommentPayload('@archon help', 'user123')),
           'mock-signature'
         );
-        expect(prepare).toHaveBeenCalledWith('testuser', 'testrepo', 'main', path, true);
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
         expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
           codebase_id: 'allocated',
           cwd: path,

@@ -24,6 +24,7 @@ import {
   getCommandFolderSearchPaths,
   getProjectSourcePath,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -429,9 +430,10 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   private async ensureRepoReady(
     projectPath: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
+    const { name: projectName, default_cwd: repoPath } = codebase;
     let directoryExists = false;
     try {
       await access(repoPath);
@@ -469,12 +471,9 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    // For nested namespaces (group/subgroup/repo), the namespace becomes the
-    // owner and the leaf segment becomes the repo.
-    const cloneSegments = projectPath.split('/');
-    const cloneRepo = cloneSegments[cloneSegments.length - 1];
-    const cloneOwner = cloneSegments.slice(0, -1).join('/');
-    await ensureProjectStructure(cloneOwner, cloneRepo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     const urlObj = new URL(this.gitlabUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
@@ -723,7 +722,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       const defaultBranch = event.project.default_branch;
 
       // 10. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
+      await this.ensureRepoReady(projectPath, defaultBranch, codebase, isNewCodebase);
 
       const existingConv = await db.getOrCreateConversation(
         gitlabPolicy.id,

@@ -71,11 +71,11 @@ function ensureRepoReady(
       ensureRepoReady(
         projectPath: string,
         defaultBranch: string,
-        repoPath: string,
+        codebase: { name: string; default_cwd: string },
         shouldSync: boolean
       ): Promise<void>;
     }
-  ).ensureRepoReady(projectPath, 'main', repoPath, false);
+  ).ensureRepoReady(projectPath, 'main', { name: projectPath, default_cwd: repoPath }, false);
 }
 
 describe('GitLab clone child security boundary', () => {

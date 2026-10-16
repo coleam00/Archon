@@ -58,6 +58,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -65,6 +66,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
 }));
 
 // Only mock what's needed for the adapter's direct functionality
@@ -944,7 +946,13 @@ describe('GitHubAdapter', () => {
           createCommentPayload('@archon help', 'user123'),
           'mock-signature'
         );
-        expect(prepare).toHaveBeenCalledWith('testuser', 'testrepo', 'main', path, true);
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
         expect(mockUpdateConversation).toHaveBeenCalledWith('conv-test', {
           codebase_id: 'allocated',
           cwd: path,
@@ -1824,7 +1832,13 @@ describe('GitHubAdapter', () => {
       shouldSync: boolean
     ): Promise<void> {
       // @ts-expect-error - accessing private method for testing
-      return testAdapter.ensureRepoReady(owner, repo, defaultBranch, repoPath, shouldSync);
+      return testAdapter.ensureRepoReady(
+        owner,
+        repo,
+        defaultBranch,
+        { name: `${owner}/${repo}`, default_cwd: repoPath },
+        shouldSync
+      );
     }
 
     test('clones repository when directory does not exist', async () => {
@@ -2351,7 +2365,13 @@ describe('GitHubAdapter', () => {
         process.env.GITHUB_TOKEN = 'ghp_unused_env_token';
         const { adapter, provider } = createAppModeAdapter();
         // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
+        await adapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: '/tmp/nonexistent-test' },
+          false
+        );
         expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
         expect(mockCloneRepository).toHaveBeenCalledTimes(1);
         expect(mockCloneRepository).toHaveBeenCalledWith(
@@ -2411,7 +2431,13 @@ describe('GitHubAdapter', () => {
           });
           const ready = (adapter: GitHubAdapter) => {
             // @ts-expect-error - calling private method
-            return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+            return adapter.ensureRepoReady(
+              'owner',
+              'repo',
+              'main',
+              { name: 'owner/repo', default_cwd: repoPath },
+              false
+            );
           };
           const first = ready(firstAdapter);
           await entered.promise;
@@ -2447,7 +2473,13 @@ describe('GitHubAdapter', () => {
         throw new AppNotInstalledError(owner, repo, 'archon-test');
       });
       // @ts-expect-error - calling private method
-      const promise = adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/missing', false);
+      const promise = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/tmp/missing' },
+        false
+      );
       await expect(promise).rejects.toBeInstanceOf(AppNotInstalledError);
     });
 
@@ -2455,7 +2487,13 @@ describe('GitHubAdapter', () => {
       const { adapter } = createAppModeAdapter();
       const clonePath = unclonedPath();
       // @ts-expect-error - calling private method
-      await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
+      await adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: clonePath },
+        false
+      );
       expect(mockCloneRepository).toHaveBeenCalledTimes(1);
       expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
@@ -2481,7 +2519,13 @@ describe('GitHubAdapter', () => {
         }
         const ensureReady = () => {
           // @ts-expect-error - calling private method
-          return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+          return adapter.ensureRepoReady(
+            'owner',
+            'repo',
+            'main',
+            { name: 'owner/repo', default_cwd: repoPath },
+            false
+          );
         };
         try {
           await expect(ensureReady()).rejects.toThrow(`${failure} setup failed`);
@@ -2508,7 +2552,13 @@ describe('GitHubAdapter', () => {
       const { adapter } = createAppModeAdapter();
 
       // @ts-expect-error - calling private method
-      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+      const setup = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: unclonedPath() },
+        false
+      );
 
       await expect(setup).rejects.toThrow('bundled credential helper unavailable');
       expect(mockCloneRepository).toHaveBeenCalled();
@@ -2523,7 +2573,13 @@ describe('GitHubAdapter', () => {
       );
       try {
         // @ts-expect-error - calling private method
-        await patAdapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+        await patAdapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: unclonedPath() },
+          false
+        );
       } catch {
         // Same bogus-path tolerance as the App-mode case above.
       }

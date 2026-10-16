@@ -357,7 +357,12 @@ describe('GitLabAdapter', () => {
     const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
     try {
       await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
-      expect(prepare).toHaveBeenCalledWith('mygroup/myproject', 'main', path, true);
+      expect(prepare).toHaveBeenCalledWith(
+        'mygroup/myproject',
+        'main',
+        expect.objectContaining({ default_cwd: path }),
+        true
+      );
       expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
         codebase_id: 'allocated',
         cwd: path,

@@ -1,13 +1,14 @@
 // @archon-test-isolated
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectSourcePath, resolveRunStorageRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { codebaseRowSchema } from '@archon/core/schemas/codebase';
 import { createGitHubAppAuthProvider } from '@archon/core';
+import * as git from '@archon/git';
 
 const codebases = await import('@archon/core/db/codebases');
 const findCodebase = spyOn(codebases, 'findCodebaseByRepoUrl');
@@ -51,6 +52,7 @@ const forges = [
     },
   },
 ];
+type ProjectCheckout = { name: string; default_cwd: string };
 const trackRoot = trackTempRoots();
 afterEach(() => {
   findCodebase.mockReset();
@@ -246,12 +248,84 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
       const routed = await adapter.getOrCreateCodebaseForRepo('acme', 'api');
       await expect(
         // @ts-expect-error - token acquisition fails before cloning
-        adapter.ensureRepoReady('acme', 'api', 'main', routed.repoPath, false)
+        adapter.ensureRepoReady('acme', 'api', 'main', routed.codebase, false)
       ).rejects.toThrow('token unavailable');
     }
     expect(token).toHaveBeenCalledTimes(2);
   } finally {
     token.mockRestore();
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
+test.each([
+  {
+    name: 'GitHub',
+    prepare: (codebase: ProjectCheckout) =>
+      // @ts-expect-error - exercise the private readiness boundary
+      new GitHubAdapter({ kind: 'pat', token: 'test' }, 'secret', lock).ensureRepoReady(
+        'acme',
+        'api',
+        'main',
+        codebase,
+        false
+      ),
+  },
+  {
+    name: 'GitLab',
+    prepare: (codebase: ProjectCheckout) =>
+      // @ts-expect-error - exercise the private readiness boundary
+      new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com').ensureRepoReady(
+        'acme/api',
+        'main',
+        codebase,
+        false
+      ),
+  },
+  {
+    name: 'Gitea',
+    prepare: (codebase: ProjectCheckout) =>
+      // @ts-expect-error - exercise the private readiness boundary
+      new GiteaAdapter('https://gitea.example.com', 'test', 'secret', lock).ensureRepoReady(
+        'acme',
+        'api',
+        'main',
+        codebase,
+        false
+      ),
+  },
+])('$name prepares an allocated project under its own storage root', async ({ prepare }) => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-allocated-storage-')));
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = root;
+  const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
+    ok: false,
+    error: { code: 'not_a_repo', path: 'acme/api' },
+  });
+  try {
+    const allocated = codebaseRowSchema.parse({
+      id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+      name: 'acme/api-2',
+      default_cwd: getProjectSourcePath('acme', 'api-2'),
+      repository_url: 'https://forge.example/acme/api',
+      commands: {},
+      kind: 'repo',
+      default_branch: null,
+      ai_assistant_type: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    await expect(prepare(allocated)).rejects.toThrow();
+    expect(clone).toHaveBeenCalled();
+    const storage = join(root, 'workspaces', 'acme', 'api-2');
+    expect(resolveRunStorageRoot({}, allocated)).toBe(storage);
+    for (const dir of ['worktrees', 'artifacts', 'logs']) await access(join(storage, dir));
+    await expect(access(join(root, 'workspaces', 'acme', 'api'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    clone.mockRestore();
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = previousHome;
   }

@@ -26,6 +26,7 @@ import {
   getCommandFolderSearchPaths,
   getProjectSourcePath,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -497,9 +498,10 @@ export class GiteaAdapter implements IPlatformAdapter {
     owner: string,
     repo: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
+    const { name: projectName, default_cwd: repoPath } = codebase;
     // Check if directory exists
     let directoryExists = false;
     try {
@@ -538,7 +540,9 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Parse URL to get host for authenticated clone
     const urlObj = new URL(this.baseUrl);
@@ -861,7 +865,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     const defaultBranch = event.repository.default_branch;
 
     // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
 
     const existingConv = await db.getOrCreateConversation(
       giteaPolicy.id,
