@@ -1379,6 +1379,31 @@ export function describeWorkflowStoreConformance(
         'quota_resume_triggered',
       ]);
     });
+    test('malformed source releases do not consume due slots ahead of a readable cursor', async () => {
+      const releasedAt = '2020-01-01T00:00:00.000Z';
+      for (const source_release of [
+        { nodeId: 'check' },
+        { nodeId: '', releasedAt },
+        { nodeId: 42, releasedAt },
+        { nodeId: 'check', releasedAt: 'invalid' },
+        { nodeId: 'check', releasedAt, releaseId: 'invalid' },
+        { nodeId: 'check', releasedAt, path: 42 },
+      ]) {
+        const run = await running(store);
+        await store.updateWorkflowRun(run.id, {
+          status: 'paused',
+          metadata: { source_release, continuation_retry_at: releasedAt },
+        });
+      }
+      const valid = await running(store);
+      await store.updateWorkflowRun(valid.id, {
+        status: 'paused',
+        metadata: { source_release: { nodeId: 'check', releasedAt } },
+      });
+      const due = await store.listDueWorkflowContinuations(new Date(), 1);
+      expect(due.map(run => run.id)).toEqual([valid.id]);
+      expect(readSourceRelease(due[0]?.metadata)).toEqual({ nodeId: 'check', releasedAt });
+    });
     test('a quota continuation released for an unreadable source stays due as a source continuation', async () => {
       const due = async (now: Date): Promise<boolean> =>
         (await store.listDueWorkflowContinuations(now, 50)).some(due => due.id === run.id);

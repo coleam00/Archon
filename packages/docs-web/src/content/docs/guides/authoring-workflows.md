@@ -946,7 +946,7 @@ Archon sorts a failed attempt into one of three buckets before deciding whether 
 
 A `quota_exhausted` failure is never retried in the same window, but when the provider reports when the limit resets, the run [waits until that reset](/reference/configuration/#workflow-attention-and-continuation-settings) instead of failing.
 
-`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
+`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable checkout or provider MCP config file. Fix the configuration and run again. A host-local read failure in captured home MCP config pauses the existing run for continuation on a host that can read it; see [MCP servers](/guides/mcp-servers/).
 
 Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule, including a loop policy with zero delay. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter; once a rate limit occurs, that larger budget remains for the rest of the iteration or node attempt sequence.
 

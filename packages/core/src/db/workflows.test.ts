@@ -815,7 +815,7 @@ describe('workflows database', () => {
       expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
       expect(query).toContain("NOT IN ('child_workflow', 'fan_out', 'writeback')");
       expect(query).toContain("ORDER BY CASE WHEN COALESCE(metadata->>'continuation_retry_at'");
-      expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25]);
+      expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25, 0]);
     });
 
     test('lists typed outputs for exact open event waits and skips malformed rows', async () => {

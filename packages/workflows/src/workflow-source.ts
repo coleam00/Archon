@@ -1194,10 +1194,11 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
 /**
  * Load a capture and prove its bytes are the ones that were frozen.
  *
- * Throws {@link WorkflowSourceIntegrityError} when the manifest is missing, unreadable, of
- * an unknown shape, or when the digest no longer matches. Every one of those means the
- * run's executable source cannot be established, which is a reason to stop rather than to
- * quietly execute something else. Temporary I/O errors propagate unchanged for retry.
+ * Throws {@link WorkflowSourceUnavailableError} for missing or inaccessible source,
+ * including the manifest, so an admitted run can resume on a readable host.
+ * Throws {@link WorkflowSourceIntegrityError} for a malformed manifest, an unsupported
+ * shape, or a digest or resolution-settings mismatch; these invalidate the frozen source.
+ * Other I/O errors propagate unchanged.
  */
 export async function loadWorkflowSource(
   captureRoot: string,

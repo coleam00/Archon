@@ -79,6 +79,9 @@ import {
   CAPACITY_WAIT_METADATA_KEY,
   SOURCE_RELEASE_METADATA_KEY,
   readCapacityWait,
+  readSourceRelease,
+  pendingWorkflowWaitDeadline,
+  answeredPauseContinuation,
 } from '@archon/workflows/schemas/workflow-run';
 import { resourceResumeBlocker, resumeRefusal } from '@archon/workflows/resource-start-store';
 import type {
@@ -1875,8 +1878,13 @@ export async function listDueWorkflowContinuations(
   const dueAt = `COALESCE(${retryAt}, CASE WHEN status = 'paused' THEN ${resumeAt} END,
                CASE WHEN status = 'failed' THEN ${scheduledResumeAt} END)`;
   try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
+    const due: WorkflowRun[] = [];
+    let offset = 0;
+    // SQL narrows the candidates; typed readers own the persisted cursor contract.
+    // Read past malformed candidates so they cannot consume the bounded due slots.
+    while (true) {
+      const result = await pool.query<WorkflowRunRow>(
+        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
          AND ((status = 'paused' AND ${metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`)} IS NULL
                AND ${waitKind} IN ('time', 'event', 'quota')
@@ -1886,11 +1894,23 @@ export async function listDueWorkflowContinuations(
           OR (${answeredAttention})
           OR (status = 'paused' AND ${metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`)} IS NOT NULL
               AND COALESCE(${metadataText('isolation')}, '') <> 'container'))
-       ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC
-       LIMIT $2`,
-      [now.toISOString(), limit]
-    );
-    return result.rows.map(normalizeWorkflowRun);
+       ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC, id ASC
+       LIMIT $2 OFFSET $3`,
+        [now.toISOString(), limit, offset]
+      );
+      for (const row of result.rows) {
+        const run = normalizeWorkflowRun(row);
+        if (
+          run.status !== 'paused' ||
+          readSourceRelease(run.metadata) ||
+          pendingWorkflowWaitDeadline(run) ||
+          answeredPauseContinuation(run)
+        )
+          due.push(run);
+      }
+      if (result.rows.length < limit || due.length >= limit) return due.slice(0, limit);
+      offset += result.rows.length;
+    }
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_continuation_due_list_failed');
