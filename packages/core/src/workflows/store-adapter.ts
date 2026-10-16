@@ -245,10 +245,6 @@ export function initializeWorkflowGitHubAppAuth(
   return provider;
 }
 
-/**
- * Create the canonical WorkflowDeps for the workflow engine.
- * Single construction point — avoids duplicating the wiring across callers.
- */
 // Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
 // the isolation provider and repo config.
 async function loadCompletedRunWorktree(): Promise<{
@@ -281,6 +277,10 @@ const sqlCompletedRunWorktree: NonNullable<WorkflowDeps['completedRunWorktree']>
   },
 };
 
+/**
+ * Create the canonical WorkflowDeps for the workflow engine.
+ * Single construction point — avoids duplicating the wiring across callers.
+ */
 export function createWorkflowDeps(
   store: IWorkflowStore = createWorkflowStore(),
   credentialStore: WorkflowStoreKind = 'database'
