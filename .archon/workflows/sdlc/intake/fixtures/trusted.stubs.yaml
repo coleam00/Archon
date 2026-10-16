@@ -1,32 +1,66 @@
-# Dry-run fixture: a listed maintainer's issue. Facts decides `triage`, so the
-# included triage runs and its real verdict script accepts the stubbed tuple
-# (unpublished, so it writes nothing). The facts and outcome scripts reach the
-# state store and the forge, so they are stubbed here and proved by
-# .archon/scripts/__tests__/intake.test.ts.
+# The simulator reads the skipped wait sink as the loop output. Only the unwrap
+# is canned here; sdlc-attention.test.ts proves it with the real executor and store.
+decide:
+  done: true
+  attention: null
+  pr: null
 facts:
   path: triage
-  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
-  target: "https://github.com/example/repo/issues/7"
+  item:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 7
+  target: https://github.com/example/repo/issues/7
   decision:
     path: triage
     trust: maintainer
     promoted: null
     stage: new
-    body_digest: "sha256:stub"
-    labels: []
-    waiting: []
-    notes: []
+    body_digest: sha256:stub
+    labels:
+      []
+    waiting:
+      []
+    notes:
+      []
   seen: null
-triage__triage:
-  decision: { contract: READY, route: deliver }
-  type: { value: feature, reason: "stub: asks for new behavior" }
-  size: { value: s, reason: "stub: size" }
-  complexity: { value: low, reason: "stub: complexity" }
-  importance: { value: medium, reason: "stub: importance" }
-  urgency: { value: none, reason: "stub: urgency" }
-  item: { repo: { host: "", path: "" }, number: 0 }
-  area_labels: []
-  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+attempt__triage:
+  decision:
+    contract: READY
+    route: deliver
+  type:
+    &type
+    value: feature
+    reason: "stub: asks for new behavior"
+  size:
+    &size
+    value: s
+    reason: "stub: size"
+  complexity:
+    &complexity
+    value: low
+    reason: "stub: complexity"
+  importance:
+    &importance
+    value: medium
+    reason: "stub: importance"
+  urgency:
+    &urgency
+    value: none
+    reason: "stub: urgency"
+  item:
+    repo:
+      host: ""
+      path: ""
+    number: 0
+  area_labels:
+    []
+  report:
+    &report
+    type: archon_artifact
+    run_id: fixture-run
+    path: triage.md
   summary: "stub: ready to deliver"
 outcome:
   path: triage
@@ -34,11 +68,50 @@ outcome:
   stage: deliver
   trust: maintainer
   promoted: false
-  labels: [archon-ready, archon-size-s, archon-type-feature]
+  labels:
+    - archon-ready
+    - archon-size-s
+    - archon-type-feature
   summary: "stub: Issue 7: deliver"
   evaluation: null
 fixture:
-  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
+  inputs:
+    repo_host: github.com
+    repo_path: example/repo
+    number: "7"
   expect: completed
-  reached: [facts, triage__verdict, outcome]
+  reached:
+    - facts
+    - attempt__verdict
+    - outcome
 exec-code: true
+triage__result:
+  contract: READY
+  route: deliver
+  pull_request: null
+  ready: true
+  type:
+    *type
+  size:
+    *size
+  complexity:
+    *complexity
+  importance:
+    *importance
+  urgency:
+    *urgency
+  labels:
+    - archon-ready
+    - archon-size-s
+    - archon-type-feature
+  published: false
+  proposed_edits:
+    title: ""
+    body: ""
+  blocked_reason: ""
+  blocked_by:
+    []
+  closure: null
+  summary: "stub: ready to deliver"
+  report:
+    *report

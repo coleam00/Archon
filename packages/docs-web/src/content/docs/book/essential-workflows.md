@@ -57,7 +57,9 @@ Grounds an issue or request against the current repository before spending on it
 archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
+**What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why.
+
+Standalone runs pause in [attention](/guides/attention/) for unresolved decisions or an unowned Ready result. Answer a declared choice to continue: retry runs the pipeline again with your ruling; finish accepts the current outcome without more work. An unanswered item waits without further spend. The workflow never merges; merging stays with you.
 
 `--input pull_request=<number>` has delivery finish that open PR whichever route triage takes; a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
 
@@ -86,6 +88,8 @@ archon workflow run archon-triage "#142"
 ```
 
 **What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue.
+
+Standalone questions and Ready acknowledgements pause in [attention](/guides/attention/): a retry choice reassesses the item with your answer, while finish accepts the verdict without another assessment. No-action outcomes complete directly. Intake owns its Ready handoff, so it skips that acknowledgement but still pauses for questions.
 
 ---
 
@@ -155,6 +159,8 @@ archon workflow run archon-plan "Add CSV export to the reports page"
 
 **What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops for a person. The SDLC pack README's sidecar section describes the rulings document.
 
+Blocking questions and a completed plan awaiting acknowledgement pause in [attention](/guides/attention/). Answer a retry choice to plan again with your ruling, or finish to accept the report without more planning. Non-blocking questions do not prevent a ready plan; accepting a blocked report leaves it blocked. Unanswered items wait without further spend.
+
 ---
 
 #### `archon-implement`
@@ -187,7 +193,9 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta, leaving out code a merge of the base brought in: after review findings, by the general code reviewer plus every lens with a finding still open or whose area the delta touches; after a CI fix, by the general code reviewer alone. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. `--input branch=<name>` opens the PR from that branch instead of the checkout's, or updates the open PR that already has it as its head. `--input part=<json>` delivers one part of a multi-part plan, as described for `archon-ship`. The run never pauses for approval; your gate is PR review and merge.
+The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to four rounds. Each correction is reviewed on its delta, leaving out code a merge of the base brought in: after review findings, by the general code reviewer plus every lens with a finding still open or whose area the delta touches; after a CI fix, by the general code reviewer alone. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. `--input branch=<name>` opens the PR from that branch instead of the checkout's, or updates the open PR that already has it as its head. `--input part=<json>` delivers one part of a multi-part plan, as described for `archon-ship`.
+
+Standalone stops such as a round cap, replan or human decision, and an unowned Ready result, pause in [attention](/guides/attention/). Answer a declared choice: retry authorizes another capped batch, replan runs planning before more delivery, and finish accepts the current outcome without more work. Finishing an undelivered result leaves it undelivered. An unanswered item waits without further spend. A composing queue owns its own decision and uses the pause-free delivery block.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
@@ -195,7 +203,7 @@ The delivery tail, in capped rounds: implement the work with focused checks on w
 archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in .archon/plans/csv-export.md"
 ```
 
-**What it produces**: A PR marked ready for review, with one canonical review comment.
+**What it produces**: A typed delivery outcome and, when created, a PR with one canonical review comment. Successful delivery marks the PR ready; unresolved stops wait for an answer, and finish preserves the reported result.
 
 ---
 
@@ -205,7 +213,7 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 Reviews a change through specialist lenses and produces one evidence-based verdict. On every round but a light one, a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) runs the general code reviewer, plus every lens the route agent selects because a finding it raised is still open or the delta touches its area, on the correction delta only (code a merge of the base brought in is left out), judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
 
-**When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
+**When to use it**: A PR or your working diff needs judging. It never edits code. Review publication writes a PR comment, and an answered CI choice can change the PR between draft and ready.
 
 ```bash
 archon workflow run archon-review --input scope=87 --branch fix/login-redirect
@@ -221,6 +229,8 @@ archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-
 Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
 
 **What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff.
+
+A standalone Ready review on a draft PR pauses in [attention](/guides/attention/). Choose CI to check the reviewed PR at its current head through the existing CI/ready path, which can mark it ready or restore draft on red. A moved head or failed CI returns to attention. Choose finish to leave the PR as it stands without CI or another review; retry requests another review with your ruling. Unanswered items wait without further spend. Working-diff reviews offer no CI action.
 
 ---
 

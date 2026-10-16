@@ -1,4 +1,4 @@
-name: archon-deliver
+name: archon-deliver-block
 description: |
   The delivery tail, autonomous on its green path. Capped rounds of implement
   (focused checks only; CI is the full validation), draft PR, and a review at the
@@ -9,8 +9,7 @@ description: |
   the base on a conflict; every other ending is not ready, with
   its reason. A red PR never stays ready. The PR description is updated once the
   rounds end, and the report relays discoveries to the operator on every ending,
-  a failure included. There is no in-run approval
-  gate — the human gate is PR review and merge on the forge, outside the run.
+  a failure included. Composing callers own any attention decision.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
   "deliver this plan", "take this to a PR", "build and ship this".
@@ -133,7 +132,7 @@ nodes:
             branch: "$INPUTS.branch"
 
         - id: review
-          include: archon-review
+          include: archon-review-block
           depends_on: [pr]
           with:
             # The PR node's structured read-back names the pull request, so review
@@ -184,7 +183,7 @@ nodes:
         # Reshape commits after review passed, so its delta is reviewed before CI, by
         # the light review a CI fix gets: the code lens alone, on the delta.
         - id: rereview
-          include: archon-review
+          include: archon-review-block
           depends_on: [reshape]
           with:
             scope: "$pr.output"

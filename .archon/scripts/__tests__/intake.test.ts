@@ -319,7 +319,7 @@ describe('pickup', () => {
 
   test("the rank orders are the triage node's own enums", () => {
     const workflow = Bun.YAML.parse(
-      readFileSync(join(PACK, 'triage/archon-triage.yaml'), 'utf8')
+      readFileSync(join(PACK, 'triage/archon-triage-block.yaml'), 'utf8')
     ) as {
       nodes: {
         id: string;

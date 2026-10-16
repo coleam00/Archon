@@ -79,8 +79,8 @@ test('every reason the pack closes an issue with is a forge close reason', () =>
 });
 
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
   if (scope === undefined || !('output_format' in scope) || scope.output_format === undefined) {
@@ -94,6 +94,10 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     { repo, number: 1 },
     { repo, number: 0 },
     { repo, number: -3 },
+    { repo, number: 1.5 },
+    { repo, number: '1' },
+    { repo },
+    { number: 1 },
     { repo: { ...repo, host: '' }, number: 1 },
     { repo: { ...repo, host: '  ' }, number: 1 },
     { repo: { ...repo, path: '' }, number: 1 },
@@ -113,14 +117,38 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     };
   });
 
+  const nonempty = { type: 'string', pattern: '\\S' };
+  const repoProperties = { host: nonempty, path: nonempty } satisfies Record<keyof QualifiedPr['repo'], unknown>;
+  const properties = {
+    repo: { type: 'object', properties: repoProperties, required: Object.keys(repoProperties), additionalProperties: false },
+    number: { type: 'integer', minimum: 1 },
+  } satisfies Record<keyof QualifiedPr, unknown>;
+  const qualified = { type: 'object', additionalProperties: false, properties, required: Object.keys(properties) };
+  for (const stage of ['plan', 'triage', 'review', 'deliver', 'ship']) {
+    const filename = `archon-${stage}.yaml`;
+    const entry = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${stage}-entry/${filename}`), 'utf8'), filename, providerRegistry);
+    if (!entry.workflow) throw new Error(entry.error.error);
+    const cycle = entry.workflow.nodes[0];
+    if (cycle.kind !== 'loop_group') throw new Error('missing cycle');
+    for (const node of cycle.loop_group.nodes) {
+      if (!['prepare', 'decide', 'settle'].includes(node.id)) continue;
+      const prSchema = 'output_format' in node ? record(record(node.output_format?.properties)?.pr) : undefined;
+      if (!prSchema) throw new Error(`missing ${stage}.${node.id} qualified PR schema`);
+      expect(prSchema).toEqual({ anyOf: [{ type: 'null' }, qualified] });
+      for (const { pr, parserAccepts } of verdicts) {
+        expect(validateStructuredOutput(pr, prSchema).valid).toBe(parserAccepts);
+      }
+    }
+    expect(cycle.loop_group.nodes.some(node => node.id === 'decide' && 'output_format' in node && record(node.output_format?.properties)?.pr)).toBe(true);
+  }
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0].parserAccepts).toBe(true);
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const node = parsed.workflow.nodes.find(node => node.id === 'triage');
   if (!node || !('output_format' in node) || !node.output_format)
@@ -149,8 +177,8 @@ test('triage producer declares qualified identities and its non-tracker sentinel
 });
 
 test('triage requires its five judged fields, each a listed value and a non-empty reason', () => {
-  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage-block.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage-block.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const node = parsed.workflow.nodes.find(node => node.id === 'triage');
   if (!node || !('output_format' in node) || !node.output_format)
@@ -255,7 +283,7 @@ test('standalone new-operation projections carry typed request and result eviden
 
 test('all four preflight source validators conform to the pack source selector', () => {
   for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
-    const file = `archon-${folder}.yaml`;
+    const file = `archon-${folder}${folder === 'deliver' || folder === 'ship' ? '-block' : ''}.yaml`;
     const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
     if (!parsed.workflow) throw new Error('invalid preflight workflow');
     const first = parsed.workflow.nodes[0];
@@ -266,7 +294,7 @@ test('all four preflight source validators conform to the pack source selector',
 
 test('every node of the four preflighted flows runs after the forge check', () => {
   for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
-    const file = `archon-${folder}.yaml`;
+    const file = `archon-${folder}${folder === 'deliver' || folder === 'ship' ? '-block' : ''}.yaml`;
     const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
     if (!parsed.workflow) throw new Error(`invalid workflow ${file}`);
     const dependsOn = new Map(parsed.workflow.nodes.map(node => [node.id, node.depends_on ?? []]));

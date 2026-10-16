@@ -1,0 +1,441 @@
+name: archon-review
+description: Review a change through the pause-free archon-review-block. An unowned verdict pauses for a disposition. Retry reviews again; finish accepts the report and leaves the PR as it stands. A Ready PR can offer CI/mark-ready through the existing CI command. This workflow never repairs code or merges.
+model: medium
+inputs:
+  scope:
+    default: ""
+    description: "What to review — a PR number/URL or a branch. Empty selects the current branch's open PR first, otherwise the working diff against the merge-base."
+  prior_report:
+    default: ""
+    description: "Path to the previous review round's report. When set, this round verifies prior findings first and reviews only the delta since the commit that round reviewed, which its publish recorded beside the report."
+  work_order:
+    default: ""
+    description: "The accepted outcome and scope boundaries for this change. Delivery passes the same work order implementation received. Standalone review may leave this empty and use the PR's problem, outcome, and explicit scope instead."
+  light:
+    default: "false"
+    description: "\"true\" when this continuation follows a correction for CI rather than for review: the general code lens alone reviews the delta."
+  part:
+    default: ""
+    description: "The part of an approved multi-part plan this change delivers, as JSON naming the delivered part and each part's contract items, quoted: `{\"delivers\": 1, \"parts\": [{\"part\": 1, \"items\": [\"...\"]}, {\"part\": 2, \"items\": [\"...\"]}]}`. A contract item that only later parts list is deferred, not unmet. Empty reviews against the whole contract. The `mode` node's `output_format` owns and enforces the shape."
+  errors:
+    default: auto
+    description: "Silent-failure lens — auto, true, or false."
+returns: result
+outcome_field: ready
+nodes:
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: |
+        done=$settle.output.done
+        test "$done" = "true"
+      nodes:
+        - id: prepare
+          script: prepare
+          runtime: bun
+          with:
+            previous: $LOOP_PREV.settle.output
+            answer: $LOOP_PREV.ask.output
+            work: $INPUTS.work_order
+          output_format:
+            type: object
+            properties:
+              effect:
+                type: string
+                enum:
+                  - retry
+                  - replan
+                  - ci
+                  - finish
+              work:
+                &text
+                type: string
+              previous:
+                type:
+                  - object
+                  - "null"
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - &qualified_pr
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      repo:
+                        type: object
+                        properties:
+                          host:
+                            &nonempty_text
+                            type: string
+                            pattern: \S
+                          path:
+                            *nonempty_text
+                        required:
+                          - host
+                          - path
+                        additionalProperties: false
+                      number:
+                        type: integer
+                        minimum: 1
+                    required:
+                      - repo
+                      - number
+              policy_defaults:
+                *text
+            required:
+              - effect
+              - work
+              - previous
+              - replan
+              - pr
+              - policy_defaults
+        - id: ci-target
+          script: ci-target
+          runtime: bun
+          depends_on:
+            - prepare
+          when: "$prepare.output.effect == 'ci'"
+          with:
+            pr:
+              from: $prepare.output.pr
+          output_format:
+            type: object
+            properties:
+              allowed:
+                type: boolean
+              summary:
+                *text
+              pr:
+                type: object
+              source:
+                type: string
+                enum:
+                  - gh
+                  - forge
+            required:
+              - allowed
+              - summary
+              - pr
+              - source
+        - id: ci
+          command: ci
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          depends_on:
+            - ci-target
+          when: $ci-target.output.allowed == true
+          with:
+            pr:
+              from: $ci-target.output.pr
+            source: $ci-target.output.source
+          output_format:
+            type: object
+            properties:
+              state:
+                type: string
+                enum:
+                  - green
+                  - pr_caused
+                  - other
+              rerun:
+                type: string
+                enum:
+                  - none
+                  - green
+                  - red
+              summary:
+                type: string
+                pattern: \S
+            required:
+              - state
+              - rerun
+              - summary
+        - id: attempt
+          include: archon-review-block
+          depends_on:
+            - prepare
+          when: "$prepare.output.effect == 'retry'"
+          with:
+            scope: $INPUTS.scope
+            prior_report: $INPUTS.prior_report
+            work_order: $prepare.output.work
+            light: $INPUTS.light
+            part: $INPUTS.part
+            errors: $INPUTS.errors
+        - id: decide
+          command: decide
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          depends_on:
+            - attempt
+            - ci
+            - ci-target
+            - prepare
+          trigger_rule: none_failed_min_one_success
+          when: "$prepare.output.effect != 'finish'"
+          with:
+            result:
+              from: $attempt.output
+              if_skipped: null
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            policy_defaults: $prepare.output.policy_defaults
+            ci:
+              from: $ci.output
+              if_skipped: null
+            ci_target:
+              from: $ci-target.output
+              if_skipped: null
+          output_format:
+            type: object
+            additionalProperties: false
+            properties:
+              done:
+                type: boolean
+              attention:
+                anyOf:
+                  - type: "null"
+                  - &attention
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      what:
+                        *nonempty_text
+                      why:
+                        *nonempty_text
+                      recommendation:
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          choice:
+                            *nonempty_text
+                          why:
+                            *nonempty_text
+                          evidence:
+                            *nonempty_text
+                          confidence:
+                            type: string
+                            enum:
+                              - low
+                              - medium
+                              - high
+                          would_change:
+                            *nonempty_text
+                        required:
+                          - choice
+                          - why
+                          - evidence
+                          - confidence
+                          - would_change
+                      choices:
+                        type: array
+                        minItems: 1
+                        items:
+                          type: object
+                          additionalProperties: false
+                          properties:
+                            id:
+                              type: string
+                              pattern: "^[a-z][a-z0-9-]*$"
+                            label:
+                              *nonempty_text
+                            does:
+                              *nonempty_text
+                            effect:
+                              type: string
+                              enum:
+                                - retry
+                                - ci
+                                - finish
+                            ruling:
+                              *text
+                          required:
+                            - id
+                            - label
+                            - does
+                            - effect
+                            - ruling
+                      if_unanswered:
+                        *nonempty_text
+                      links:
+                        type: array
+                        items:
+                          *nonempty_text
+                        minItems: 1
+                    required:
+                      - what
+                      - why
+                      - recommendation
+                      - choices
+                      - if_unanswered
+                      - links
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - done
+              - attention
+              - pr
+        - id: settle
+          script: settle
+          runtime: bun
+          depends_on:
+            - prepare
+            - attempt
+            - decide
+          trigger_rule: none_failed_min_one_success
+          with:
+            previous:
+              from: $prepare.output.previous
+            effect: $prepare.output.effect
+            result:
+              from: $attempt.output
+              if_skipped: null
+            decision:
+              from: $decide.output
+              if_skipped: null
+          output_format:
+            type: object
+            properties:
+              result:
+                &result
+                required:
+                  - ready
+                  - action
+                  - findings_summary
+                  - report
+                  - discoveries
+                  - contract_left
+                properties:
+                  contract_left:
+                    type: array
+                    items:
+                      type: string
+                      pattern: \S
+                  discoveries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                          pattern: \S
+                        claim:
+                          type: string
+                          pattern: \S
+                        evidence:
+                          type: array
+                          items:
+                            type: string
+                          minItems: 1
+                        relation:
+                          type: string
+                          enum:
+                            - unrelated
+                            - scope_conflict
+                            - note
+                        source_nodes:
+                          type: array
+                          items:
+                            type: string
+                          minItems: 1
+                      required:
+                        - title
+                        - claim
+                        - evidence
+                        - relation
+                        - source_nodes
+                  report:
+                    required:
+                      - type
+                      - run_id
+                      - path
+                    properties:
+                      path:
+                        type: string
+                        enum:
+                          - review/report.md
+                          - review/scope.md
+                      run_id:
+                        type: string
+                      type:
+                        type: string
+                        enum:
+                          - archon_artifact
+                    type: object
+                  findings_summary:
+                    type: string
+                  action:
+                    type: string
+                    enum:
+                      - none
+                      - correct
+                      - replan
+                      - needs_human
+                  ready:
+                    type: boolean
+                type: object
+              done:
+                type: boolean
+              message:
+                *text
+              attention:
+                anyOf:
+                  - type: "null"
+                  - *attention
+              class: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      *text
+                    label:
+                      *text
+                  required:
+                    - id
+                    - label
+              replan:
+                type: boolean
+              pr:
+                anyOf:
+                  - type: "null"
+                  - *qualified_pr
+            required:
+              - result
+              - done
+              - message
+              - class
+              - attention
+              - options
+              - replan
+              - pr
+        - id: ask
+          depends_on:
+            - settle
+          when: "$settle.output.message != ''"
+          wait:
+            attention: $settle.output.message
+            form: select
+            options: $settle.output.options
+            labels:
+              sdlc: review
+              decision: $settle.output.class
+  - id: result
+    depends_on:
+      - cycle
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_ENVELOPE).result))
+    with:
+      envelope:
+        from: $cycle.output
+    output_format:
+      *result

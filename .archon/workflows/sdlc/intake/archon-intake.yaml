@@ -126,6 +126,7 @@ nodes:
     with:
       target: "$facts.output.target"
       publish: "false"
+      ready_handoff: "true"
 
   - id: outcome
     script: outcome

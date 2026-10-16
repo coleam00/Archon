@@ -15,7 +15,7 @@ const { runPackScript } = packScriptRunner();
 
 function outputFormat(id: 'triage' | 'verdict'): Record<string, unknown> {
   const workflow = Bun.YAML.parse(
-    readFileSync(join(PACK, 'triage/archon-triage.yaml'), 'utf8')
+    readFileSync(join(PACK, 'triage/archon-triage-block.yaml'), 'utf8')
   ) as { nodes: { id: string; output_format?: Record<string, unknown> }[] };
   return workflow.nodes.find(node => node.id === id)?.output_format ?? {};
 }

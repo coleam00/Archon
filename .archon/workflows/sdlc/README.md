@@ -6,6 +6,39 @@ Conventions for this pack specifically. Project-wide judgment lives in
 How we decide what a workflow should be, agents first, is in
 [`CONSTITUTION.md`](CONSTITUTION.md).
 
+## Standalone decisions and composition
+
+`archon-plan`, `archon-triage`, `archon-review`, `archon-deliver` and `archon-ship`
+now pause at an unowned stop instead of leaving a question or Ready report unattended.
+Each entry runs one attempt, then raises one `wait: attention` item with the decision,
+its consequences, recommendation, confidence, evidence, choices, unanswered behavior
+and links, labelled by stage and decision class. Without an answer it waits indefinitely and spends nothing more.
+
+An answer selects a declared effect. `retry` authorizes one more stage attempt with
+the complete answer and ruling in `attention-decisions.md`. Another unresolved
+question asks again. `finish` accepts the report and leaves the work as it stands;
+it spends nothing on another attempt and preserves the typed work outcome, even
+when negative. Delivery can `replan` before another capped batch, and a blocked
+new plan asks before implementation. A Ready standalone PR review can offer `ci`,
+which uses delivery's existing current-head CI/ready command. CI red or a moved head
+asks again; leaving a draft performs no ready write. These entries never merge.
+
+The pause-free work graphs are `archon-plan-block`, `archon-triage-block`,
+`archon-review-block`, `archon-deliver-block` and `archon-ship-block`. They keep the
+original resource directories and typed results. Build and merge queues compose
+blocks and remain the sole decision owners; delivery's internal reviews and the
+review eval also use blocks. Intake uses the triage entry with `ready_handoff: true`:
+it owns admission after Ready, while a triage question still pauses once. Upkeep
+uses the delivery entry because it has no competing attention owner. The intake
+bench's standalone triage samples use the block to measure the triage judgment;
+a paused intake sample remains an explicit unfinished sample, not an automatic answer.
+
+The public entries live under `*-entry/`; blocks, commands, scripts and block
+fixtures remain under their original stage directories. A failure still fails the
+run. Delivery and ship retain their terminal `reason: failed` reporter, including
+a failure after an earlier answered stop. An acknowledged advisory result is not
+implementation, CI approval, or merge.
+
 ## Guards
 
 A guard here must protect an action the node it lives in takes.
@@ -508,7 +541,7 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
+- **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
@@ -549,7 +582,7 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   now.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship`, which
+item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
 changes its checkout, so every run needs its own worktree:
 
 ```json
@@ -608,7 +641,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   sync and wait for their delta review and CI: a sweep merges at most one pull request. A
   push, by the sweep or anyone else, makes the verdict stale, and so does a comment
   published before verdicts were stamped: one such pull request gets a delta review in
-  the same run, through an included `archon-review` continuing from its last report,
+  the same run, through an included `archon-review-block` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
   gets one rerun of its failed jobs; the record stores the head it re-ran at and
   refuses a second rerun there. What the build queue can fix (a verdict that is

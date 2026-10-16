@@ -1,0 +1,134 @@
+attempt__forge:
+  source: forge
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented; focused checks pass"
+implement__assert-changed: 3 files changed
+pr__forge:
+  source: forge
+pr__prepare:
+  repo:
+    host: github.com
+    path: example/repo
+  head_repo:
+    host: github.com
+    path: example/repo
+  head: fixture-branch
+  base: dev
+  existing: null
+  title: "stub: title"
+  body:
+    type: archon_artifact
+    run_id: fixture-run
+    path: pr-body.md
+  summary: "stub: target recorded"
+pr__publish:
+  schemaVersion: 1
+  repo:
+    host: github.com
+    path: example/repo
+  number: 1
+  url: https://github.com/example/repo/pull/1
+  head: fixture-branch
+  base: dev
+  is_draft: true
+  state: open
+  head_repo:
+    host: github.com
+    path: example/repo
+  head_revision: fixturehead
+  base_revision: fixturebase
+  maintainer_can_modify: null
+review__mode: "{\"continuation\":false,\"light\":false,\"head\":\"fixturehead\",\"cursor\":\"\",\"risks\":\"fixture-owned-policy\",\"execution\":{\"path\":\"review__mode\",\"invocation\":{\"loopPath\":[]}},\"seams\":false,\"code\":false,\"tests\":false,\"errors\":false,\"docs\":false,\"part\":null}"
+review__route:
+  seams: true
+  code: true
+  tests: true
+  errors: false
+  docs: false
+  reason: "stub: the change touches a persisted format"
+review__scope:
+  head_matches: true
+  pr:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 1
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/scope.md
+review__seams: 0 findings
+review__code: 0 findings
+review__tests: 0 findings
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+  discoveries:
+    []
+  contract_left:
+    []
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+  discoveries:
+    []
+  contract_left:
+    []
+simplify__simplify:
+  findings: false
+simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+ci:
+  state: pr_caused
+  rerun: none
+  summary: "stub: conflicts with dev in src/a.ts; marked draft"
+attempt__update-pr-body:
+  changed: false
+  summary: "stub: the description is still accurate"
+decide:
+  done: false
+  attention:
+    what: Delivery exhausted four rounds with findings still open.
+    why: The capped batch stopped before the requested work was ready.
+    recommendation:
+      choice: retry
+      why: Resolve the question before continuing.
+      evidence: "The typed delivery result is round_cap, ready:false."
+      confidence: high
+      would_change: An explicit terminal disposition.
+    choices:
+      - id: retry
+        label: Authorize another batch
+        does: Run one more capped delivery batch with the answer and current findings.
+        effect: retry
+        ruling: Continue the accepted work through another capped batch.
+      - id: finish
+        label: Leave it
+        does: Leave the PR as it stands and preserve the negative delivery result.
+        effect: finish
+        ruling: ""
+    if_unanswered: This run waits indefinitely without additional spend.
+    links:
+      - archon-artifact://fixture-run/deliver.md
+      - https://github.com/example/repo/pull/1
+  pr: null
+fixture:
+  inputs:
+    {}
+  expect: paused
+  reached:
+    - settle
+exec-code: true

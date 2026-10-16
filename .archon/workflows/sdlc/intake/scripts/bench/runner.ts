@@ -2,7 +2,7 @@
  * The intake bench runner: every version on the same batch of five rows, one ordinary
  * run per (version, row), one JSONL line per run.
  *
- * A version is one model on triage's tier, the only tier intake's agent node uses, so
+ * A version is one model on triage's tier, the tier intake's judging and handoff nodes use, so
  * versions differ in nothing else. The baseline is whatever that tier resolves to in
  * the checkout's own configuration today; every version, the baseline included, runs
  * with a config layer pinning that tier, so a config edit mid-bench cannot move it.
@@ -46,20 +46,28 @@ import type { Contract, Route } from '../../../.shared/labels.ts';
 import { remoteFor } from '../../../.shared/remote.ts';
 import { isObject } from '../../../.shared/typed.ts';
 import { INTAKE_PATHS } from '../../../.shared/workitem.ts';
-import { type BenchSet, type BenchWorkflow, type Row, WORKFLOWS } from './set.ts';
+import { type BenchSet, type BenchWorkflow, type Row } from './set.ts';
 
 type Repo = QualifiedPr['repo'];
 type IntakePath = (typeof INTAKE_PATHS)[number];
 
 export const CHECKS_FILE = 'checks.jsonl';
-export const TRIAGE_VERDICT_NODE = 'triage__verdict';
+export interface BenchLayout {
+  readonly workflows: Readonly<Record<BenchWorkflow, string>>;
+  readonly judges: Readonly<Record<BenchWorkflow, string>>;
+  readonly intakeVerdict: string;
+}
+
+interface ResolvedIntakeVersion extends ResolvedVersion<Version> {
+  readonly layout: BenchLayout;
+}
 
 /** What one version pins. Versions differ only in `provider` and `model`. */
 export interface Version {
   readonly label: string;
   /** The full commit the pack source is read from. */
   readonly pack_sha: string;
-  /** Blob SHA of the triage prompt at `pack_sha`; there is no other agent prompt on intake's path. */
+  /** Blob SHA of the triage judgment at `pack_sha`; handoff prompts belong to the pinned pack source. */
   readonly prompt_sha: { readonly triage: string };
   readonly provider: string;
   readonly model: string;
@@ -93,12 +101,12 @@ export function bindingStubs(source: string, workflowPath: string): Record<strin
 }
 
 /** The binding archon-triage's agent node resolves to in `cwd`, with an optional config layer. */
-async function dryRunBinding(cwd: string, source: string, stubs: string, config?: string): Promise<Binding> {
+async function dryRunBinding(cwd: string, source: string, stubs: string, workflow: string, config?: string): Promise<Binding> {
   const trace = await archonJson(
     [
       'workflow',
       'run',
-      WORKFLOWS.triage,
+      workflow,
       '--cwd',
       cwd,
       '--workflow-source',
@@ -132,13 +140,49 @@ function packFile(repoRoot: string, sha: string, suffix: string): string {
   return paths[0];
 }
 
+/** Historical versions keep their own launch names and expanded intake node paths. */
+export function resolveLayout(repoRoot: string, sha: string): { layout: BenchLayout; workflowPath: string } {
+  const files = gitOrThrow('-C', repoRoot, 'ls-tree', '-r', '--name-only', sha, '--', '.archon/workflows').split('\n');
+  const triage = files.some(path => path.endsWith('/archon-triage-block.yaml')) ? 'archon-triage-block' : 'archon-triage';
+  const workflowPath = packFile(repoRoot, sha, `/${triage}.yaml`);
+  const readWorkflow = (name: string) => {
+    const declared: unknown = Bun.YAML.parse(gitOrThrow('-C', repoRoot, 'show', `${sha}:${packFile(repoRoot, sha, `/${name}.yaml`)}`));
+    if (!isObject(declared)) throw new Error(`${name} at ${sha} is not a workflow mapping`);
+    return declared;
+  };
+  const includedPrefix = (nodes: unknown, prefix: string): string | undefined => {
+    if (!Array.isArray(nodes)) return undefined;
+    for (const node of nodes) {
+      if (!isObject(node) || typeof node.id !== 'string') continue;
+      const id = `${prefix}${node.id}`;
+      if (node.include === triage) return `${id}__`;
+      const nested = typeof node.include === 'string'
+        ? includedPrefix(readWorkflow(node.include).nodes, `${id}__`)
+        : isObject(node.loop_group) ? includedPrefix(node.loop_group.nodes, `${id}.`) : undefined;
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  };
+  const prefix = includedPrefix(readWorkflow('archon-intake').nodes, '');
+  const verdict = readWorkflow(triage).returns;
+  if (prefix === undefined || typeof verdict !== 'string') throw new Error(`no intake triage result path at ${sha}`);
+  return {
+    workflowPath,
+    layout: {
+      workflows: { triage, intake: 'archon-intake' },
+      judges: { triage: 'triage', intake: `${prefix}triage` },
+      intakeVerdict: `${prefix}${verdict}`,
+    },
+  };
+}
+
 /**
  * Read a version file (`{label, pack_sha}`, plus `provider` and `model` for anything
  * but the baseline) and pin it, or refuse before anything runs. A label means one
  * record for the life of an output directory, so a label already recorded with
  * another version is refused.
  */
-export async function resolveVersion(file: string, repoRoot: string, checkout: string, outDir: string): Promise<ResolvedVersion<Version>> {
+export async function resolveVersion(file: string, repoRoot: string, checkout: string, outDir: string): Promise<ResolvedIntakeVersion> {
   const refuse = (reason: string): never => {
     throw new Error(`version ${file}: ${reason}`);
   };
@@ -160,7 +204,7 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
   const commit = git('-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${packRef}^{commit}`);
   if (commit.code !== 0) return refuse(`pack_sha ${packRef} is not a commit in ${repoRoot}`);
   const packSha = commit.stdout;
-  const workflowPath = packFile(repoRoot, packSha, `/${WORKFLOWS.triage}.yaml`);
+  const { workflowPath, layout } = resolveLayout(repoRoot, packSha);
   const declared: unknown = Bun.YAML.parse(gitOrThrow('-C', repoRoot, 'show', `${packSha}:${workflowPath}`));
   const tier = isObject(declared) ? declared.model : undefined;
   if (!TIERS.includes(tier as Tier)) return refuse(`${workflowPath} at ${packSha} names no tier as its model`);
@@ -172,7 +216,7 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
   mkdirSync(join(outDir, 'versions'), { recursive: true });
   const stubs = join(outDir, 'versions', `${label}.stubs.yaml`);
   writeFileSync(stubs, Bun.YAML.stringify(bindingStubs(source, workflowPath), null, 2));
-  const baseline = await dryRunBinding(checkout, source, stubs);
+  const baseline = await dryRunBinding(checkout, source, stubs, layout.workflows.triage);
   // Only the model moves; the baseline's effort stays, so effort is not a second variable.
   const wanted: Binding =
     typeof provider === 'string' && typeof model === 'string'
@@ -180,7 +224,7 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
       : baseline;
   const config = join(outDir, 'versions', `${label}.config.yaml`);
   writeFileSync(config, Bun.YAML.stringify({ tiers: { [tier as Tier]: wanted } }, null, 2));
-  const pinned = await dryRunBinding(checkout, source, stubs, config);
+  const pinned = await dryRunBinding(checkout, source, stubs, layout.workflows.triage, config);
   if (canonical(pinned) !== canonical(wanted)) {
     return refuse(`the pinned tier resolved to ${JSON.stringify(pinned)}, not ${JSON.stringify(wanted)}`);
   }
@@ -194,7 +238,7 @@ export async function resolveVersion(file: string, repoRoot: string, checkout: s
   };
   const relabel = relabelRefusal(outDir, version);
   if (relabel !== undefined) return refuse(relabel);
-  return { version, source, config };
+  return { version, source, config, layout };
 }
 
 /**
@@ -598,11 +642,6 @@ export interface Line {
   readonly report: string | null;
 }
 
-/** The agent node that judges the row: archon-triage's own, or the one intake includes. */
-export function triageNodeId(workflow: BenchWorkflow): string {
-  return workflow === 'intake' ? 'triage__triage' : 'triage';
-}
-
 const ran = (node: RunNode): boolean => node.state !== 'skipped' && node.state !== 'pending';
 
 /** Nodes that ran an agent; a node that ran without recording its kind cannot be cleared. */
@@ -727,7 +766,7 @@ function workflowOf(run: RowRun): BenchWorkflow {
 
 export interface RowRun {
   readonly row: Row;
-  readonly resolved: ResolvedVersion<Version>;
+  readonly resolved: ResolvedIntakeVersion;
   /** Where the run executes: the eval checkout, or the version's scratch checkout. */
   readonly cwd: string;
   /** The scratch repository, row copy and expected canonical copy; absent in eval. */
@@ -796,7 +835,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
     const unread = context.unread.get(row.number);
     if (unread !== undefined) throw new Error(unread);
     runId = await launch({
-      workflow: WORKFLOWS[workflow],
+      workflow: resolved.layout.workflows[workflow],
       cwd: run.cwd,
       source: resolved.source,
       config: resolved.config,
@@ -818,14 +857,14 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
 
   const nodes = detail?.nodes ?? [];
   // A skipped agent node records an empty binding; only a judge that ran has a model to prove.
-  const judge = nodes.find(node => node.nodeId === triageNodeId(workflow) && ran(node));
+  const judge = nodes.find(node => node.nodeId === resolved.layout.judges[workflow] && ran(node));
   const binding = agentBinding(judge) ?? null;
   if (binding?.provider !== undefined && binding.requested !== undefined) {
     if (binding.provider !== version.provider || binding.requested !== version.model) {
       problems.push(`triage ran ${binding.provider}/${binding.requested}, not ${version.provider}/${version.model}`);
     }
   } else if (decided.verdict !== null) {
-    problems.push(`${triageNodeId(workflow)} recorded no model binding, so its version is unproven`);
+    problems.push(`${resolved.layout.judges[workflow]} recorded no model binding, so its version is unproven`);
   }
   let leak: string[] = [];
   let report: string | null = null;
@@ -852,7 +891,7 @@ export async function runRow(run: RowRun, context: BatchContext): Promise<{ line
   const closureProblems: string[] = [];
   try {
     const live = run.live;
-    const declaration = detail?.nodes.find(node => node.nodeId === TRIAGE_VERDICT_NODE && node.state === 'completed')?.structuredOutput;
+    const declaration = detail?.nodes.find(node => node.nodeId === resolved.layout.intakeVerdict && node.state === 'completed')?.structuredOutput;
     const closure = isObject(declaration) && declaration.contract === 'NO_ACTION' ? toVerdict(declaration).closure : null;
     if (live !== undefined && closure != null && runId !== null) {
       const recorded = status === 'completed' ? decided.verdict : liveVerdict((await archonJson(['state', 'get', `work/${String(live.number)}`], run.cwd)).value, runId);
@@ -988,7 +1027,7 @@ export interface BatchOptions {
   readonly outDir: string;
   readonly repoRoot: string;
   /** Each version and the checkout a row runs in: the row's own in eval, the version's scratch checkout live. */
-  readonly versions: readonly { readonly resolved: ResolvedVersion<Version>; readonly checkout: (row: Row) => string }[];
+  readonly versions: readonly { readonly resolved: ResolvedIntakeVersion; readonly checkout: (row: Row) => string }[];
   /** Present for a live batch: each label's scratch repository and its copies of the rows. */
   readonly live?: ReadonlyMap<string, { readonly scratch: Scratch; readonly copies: Readonly<Record<string, number>> }>;
   readonly concurrency?: number;

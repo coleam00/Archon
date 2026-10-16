@@ -1,0 +1,67 @@
+attempt__triage:
+  decision:
+    contract: BLOCKED
+    blocked_reason: "stub: waits on the forge contract's merge operation"
+    blocked_by:
+      - https://github.com/example/repo/issues/1
+  type:
+    value: feature
+    reason: "stub: asks for new behavior"
+  size:
+    value: l
+    reason: "stub: size"
+  complexity:
+    value: high
+    reason: "stub: complexity"
+  importance:
+    value: medium
+    reason: "stub: importance"
+  urgency:
+    value: none
+    reason: "stub: urgency"
+  item:
+    repo:
+      host: ""
+      path: ""
+    number: 0
+  area_labels:
+    []
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: triage.md
+  summary: "stub: blocked on an owned prerequisite; see triage.md"
+decide:
+  done: false
+  attention:
+    what: "stub: waits on the forge contract's merge operation"
+    why: The verified prerequisite blocks admission.
+    recommendation:
+      choice: retry
+      why: Resolve the question before continuing.
+      evidence: https://github.com/example/repo/issues/1
+      confidence: high
+      would_change: An explicit terminal disposition.
+    choices:
+      - id: retry
+        label: Continue
+        does: Reassess the item with the complete prerequisite answer; publish no body edits.
+        effect: retry
+        ruling: Use the confirmed default.
+      - id: finish
+        label: Leave it
+        does: Accept the report and leave the work as it stands.
+        effect: finish
+        ruling: ""
+    if_unanswered: This run waits indefinitely without additional spend.
+    links:
+      - archon-artifact://fixture-run/triage.md
+      - https://github.com/example/repo/issues/1
+  pr: null
+fixture:
+  inputs:
+    {}
+  expect: paused
+  reached:
+    - settle
+exec-code: true
