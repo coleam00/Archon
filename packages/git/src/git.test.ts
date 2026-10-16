@@ -2975,7 +2975,7 @@ branch refs/heads/feature/auth
     });
 
     test.each([1, 128])(
-      'bounds fetch retries for exit %s and preserves the first failure',
+      'bounds fetch retries for exit %s and preserves the final failure',
       async code => {
         const failures: git.GitFailure[] = [];
         execSpy.mockImplementation(async (_cmd, args) => {
@@ -2999,8 +2999,9 @@ branch refs/heads/feature/auth
         expect(failures).toHaveLength(3);
         expect(error).toBeInstanceOf(Error);
         if (!(error instanceof Error)) throw error;
-        expect(error.cause).toBe(failures[0]);
-        expect(error.message).toContain('evidence 0');
+        expect(error.cause).toBe(failures[2]);
+        expect(error.message).toContain('evidence 2');
+        expect(error.message).not.toContain('evidence 0');
         expect(error.message).toContain(`exit code ${code}`);
       }
     );

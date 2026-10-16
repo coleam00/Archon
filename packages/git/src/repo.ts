@@ -35,7 +35,6 @@ export async function fetchWithRetry(
   fetchArgs: string[],
   options: { timeout: number }
 ): Promise<void> {
-  let firstFailure: GitFailure | undefined;
   for (let attempt = 0; ; attempt++) {
     try {
       await execFileAsync('git', ['-C', repoPath, 'fetch', ...fetchArgs], options);
@@ -48,8 +47,7 @@ export async function fetchWithRetry(
         error.code <= 0
       )
         throw error;
-      firstFailure ??= error;
-      if (attempt === 2) throw firstFailure;
+      if (attempt === 2) throw error;
       getLog().warn({ err: error, repoPath, attempt: attempt + 1 }, 'git.fetch_retry');
       await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
     }
