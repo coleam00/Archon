@@ -332,7 +332,7 @@ mock.module('../workflows/store-adapter', () => ({
         checkout_baseline: null,
       }),
       updateWorkflowRun: async () => {},
-      failWorkflowRun: async () => {},
+      failWorkflowRun: async () => ({ failed: true }),
     },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
