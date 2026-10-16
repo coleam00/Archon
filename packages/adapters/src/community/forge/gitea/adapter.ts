@@ -489,10 +489,10 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Ensure repository is cloned and ready.
    * Uses @archon/git functions for safe, testable git operations.
    *
-   * For new codebases: clone (directory won't exist)
-   * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
+   * Without a checkout (no source/ or an empty one): clone
+   * With a checkout: sync if shouldSync=true, skip if shouldSync=false
    *
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing checkout (pass true to ensure latest code)
    */
   private async ensureRepoReady(
     owner: string,
@@ -502,11 +502,10 @@ export class GiteaAdapter implements IPlatformAdapter {
     shouldSync: boolean
   ): Promise<void> {
     const { name: projectName, default_cwd: repoPath } = codebase;
-    // Check if directory exists
-    let directoryExists = false;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      await access(join(repoPath, '.git'));
+      repositoryExists = true;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -517,10 +516,10 @@ export class GiteaAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
+      // Missing git metadata includes the empty source/ left by a failed clone.
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));

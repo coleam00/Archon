@@ -434,10 +434,10 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     shouldSync: boolean
   ): Promise<void> {
     const { name: projectName, default_cwd: repoPath } = codebase;
-    let directoryExists = false;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      await access(join(repoPath, '.git'));
+      repositoryExists = true;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -449,7 +449,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       }
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'gitlab.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));

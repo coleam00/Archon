@@ -262,7 +262,7 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
   }
 });
 
-test.each([
+const readiness = [
   {
     name: 'GitHub',
     prepare: (codebase: ProjectCheckout) =>
@@ -298,41 +298,71 @@ test.each([
         false
       ),
   },
-])('$name prepares an allocated project under its own storage root', async ({ prepare }) => {
-  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-allocated-storage-')));
-  const previousHome = process.env.ARCHON_HOME;
-  process.env.ARCHON_HOME = root;
-  const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
-    ok: false,
-    error: { code: 'not_a_repo', path: 'acme/api' },
-  });
-  try {
-    const allocated = codebaseRowSchema.parse({
-      id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
-      name: 'acme/api-2',
-      default_cwd: getProjectSourcePath('acme', 'api-2'),
-      repository_url: 'https://forge.example/acme/api',
-      commands: {},
-      kind: 'repo',
-      default_branch: null,
-      ai_assistant_type: null,
-      created_at: new Date(),
-      updated_at: new Date(),
+];
+
+test.each(readiness)(
+  '$name clones again into the empty managed source a failed clone left',
+  async ({ prepare }) => {
+    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-clone-retry-')));
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = root;
+    const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
+      ok: false,
+      error: { code: 'not_a_repo', path: 'acme/api' },
     });
-    await expect(prepare(allocated)).rejects.toThrow();
-    expect(clone).toHaveBeenCalled();
-    const storage = join(root, 'workspaces', 'acme', 'api-2');
-    expect(resolveRunStorageRoot({}, allocated)).toBe(storage);
-    for (const dir of ['worktrees', 'artifacts', 'logs']) await access(join(storage, dir));
-    await expect(access(join(root, 'workspaces', 'acme', 'api'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
-  } finally {
-    clone.mockRestore();
-    if (previousHome === undefined) delete process.env.ARCHON_HOME;
-    else process.env.ARCHON_HOME = previousHome;
+    try {
+      const codebase = { name: 'acme/api', default_cwd: getProjectSourcePath('acme', 'api') };
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await mkdir(codebase.default_cwd, { recursive: true });
+        await expect(prepare(codebase)).rejects.toThrow('not found');
+        expect(clone).toHaveBeenCalledTimes(attempt);
+      }
+    } finally {
+      clone.mockRestore();
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
   }
-});
+);
+
+test.each(readiness)(
+  '$name prepares an allocated project under its own storage root',
+  async ({ prepare }) => {
+    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-allocated-storage-')));
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = root;
+    const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
+      ok: false,
+      error: { code: 'not_a_repo', path: 'acme/api' },
+    });
+    try {
+      const allocated = codebaseRowSchema.parse({
+        id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+        name: 'acme/api-2',
+        default_cwd: getProjectSourcePath('acme', 'api-2'),
+        repository_url: 'https://forge.example/acme/api',
+        commands: {},
+        kind: 'repo',
+        default_branch: null,
+        ai_assistant_type: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      await expect(prepare(allocated)).rejects.toThrow();
+      expect(clone).toHaveBeenCalled();
+      const storage = join(root, 'workspaces', 'acme', 'api-2');
+      expect(resolveRunStorageRoot({}, allocated)).toBe(storage);
+      for (const dir of ['worktrees', 'artifacts', 'logs']) await access(join(storage, dir));
+      await expect(access(join(root, 'workspaces', 'acme', 'api'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      clone.mockRestore();
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  }
+);
 
 test('refuses nested GitLab repairs that would move or merge existing storage', async () => {
   const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-nested-storage-')));
