@@ -114,7 +114,8 @@ import {
   captureArchonActive,
   getSourceWebDistDir,
 } from '@archon/paths';
-import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,

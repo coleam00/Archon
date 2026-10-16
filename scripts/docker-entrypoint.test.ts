@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { selectGitHubAuthMode } from '../packages/server/src/github-auth-bootstrap';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
 
 const trackTempRoot = trackTempRoots();
 const entrypoint = fileURLToPath(new URL('../docker-entrypoint.sh', import.meta.url));
