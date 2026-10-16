@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { GitFailure } from './errors';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
@@ -77,8 +77,27 @@ async function isMissingPath(path: string): Promise<boolean> {
   }
 }
 
-async function hasRepositoryMarker(path: string): Promise<boolean> {
+/**
+ * Whether Git's own discovery from `path` would reach a `.git` entry or a bare
+ * repository. The walk stops where Git's does: before entering a
+ * `GIT_CEILING_DIRECTORIES` entry, and at a filesystem boundary unless
+ * `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set. A marker beyond either is not one
+ * Git saw, so it must not turn absence into a repository failure.
+ */
+async function hasRepositoryMarker(path: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const ceilings = new Set(
+    await Promise.all(
+      (env.GIT_CEILING_DIRECTORIES ?? '')
+        .split(delimiter)
+        .filter(entry => isAbsolute(entry))
+        .map(entry => realpath(entry).catch(() => entry))
+    )
+  );
+  const acrossFilesystems = ['1', 'true', 'yes', 'on'].includes(
+    (env.GIT_DISCOVERY_ACROSS_FILESYSTEM ?? '').toLowerCase()
+  );
   let current = await realpath(path);
+  const device = (await stat(current)).dev;
   while (true) {
     for (const marker of ['.git', 'HEAD']) {
       try {
@@ -90,7 +109,8 @@ async function hasRepositoryMarker(path: string): Promise<boolean> {
       }
     }
     const parent = dirname(current);
-    if (parent === current) return false;
+    if (parent === current || ceilings.has(parent)) return false;
+    if (!acrossFilesystems && (await stat(parent)).dev !== device) return false;
     current = parent;
   }
 }
@@ -144,18 +164,19 @@ export async function execFileAsync(
       )
         kind = 'timeout';
       const path = args[0] === '-C' ? args[1] : options?.cwd;
+      const env = options?.env ?? process.env;
       if (
         path &&
         cause instanceof Error &&
         'code' in cause &&
         (cause.code === 128 || cause.code === 'ENOENT') &&
-        !(options?.env?.GIT_DIR ?? process.env.GIT_DIR)
+        !env.GIT_DIR
       ) {
         try {
           // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
           // ENOENT; either way no repository is there.
           if (await isMissingPath(path)) kind = 'not_repository';
-          else if (cause.code === 128 && !(await hasRepositoryMarker(path))) {
+          else if (cause.code === 128 && !(await hasRepositoryMarker(path, env))) {
             // Repository discovery also exits 128 for invalid configuration. Verify
             // Git can load its configuration before treating absence as the cause.
             await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {

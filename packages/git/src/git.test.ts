@@ -827,6 +827,47 @@ describe('git utilities', () => {
       expect(await git.hasUncommittedChanges(worktree(missing))).toBe(false);
     });
 
+    test('a bare repository is not reported as absent', async () => {
+      const bare = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-bare-')));
+      await git.execFileAsync('git', ['init', '-q', '--bare', bare]);
+      const failure = await git
+        .execFileAsync('git', ['-C', bare, 'status'])
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('unclassified');
+      expect(failure.code).toBe(128);
+    });
+
+    test('an explicit GIT_DIR that Git cannot open is not reported as absent', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-dir-')));
+      const failure = await git
+        .execFileAsync('git', ['-C', root, 'status'], {
+          env: { ...process.env, GIT_DIR: join(root, 'missing-git-dir') },
+        })
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(git.GitFailure);
+      if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+      expect(failure.kind).toBe('unclassified');
+      expect(failure.code).toBe(128);
+    });
+
+    test('a repository above GIT_CEILING_DIRECTORIES does not hide absence', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-ceiling-')));
+      const ceiling = join(root, 'inner');
+      const start = join(ceiling, 'sub');
+      await git.execFileAsync('git', ['init', '-q', root]);
+      await realMkdir(start, { recursive: true });
+      const previous = process.env.GIT_CEILING_DIRECTORIES;
+      process.env.GIT_CEILING_DIRECTORIES = ceiling;
+      try {
+        expect(await git.findRepoRoot(start)).toBeNull();
+      } finally {
+        if (previous === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+        else process.env.GIT_CEILING_DIRECTORIES = previous;
+      }
+    });
+
     test('invalid global config stays unclassified across repository absence consumers', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-config-')));
       const config = join(root, 'global-config');
