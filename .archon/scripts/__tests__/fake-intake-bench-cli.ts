@@ -33,6 +33,7 @@ export interface FakeIssue {
 
 export interface FakeConfig {
   readonly declaredClosure?: Closure;
+  readonly recordedContract?: 'NO_ACTION' | 'READY';
   readonly posted?: readonly { number: number; body: string }[];
   /** What the triage tier resolves to with no config layer; null resolves nothing. */
   readonly baseline: { provider: string; model: string; effort?: string } | null;
@@ -189,7 +190,8 @@ function answer(dir: string, args: readonly string[]): string {
     const work = join(dir, `work-${given.number}.json`);
     if (given.mode === 'live' && path === 'triage') {
       const field = { value: 'bug', reason: 'r' };
-      const triage = { verdict: { contract: config.declaredClosure ? 'NO_ACTION' : 'READY', route: config.declaredClosure ? null : 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
+      const contract = config.recordedContract ?? (config.declaredClosure ? 'NO_ACTION' : 'READY');
+      const triage = { verdict: { contract, route: contract === 'NO_ACTION' ? null : 'plan' }, pull_request: null, type: field, size: { value: 'm', reason: 'r' }, complexity: { value: 'low', reason: 'r' }, importance: { value: 'low', reason: 'r' }, urgency: { value: 'none', reason: 'r' }, run_id: `run-${n}` };
       writeFileSync(work, JSON.stringify({ triage }));
     } else if (given.mode === 'live' && !existsSync(work)) {
       writeFileSync(work, JSON.stringify({ triage: { verdict: { contract: 'READY', route: 'plan' }, run_id: 'an-earlier-run' } }));

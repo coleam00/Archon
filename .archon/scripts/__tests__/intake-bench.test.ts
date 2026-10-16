@@ -422,6 +422,15 @@ describe('bench run', () => {
     }
   });
 
+  it('rejects declared closure text when the recorded verdict is READY', () => {
+    const declaredClosure = { kind: 'delivered' as const, url: 'https://github.com/o/r/pull/30' };
+    const posted = [{ number: 101, body: `<!-- archon-close -->\nClosing as already delivered by ${declaredClosure.url}.` }];
+    for (const runStatus of [undefined, 'failed'] as const) {
+      const result = benchLive({ declaredClosure, posted, recordedContract: 'READY', runStatus });
+      expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([1, false]);
+    }
+  });
+
   it('uses the forge canonical URL spelling, as the closure writer does', () => {
     const url = 'https://github.com/Me/Scratch-Base/issues/103';
     const declaredClosure = { kind: 'duplicate' as const, url: url.toLowerCase(), original: { repo: { host: 'github.com', path: 'me/scratch-base' }, number: 103 } };
