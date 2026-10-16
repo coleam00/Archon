@@ -27,6 +27,7 @@ If the move turns out to be wrong (the pull request was already merged, the issu
 - Do the work properly. Stay within what the issue asks, but fix what is genuinely broken in your way. If the existing design is the real problem, say so in a new issue rather than patching around it.
 - Run the project's own checks (the commands in `engineering.md`, the harness config, or the CI workflow). They must pass before you push. If the change is something a user would see or do, run the app the way a user would and look: $INPUTS.runtime
 - Commit with a clear message, push, and open a pull request that says `Closes #<n>` for a new issue, or push to the existing pull request. When the work is complete, make sure the pull request is not a draft (`gh pr ready <n>`). Never merge it yourself.
+- The pull request body has an `Evidence` section: for each contract criterion, the evidence that proves it, named the way the criterion asks for it (the command and its result, the report or frame path, the soak or check output line), at the commit you pushed. A criterion with no evidence yet says so. Reviewers send back a pull request whose body does not name its evidence, so keep the section current on every push.
 - Leave one comment on the pull request: what you did this run, how each contract criterion is met, and anything left.
 
 ## Never
