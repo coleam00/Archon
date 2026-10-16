@@ -19,11 +19,10 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { CONFIDENCES, checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
+import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   newWorkItem,
   parseWorkItem,
-  stateGet,
-  statePut,
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';

@@ -273,6 +273,20 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const issueUrl = (n) => 'https://' + apiHost + '/' + apiPath + '/issues/' + String(n);
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     const input = () => JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8'));
+    // The repository's issue list (every state), and an issue create.
+    if (endpoint.split('?')[0].split('/').length === 4 && endpoint.split('?')[0].endsWith('/issues')) {
+      if (method === 'POST') {
+        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+        const request = input();
+        const number = 100 + issues.length;
+        const row = { number, title: request.title, body: fake.writeLost ? 'different' : request.body, state: 'OPEN' };
+        issues.push(row);
+        appendFileSync(${JSON.stringify(ghLog)} + '.issues', JSON.stringify(row) + '\\n');
+        return result(0, JSON.stringify({ number, html_url: issueUrl(number) }));
+      }
+      const rows = issues.map(row => ({ number: row.number, title: row.title, body: row.body, state: row.state.toLowerCase(), ...(row.pull ? { pull_request: {} } : {}) }));
+      return result(0, JSON.stringify(argv.includes('--slurp') ? [rows] : rows));
+    }
     if (endpoint.endsWith('/issues/' + String(subject.number))) {
       if (method === 'PATCH' && argv.includes('--input')) {
         if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);

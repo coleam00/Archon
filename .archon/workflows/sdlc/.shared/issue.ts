@@ -1,6 +1,6 @@
 /**
- * The pack's one issue read, and its close, through whichever source the run
- * selected (./forge.ts).
+ * The pack's one issue read, its close, and its create-or-recover by marker, through
+ * whichever source the run selected (./forge.ts).
  *
  * Both sources prove the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or
@@ -14,7 +14,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
 import {
   forgeSource,
   invokeForge,
@@ -134,6 +133,118 @@ function forgeView(item: QualifiedPr): IssueView {
     state: value.state,
     url: value.url,
   };
+}
+
+/** A created or recovered issue, read back from the tracker. */
+export interface CreatedIssue {
+  readonly issue: QualifiedPr;
+  readonly url: string;
+}
+
+function firstLine(body: string): string {
+  return body.split(/\r?\n/, 1)[0] ?? '';
+}
+
+/**
+ * Create the one issue whose body begins with `marker`, or recover it when an earlier
+ * attempt already created it, so a repeated call never files a second one. Both
+ * sources look across every issue, open or closed, and refuse when more than one
+ * carries the marker. A recovered issue is returned as it is, never edited or
+ * reopened. A new one must read back open with the requested title and body.
+ */
+export function createIssue(
+  repo: QualifiedPr['repo'],
+  title: string,
+  body: string,
+  marker: string
+): CreatedIssue {
+  if (firstLine(body) !== marker) throw new Error('the issue body must begin with its marker');
+  if (forgeSource() === 'forge') {
+    const value = invokeForge('workitem.create', { repo, title, body, marker });
+    const item = record(value?.workitem);
+    const ref = parseQualifiedPr(JSON.stringify(item?.ref));
+    if (
+      value?.outcome !== 'applied' ||
+      item?.kind !== 'issue' ||
+      !samePr({ repo, number: ref.number }, ref) ||
+      typeof item.url !== 'string'
+    ) {
+      throw new Error('forge returned no verified created issue');
+    }
+    return { issue: ref, url: item.url };
+  }
+  const listed = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      repo.host,
+      '--paginate',
+      '--slurp',
+      `repos/${repo.path}/issues?state=all&per_page=100`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (listed.exitCode !== 0) {
+    throw new Error(`gh api issue listing failed: ${listed.stderr.toString().trim()}`);
+  }
+  const pages: unknown = JSON.parse(listed.stdout.toString());
+  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+    throw new Error('gh api returned an unexpected issue listing');
+  }
+  const marked = (pages as unknown[][])
+    .flat()
+    .map(record)
+    .filter(
+      row =>
+        row !== undefined &&
+        !('pull_request' in row) &&
+        typeof row.body === 'string' &&
+        firstLine(row.body) === marker
+    );
+  if (marked.length > 1) throw new Error(`more than one issue carries ${marker}`);
+  const found = marked[0];
+  if (found !== undefined) {
+    if (typeof found.number !== 'number') throw new Error('gh api listed an issue with no number');
+    const issue = { repo, number: found.number };
+    return { issue, url: ghIssue(issue).html_url };
+  }
+  const directory = mkdtempSync(join(tmpdir(), 'archon-issue-'));
+  let created: { exitCode: number; stdout: Buffer; stderr: Buffer };
+  try {
+    // The body travels in a request file: argv is not where authored content belongs.
+    const payload = join(directory, 'issue.json');
+    writeFileSync(payload, JSON.stringify({ title, body }), { mode: 0o600 });
+    created = Bun.spawnSync(
+      [
+        'gh',
+        'api',
+        '--hostname',
+        repo.host,
+        '--method',
+        'POST',
+        `repos/${repo.path}/issues`,
+        '--input',
+        payload,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  if (created.exitCode !== 0) {
+    throw new Error(`gh api issue create failed: ${created.stderr.toString().trim()}`);
+  }
+  const number = record(JSON.parse(created.stdout.toString()))?.number;
+  if (typeof number !== 'number') {
+    throw new Error('gh api returned no issue number; an issue may have been created');
+  }
+  const issue = { repo, number };
+  const observed = ghIssue(issue);
+  if (observed.title !== title || observed.body !== body || observed.state !== 'open') {
+    throw new Error(`${observed.html_url} does not read back as created`);
+  }
+  return { issue, url: observed.html_url };
 }
 
 /** Why the pack closes an issue: the subset of the forge contract's reasons it uses. */
