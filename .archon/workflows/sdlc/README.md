@@ -131,8 +131,9 @@ request, and `publish-review` upserts the one marked review comment. Every pack
 label is declared in `.shared/labels.ts`, and every stage writes labels through its
 `writeLabels`, which adds and removes them as a delta so labels another writer adds
 survive. On the `forge` source it still writes the whole label set back, because
-the forge contract has no single-label add or remove yet. No node files discoveries: the
-run's terminal report relays them to the operator. In `archon-deliver` and
+the forge contract has no single-label add or remove yet. No delivery node files
+discoveries: the run's terminal report relays them to the operator, and
+[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver` and
 `archon-ship` that is the `report` node, which also runs when a node fails, so a
 workflow that includes `archon-deliver` runs after a failed delivery and must gate
 on `$deliver.output.ready`. Each acts on the values the agent
@@ -459,6 +460,87 @@ are the operator's and stay outside the pack and the repository.
   which an agent ran (`unreported` when no provider reported one) and wall time, and
   which versions got each disagreement right. A bar with no applicable rows reads
   `not applicable`. It does not choose a winner.
+
+## Discoveries
+
+[`archon-discoveries`](discoveries/archon-discoveries.yaml) drains the discoveries
+finished runs recorded outside their own scope. A run's discoveries are its latest
+review verdict's certified records plus any raw `discoveries/*.json` record a node
+wrote after that review ([`.shared/report.ts`](.shared/report.ts)), the same set its
+terminal report lists.
+
+- **Queue.** A pass lists this project's runs that ended (completed, failed or
+  cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
+  them that still have undecided records. A record is decided once a decision record
+  that is not `asked` lists it. A run's work item is the state document
+  `discoveries/runs/<run-id>`, which holds the claim of the pass working it. A claim is
+  released only when the claiming run is completed, failed or cancelled, never on age.
+  A run whose records cannot be read is left queued and named on the pass's stderr.
+- **Decisions.** One agent decides every queued record, under the project's direction
+  document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
+  verifies each claim against the default branch's head with `git show` and
+  `git grep`, merges duplicates across runs and with earlier decisions, and searches
+  the tracker before filing. Each discovery ends in one decision: `file` an issue with
+  a full brief, `track` it on the open issue that already covers it (with one marked
+  evidence comment per key, only when it adds something), `drop` it with a reason, or
+  `ask` a maintainer.
+- **Memory.** Every decision is the state document `discoveries/decisions/<key>`: the
+  outcome, the reason, the commit it was verified at, every run record that found it
+  (`<run-id>:<ref>`), and the last question with its answer. Each pass writes them all as one readable
+  `drain/discovery-decisions.md` in its artifacts, which is what the agent reads. List
+  them with `archon state list --prefix discoveries/decisions/`.
+- **Writes.** The `outcome` script checks before any write that every queued record is
+  decided exactly once and that a key which already has an issue is not filed again,
+  and that a tracking issue is open. It writes every decision record before any public
+  write. A filed record keeps the issue's body until the issue reads back, and a
+  tracked record keeps its evidence comment until it is posted. A filed issue's body
+  begins with `<!-- archon-discovery <key> -->`, and the create looks for that marker
+  across every issue first; the evidence comment carries the same marker and is
+  replaced in place. So the next live pass, idle or not, finishes any write an earlier
+  pass stopped before, without a second issue or comment. Filed issues carry no
+  labels: intake triages them like any other issue, which it does only when the
+  install's forge identity is on `maintainers.json`.
+- **Questions.** Every `ask` in a pass becomes one attention item labelled
+  `discoveries: question`. The answer is stored on each asked record. The runs those
+  records came from stay claimed by the asking run until it ends, so no other pass asks
+  again; the next pass then decides them with the answer in memory.
+- **Eval mode.** `mode: eval` reads the stored decisions and writes nothing: no state
+  document, issue or comment. It ignores which runs earlier passes drained, so it
+  decides the window's runs as unhandled, and returns every decision, and every check
+  that would have refused the pass, as the outcome's `evaluation`.
+
+The pack installs no binding, so the workflow runs only when started by hand until an
+operator adds one. A native schedule starts a pass every few hours; `overlap: skip`
+skips a start while a pass still runs, and a pass paused on a question gives its slot
+back:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-host-discoveries",
+  "binding": {
+    "bindingId": "discoveries",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "discoveries:github.com/acme/widgets",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-discoveries",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 14400, "runAtLoad": false }
+}
+```
+
+To seed decisions an operator already made, put one record per key with
+`archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
+JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
+parse refuses every pass, naming the document.
 
 ## Composition validation
 

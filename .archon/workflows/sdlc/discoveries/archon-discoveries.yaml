@@ -1,0 +1,205 @@
+name: archon-discoveries
+description: |
+  Drain the discoveries finished runs recorded outside their own scope. Each pass
+  claims the oldest finished runs with undecided discovery records, and one agent
+  verifies every record against the default branch, merges duplicates across runs
+  and with earlier decisions, and decides each one: file an issue with a full brief,
+  track it on the open issue that already covers it (with a marked evidence comment
+  only when it adds something), drop it with a reason, or ask a maintainer. The nodes
+  after the agent perform only the writes it declared and read them back. Every
+  decision is stored as a state document, so a discovery is decided once, a key with
+  an issue never gets a second one, and a maintainer's answer is remembered. With
+  mode eval the run writes nothing and returns every decision as its output.
+
+  Use when: an operator drains discoveries by hand, or a schedule binding the
+  operator installed starts it (see the SDLC pack README, "Discoveries"). The pack
+  installs no binding.
+  NOT for: delivering the filed work (intake triages each filed issue), or reading
+  one run's discoveries (its terminal report lists them).
+
+inputs:
+  repo_host:
+    description: The forge host of the repository the runs worked on, such as github.com.
+  repo_path:
+    description: The owner/name path of that repository.
+  mode:
+    default: "live"
+    description: >-
+      live or eval. Eval reads the stored decisions but writes no state document,
+      issue or comment, ignores which runs earlier passes drained, and returns every
+      decision and every check that would have refused it as the outcome's
+      evaluation. Any other value refuses the run at facts, before anything is read.
+  since:
+    default: ""
+    description: Drain only runs that finished at or after this ISO-8601 time; empty is unbounded.
+  until:
+    default: ""
+    description: Drain only runs that finished at or before this ISO-8601 time; empty is unbounded.
+  limit:
+    default: "20"
+    description: The most runs one pass decides, oldest first.
+
+returns: outcome
+
+nodes:
+  # Builds the queue and the decisions dump, and in live mode claims the queued runs.
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, decide] }
+        base:
+          type: object
+          properties:
+            branch: { type: string }
+            sha: { type: string }
+          required: [branch, sha]
+        policy_defaults: { type: string }
+      required: [path, base, policy_defaults]
+
+  # Reads code at the base commit with git show and git grep; the checkout stays as
+  # it was. The engine fails this node if the agent modifies it.
+  - id: decide
+    command: decide
+    depends_on: [facts]
+    when: "$facts.output.path == 'decide'"
+    model: large
+    mutates_checkout: false
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      base_sha: "$facts.output.base.sha"
+      repo_host: "$INPUTS.repo_host"
+      repo_path: "$INPUTS.repo_path"
+    output_format:
+      type: object
+      properties:
+        decisions:
+          type: array
+          items:
+            anyOf:
+              - type: object
+                additionalProperties: false
+                properties:
+                  outcome: { type: string, enum: [file] }
+                  key: &key { type: string, pattern: '^[a-z0-9][a-z0-9-]{2,80}$' }
+                  refs: &refs { type: array, items: { type: string }, minItems: 1 }
+                  title: &title { type: string, pattern: '\S' }
+                  body: { type: string, pattern: '\S' }
+                  reason: &reason { type: string, pattern: '\S' }
+                required: [outcome, key, refs, title, body, reason]
+              - type: object
+                additionalProperties: false
+                properties:
+                  outcome: { type: string, enum: [track] }
+                  key: *key
+                  refs: *refs
+                  title: *title
+                  issue:
+                    type: object
+                    properties:
+                      repo:
+                        type: object
+                        properties:
+                          host: { type: string }
+                          path: { type: string }
+                        required: [host, path]
+                      number: { type: integer, minimum: 1 }
+                    required: [repo, number]
+                  # Evidence the issue does not hold yet, posted as one marked comment
+                  # per key; null posts nothing.
+                  comment: { type: [string, 'null'] }
+                  reason: *reason
+                required: [outcome, key, refs, title, issue, comment, reason]
+              - type: object
+                additionalProperties: false
+                properties:
+                  outcome: { type: string, enum: [drop] }
+                  key: *key
+                  refs: *refs
+                  title: *title
+                  reason: *reason
+                required: [outcome, key, refs, title, reason]
+              - type: object
+                additionalProperties: false
+                properties:
+                  outcome: { type: string, enum: [ask] }
+                  key: *key
+                  refs: *refs
+                  title: *title
+                  question: { type: string, pattern: '\S' }
+                  recommendation: { type: string, pattern: '\S' }
+                required: [outcome, key, refs, title, question, recommendation]
+        summary: { type: string }
+      required: [decisions, summary]
+
+  - id: outcome
+    script: outcome
+    runtime: bun
+    depends_on: [facts, decide]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      decisions: { from: "$decide.output.decisions", if_skipped: null }
+      summary: { from: "$decide.output.summary", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        mode: { type: string, enum: [live, eval] }
+        summary: { type: string }
+        # Issues filed or recovered, and issues a discovery is tracked by (the
+        # evidence comment's URL when one was posted).
+        written:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              outcome: { type: string, enum: [file, track] }
+              url: { type: string }
+            required: [key, outcome, url]
+        dropped:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              reason: { type: string }
+            required: [key, reason]
+        asked: { type: array, items: { type: string } }
+        # The asked items, numbered with their recommendations; empty when none.
+        question: { type: string }
+        # Null in live. In eval: every decision, and every check that would have
+        # refused the pass before a write. The queued runs are in drain/queue.json.
+        evaluation:
+          type: [object, 'null']
+          properties:
+            decisions: { type: array, items: { type: object } }
+            problems: { type: array, items: { type: string } }
+          required: [decisions, problems]
+      required: [mode, summary, written, dropped, asked, question, evaluation]
+
+  # One attention item per pass, whatever the number of questions. A paused run
+  # gives its resource slot back, so the next scheduled pass is not blocked.
+  - id: ask
+    depends_on: [outcome]
+    when: "$outcome.output.question != ''"
+    wait:
+      attention: "$outcome.output.question"
+      form: message
+      labels:
+        discoveries: question
+
+  - id: answer
+    script: answer
+    runtime: bun
+    depends_on: [outcome, ask]
+    with:
+      keys: { from: "$outcome.output.asked" }
+      text: "$ask.output.text"
+    output_format:
+      type: object
+      properties:
+        answered: { type: array, items: { type: string } }
+      required: [answered]

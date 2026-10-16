@@ -11,7 +11,7 @@
  */
 
 import { sameRepo, type QualifiedPr } from './forge.ts';
-import { git } from './git.ts';
+import { git, gitOrThrow } from './git.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -89,5 +89,19 @@ export function remoteFor(repo: Repo): string {
   const remote = findRemote(repo);
   if (remote === undefined) throw new Error(`no git remote points at ${repo.host}/${repo.path}`);
   return remote;
+}
+
+/**
+ * Fetch the head of the repository's default branch, as its remote reports it, into
+ * the remote-tracking ref, whatever branch the checkout sits on.
+ */
+export function fetchDefaultBranch(repo: Repo): { readonly branch: string; readonly ref: string } {
+  const remote = remoteFor(repo);
+  const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
+  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
+  if (branch === undefined) throw new Error(`${remote} reports no default branch`);
+  const ref = `refs/remotes/${remote}/${branch}`;
+  gitOrThrow('fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${ref}`);
+  return { branch, ref };
 }
 
