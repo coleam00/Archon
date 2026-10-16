@@ -265,8 +265,8 @@ for (const legacy of [false, true]) {
     const { create, getById, markWorktreeDestroyed, updateMetadata } =
       await import('./isolation-environments');
     const project = await createCodebase({
-      name: 'idempotent-retire',
-      default_cwd: '/repos/retire',
+      name: `idempotent-retire-${legacy}`,
+      default_cwd: `/repos/retire-${legacy}`,
     });
     const input = {
       codebase_id: project.id,
