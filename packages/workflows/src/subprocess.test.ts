@@ -155,6 +155,88 @@ posixOnly('a recorded node deadline still reports the documented SIGTERM', async
   }
 });
 
+posixOnly('a recorded node timeout without endTreeOnTimeout ends its root only', async () => {
+  const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
+  const trees = recordNodeProcessTrees();
+  let job: number | undefined;
+  try {
+    const error = await runHostBash(
+      `/bin/sleep 30 >/dev/null 2>&1 & echo $! > '${pidFile}'; exec /bin/sleep 5`,
+      200
+    ).then(
+      () => undefined,
+      (e: unknown) => e as RawSubprocessRejection
+    );
+    expect(error && isSubprocessTimeout(error)).toBe(true);
+    job = Number(readFileSync(pidFile, 'utf8'));
+    expect(processExists(job)).toBe(true);
+  } finally {
+    trees.release();
+    if (job !== undefined && processExists(job)) process.kill(job, 'SIGKILL');
+  }
+});
+
+posixOnly('an unrecorded POSIX node stays in its owner process group', async () => {
+  const ownerGroup = Bun.spawnSync(['/bin/ps', '-o', 'pgid=', '-p', String(process.pid)])
+    .stdout.toString()
+    .trim();
+  const { stdout } = await runSubprocess(
+    { kind: 'host' },
+    '/bin/bash',
+    ['-c', '/bin/ps -o pgid= -p $$'],
+    {
+      cwd: import.meta.dir,
+      timeout: 5000,
+      env: {},
+      endTreeOnTimeout: true,
+      retention: { standalone: true },
+    }
+  );
+  expect(stdout.trim()).toBe(ownerGroup);
+});
+
+// A wrapper runtime (`bun run`, `uv run`) starts the real work as a grandchild. The node's
+// timeout must end that grandchild too, before the timeout is reported.
+async function expectTimeoutEndsGrandchild(): Promise<void> {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-timeout-')));
+  const started = join(dir, 'started');
+  const marker = join(dir, 'marker');
+  const grandchild =
+    "require('fs').writeFileSync(process.env.STARTED, ''); " +
+    "setTimeout(() => require('fs').writeFileSync(process.env.MARKER, 'leaked'), 2500);";
+  const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
+  const error = await runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
+    cwd: dir,
+    timeout: 1500,
+    env: { STARTED: started, MARKER: marker },
+    endTreeOnTimeout: true,
+    retention: { standalone: true },
+  }).then(
+    () => undefined,
+    (e: unknown) => e as RawSubprocessRejection
+  );
+  expect(error && isSubprocessTimeout(error)).toBe(true);
+  expect(error?.signal).toBe('SIGTERM');
+  expect(existsSync(started)).toBe(true);
+  await new Promise<void>(resolve => setTimeout(resolve, 3000));
+  expect(existsSync(marker)).toBe(false);
+}
+
+test('a recorded node timeout ends the wrapper and its grandchild', async () => {
+  const trees = recordNodeProcessTrees();
+  try {
+    await expectTimeoutEndsGrandchild();
+  } finally {
+    trees.release();
+  }
+}, 15_000);
+
+test.skipIf(process.platform !== 'win32')(
+  'an unrecorded Windows node timeout ends the wrapper and its grandchild',
+  expectTimeoutEndsGrandchild,
+  15_000
+);
+
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {
   const error = Object.assign(new Error('deadline'), { timedOut: true, code: 7 });
   expect(isSubprocessTimeout(error)).toBe(true);

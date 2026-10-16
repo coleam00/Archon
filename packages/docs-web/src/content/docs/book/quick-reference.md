@@ -162,7 +162,7 @@ All nodes share these base fields:
 |-------|----------|------|-------------|
 | `runtime` | Yes | `'bun'` \| `'uv'` | Which runtime executes the script. Must match file extension for named scripts (`.ts`/`.js` → bun, `.py` → uv) |
 | `deps` | No | string[] | Python dependencies for `uv run --with`. Ignored for bun (bun auto-installs) |
-| `timeout` | No | number | Hard kill in ms. Default: 120000 (2 min). Same semantics as `bash` timeout |
+| `timeout` | No | number | Milliseconds before Archon sends `SIGTERM`. Default: 120000 (2 min). Same semantics as `bash` timeout |
 
 **Workflow (sub-run)-specific fields** (when `workflow:` is set):
 
