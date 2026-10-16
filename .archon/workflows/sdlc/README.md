@@ -279,7 +279,8 @@ recommendation with its confidence and evidence, the choices and what each does,
 waiting costs, and the links. The run continues on the answer: `rerun` runs the block
 again with the item and the person's note added to its work, `ready` takes the pull
 request out of draft, and `finish` keeps the outcome as it stands. The entry returns
-the block's typed outcome as its last pass left it.
+the block's typed outcome as its last pass left it. A stage that fails raises no item:
+the run fails at the failed node, as the block alone would.
 
 A workflow that composes a stage includes its `-block`: the queues, intake, upkeep,
 the review eval, and `archon-ship-block` and `archon-deliver-block` themselves. The

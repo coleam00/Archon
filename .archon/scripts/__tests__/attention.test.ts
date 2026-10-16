@@ -4,10 +4,12 @@
  * a pass from the agent's decision to the person's answer and on to the next pass.
  * The engine's loop between them was proved on a real run when the pause was built;
  * dry-run fixtures cannot reach a second pass, so these tests chain the scripts the
- * way the loop does: one pass's settle output is the next pass's `previous`.
+ * way the loop does: one pass's settle output is the next pass's `previous`, and pin
+ * the loop's gate and exit to what the scripts do with each answer.
  */
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   STAGE_EFFECTS,
@@ -15,6 +17,7 @@ import {
   type StageDecision,
   type StageEffect,
 } from '../../workflows/sdlc/.shared/attention';
+import { CONFIDENCES } from '../../workflows/sdlc/.shared/queue';
 import { PACK, PR, PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -24,9 +27,11 @@ const STAGES = ['deliver', 'plan', 'triage', 'review', 'ship'] as const;
 interface RawNode {
   id: string;
   include?: string;
+  workflow?: string;
+  when?: string;
   with?: Record<string, unknown>;
   output_format?: { properties?: Record<string, unknown> };
-  loop_group?: { nodes: RawNode[] };
+  loop_group?: { nodes: RawNode[]; until_bash?: string };
 }
 interface RawWorkflow {
   inputs?: Record<string, unknown>;
@@ -76,6 +81,28 @@ describe('every public stage is the shared wrapper over its block', () => {
     for (const entry of entries.slice(1)) expect(shape(entry)).toEqual(shape(entries[0]));
   });
 
+  it('the stage runs again exactly on the answers that judge a new pass', () => {
+    const decision = /^\$LOOP_PREV\.attend__ask\.output\.decision == '(\w*)'$/;
+    const gate = node(node(entries[0].entry.nodes, 'cycle').loop_group?.nodes ?? [], 'go').when ?? '';
+    const gated = gate.split(' || ').map(clause => decision.exec(clause)?.[1]);
+    const item = settled(ask([RERUN, READY, FINISH], 'rerun', PR));
+    const judging = STAGE_EFFECTS.filter(effect => {
+      const run = answer(item, effect, LATER, { pr: { isDraft: true } });
+      expect(run.code, run.stderr).toBe(0);
+      return (JSON.parse(run.stdout) as { judge: boolean }).judge;
+    });
+    expect(judging).toEqual(['rerun']);
+    expect(gated.sort()).toEqual(['', ...judging].sort());
+  });
+
+  it('the loop ends exactly when the pass settled done', () => {
+    const until = node(entries[0].entry.nodes, 'cycle').loop_group?.until_bash ?? '';
+    const exits = [true, false].map(
+      done => spawnSync('bash', ['-c', until.replaceAll('$attend.output.done', String(done))]).status
+    );
+    expect(exits).toEqual([0, 1]);
+  });
+
   it('a pass hands its answer text to the stage after the work it was given', () => {
     for (const { entry } of entries) {
       const work = Object.values(node(node(entry.nodes, 'cycle').loop_group?.nodes ?? [], 'stage').with ?? {});
@@ -89,10 +116,29 @@ describe('every public stage is the shared wrapper over its block', () => {
 it("the decide agent's choices are the effects the scripts act on", () => {
   const decide = read('attention/archon-attention.yaml').nodes.find(node => node.id === 'decide');
   const attention = (decide?.output_format?.properties?.attention ?? {}) as {
-    properties: { recommendation: { properties: { choice: { enum: string[] } } }; choices: { items: { properties: { id: { enum: string[] } } } } };
+    properties: {
+      recommendation: { properties: { choice: { enum: string[] }; confidence: { enum: string[] } } };
+      choices: { items: { properties: { id: { enum: string[] } } } };
+    };
   };
   expect(attention.properties.recommendation.properties.choice.enum).toEqual([...STAGE_EFFECTS]);
   expect(attention.properties.choices.items.properties.id.enum).toEqual([...STAGE_EFFECTS]);
+  expect(attention.properties.recommendation.properties.confidence.enum).toEqual([...CONFIDENCES]);
+});
+
+it('a workflow that composes a stage includes its block, so it never raises a second item', () => {
+  const pauses = new Set(['archon-attention', ...STAGES.map(stage => `archon-${stage}`)]);
+  const targets = (nodes: readonly RawNode[]): string[] =>
+    nodes.flatMap(node => [
+      ...[node.include, node.workflow].filter(target => target !== undefined),
+      ...targets(node.loop_group?.nodes ?? []),
+    ]);
+  const composers = readdirSync(PACK, { recursive: true, encoding: 'utf8' }).filter(
+    path => path.endsWith('.yaml') && !path.includes('fixtures/') && !path.split('/')[0].endsWith('-entry')
+  );
+  const composed = composers.flatMap(path => targets(read(path).nodes ?? []).map(target => `${path}: ${target}`));
+  expect(composed).toContain('merge-queue/archon-merge-queue.yaml: archon-review-block');
+  expect(composed.filter(entry => pauses.has(entry.split(': ')[1]))).toEqual([]);
 });
 
 const OUTCOME = { ready: false, reason: 'round_cap', pr_url: PR_URL, ci_rerun: 'none', summary: 'Not ready' };
@@ -226,6 +272,17 @@ describe('answer', () => {
     const run = answer(settled(ask([READY, FINISH], 'ready', PR)), 'ready', null, { pr: { isDraft: true }, writeLost: true });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('does not report an open pull request ready for review');
+  });
+
+  it.each([
+    ['a stage that reports reason failed', null, { ...OUTCOME, reason: 'failed' }],
+    ['a stage that left no outcome', null, null],
+    ['a rerun whose stage failed', 'rerun', { ...LATER, ready: false, reason: 'failed' }],
+  ])('does not judge %s, so nothing is asked', (_name, choice, outcome) => {
+    const previous = choice === null ? null : settled(ask([RERUN, FINISH], 'rerun'));
+    const run = answer(previous, choice, outcome);
+    expect(run.code, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({ judge: false, outcome });
   });
 
   it('refuses an answer the item never offered', () => {

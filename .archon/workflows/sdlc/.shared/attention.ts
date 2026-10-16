@@ -72,7 +72,7 @@ export interface Settled {
 
 /** `answer`'s output. */
 export interface Answered {
-  /** Whether the stage ran this pass, so its ending needs judging. */
+  /** Whether the stage ran this pass and did not fail, so its ending needs judging. */
   readonly judge: boolean;
   readonly outcome: unknown;
   /** What the previous pass's answer did; empty when there was none. */

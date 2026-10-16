@@ -14,7 +14,8 @@ description: |
   answer, read as `$LOOP_PREV.attend__ask.output.decision`; the stage, whose work
   gets `$LOOP_PREV.attend__settle.output.brief` and the answer's text appended; and
   this block with `trigger_rule: all_done`, so it settles a pass whose stage was
-  skipped. The loop ends on `$attend.output.done`, and `$attend.output.outcome` is the
+  skipped. A pass whose stage failed asks nothing, and the stage's failure fails the
+  run. The loop ends on `$attend.output.done`, and `$attend.output.outcome` is the
   stage's outcome. A workflow that composes a stage includes the `-block` instead and
   owns what follows its ending, so it never raises a second item.
 
@@ -42,7 +43,7 @@ nodes:
       type: object
       properties:
         judge: { type: boolean }
-        outcome: { type: object }
+        outcome: { type: [object, 'null'] }
         applied: { type: string }
       required: [judge, outcome, applied]
 
@@ -108,7 +109,7 @@ nodes:
       required: [decision, reason, pull_request, attention]
 
   # Runs after a skipped decide too: a pass whose stage was skipped settles on the
-  # previous pass's outcome, and ends the loop.
+  # previous pass's outcome, and ends the loop; one whose stage failed raises no item.
   - id: settle
     script: settle
     runtime: bun
@@ -122,7 +123,7 @@ nodes:
       type: object
       properties:
         done: { type: boolean }
-        outcome: { type: object }
+        outcome: { type: [object, 'null'] }
         message: { type: string }
         options:
           type: array
