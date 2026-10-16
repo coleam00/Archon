@@ -720,22 +720,46 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each(['ambiguous', 'invalid'] as const)(
-    '%s incoming remote configuration still refuses registration',
+  test('unreadable incoming remote configuration refuses registration', async () => {
+    const root = await makeHome();
+    const path = await gitCheckout(join(root, 'incoming'), 'https://github.com/acme/api.git');
+    await mkdir(join(path, '.archon'));
+    await writeFile(join(path, '.archon/config.yaml'), 'worktree: [');
+    await expect(registerRepository(path)).rejects.toThrow(path);
+    expect(await listCodebases()).toHaveLength(0);
+  });
+
+  test.each(['unowned', 'owned'] as const)(
+    'a checkout with several remotes and no origin registers without a URL unless one is %s',
     async state => {
       const root = await makeHome();
+      const owner =
+        state === 'owned'
+          ? await registerRepository(
+              await gitCheckout(join(root, 'registered'), 'https://mirror.example/acme/api')
+            )
+          : null;
       const path = await gitCheckout(join(root, 'incoming'), 'https://github.com/acme/api.git');
-      if (state === 'ambiguous') {
-        execFileSync('git', ['-C', path, 'remote', 'rename', 'origin', 'upstream']);
-        execFileSync('git', ['-C', path, 'remote', 'add', 'mirror', 'https://mirror.example/api']);
+      execFileSync('git', ['-C', path, 'remote', 'rename', 'origin', 'upstream']);
+      execFileSync('git', [
+        '-C',
+        path,
+        'remote',
+        'add',
+        'mirror',
+        'https://mirror.example/acme/api',
+      ]);
+      if (owner) {
+        await expect(registerRepository(path)).rejects.toThrow(owner.defaultCwd);
+        expect(await listCodebases()).toHaveLength(1);
       } else {
-        await mkdir(join(path, '.archon'));
-        await writeFile(join(path, '.archon/config.yaml'), 'worktree: [');
+        expect(await registerRepository(path)).toMatchObject({
+          name: 'incoming',
+          repositoryUrl: null,
+          defaultCwd: path,
+          alreadyExisted: false,
+        });
       }
-      await expect(registerRepository(path)).rejects.toThrow(
-        state === 'ambiguous' ? 'worktree.remote' : path
-      );
-      expect(await listCodebases()).toHaveLength(0);
     }
   );
 

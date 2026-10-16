@@ -30,9 +30,7 @@ import {
   assertCheckoutRemote,
   findRemoteOwner,
   effectiveRegistrationUrl,
-  registrationRemote,
   registrationRemotes,
-  ambiguousRegistrationRemote,
 } from '../services/registration-remote';
 export { ProjectRegistrationError } from '../services/registration-remote';
 
@@ -297,7 +295,7 @@ async function validateRegistrationChoice(
     if (error instanceof InvalidBaseBranchError) throw new ProjectRegistrationError(error.message);
     throw error;
   }
-  const remote = await registrationRemote(path);
+  const { selected: remote } = await registrationRemotes(path);
   if (!remote) {
     getLog().warn({ path }, 'registration.base_branch_no_remote');
     return;
@@ -632,18 +630,18 @@ export async function registerRepository(
   }
 
   const { selected, names } = await registrationRemotes(localPath);
-  if (!selected && names.length > 0) {
-    for (const remote of names) {
-      const url = await effectiveRegistrationUrl(localPath, remote);
-      const owner = url && (await findRegisteredRemote(codebases, url));
-      if (owner) {
-        throw new ProjectRegistrationError(
-          `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
-            'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
-        );
-      }
+  // With several remotes and none selected, the checkout registers without a
+  // URL, as before remote selection existed; any remote another project owns
+  // still makes it a second clone.
+  for (const remote of selected ? [] : names) {
+    const url = await effectiveRegistrationUrl(localPath, remote);
+    const owner = url && (await findRegisteredRemote(codebases, url));
+    if (owner) {
+      throw new ProjectRegistrationError(
+        `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
+          'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+      );
     }
-    throw ambiguousRegistrationRemote(localPath, names);
   }
   const remoteUrl = selected ? await effectiveRegistrationUrl(localPath, selected) : null;
 

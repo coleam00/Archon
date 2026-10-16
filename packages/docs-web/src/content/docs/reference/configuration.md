@@ -419,7 +419,7 @@ worktree:
 **Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
 1. If `worktree.remote` is set: Uses the configured remote name for all operations.
 2. If omitted: Auto-detects — `origin` if it exists, otherwise the sole remote if only one is configured.
-3. If multiple remotes exist and none is named `origin`: Registration **fails with an actionable error** listing the available remotes and suggesting the config fix, before any worktree exists. Worktree creation also requires an unambiguous remote.
+3. If multiple remotes exist and none is named `origin`: Worktree creation **fails with an actionable error** listing the available remotes and suggesting the config fix. Registration still succeeds but records no repository URL, unless one of the remotes already belongs to a registered project, which refuses it as a second clone.
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).

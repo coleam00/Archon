@@ -37,18 +37,13 @@ export async function registrationRemotes(path: string): Promise<{
   return { selected: null, names };
 }
 
-export function ambiguousRegistrationRemote(
-  path: string,
-  names: readonly string[]
-): ProjectRegistrationError {
-  return new ProjectRegistrationError(
-    `Cannot select a remote for ${path}: ${names.join(', ')}. Set worktree.remote in .archon/config.yaml before registering this repository.`
-  );
-}
-
-export async function registrationRemote(path: string): Promise<string | null> {
+async function registrationRemote(path: string): Promise<string | null> {
   const { selected, names } = await registrationRemotes(path);
-  if (!selected && names.length > 0) throw ambiguousRegistrationRemote(path, names);
+  if (!selected && names.length > 0) {
+    throw new ProjectRegistrationError(
+      `Cannot select a remote for ${path}: ${names.join(', ')}. Set worktree.remote in .archon/config.yaml before registering this repository.`
+    );
+  }
   return selected;
 }
 
