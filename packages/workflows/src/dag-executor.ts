@@ -9314,6 +9314,11 @@ async function executeComposeFanOutNode(
         // Without a terminal record the resumed fan-out would find this instance started
         // and never finished, and refuse to replay it.
         if (error instanceof RunSourceUnreadableError) {
+          let releasedRecord = finishNodeExecution(
+            instanceExecution,
+            { status: 'failed', error: error.message, failureKind: 'child_failed' },
+            { output: { text: '' } }
+          );
           try {
             const rows = await deps.store.listWorkflowEvents(parentRun.id);
             let start = rows.length - 1;
@@ -9332,7 +9337,7 @@ async function executeComposeFanOutNode(
                 .filter(row => row.step_name?.startsWith(instanceStepNamePrefix)),
               parentRun.id
             );
-            const releasedRecord = finishNodeExecution(
+            releasedRecord = finishNodeExecution(
               instanceExecution,
               { status: 'failed', error: error.message, failureKind: 'child_failed' },
               {
@@ -9344,6 +9349,17 @@ async function executeComposeFanOutNode(
               }
             );
             await deps.store.persistWorkflowEvent(serializeNodeStateRecord(releasedRecord));
+          } catch (closureError) {
+            if (
+              closureError instanceof NodeEventWriteError ||
+              closureError instanceof TerminalStatusWriteError
+            )
+              throw closureError;
+            // The terminal owns the scope's spend. If accounting cannot be read, recovery
+            // must retain the open start rather than close it with incomplete usage.
+            throw new NodeEventWriteError(serializeNodeStateRecord(releasedRecord), closureError);
+          }
+          try {
             await deriveInstanceSinks(releasedRecord);
           } catch (cleanupError) {
             if (
@@ -9353,7 +9369,7 @@ async function executeComposeFanOutNode(
               throw cleanupError;
             getLog().error(
               { err: cleanupError, parentRunId: parentRun.id, instance: instanceScopeName },
-              'workflow.compose_fan_out_release_record_failed'
+              'workflow.compose_fan_out_release_sinks_failed'
             );
           }
         }

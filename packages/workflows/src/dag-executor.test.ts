@@ -22495,7 +22495,13 @@ describe('executeDagWorkflow -- script nodes', () => {
             });
           }
           try {
-            if (durableFault) {
+            if (cleanupFault === 'read' || cleanupFault === 'write') {
+              await expect(executeDagWorkflow(options)).rejects.toMatchObject({
+                name: 'NodeEventWriteError',
+                cause: storeFault,
+                message: expect.stringContaining('This host could not read'),
+              });
+            } else if (durableFault) {
               await expect(executeDagWorkflow(options)).rejects.toBe(durableFault);
             } else {
               await executeDagWorkflow(options);
@@ -22504,18 +22510,14 @@ describe('executeDagWorkflow -- script nodes', () => {
             await chmod(scriptsDir, 0o755);
           }
           expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
-          if (durableFault) {
+          if (durableFault || cleanupFault === 'read' || cleanupFault === 'write') {
             expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+            expect(
+              (await mockDeps.store.getDagResumeSnapshot(workflowRunId)).unresolvedNodeStarts.size
+            ).toBeGreaterThan(0);
             return;
           }
           expect(mockDeps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
-          if (cleanupFault !== 'none') {
-            expect(mockLogFn).toHaveBeenCalledWith(
-              expect.objectContaining({ err: storeFault, parentRunId: workflowRunId }),
-              'workflow.compose_fan_out_release_record_failed'
-            );
-            return;
-          }
           expect(await mockDeps.store.getDagResumeSnapshot(workflowRunId)).toMatchObject({
             costUsd: 0.25,
             tokens: { input: 10, output: 5 },
