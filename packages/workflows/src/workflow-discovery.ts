@@ -1061,13 +1061,16 @@ export async function discoverWorkflows(
       }
       // A pack workflow is referred to inside its pack by its `name:`. It is known
       // outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
-      const qualifiedByName = new Map<string, string>();
+      const qualifiedByName = new Map<string, string[]>();
       const entrypoints = new Set<string>();
       for (const file of loaded.files) {
         const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
         const qualified = installedWorkflowName(pack, entry ?? file.parsed.workflow.name);
         if (entry !== undefined) entrypoints.add(qualified);
-        qualifiedByName.set(file.parsed.workflow.name, qualified);
+        const authoredName = file.parsed.workflow.name;
+        const targets = qualifiedByName.get(authoredName) ?? [];
+        targets.push(qualified);
+        qualifiedByName.set(authoredName, targets);
       }
       for (const [path, entry] of entrypointByPath) {
         if (
@@ -1088,7 +1091,25 @@ export async function discoverWorkflows(
         const filename = `${label}/${file.folder}/${file.filename}`;
         const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
         const qualified = installedWorkflowName(pack, entry ?? workflow.name);
-        const supportChildren = qualifyPackReferences(workflow, qualifiedByName, entrypoints);
+        const { supportChildren, ambiguousReferences } = qualifyPackReferences(
+          workflow,
+          qualifiedByName,
+          entrypoints
+        );
+        if (ambiguousReferences.length > 0) {
+          allErrors.push({
+            filename,
+            workflowName: qualified,
+            error: ambiguousReferences
+              .map(
+                name =>
+                  `Ambiguous workflow reference '${name}': multiple files in installed plugin ${label} declare that name. Use a qualified workflow name.`
+              )
+              .join(' '),
+            errorType: 'validation_error',
+          });
+          continue;
+        }
         if (supportChildren.length > 0) {
           allErrors.push({
             filename,

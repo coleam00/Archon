@@ -319,6 +319,94 @@ describe('installed packs in the catalog', () => {
     });
   }
 
+  for (const collision of ['entrypoint', 'support'] as const) {
+    for (const reference of [
+      'include',
+      'workflow',
+      'fan-out include',
+      'fan-out workflow',
+      'loop include',
+    ] as const) {
+      test(`ambiguous authored references reject ${reference} with an entrypoint/${collision} collision`, async () => {
+        const field = reference.includes('workflow') ? 'workflow' : 'include';
+        let nodes = `  - id: child\n    ${field}: shared\n`;
+        if (reference.startsWith('fan-out')) {
+          nodes += `    fan_out:\n      items: '["a"]'\n      as: item\n`;
+        }
+        if (reference === 'loop include') {
+          nodes = `  - id: group\n    loop_group:\n      until_bash: exit 0\n      max_iterations: 1\n      nodes:\n        - id: child\n          include: shared\n`;
+        }
+        await install({
+          id: ID,
+          name: 'review-kit',
+          commit: COMMIT_A,
+          entrypoints: {
+            review: 'review/review.yaml',
+            first: 'first/first.yaml',
+            ...(collision === 'entrypoint' ? { second: 'second/second.yaml' } : {}),
+          },
+          files: {
+            'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n${nodes}`,
+            'first/first.yaml':
+              'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+            'second/second.yaml':
+              'name: shared\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
+          },
+        });
+        const catalog = await discover();
+        const errors = catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatchObject({
+          filename: 'acme/review-kit/review/review.yaml',
+          errorType: 'validation_error',
+        });
+        expect(errors[0].error).toContain("Ambiguous workflow reference 'shared'");
+        expect(names(catalog.workflows)).not.toContain(REVIEW);
+        expect(names(catalog.workflows)).toContain('acme/review-kit:first');
+        expect(
+          names(collision === 'entrypoint' ? catalog.workflows : (catalog.support ?? []))
+        ).toContain(`acme/review-kit:${collision === 'entrypoint' ? 'second' : 'shared'}`);
+        expect(
+          await resolveFanOutChildDefinition(
+            { ...deps, providers: providerRegistry },
+            project,
+            REVIEW
+          )
+        ).toEqual({
+          unresolved: errors[0].error,
+        });
+      });
+    }
+  }
+
+  for (const field of ['include', 'workflow'] as const) {
+    test(`qualified ${field} references select the requested public identity despite authored-name collisions`, async () => {
+      await install({
+        id: ID,
+        name: 'review-kit',
+        commit: COMMIT_A,
+        entrypoints: {
+          review: 'review/review.yaml',
+          first: 'first/first.yaml',
+          second: 'second/second.yaml',
+        },
+        files: {
+          'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n  - id: child\n    ${field}: acme/review-kit:first\n`,
+          'first/first.yaml':
+            'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+          'second/second.yaml':
+            'name: shared\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
+        },
+      });
+      const catalog = await discover();
+      expect(catalog.errors).toEqual([]);
+      const caller = catalog.workflows.find(entry => entry.workflow.name === REVIEW);
+      expect(caller?.workflow.nodes[0]).toMatchObject(
+        field === 'include' ? { script: 'echo first' } : { workflow: 'acme/review-kit:first' }
+      );
+    });
+  }
+
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a pack-root read fault retains the actual cause for every entrypoint',
     async () => {

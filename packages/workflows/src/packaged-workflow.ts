@@ -126,29 +126,37 @@ export function qualifyWorkflowResources(
 
 /**
  * Rewrite an installed pack workflow's references to workflows of the same pack from
- * their `name:` to the `owner/plugin:<name>` discovery gives them: `include:` targets
+ * their authored `name:` to their qualified discovery identity: `include:` targets
  * (a fan-out's too) and `workflow:` targets. A target outside the pack stays as
  * written, so an `include:` of it fails in the pack's own name map and a `workflow:`
  * child resolves through the catalog like any other.
  *
- * Returns the `workflow:` targets that name a support workflow. A child run is
- * dispatch, and support workflows are never dispatched; they compose through
- * `include:` only.
+ * Reports ambiguous authored references and `workflow:` targets that name support
+ * workflows. A child run is dispatch; support workflows compose through `include:` only.
  */
 export function qualifyPackReferences(
   workflow: WorkflowDefinition,
-  qualifiedByName: ReadonlyMap<string, string>,
+  qualifiedByName: ReadonlyMap<string, readonly string[]>,
   entrypoints: ReadonlySet<string>
-): string[] {
+): { supportChildren: string[]; ambiguousReferences: string[] } {
   const supportChildren: string[] = [];
+  const ambiguousReferences = new Set<string>();
+  const resolve = (name: string): string | undefined => {
+    const targets = qualifiedByName.get(name);
+    if (targets !== undefined && targets.length > 1) {
+      ambiguousReferences.add(name);
+      return undefined;
+    }
+    return targets?.[0];
+  };
   const visit = (nodes: WorkflowDefinition['nodes']): void => {
     for (const node of nodes) {
       if (isIncludeDirective(node) || isComposeFanOutNode(node)) {
-        node.include = qualifiedByName.get(node.include) ?? node.include;
+        node.include = resolve(node.include) ?? node.include;
         continue;
       }
       if (isWorkflowNode(node)) {
-        const target = qualifiedByName.get(node.workflow);
+        const target = resolve(node.workflow);
         if (target !== undefined && !entrypoints.has(target)) supportChildren.push(node.workflow);
         else if (target !== undefined) node.workflow = target;
       }
@@ -156,5 +164,5 @@ export function qualifyPackReferences(
     }
   };
   visit(workflow.nodes);
-  return supportChildren;
+  return { supportChildren, ambiguousReferences: [...ambiguousReferences] };
 }
