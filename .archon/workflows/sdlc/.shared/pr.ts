@@ -276,10 +276,12 @@ export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
   return after;
 }
 
-interface GhComment {
+export interface GhComment {
   readonly id: string;
   readonly body: string;
   readonly url: string;
+  /** Null for a deleted account. */
+  readonly author: string | null;
 }
 
 export function ghIssueComments(ref: QualifiedPr): GhComment[] {
@@ -304,10 +306,12 @@ export function ghIssueComments(ref: QualifiedPr): GhComment[] {
       ) {
         throw new Error('gh api returned an unexpected comment payload');
       }
+      const login = record(comment.user)?.login;
       comments.push({
         id: String(comment.id),
         body: typeof comment.body === 'string' ? comment.body : '',
         url: comment.html_url,
+        author: typeof login === 'string' && login !== '' ? login : null,
       });
     }
     if (rows.length < 100) return comments;

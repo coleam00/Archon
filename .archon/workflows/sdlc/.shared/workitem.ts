@@ -11,14 +11,16 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The build queue claims the same documents through the same claim, so an item has one
- * owner at a time across both queues; its record is `facts.build` (./build.ts).
+ * The build and merge queues claim the same documents through the same claim, so an
+ * item has one owner at a time across the queues; their records are `facts.build`
+ * (./build.ts) and `facts.merge` (./merge.ts).
  */
 
 import { createHash } from 'node:crypto';
 import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
+import type { MergeRecord } from './merge.ts';
 import { git, gitOrThrow } from './git.ts';
 import { note } from './io.ts';
 import {
@@ -120,7 +122,7 @@ export interface TriageFacts {
 export interface HistoryEntry {
   readonly at: string;
   /** The queue whose pickup or decision wrote the entry. */
-  readonly stage: 'intake' | 'build';
+  readonly stage: 'intake' | 'build' | 'merge';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -151,6 +153,7 @@ export interface WorkItem {
     };
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
+    readonly merge?: MergeRecord;
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -724,7 +727,8 @@ export function readWorkItem(number: number): WorkItem | null {
  */
 function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
-  if (claim === null) return item;
+  // A pickup that claims several items sees its own claims on its next pass.
+  if (claim === null || claim.run_id === runId) return item;
   const status = runStatus(claim.run_id);
   if (claimDisposition(status) === 'hold') {
     if (status === null) {

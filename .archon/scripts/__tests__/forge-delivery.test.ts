@@ -195,7 +195,7 @@ describe('the forge source delivers through plugin operations', () => {
     expect(state.pulls).toHaveLength(1);
     expect(state.pulls[0]).toMatchObject({ draft: true });
     expect(state.comments).toEqual([
-      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\n\n${ROUND_TWO}` },
+      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\nVerdict: ready\n\n${ROUND_TWO}` },
     ]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([

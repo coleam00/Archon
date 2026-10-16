@@ -107,6 +107,16 @@ The stage after intake, started by a schedule binding. Each run claims one triag
 
 ---
 
+#### `archon-merge-queue`
+
+The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges the base branch into any behind it, sends a pull request whose review a push made stale to a delta review, hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready at the head, CI is green there, no review thread is unresolved and the head contains the base branch, and merges pinned to that head. After a batch it checks the base branch's CI. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices. With `mode: eval` it merges and writes nothing and replays recorded merge decisions.
+
+**When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack installs no binding; the SDLC pack README's "Merge queue" section shows the one to add.
+
+**What it produces**: Merged pull requests, the queue's record on each work item (`facts.merge`: status and decisions), and attention items for the decisions that need a person.
+
+---
+
 #### `archon-discoveries`
 
 Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, or ask a maintainer. Scripts perform only the writes it declared. With `mode: eval` it writes nothing and returns every decision.
@@ -250,6 +260,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
+| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into any PR that is behind it) |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
