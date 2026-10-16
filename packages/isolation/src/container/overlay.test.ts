@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { summarizeOverlayChanges, applyOverlayChanges } from './overlay';
-import type { DockerRunner, DockerExecResult } from './docker-exec';
-import { IsolationFailure } from '../errors';
+import { extractDockerError, type DockerRunner, type DockerExecResult } from './docker-exec';
+import { IsolationFailure, isKnownIsolationError } from '../errors';
 
 const TARGET = { volume: 'archon-x-upper', hostRoot: '/tmp/ops', image: 'archon-runner:test' };
 
@@ -86,13 +86,24 @@ describe('summarizeOverlayChanges', () => {
     expect(summary.truncated).toBe(true);
   });
 
-  test('a docker failure is surfaced, not swallowed', async () => {
-    const docker = fakeDocker(() => {
-      throw new IsolationFailure('unclassified', 'Cannot connect to the Docker daemon');
+  test('an inspection failure preserves its typed cause and original process evidence', async () => {
+    const cause = Object.assign(new Error('docker run failed'), {
+      code: 23,
+      stderr: 'Cannot connect to the Docker daemon\noriginal stderr',
     });
-    await expect(summarizeOverlayChanges(docker, TARGET)).rejects.toThrow(
-      /inspect the overlay diff/
-    );
+    const failure = new IsolationFailure('unclassified', extractDockerError(cause), cause);
+    const docker = fakeDocker(() => {
+      throw failure;
+    });
+    const error = await summarizeOverlayChanges(docker, TARGET).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error('expected inspection failure');
+    expect(error.message).toContain('inspect the overlay diff');
+    expect(error.message).toContain(cause.stderr);
+    expect(error.message).toContain('exit code 23');
+    expect(error.cause).toBe(failure);
+    expect(failure.cause).toBe(cause);
+    expect(isKnownIsolationError(error)).toBe(true);
   });
 });
 

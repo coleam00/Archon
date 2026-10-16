@@ -37,6 +37,30 @@ test.skipIf(process.platform === 'win32')(
   }
 );
 
+test.skipIf(process.platform === 'win32')(
+  'dockerCli classifies a real process timeout and preserves its cause',
+  async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'docker-cli-')));
+    await writeFile(join(root, 'docker'), '#!/bin/sh\nexec /bin/sleep 30\n', { mode: 0o755 });
+
+    const error = await dockerCli(['version'], {
+      timeout: 100,
+      env: { ...process.env, PATH: root },
+    }).catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(IsolationFailure);
+    if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
+    expect(error.kind).toBe('timeout');
+    expect(error.cause).toBeInstanceOf(Error);
+    expect(error.cause).toMatchObject({ code: null, killed: true, signal: 'SIGTERM' });
+    expect(error.message).toContain('docker version');
+    expect(isKnownIsolationError(error)).toBe(true);
+    expect(classifyIsolationError(error)).toBe(
+      '**Error:** Timed out creating workspace. Git repository may be slow or unavailable.'
+    );
+  }
+);
+
 describe('dockerPreflight', () => {
   test('resolves when daemon reachable and image present', async () => {
     const calls: string[][] = [];
