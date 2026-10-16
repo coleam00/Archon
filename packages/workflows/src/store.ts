@@ -447,8 +447,17 @@ export function waitContinuedEvent(
   };
 }
 
+export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
+
+/** The initial execution has no token; resumes mint one so old executors cannot release a later claim. */
+export function executionClaim(metadata: Record<string, unknown>): string | null {
+  const claim = metadata[EXECUTION_CLAIM_METADATA_KEY];
+  return typeof claim === 'string' ? claim : null;
+}
+
 /** What `releaseRunForUnreadableSource` records about the node whose source could not be read. */
 export interface SourceReleaseWrite {
+  claimId: string | null;
   nodeId: string;
   path?: string;
   error: string;
@@ -944,7 +953,7 @@ export interface IWorkflowStore
    * compare-and-swap from `running` to `paused` that writes `source_release` with a
    * store-minted `releaseId` and `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
    * `source_released` in the same transaction. Writes nothing, and returns
-   * `released: false`, when the row is no longer `running`: another transition owns it.
+   * `released: false`, when status or `claimId` no longer matches: another execution owns it.
    */
   releaseRunForUnreadableSource(
     id: string,

@@ -17,6 +17,7 @@ import {
   waitContinuedEvent,
   workflowUnpausedEvent,
   sourceReleaseMetadata,
+  EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
   type SourceReleaseWrite,
   type GateResolutionEvent,
@@ -1102,6 +1103,7 @@ export async function resumeWorkflowRun(
         continuation_retry_at: null,
         [CAPACITY_WAIT_METADATA_KEY]: null,
         [SOURCE_RELEASE_METADATA_KEY]: null,
+        [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
         ...(scheduled !== null && triggeredAt !== null
           ? { scheduled_resume: { ...scheduled, triggeredAt } }
           : {}),
@@ -1224,7 +1226,10 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
            AND ${cancelledReason} IN (${reasonPlaceholders(3)})`,
         [
           id,
-          JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+          JSON.stringify({
+            [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
+            [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
+          }),
           ...FAN_OUT_CANCEL_REASONS,
         ]
       );
@@ -1775,8 +1780,13 @@ export async function releaseRunForUnreadableSource(
         `UPDATE remote_agent_workflow_runs
          SET status = 'paused', last_activity_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge('metadata', 2)}
-         WHERE id = $1 AND status = 'running'`,
-        [id, JSON.stringify(sourceReleaseMetadata(release, new Date().toISOString()))]
+         WHERE id = $1 AND status = 'running'
+           AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${release.claimId === null ? 'IS NULL' : '= $3'}`,
+        [
+          id,
+          JSON.stringify(sourceReleaseMetadata(release, new Date().toISOString())),
+          ...(release.claimId === null ? [] : [release.claimId]),
+        ]
       );
       if ((result.rowCount ?? 0) === 0) return { released: false };
       await insertWorkflowEvent(query, sourceReleasedEvent(id, release));

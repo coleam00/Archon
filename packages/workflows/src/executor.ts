@@ -98,6 +98,7 @@ import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import {
   CONTINUATION_RETRY_MS,
+  executionClaim,
   continuablePauseCursor,
   deadlineWaitCursor,
   type PersistedNodeOutput,
@@ -3022,6 +3023,7 @@ export async function executeWorkflow(
           'workflow.source_restore_unreadable'
         );
         const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+          claimId: executionClaim(workflowRun.metadata),
           nodeId: 'workflow-source',
           path,
           error: error instanceof Error ? error.message : String(error),

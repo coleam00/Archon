@@ -1801,18 +1801,16 @@ describe('workflows database', () => {
       expect(updateQuery).toContain('metadata = metadata || $3::jsonb');
       // $1 = id, $2 = ORPHAN_RESUME_STALE_DAYS. The day param MUST be bound or the
       // CAS predicate's `< $2 days` references an unbound placeholder (PR #1830 C1).
-      expect(updateParams).toEqual([
-        'workflow-run-123',
-        1,
-        JSON.stringify({
-          tool_call_attention: null,
-          error: null,
-          stop_reason: null,
-          continuation_retry_at: null,
-          capacity_wait: null,
-          source_release: null,
-        }),
-      ]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
+      expect(JSON.parse(String(updateParams[2]))).toEqual({
+        tool_call_attention: null,
+        error: null,
+        stop_reason: null,
+        continuation_retry_at: null,
+        capacity_wait: null,
+        source_release: null,
+        execution_claim: expect.any(String),
+      });
       // Third call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
@@ -1855,18 +1853,16 @@ describe('workflows database', () => {
       expect(updateQuery).toContain("status = 'running' AND");
       // The stale-orphan arm references $2 — it MUST be bound to the day count.
       expect(updateQuery).toContain('$2');
-      expect(updateParams).toEqual([
-        'workflow-run-123',
-        1,
-        JSON.stringify({
-          tool_call_attention: null,
-          error: null,
-          stop_reason: null,
-          continuation_retry_at: null,
-          capacity_wait: null,
-          source_release: null,
-        }),
-      ]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
+      expect(JSON.parse(String(updateParams[2]))).toEqual({
+        tool_call_attention: null,
+        error: null,
+        stop_reason: null,
+        continuation_retry_at: null,
+        capacity_wait: null,
+        source_release: null,
+        execution_claim: expect.any(String),
+      });
     });
 
     test('preserves the cleared error as a workflow_resumed event (CAS winner only)', async () => {

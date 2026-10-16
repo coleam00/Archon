@@ -24,6 +24,8 @@ import {
   waitContinuedEvent,
   workflowUnpausedEvent,
   sourceReleaseMetadata,
+  executionClaim,
+  EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
 } from '../store';
 import {
@@ -436,6 +438,7 @@ export function createTransactionView(
       run.status = 'running';
       run.completed_at = null;
       run.started_at = new Date();
+      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
       return structuredClone(run);
     },
@@ -721,6 +724,7 @@ export function createTransactionView(
       run.status = 'running';
       run.completed_at = null;
       run.started_at = new Date();
+      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
       delete run.metadata.cancelled_reason;
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
@@ -737,7 +741,8 @@ export function createTransactionView(
     },
     releaseRunForUnreadableSource: async (id, release) => {
       const run = row(id);
-      if (run.status !== 'running') return { released: false };
+      if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)
+        return { released: false };
       run.status = 'paused';
       run.last_activity_at = new Date();
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));

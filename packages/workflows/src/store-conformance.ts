@@ -11,6 +11,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, test, setSystemTime } from 'bun:test';
 import {
   FAN_OUT_CANCEL_REASONS,
+  executionClaim,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   continuablePauseCursor,
@@ -22,6 +23,7 @@ import {
   type AttentionAnswerWrite,
   type GateResolutionEvent,
   type IWorkflowStore,
+  type SourceReleaseWrite,
 } from './store';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -426,6 +428,7 @@ export function describeWorkflowStoreConformance(
         await store.resumeWorkflowRun(id, answeredCursor);
         const retryAt = new Date().toISOString();
         await store.releaseRunForUnreadableSource(id, {
+          claimId: executionClaim((await store.getWorkflowRun(id))?.metadata ?? {}),
           nodeId: 'check',
           error: 'EACCES',
           retryAt,
@@ -1394,6 +1397,7 @@ export function describeWorkflowStoreConformance(
       const afterRetry = new Date(Date.parse(retryAt) + 1000);
       expect(
         await store.releaseRunForUnreadableSource(run.id, {
+          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
           nodeId: 'check',
           path: '/capture/project/.archon/scripts',
           error: 'EACCES',
@@ -1442,6 +1446,7 @@ export function describeWorkflowStoreConformance(
         await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'check' });
         await store.resumeWorkflowRun(run.id);
         await store.releaseRunForUnreadableSource(run.id, {
+          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
           nodeId: 'check',
           error: 'EIO',
           retryAt: resumeAt,
@@ -1456,12 +1461,18 @@ export function describeWorkflowStoreConformance(
       setSystemTime(now);
       try {
         const run = await running(store);
-        const write = { nodeId: 'check', error: 'EACCES', retryAt: now.toISOString() };
+        const write: SourceReleaseWrite = {
+          claimId: null,
+          nodeId: 'check',
+          error: 'EACCES',
+          retryAt: now.toISOString(),
+        };
         await store.releaseRunForUnreadableSource(run.id, write);
         const first = readSourceRelease((await store.getWorkflowRun(run.id))?.metadata);
         if (!first) throw new Error('missing release');
         const cursor = { kind: 'source' as const, ...first };
-        await store.resumeWorkflowRun(run.id, cursor);
+        const resumedClaim = await store.resumeWorkflowRun(run.id, cursor);
+        write.claimId = executionClaim(resumedClaim.metadata);
         await store.releaseRunForUnreadableSource(run.id, write);
         const second = readSourceRelease((await store.getWorkflowRun(run.id))?.metadata);
         expect(second?.releasedAt).toBe(first.releasedAt);
@@ -1485,6 +1496,7 @@ export function describeWorkflowStoreConformance(
       const retryAt = new Date(Date.now() + 60_000).toISOString();
       expect(
         await store.releaseRunForUnreadableSource(run.id, {
+          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
           nodeId: 'check',
           error: 'EACCES',
           retryAt,
@@ -1496,8 +1508,36 @@ export function describeWorkflowStoreConformance(
       );
       expect(due.map(row => row.id)).not.toContain(run.id);
     });
+    test('a stale source release cannot pause a newer claim in the same millisecond', async () => {
+      setSystemTime(new Date('2026-10-16T10:00:00.000Z'));
+      try {
+        const run = await running(store);
+        const release = {
+          claimId: executionClaim(run.metadata),
+          nodeId: 'check',
+          error: 'EACCES',
+          retryAt: new Date().toISOString(),
+        };
+        await store.pauseWorkflowRun(run.id, { ...approval, resolved: 'approved' });
+        const resumed = await store.resumeWorkflowRun(run.id);
+        expect(await store.releaseRunForUnreadableSource(run.id, release)).toEqual({
+          released: false,
+        });
+        expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+        expect(await types(store, run.id)).not.toContain('source_released');
+        expect(
+          await store.releaseRunForUnreadableSource(run.id, {
+            ...release,
+            claimId: executionClaim(resumed.metadata),
+          })
+        ).toEqual({ released: true });
+      } finally {
+        setSystemTime();
+      }
+    });
     test('a source release never overrides another transition', async () => {
       const release = {
+        claimId: null,
         nodeId: 'check',
         error: 'EACCES',
         retryAt: new Date(Date.now() + 60_000).toISOString(),
@@ -1541,7 +1581,7 @@ export function describeWorkflowStoreConformance(
       expect(await rejection(store.pauseWorkflowRun(run.id, approval))).toBeInstanceOf(
         WorkflowRunPauseConflictError
       );
-      await store.resumeWorkflowRun(run.id);
+      const resumed = await store.resumeWorkflowRun(run.id);
       const results = await Promise.allSettled(
         Array.from({ length: 8 }, () =>
           store.pauseWorkflowRun(
@@ -1562,6 +1602,7 @@ export function describeWorkflowStoreConformance(
         if (result.status === 'rejected')
           expect(result.reason).toBeInstanceOf(WorkflowRunPauseConflictError);
       expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
+        execution_claim: executionClaim(resumed.metadata),
         keep: true,
         extra: true,
         approval,

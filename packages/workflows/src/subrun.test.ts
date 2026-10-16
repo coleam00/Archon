@@ -821,6 +821,118 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'child source recovery',
     () => {
+      it('an admitted child owns its source pause and resumes without replaying parent work', async () => {
+        await mkdir(join(cwd, '.archon/scripts'), { recursive: true });
+        await writeFile(join(cwd, '.archon/scripts/check.ts'), 'console.log("child done")');
+        await writeWorkflow(
+          'source-child',
+          `name: source-child
+description: child
+nodes:
+  - id: check
+    script: check
+    runtime: bun
+`
+        );
+        await writeWorkflow(
+          'source-parent',
+          `name: source-parent
+description: parent
+nodes:
+  - id: before
+    prompt: before
+  - id: sub
+    workflow: source-child
+    depends_on: [before]
+`
+        );
+        const store = new InMemoryStore();
+        store.releaseRunForUnreadableSource = async (id, release) => {
+          const run = store.runs.get(id);
+          if (!run || run.status !== 'running') return { released: false };
+          run.status = 'paused';
+          Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
+          await store.persistWorkflowEvent(sourceReleasedEvent(id, release));
+          return { released: true };
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const persist = store.persistWorkflowEvent;
+        let locked: string | undefined;
+        let inject = true;
+        store.persistWorkflowEvent = async event => {
+          await persist(event);
+          if (inject && event.event_type === 'node_started' && event.step_name === 'check') {
+            const child = store.runs.get(event.workflow_run_id);
+            if (!child) throw new Error('child not admitted');
+            expect(child.status).toBe('running');
+            const capture = await resolveRunSourceCapture(child.metadata);
+            if (!capture) throw new Error('missing child capture');
+            locked = join(capture.anchor.root, 'project/.archon/scripts/check.ts');
+            await chmod(locked, 0o000);
+          }
+        };
+        const deps = makeDeps(store);
+        const parentWorkflow = await discover('source-parent');
+        try {
+          await executeWorkflow(
+            deps,
+            makePlatform(),
+            'source-child-test',
+            cwd,
+            parentWorkflow,
+            'goal'
+          );
+        } finally {
+          inject = false;
+          if (locked) await chmod(locked, 0o644);
+        }
+        const parent = [...store.runs.values()].find(run => run.workflow_name === 'source-parent');
+        const child = [...store.runs.values()].find(run => run.workflow_name === 'source-child');
+        if (!parent || !child) throw new Error('missing parent or child');
+        expect(fail).not.toHaveBeenCalled();
+        expect(child.status).toBe('paused');
+        expect(child.metadata.source_release).toMatchObject({ nodeId: 'check', path: locked });
+        expect(parent.status).toBe('paused');
+        expect(parent.metadata.approval).toMatchObject({
+          type: 'child_workflow',
+          nodeId: 'sub',
+          childRunId: child.id,
+        });
+        expect(parent.metadata.source_release).toBeUndefined();
+        expect(store.events.filter(event => event.event_type === 'source_released')).toEqual([
+          expect.objectContaining({ workflow_run_id: child.id, step_name: 'check' }),
+        ]);
+        const resumed = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+        if (!resumed) throw new Error('child not resumable');
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'source-child-test',
+          cwd,
+          await discover('source-child'),
+          'goal',
+          undefined,
+          resumed
+        );
+        expect(child.status).toBe('completed');
+        expect(parent.status).toBe('completed');
+        expect(store.runs.size).toBe(2);
+        for (const [runId, nodeId] of [
+          [parent.id, 'before'],
+          [parent.id, 'sub'],
+          [child.id, 'check'],
+        ]) {
+          expect(
+            store.events.filter(
+              event =>
+                event.workflow_run_id === runId &&
+                event.step_name === nodeId &&
+                event.event_type === 'node_completed'
+            )
+          ).toHaveLength(1);
+        }
+        expect(fail).not.toHaveBeenCalled();
+      });
       for (const fault of [
         'capture',
         'discovery',

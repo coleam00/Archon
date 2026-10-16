@@ -1,3 +1,4 @@
+import { createTransactionView } from './file-store/transaction-view';
 import { formatPackagedResourceReference } from './packaged-workflow';
 import { providerRegistry } from '@archon/providers';
 import { isApprovalContext } from './schemas/workflow-run';
@@ -21929,6 +21930,138 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
+      it('a sibling gate resume wins over the old executor source release', async () => {
+        const deps = createMockDeps();
+        const view = createTransactionView(new Map(), [], async () => null);
+        const pending = await view.createWorkflowRun({
+          workflow_name: 'ownership',
+          user_message: '',
+        });
+        const run = await view.claimPendingWorkflowRun(pending.id);
+        if (!run) throw new Error('claim lost');
+        let resumeClaimed = false;
+        let resumed!: () => void;
+        const resumeDone = new Promise<void>(resolve => {
+          resumed = resolve;
+        });
+        deps.store.getWorkflowRunStatus.mockImplementation(view.getWorkflowRunStatus);
+        deps.store.pauseWorkflowRun.mockImplementation(async (id, approval, metadata, event) => {
+          await view.pauseWorkflowRun(id, approval, metadata, event);
+          await view.resolveApprovalGate(
+            id,
+            { approval: { ...approval, resolved: 'approved' } },
+            []
+          );
+          await view.resumeWorkflowRun(id);
+          resumeClaimed = true;
+          resumed();
+        });
+        deps.store.releaseRunForUnreadableSource.mockImplementation(
+          view.releaseRunForUnreadableSource
+        );
+        const verifier = spyOn(sourceIntegrity, 'assertWorkflowSourceIntegrity').mockImplementation(
+          async () => {
+            await resumeDone;
+            throw Object.assign(new Error('source unreadable'), {
+              code: 'EACCES',
+              syscall: 'open',
+              path: '/capture/check.ts',
+            });
+          }
+        );
+        try {
+          expect(
+            await executeDagWorkflow(
+              dagOptions({
+                deps,
+                cwd: testDir,
+                workflowRun: run,
+                workflow: {
+                  name: 'ownership',
+                  nodes: [
+                    dagNodeSchema.parse({ id: 'gate', approval: { message: 'review' } }),
+                    checkNode,
+                  ],
+                },
+              })
+            )
+          ).toEqual({ kind: 'source_release', released: false });
+        } finally {
+          verifier.mockRestore();
+        }
+        expect(resumeClaimed).toBe(true);
+        expect((await view.getWorkflowRun(run.id))?.status).toBe('running');
+        expect(deps.store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+        expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+      });
+      for (const runtime of ['bun', 'uv'] as const) {
+        it(`a late named-script read fault stays resumable (${runtime})`, async () => {
+          const deps = createMockDeps();
+          const scripts = join(testDir, '.archon/scripts');
+          await mkdir(scripts, { recursive: true });
+          const path = join(scripts, runtime === 'bun' ? 'late.ts' : 'late.py');
+          await writeFile(
+            join(scripts, runtime === 'bun' ? 'helper.ts' : 'helper.py'),
+            runtime === 'bun' ? 'export const value = "ok";' : 'value = "ok"'
+          );
+          await writeFile(
+            path,
+            runtime === 'bun'
+              ? `import { value } from './helper.ts'; if (import.meta.path !== ${JSON.stringify(join(await sourceFiles.realpath(scripts), 'late.ts'))}) throw new Error('wrong source path'); console.log(value);`
+              : `from helper import value\nassert __file__ == ${JSON.stringify(path)}\nprint(value)`
+          );
+          const healthy = createMockDeps();
+          await executeDagWorkflow(
+            dagOptions({
+              deps: healthy,
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('healthy-runtime'),
+              workflow: {
+                name: 'healthy-runtime',
+                nodes: [dagNodeSchema.parse({ id: 'late', script: 'late', runtime })],
+              },
+            })
+          );
+          expect(healthy.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(healthy.store.failWorkflowRun).not.toHaveBeenCalled();
+          const persist = deps.store.persistWorkflowEvent.getMockImplementation()!;
+          deps.store.persistWorkflowEvent.mockImplementation(async event => {
+            await persist(event);
+            if (event.event_type === 'node_started' && event.step_name === 'late')
+              await chmod(path, 0o000);
+          });
+          const options = dagOptions({
+            deps,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('late-read'),
+            workflow: {
+              name: 'late-read',
+              nodes: [dagNodeSchema.parse({ id: 'late', script: 'late', runtime })],
+            },
+          });
+          try {
+            await executeDagWorkflow(options);
+          } finally {
+            await chmod(path, 0o644);
+          }
+          expectReleased(deps.store, 'late');
+          deps.store.persistWorkflowEvent.mockImplementation(persist);
+          deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          await executeDagWorkflow(options);
+          expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+          await writeFile(
+            path,
+            runtime === 'bun'
+              ? 'throw new Error("ordinary script failure")'
+              : 'raise RuntimeError("ordinary script failure")'
+          );
+          const failing = createMockDeps();
+          await executeDagWorkflow({ ...options, deps: failing });
+          expect(failing.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(failing.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        });
+      }
       it('an unreadable captured scripts directory after admission leaves the run resumable, not failed', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');

@@ -173,6 +173,7 @@ import {
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   CONTINUATION_RETRY_MS,
+  executionClaim,
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
@@ -4055,6 +4056,20 @@ async function executeScriptNode(
         nodeId: node.id,
         label: '<script>',
       },
+    }).catch(async (error: unknown) => {
+      // Runtimes reopen named scripts. Diagnose source availability from a fresh typed
+      // filesystem operation, never from Bun/uv's stderr or ordinary exit codes.
+      const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
+      if (selected) {
+        try {
+          await readFile(selected.path);
+        } catch (sourceError) {
+          if (isSourceReadFailure(sourceError, verifiedScriptFiles))
+            throw new RunSourceUnreadableError(stepName, sourceError);
+          throw sourceError;
+        }
+      }
+      throw error;
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -4075,6 +4090,7 @@ async function executeScriptNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
+    if (error instanceof RunSourceUnreadableError) throw error;
     const err = error as RawSubprocessRejection;
     // See executeBashNode: a contract failure (#2453) stays outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
@@ -12242,7 +12258,7 @@ export async function executeDagWorkflow(
 
   /**
    * Pause the run instead of failing it: this host could not read its source (#4209).
-   * The release is a store compare-and-swap on `running`, so an operator's abandon or a
+   * The release compares status and execution claim, so an operator's abandon or a
    * sibling gate that already moved the row wins. It runs after the layer settled, so
    * nothing of this run still executes here when another host may claim it.
    */
@@ -12254,6 +12270,7 @@ export async function executeDagWorkflow(
       'dag.run_released_source_unreadable'
     );
     const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+      claimId: executionClaim(workflowRun.metadata),
       nodeId: error.nodeId,
       ...(error.path !== undefined ? { path: error.path } : {}),
       error: error.message,
