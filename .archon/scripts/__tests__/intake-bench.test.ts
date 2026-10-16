@@ -37,7 +37,7 @@ import {
   triageNodeId,
   type Version,
 } from '../../workflows/sdlc/intake/scripts/bench/runner';
-import { MARKS_FILE, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
+import { MARKS_FILE, closeCheck, renderScore, score } from '../../workflows/sdlc/intake/scripts/bench/score';
 import {
   type BenchSet,
   humanType,
@@ -326,9 +326,10 @@ describe('bench run', () => {
 
   /** `run --live` for the base version on a scratch clone holding copies 101 and 102 of the two rows. */
   function benchLive(scenario: Partial<FakeConfig> = {}) {
-    const { runWith, argv, repo, out, cli } = bench(scenario);
+    const { runWith, argv, repo, out, cli, packSha } = bench(scenario);
     const scratch = track(mkdtempSync(join(tmpdir(), 'intake-bench-scratch-')));
     ok(scratch, 'clone', '-q', repo, '.');
+    ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the batch base');
     ok(scratch, 'remote', 'set-url', 'origin', 'git@github.com:me/scratch-base.git');
     writeFileSync(join(out, 'live.yaml'), JSON.stringify({ base: { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: scratch } }));
     mkdirSync(join(out, 'bench', 'live'), { recursive: true });
@@ -336,8 +337,24 @@ describe('bench run', () => {
     const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
     config.issues.push({ number: 101, labels: [], comments: 0 }, { number: 102, labels: [], comments: 0 });
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
-    return { ...runWith(['--live', join(out, 'live.yaml')], 'base'), argv, scratch };
+    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch };
   }
+
+  it('records original merged-base evidence in live scratch runs for scoring', () => {
+    const { status, lines, argv } = benchLive({ issues: [
+      { number: 11, labels: [], comments: 0, refs: [
+        { url: 'https://github.com/o/r/pull/30', merged: true, oid: 'HEAD~1' },
+        { connected: true, url: 'https://github.com/o/r/pull/31', merged: true, oid: 'HEAD~1' },
+        { url: 'https://github.com/o/r/pull/32', merged: true, oid: 'HEAD' },
+        { url: 'https://github.com/o/r/pull/33', merged: false, oid: null },
+        { url: 'https://github.com/fork/r/pull/34', merged: true, oid: 'f'.repeat(40) },
+      ] },
+      { number: 12, labels: [], comments: 0 },
+    ] });
+    expect(status).toBe(0);
+    expect(lines.find(line => line.row === '11')?.merged_on_base).toEqual(['https://github.com/o/r/pull/30', 'https://github.com/o/r/pull/31']);
+    expect(argv(1)).toContain('mode=live');
+  });
 
   it('runs intake live on the version scratch copies and reads the verdict from the copy work item', () => {
     const { status, stderr, lines, checks, argv, scratch } = benchLive();
@@ -353,6 +370,52 @@ describe('bench run', () => {
     ]);
     expect(checks[0]).toMatchObject({ mode: 'live', passed: true });
   });
+
+  it('fails live rows when original merged-base evidence is incomplete', () => {
+    const refs = Array.from({ length: 101 }, (_, i) => ({ url: `https://github.com/o/r/pull/${String(i)}`, merged: false, oid: null }));
+    const { status, lines, argv } = benchLive({ issues: [{ number: 11, labels: [], comments: 0, refs }, { number: 12, labels: [], comments: 0 }] });
+    expect(status).toBe(1);
+    expect(lines.find(line => line.row === '11')?.problems.join('; ')).toContain('more than 100 cross-references');
+    expect(lines.find(line => line.row === '11')?.run_id).toBeNull();
+    expect(argv(1)).toContain('number=102');
+    expect(() => argv(2)).toThrow();
+  });
+
+  it('accepts complete empty merged-base references in a shallow source checkout', () => {
+    const { repo, cli } = bench();
+    const shallow = track(mkdtempSync(join(tmpdir(), 'intake-bench-shallow-')));
+    ok(shallow, 'clone', '-q', '--depth=1', `file://${repo}`, '.');
+    expect(ok(shallow, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    const reader = join(import.meta.dir, '../../workflows/sdlc/intake/scripts/bench/runner.ts');
+    const result = spawnSync(process.execPath, ['--preload', join(cli, 'preload.ts'), '--eval',
+      `import { readMergedOnBase } from ${JSON.stringify(reader)}; console.log(JSON.stringify(readMergedOnBase(${JSON.stringify(REPO)}, 11, process.cwd(), 'HEAD')));`,
+    ], { cwd: shallow, encoding: 'utf8' });
+    expect([result.status, result.stderr]).toEqual([0, '']);
+    expect(JSON.parse(result.stdout)).toEqual([]);
+  });
+
+  for (const fetchMergeObject of [false, true]) {
+    it(`refuses shallow merged-base evidence with the merge object ${fetchMergeObject ? 'present' : 'absent'}`, () => {
+      const { repo, cli, packSha } = bench();
+      ok(repo, 'commit', '-q', '--allow-empty', '-m', 'after the merge');
+      const shallow = track(mkdtempSync(join(tmpdir(), 'intake-bench-shallow-')));
+      ok(shallow, 'clone', '-q', '--depth=1', `file://${repo}`, '.');
+      // Fetching the object alone still leaves the base's ancestry truncated.
+      if (fetchMergeObject) ok(shallow, 'fetch', '-q', '--depth=1', repo, packSha);
+      const config = JSON.parse(readFileSync(join(cli, 'config.json'), 'utf8')) as FakeConfig;
+      config.issues[0] = { ...config.issues[0], refs: [{ url: 'https://github.com/o/r/pull/30', merged: true, oid: packSha }] };
+      writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
+      expect(spawnSync('git', ['cat-file', '-e', packSha], { cwd: shallow }).status).toBe(fetchMergeObject ? 0 : 1);
+      if (fetchMergeObject) expect(spawnSync('git', ['merge-base', '--is-ancestor', packSha, 'HEAD'], { cwd: shallow }).status).toBe(1);
+      const reader = join(import.meta.dir, '../../workflows/sdlc/intake/scripts/bench/runner.ts');
+      const result = spawnSync(process.execPath, ['--preload', join(cli, 'preload.ts'), '--eval',
+        `import { readMergedOnBase } from ${JSON.stringify(reader)}; readMergedOnBase(${JSON.stringify(REPO)}, 11, process.cwd(), 'HEAD');`,
+      ], { cwd: shallow, encoding: 'utf8' });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('shallow');
+      expect(result.stderr).toContain('unshallow');
+    });
+  }
 
   it('does not pass a trust: auto row on which intake took a path without triage', () => {
     const { lines } = benchLive({ autoPath: 'quiet' });
@@ -801,6 +864,97 @@ describe('score', () => {
     const [a, b] = score({ ...set, rows: [...set.rows, notPlanned, closeDisposed, blockDisposed] }, out).versions;
     // a proposes a close on the closed duplicate, fixed and not-planned rows too.
     expect([a.false_closes, b.false_closes]).toEqual([['22'], ['2']]);
+  });
+
+  function liveOut(): string {
+    const out = benchOut();
+    const samples = readLines(join(out, SAMPLES_FILE));
+    writeFileSync(join(out, SAMPLES_FILE), '');
+    for (const sample of samples) appendLine(join(out, SAMPLES_FILE), { ...sample, mode: 'live', workflow: 'intake', merged_on_base: [] });
+    const records = readLines(join(out, CHECKS_FILE));
+    writeFileSync(join(out, CHECKS_FILE), '');
+    for (const record of records) appendLine(join(out, CHECKS_FILE), { ...record, mode: 'live' });
+    return out;
+  }
+
+  it('keeps historical live closes without collected evidence unresolved', () => {
+    const out = liveOut();
+    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', { mode: 'live', workflow: 'intake' }));
+    const result = score(set, out).versions[1];
+    expect([result.false_closes, result.pending_closes]).toEqual([[], ['2']]);
+    expect(renderPage(set, out, 1)).toContain('Merged-base evidence was not collected');
+    expect(renderPage(set, out, 1)).toContain('Rerun this live row');
+    expect(renderScore(score(set, out))).toContain('0, 1 awaiting operator judgment (2): pending');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'partly', note: '' });
+    expect(score(set, out).versions[1].pending_closes).toEqual(['2']);
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'wrong', note: '' });
+    expect(score(set, out).versions[1].false_closes).toEqual(['2']);
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: '' });
+    expect(score(set, out).versions[1].pending_closes).toEqual([]);
+  });
+
+  it('keeps reference-only closes pending until the operator judges the fix', () => {
+    const out = liveOut();
+    const fixedOnBase = { merged_on_base: ['https://github.com/o/r/pull/40'] };
+    appendLine(join(out, SAMPLES_FILE), line('b', typed, '1-x', { ...fixedOnBase, mode: 'live', workflow: 'intake' }));
+    const pending = score(set, out).versions[1];
+    expect([pending.false_closes, pending.pending_closes]).toEqual([[], ['2']]);
+    expect(renderScore(score(set, out))).toContain('0, 1 awaiting operator judgment (2): pending');
+    expect(renderPage(set, out, 1)).toContain('A merged pull request on the base references this issue: <a href="https://github.com/o/r/pull/40">');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'partly', note: '' });
+    expect(score(set, out).versions[1].pending_closes).toEqual(['2']);
+    expect(renderPage(set, out, 1)).toContain('the close bar stays pending');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'wrong', note: '' });
+    expect(score(set, out).versions[1].false_closes).toEqual(['2']);
+    expect(renderPage(set, out, 1)).not.toContain('the close bar stays pending');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: 'verified fix' });
+    expect(renderPage(set, out, 1)).not.toContain('the close bar stays pending');
+    expect(renderScore(score(set, out))).toContain('| false closes (none allowed) | 0: pass | 0: pass |');
+  });
+
+  it('lets a wrong operator mark overturn an open close disposition, retaining closed rows', () => {
+    const disposed = row(21, { group: 'dispositioned', known: { disposition: { contract: 'NO_ACTION' } } });
+    const proposed = line('a', disposed, '2-y', { mode: 'live', workflow: 'intake' });
+    expect(([undefined, 'right', 'wrong', 'partly'] as const).map(mark => closeCheck(disposed, proposed, mark))).toEqual([null, null, 'false', null]);
+    expect(closeCheck(fixed, line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }), 'wrong')).toBeNull();
+    const out = liveOut();
+    appendLine(join(out, SAMPLES_FILE), proposed);
+    appendLine(join(out, MARKS_FILE), { run_id: proposed.run_id, batch: 2, row: disposed.id, label: 'a', mark: 'wrong', note: '' });
+    expect(score({ ...set, rows: [...set.rows, disposed] }, out).versions[0].false_closes).toEqual(['21']);
+  });
+
+  it('lets a mark override the expected answer for closes and dispositions, but not for type', () => {
+    const out = liveOut();
+    expect(renderPage(set, out, 1)).toContain('Counts as a false close unless you mark it right.');
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-2-1-x', batch: 1, row: '2', label: 'b', mark: 'right', note: '' });
+    expect(renderPage(set, out, 1)).not.toContain('Counts as a false close unless you mark it right.');
+    const blocked = row(10, { group: 'dispositioned', known: { disposition: { contract: 'BLOCKED' } } });
+    const ready = { verdict: { ...line('a', blocked, '2-y').verdict!, contract: 'READY' as const, route: 'plan' as const } };
+    appendLine(join(out, SAMPLES_FILE), line('a', blocked, '2-y', { ...ready, mode: 'live', workflow: 'intake' }));
+    appendLine(join(out, SAMPLES_FILE), line('b', blocked, '2-y', { mode: 'live', workflow: 'intake', verdict: { ...ready.verdict, contract: 'BLOCKED', route: null } }));
+    const withBlocked: BenchSet = { ...set, rows: [...set.rows, blocked] };
+    const before = score(withBlocked, out).versions;
+    expect([before[0].dispositions.agree, before[1].dispositions.agree]).toEqual([0, 1]);
+    appendLine(join(out, MARKS_FILE), { run_id: 'a-10-2-y', batch: 2, row: '10', label: 'a', mark: 'right', note: '' });
+    appendLine(join(out, MARKS_FILE), { run_id: 'b-10-2-y', batch: 2, row: '10', label: 'b', mark: 'wrong', note: '' });
+    const [a, b] = score(withBlocked, out).versions;
+    expect([a.dispositions.agree, b.dispositions.agree]).toEqual([1, 0]);
+    expect(b.false_closes).toEqual([]);
+    // b's type on row 2 still disagrees with the human label, whatever the mark.
+    expect(b.type.agree).toBe(0);
+  });
+
+  it('reads a bar with no applicable rows as not applicable', () => {
+    const out = liveOut();
+    const result = score(set, out);
+    expect(renderScore(result)).toContain('| every `trust: outside` row ran no agent node | 0 of 0 ran one: not applicable |');
+    expect(result.versions[0].bars.not_planned.status).toBe('not applicable');
+    const empty = track(mkdtempSync(join(tmpdir(), 'intake-bench-score-')));
+    appendLine(join(empty, SAMPLES_FILE), line('a', fixed, '2-y', { mode: 'live', workflow: 'intake' }));
+    appendLine(join(empty, CHECKS_FILE), { ...checks('2-y', true), mode: 'live' });
+    const closedOnly = renderScore(score(set, empty));
+    expect(closedOnly).toContain('| false closes (none allowed) | 0: not applicable |');
+    expect(closedOnly).toContain('| `type` agreement (at least 80%) | -: not applicable |');
   });
 
   it('counts a close proposal that links the canonical issue, and shows its link', () => {

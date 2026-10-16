@@ -389,25 +389,43 @@ are the operator's and stay outside the pack and the repository.
   version's result, not a batch failure. A `trust: auto`
   run that returns no triage verdict, or a verdict whose transcript is missing so no
   leak check ran, is recorded as failed: it counts against the bars as not right.
-- **Live batches.** `copy` opens copies of a batch's issues in scratch repositories
+  Eval batches are cheap dry checks that the bench works, not fair scored
+  comparisons: an eval run can read the issue's current state, including its outcome.
+- **Live batches.** Use live batches on scratch copies for scored comparisons.
+  `copy` opens copies of a batch's issues in scratch repositories
   the operator prepared, one per version, and `run --live` runs intake for real
   there, reading each verdict from the copy's work item. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's.
+  scratch repository may not be the set's own or another version's. Each copy holds
+  the pinned text, so lookups need no rewriting. Each live line records
+  merged pull requests on the base that reference the original issue, for scoring.
+  If that evidence is incomplete, the row does not run and its line says why;
+  reference histories exceeding the first 100 events are refused. Rows with
+  references also require a complete source history: unshallow the source checkout
+  before rerunning. Complete empty reference responses need no history check. Older
+  live lines without collected evidence keep close proposals pending until rerun or
+  marked right or wrong.
 - **Evaluation.** `page` serves one batch's page on the loopback interface: each
   row's versions side by side with the verdict, the five fields, any close proposal
   or maintainer recommendation with its links, cost, time and the triage report. The
   operator marks each run right, wrong or partly right, and marks land in
-  `marks.jsonl`, so they tally across batches.
+  `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
+  expected answer for false closes and dispositions, not for `type`. The score uses
+  these marks; the page shows the selected mark and any note.
 - **Score.** `score` prints one column per version from each version's latest line
   per row, with live lines in their own `<label> (live)` column: which workflow
   judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
   the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a command, fetch or search that looked
-  up the judged issue, left out of the accuracy numbers), cost over the runs in
+  open, unless the operator dispositioned it closed or marked the run right; a wrong
+  mark overrides a close disposition. A merged pull request on the base that only
+  references the issue leaves the close bar pending until the operator marks the
+  run right or wrong),
+  dispositions matched (a right or wrong mark decides), the `type` confusion matrix
+  with `enhancement` read as `feature`, leaks (a command, fetch or search that
+  looked up the judged issue, left out of the accuracy numbers), cost over the runs in
   which an agent ran (`unreported` when no provider reported one) and wall time, and
-  which versions got each disagreement right. It does not choose a winner.
+  which versions got each disagreement right. A bar with no applicable rows reads
+  `not applicable`. It does not choose a winner.
 
 ## Composition validation
 
