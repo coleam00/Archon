@@ -269,6 +269,7 @@ import {
   getRetryDelayMs,
   effectiveRetryMaxRetries,
   rateLimitResumeAt,
+  aggregateProviderFailure,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -5143,11 +5144,9 @@ async function executeLoopGroupBody(
     });
     if (failedBodyOutputs.length > 0) {
       const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
-      // A body node's typed provider failure is the group's, unchanged: quota resume
-      // reads it from the group's output, which is all the run sees.
-      const providerFailure = failedBodyOutputs.find(
-        ({ output }) => output.providerFailure !== undefined
-      )?.output.providerFailure;
+      const providerFailure = aggregateProviderFailure(
+        failedBodyOutputs.map(({ output }) => output.providerFailure)
+      );
       const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
       getLog().warn(
         { nodeId: node.id, iteration: i, failedCount: failedBodyNodes.length },
@@ -8903,7 +8902,7 @@ interface ComposeInstanceOutcome {
   output: string;
   structuredOutput?: unknown;
   error?: string;
-  /** The failed instance node's typed provider failure, unchanged. */
+  /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
   providerFailure?: ProviderFailure;
   costUsd?: number;
   tokens?: TokenUsage;
@@ -9395,9 +9394,7 @@ async function executeComposeFanOutNode(
       };
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
-        // An instance node's typed provider failure is the instance's, unchanged: quota
-        // resume reads it from the fan-out node's output, which is all the run sees.
-        const providerFailure = failed.find(o => o.providerFailure !== undefined)?.providerFailure;
+        const providerFailure = aggregateProviderFailure(failed.map(o => o.providerFailure));
         const outcome: ComposeInstanceOutcome = {
           status: 'failed',
           output: '',
@@ -9538,7 +9535,9 @@ async function executeComposeFanOutNode(
         'child_failed',
         totalCostUsd,
         totalTokens,
-        bad.providerFailure
+        aggregateProviderFailure(
+          outcomes.filter(o => o.status !== 'completed').map(o => o.providerFailure)
+        )
       );
     }
   }

@@ -17982,6 +17982,52 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     testTimeout(10_000)
   );
 
+  it(
+    'fails a loop group whose body failed both on an exhausted rate limit and for another reason',
+    async () => {
+      useQuery(rateLimitedQuery());
+      const store = createMockStore();
+
+      await withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-rate',
+            cwd: testDir,
+            workflow: {
+              name: 'rate-mixed-group',
+              nodes: [
+                {
+                  id: 'refine',
+                  kind: 'loop_group',
+                  loop_group: {
+                    until: 'DONE',
+                    max_iterations: 3,
+                    nodes: [
+                      { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } },
+                      { id: 'broken', kind: 'exec', runtime: 'sh', script: 'exit 3' },
+                    ],
+                  },
+                },
+              ] as DagNode[],
+            },
+            workflowRun: makeWorkflowRun('rate-mixed-group-run'),
+            config: quotaConfig(),
+          })
+        )
+      );
+
+      expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+      const groupFailed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'refine'
+      );
+      expect(groupFailed?.data?.error).toContain("'broken'");
+      expect(groupFailed?.data?.provider_failure).toBeUndefined();
+    },
+    testTimeout(10_000)
+  );
+
   it('does not wait for a container run, which the continuation host cannot continue', async () => {
     useQuery(quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
     const store = createMockStore();
@@ -41006,6 +41052,57 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
       { kind: 'started', stepName: 'fan' }
     );
+  });
+
+  it('fails a composed instance that failed both on a usage limit and for another reason', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+        '  - id: broken',
+        "    bash: 'exit 3'",
+      ].join('\n')
+    );
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
+      };
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-compose',
+        cwd: testDir,
+        workflow: {
+          name: 'compose-parent',
+          nodes: [
+            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              depends_on: ['list'],
+              with: { item: 'unused' },
+              fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('compose-mixed-run'),
+        config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
   it('refuses runtime composed fan-out resolution after the capture changes', async () => {

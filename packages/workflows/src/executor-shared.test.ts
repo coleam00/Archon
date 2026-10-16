@@ -34,6 +34,7 @@ import {
   RATE_LIMIT_RETRY_DELAY_MS,
   RATE_LIMIT_PAUSE_DELAY_MS,
   rateLimitResumeAt,
+  aggregateProviderFailure,
   nodeFailureKindOf,
   retryClassOf,
   safeSendMessage,
@@ -984,6 +985,39 @@ describe('rateLimitResumeAt', () => {
     } finally {
       Math.random = random;
     }
+  });
+});
+
+describe('aggregateProviderFailure', () => {
+  const sooner = {
+    class: 'rate_limited' as const,
+    evidence: '429',
+    resetAt: '2026-10-16T12:10:00Z',
+  };
+  const later = {
+    class: 'quota_exhausted' as const,
+    evidence: 'session limit',
+    resetAt: '2026-10-16T13:00:00Z',
+  };
+
+  it('reports a lone failed descendant unchanged, whatever its class', () => {
+    const auth = { class: 'auth' as const, evidence: 'bad key' };
+    expect(aggregateProviderFailure([auth])).toBe(auth);
+    expect(aggregateProviderFailure([undefined])).toBeUndefined();
+  });
+
+  it('reports nothing when a provider limit sits beside any other failure', () => {
+    expect(aggregateProviderFailure([sooner, undefined])).toBeUndefined();
+    expect(
+      aggregateProviderFailure([later, { class: 'transient', evidence: 'socket hang up' }])
+    ).toBeUndefined();
+  });
+
+  it('reports the latest reset among several limits, and a resetless usage limit over any', () => {
+    const noReset = { class: 'rate_limited' as const, evidence: '429' };
+    expect(aggregateProviderFailure([noReset, sooner, later])).toBe(later);
+    const unwaitable = { class: 'quota_exhausted' as const, evidence: 'session limit' };
+    expect(aggregateProviderFailure([later, unwaitable])).toBe(unwaitable);
   });
 });
 
