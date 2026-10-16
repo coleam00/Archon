@@ -152,17 +152,16 @@ function main(): void {
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as Settled[];
   const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
-  const idle = {
-    merged: [],
-    summary: 'No pull request waits for the merge queue.',
-    attention: '',
-    options: [],
-    class: '',
-    asked: null,
-    evaluation: null,
-  };
   if (path === 'idle') {
-    emit(idle);
+    emit({
+      merged: [],
+      summary: 'No pull request waits for the merge queue.',
+      attention: '',
+      options: [],
+      class: '',
+      asked: null,
+      evaluation: null,
+    });
     return;
   }
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
