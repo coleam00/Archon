@@ -868,8 +868,11 @@ describe('project storage collisions', () => {
       setLogSink(line => warnings.push(JSON.parse(line)));
       expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
       // A checkout with several remotes and no origin owns none of them; it is not unreadable.
-      if (state === 'ambiguous') expect(warnings).toEqual([]);
-      else {
+      if (state === 'ambiguous') {
+        expect(await store.findCodebaseByRepoUrl('https://github.com/unknown/api')).toBeNull();
+        expect(await store.findCodebaseByRepoUrl('https://mirror.example/api')).toBeNull();
+        expect(warnings).toEqual([]);
+      } else {
         expect(warnings).toEqual([
           expect.objectContaining({
             level: 40,
