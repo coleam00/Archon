@@ -62,7 +62,8 @@ function publishPr(
       // The engine binds a field prepare declared null as empty text.
       INPUTS_EXISTING: target.existing == null ? '' : JSON.stringify(target.existing),
       INPUTS_TITLE: 'A title',
-      INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+      WORKFLOW_ID: 'run',
+      INPUTS_BODY: prepareBody ? JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) : '',
       INPUTS_DRAFT: 'true',
       TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
@@ -130,6 +131,58 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+  });
+
+  it.each(['gh', 'forge'] as const)('requires the declared body before creating through %s', source => {
+    for (const leftover of ['', 'An old body']) {
+      const result = publishPr({
+        source,
+        target: { existing: 42 },
+        inputs: { INPUTS_BRANCH: 'selected', INPUTS_BODY: 'null' },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+        artifacts: { 'pr-body.md': leftover },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('prepare wrote no body');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
+  });
+
+  it.each(['gh', 'forge'] as const)('rejects a body pointer outside its declared contract through %s', source => {
+    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: '../pr-body.md' }]) {
+      const result = publishPr({
+        source,
+        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md', ...override }) },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('prepare must declare the pr-body.md artifact from this run');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
+  });
+
+  it.each(['gh', 'forge'] as const)('reads the body before claiming a create through %s', source => {
+    for (const directory of [false, true]) {
+      const result = publishPr({
+        source,
+        prepareBody: false,
+        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
+        artifacts: directory ? { 'pr-body.md/entry': 'a directory cannot be a PR body' } : {},
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(directory ? 'EISDIR' : 'ENOENT');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
   });
 
   it('reuses the open pull request for that head instead of opening a second one', () => {

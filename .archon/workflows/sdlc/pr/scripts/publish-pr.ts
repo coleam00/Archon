@@ -22,16 +22,17 @@
  *   continued only when the caller named it or selected no branch.
  * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
  * - INPUTS_TITLE: the title.
- * - INPUTS_BODY: the certified body file; prepare writes none for a pull request it continues.
+ * - INPUTS_BODY: the certified body pointer, or null; prepare writes none for a pull request it continues.
  * - INPUTS_DRAFT: `true` opens a draft.
  */
 
-import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
+  record,
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
@@ -104,12 +105,20 @@ function publish(): PrRecord {
     return awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
   }
 
-  const bodyPath = text(process.env.INPUTS_BODY);
-  // Prepare writes no body for a pull request it continues. Refuse before the claim:
-  // a create that cannot read its body sent nothing, and a kept claim blocks the retry.
-  if (!existsSync(bodyPath)) {
+  const body = record(nullableJson(process.env.INPUTS_BODY));
+  if (body === undefined) {
     throw new Error(`no open pull request has ${headRepo.path}:${head}, and prepare wrote no body to open one with`);
   }
+  if (
+    body.type !== 'archon_artifact' ||
+    body.run_id !== process.env.WORKFLOW_ID ||
+    body.path !== 'pr-body.md'
+  ) {
+    throw new Error('prepare must declare the pr-body.md artifact from this run');
+  }
+  const bodyPath = join(artifacts, body.path);
+  // A local read failure sent no create; it must not leave a claim blocking retry.
+  readFileSync(bodyPath, 'utf8');
 
   // Killing the script cannot cancel a submitted forge write. Keep this claim even
   // after success: a retry may only reconcile it.

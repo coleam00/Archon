@@ -92,7 +92,7 @@ nodes:
       base: "$prepare.output.base"
       existing: { from: "$prepare.output.existing" }
       title: "$prepare.output.title"
-      body: "$ARTIFACTS_DIR/pr-body.md"
+      body: { from: "$prepare.output.body" }
       draft: "$INPUTS.draft"
       pull_request: "$INPUTS.pull_request"
       branch: "$INPUTS.branch"
