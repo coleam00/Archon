@@ -98,8 +98,10 @@ describe('terminal writers report each committed transition once', () => {
     await expect(completeWorkflowRun('t-complete', { duration_ms: 5 })).rejects.toThrow();
 
     await seedRun('t-fail', 'running');
-    await failWorkflowRun('t-fail', 'boom', { exitReason: 'node_error' });
-    await failWorkflowRun('t-fail', 'boom');
+    expect(await failWorkflowRun('t-fail', 'boom', { exitReason: 'node_error' })).toEqual({
+      failed: true,
+    });
+    expect(await failWorkflowRun('t-fail', 'boom')).toEqual({ failed: false });
 
     await seedRun('t-cancel', 'running');
     await cancelWorkflowRun('t-cancel', { cancel_reason: 'operator', reason: 'free text' });

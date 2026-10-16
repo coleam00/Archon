@@ -1111,7 +1111,9 @@ describe('workflows database', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');
 
-      await failWorkflowRun('workflow-run-123', 'Step not found: missing.md');
+      expect(await failWorkflowRun('workflow-run-123', 'Step not found: missing.md')).toEqual({
+        failed: true,
+      });
 
       expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("status = 'failed'"), [
         'workflow-run-123',

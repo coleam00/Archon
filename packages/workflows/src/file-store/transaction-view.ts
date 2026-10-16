@@ -352,7 +352,7 @@ export function createTransactionView(
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
       const run = structuredClone(row(id));
-      if (isTerminalRunStatus(run.status)) return;
+      if (isTerminalRunStatus(run.status)) return { failed: false };
       if (run.status !== 'running' && run.status !== 'pending')
         throw new Error('Run not in pending/running state');
       run.status = 'failed';
@@ -369,6 +369,7 @@ export function createTransactionView(
         event_type: 'workflow_failed',
         data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
       });
+      return { failed: true };
     },
     pauseWorkflowRun: async (
       id,

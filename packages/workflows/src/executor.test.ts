@@ -1,5 +1,6 @@
 import * as checkout from './checkout-observation';
 import { prepareRunAiConfiguration } from './run-preflight';
+import type { WorkflowEmitterEvent } from './event-emitter';
 import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
@@ -158,7 +159,7 @@ mock.module('./logger', () => ({
 const mockEmitter = {
   registerRun: mock(() => {}),
   unregisterRun: mock(() => {}),
-  emit: mock(() => {}),
+  emit: mock((_event: WorkflowEmitterEvent) => {}),
 };
 mock.module('./event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => mockEmitter),
@@ -339,7 +340,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
     updateWorkflowRun: mock(async () => {}),
-    failWorkflowRun: mock(async () => {}),
+    failWorkflowRun: mock(async () => ({ failed: true })),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
@@ -943,7 +944,7 @@ describe('executeWorkflow', () => {
     });
 
     it('fails a container run resumed without a container context, pointing at the CLI', async () => {
-      const failSpy = mock(async () => {});
+      const failSpy = mock(async () => ({ failed: true }));
       const store = makeStore({ failWorkflowRun: failSpy });
       const preCreatedRun = makeRun({
         id: 'crun',
@@ -2333,7 +2334,7 @@ describe('executeWorkflow', () => {
       const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {
         throw new Error('database unavailable');
       });
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({ id: 'pending-run', status: 'pending', metadata: {} });
 
       const result = await executeWorkflow(
@@ -2421,7 +2422,7 @@ describe('executeWorkflow', () => {
     });
 
     it('terminalizes a resumed run before dispatch when persisted effort is ineffective', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({
         id: 'resume-opencode-effort-run',
         status: 'running',
@@ -2473,7 +2474,7 @@ describe('executeWorkflow', () => {
     });
 
     it('terminalizes a resumed run with an invalid persisted alias key', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({
         id: 'resume-invalid-alias-run',
         status: 'running',
@@ -2511,7 +2512,7 @@ describe('executeWorkflow', () => {
     });
 
     it('terminalizes a resumed run before dispatch when a persisted provider is unavailable', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({
         id: 'resume-removed-provider-run',
         status: 'running',
@@ -2551,7 +2552,7 @@ describe('executeWorkflow', () => {
     });
 
     it('terminalizes a resumed run when persisted metadata uses retired thinking config', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preset = {
         provider: 'copilot',
         model: 'gpt-5.6',
@@ -2592,7 +2593,7 @@ describe('executeWorkflow', () => {
     });
 
     it('fails a pre-created row when a semantic binding error stops startup', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({ id: 'invalid-model-run', status: 'pending', metadata: {} });
 
       await expect(
@@ -2797,7 +2798,7 @@ describe('executeWorkflow', () => {
     });
 
     it('terminalizes a pre-created run when persisted config cannot be restored', async () => {
-      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true }));
       const preCreatedRun = makeRun({
         id: 'broken-config-run',
         status: 'running',
@@ -5091,7 +5092,7 @@ describe('finally backstop', () => {
   });
 
   it('calls failWorkflowRun when run is still running at finally', async () => {
-    const failSpy = mock(async () => {});
+    const failSpy = mock(async () => ({ failed: true }));
     const store = makeStore({
       getWorkflowRunStatus: mock(async () => 'running' as const),
       failWorkflowRun: failSpy,
@@ -5109,7 +5110,7 @@ describe('finally backstop', () => {
   });
 
   it('does not call failWorkflowRun when run already completed', async () => {
-    const failSpy = mock(async () => {});
+    const failSpy = mock(async () => ({ failed: true }));
     const store = makeStore({
       getWorkflowRunStatus: mock(async () => 'completed' as const),
       failWorkflowRun: failSpy,
@@ -5161,6 +5162,33 @@ describe('telemetry wiring', () => {
     );
   });
 
+  it.each([true, false])(
+    'publishes the unhandled failure live only when this write committed it (%p)',
+    async failed => {
+      mockEmitter.emit.mockClear();
+      mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
+      const store = makeStore({ failWorkflowRun: mock(async () => ({ failed })) });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        {
+          conversationId: 'db-conv-1',
+        }
+      );
+
+      const liveFailures = mockEmitter.emit.mock.calls.filter(
+        ([event]) => event.type === 'workflow_failed'
+      );
+      expect(liveFailures).toHaveLength(failed ? 1 : 0);
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('records a run failure when durable node evidence cannot be stored', async () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(
       new NodeEventWriteError(
@@ -5209,7 +5237,7 @@ describe('telemetry wiring', () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(
       new TerminalStatusWriteError(new Error('terminal completion write failed'))
     );
-    const failWorkflowRun = mock(async () => {});
+    const failWorkflowRun = mock(async () => ({ failed: true }));
     const store = makeStore({ failWorkflowRun });
 
     await expect(

@@ -172,6 +172,7 @@ import {
   type ExecNodeEnvironmentContext,
 } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
+import type { RunExitReason } from './schemas/run-terminal-reason';
 import {
   CONTINUATION_RETRY_MS,
   executionClaim,
@@ -12251,6 +12252,30 @@ export async function executeDagWorkflow(
   };
 
   /**
+   * The engine's terminal failure write. The live `workflow_failed` event is published only
+   * when this call committed the failure: a run another writer already finished (a
+   * cancellation during the failure notification, or a competing failure) keeps that
+   * writer's outcome and announcement. A rejected write throws the typed marker, which the
+   * outer executor catch rethrows without emitting.
+   */
+  const failRun = async (failMsg: string, exitReason: RunExitReason, site: string) => {
+    const { failed } = await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
+      { workflowRunId: workflowRun.id, site }
+    );
+    const emitter = getWorkflowEventEmitter();
+    if (failed) {
+      emitter.emit({
+        type: 'workflow_failed',
+        runId: workflowRun.id,
+        workflowName: workflow.name,
+        error: failMsg,
+      });
+    }
+    emitter.unregisterRun(workflowRun.id);
+  };
+
+  /**
    * Fail the run on a budget refusal. Returns normally, like the other engine refusals,
    * so the outer executor catch does not emit a second failure. A run paused or cancelled
    * meanwhile keeps its status; its next pass rebuilds the ledger and refuses again.
@@ -12277,21 +12302,10 @@ export async function executeDagWorkflow(
         'dag.workflow_error_log_write_failed'
       );
     });
-    const emitter = getWorkflowEventEmitter();
-    emitter.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitter.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'budget_refused' }),
-      { workflowRunId: workflowRun.id, site: 'dag.run_budget_refused_fail' }
-    );
+    await failRun(failMsg, 'budget_refused', 'dag.run_budget_refused_fail');
   };
 
   const startRefusal = runBudget && runBudgetStartRefusal(runBudget);
@@ -12473,21 +12487,6 @@ export async function executeDagWorkflow(
     'dag_workflow_finished'
   );
 
-  async function emitCommittedFailure(error: string): Promise<void> {
-    // Failure writes can acknowledge a concurrent terminal outcome without changing it.
-    const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    const emitter = getWorkflowEventEmitter();
-    if (status === 'failed') {
-      emitter.emit({
-        type: 'workflow_failed',
-        runId: workflowRun.id,
-        workflowName: workflow.name,
-        error,
-      });
-    }
-    if (status !== 'paused') emitter.unregisterRun(workflowRun.id);
-  }
-
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
     if (anyFailed && (await pauseForUsageLimit())) return;
@@ -12515,14 +12514,12 @@ export async function executeDagWorkflow(
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        // A first-node failure completes nothing, but it is still a node failure.
-        exitReason: anyFailed ? 'node_error' : 'no_nodes_completed',
-      }),
-      { workflowRunId: workflowRun.id, site: 'dag.no_nodes_completed_fail' }
+    await failRun(
+      failMsg,
+      // A first-node failure completes nothing, but it is still a node failure.
+      anyFailed ? 'node_error' : 'no_nodes_completed',
+      'dag.no_nodes_completed_fail'
     );
-    await emitCommittedFailure(failMsg);
     return;
   }
 
@@ -12545,11 +12542,7 @@ export async function executeDagWorkflow(
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
-      { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
-    );
-    await emitCommittedFailure(failMsg);
+    await failRun(failMsg, 'node_error', 'dag.node_failure_fail');
     return;
   }
 
@@ -12611,32 +12604,12 @@ export async function executeDagWorkflow(
           );
         }
       );
-      const emitterForEvidence = getWorkflowEventEmitter();
-      emitterForEvidence.emit({
-        type: 'workflow_failed',
-        runId: workflowRun.id,
-        workflowName: workflow.name,
-        error: failMsg,
-      });
-      emitterForEvidence.unregisterRun(workflowRun.id);
       await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
         workflowId: workflowRun.id,
       });
-      // Terminal write LAST: nothing above depends on it and all of it used to run
-      // unconditionally, so a rejection must not silence the evidence event, the log
-      // file, the live event, or the user's notification. The metadata merge above
-      // still precedes it, so `metadata.evidence_validation` is present the moment the
-      // run reads as failed.
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'evidence_missing' }),
-        {
-          workflowRunId: workflowRun.id,
-          site: 'dag.evidence_gate_fail',
-        }
-      );
-      // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-      // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-      // catch recognizes the marker and rethrows without re-emitting.
+      // The metadata merge above precedes the terminal write, so
+      // `metadata.evidence_validation` is present the moment the run reads as failed.
+      await failRun(failMsg, 'evidence_missing', 'dag.evidence_gate_fail');
       return;
     }
     getLog().info({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_passed');

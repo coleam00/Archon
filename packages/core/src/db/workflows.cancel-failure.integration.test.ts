@@ -35,14 +35,13 @@ const config: WorkflowConfig = {
   defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
 };
 
-test.each([
-  { successfulSibling: false, cancel: false },
-  { successfulSibling: true, cancel: false },
-  { successfulSibling: false, cancel: true },
-  { successfulSibling: true, cancel: true },
-])(
+test.each(
+  [false, true].flatMap(successfulSibling =>
+    (['none', 'cancel', 'fail'] as const).map(race => ({ successfulSibling, race }))
+  )
+)(
   'failure notification preserves the committed outcome (%j)',
-  async ({ successfulSibling, cancel }) => {
+  async ({ successfulSibling, race }) => {
     const cwd = roots(await mkdtemp(join(tmpdir(), 'archon-cancel-failure-')));
     const store = createWorkflowStore();
     const run = await store.createWorkflowRun({
@@ -58,12 +57,11 @@ test.each([
         { id: 'bad', bash: 'exit 3' },
       ],
     });
-    let cancelledDuringNotification = false;
-    const liveFailureStatuses: ReturnType<typeof store.getWorkflowRunStatus>[] = [];
+    let racedDuringNotification = false;
+    const liveFailures: string[] = [];
     const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
-      if (event.runId === run.id && event.type === 'workflow_failed') {
-        liveFailureStatuses.push(store.getWorkflowRunStatus(run.id));
-      }
+      if (event.runId === run.id && event.type === 'workflow_failed')
+        liveFailures.push(event.error);
     });
     try {
       await executeTestDagWorkflow({
@@ -82,9 +80,14 @@ test.each([
           sendMessage: async (_id, message) => {
             if (!message.startsWith('❌ DAG workflow')) return;
             expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
-            if (cancel) {
+            if (race === 'cancel') {
               expect(await store.cancelWorkflowRun(run.id)).toEqual({ cancelled: true });
-              cancelledDuringNotification = true;
+              racedDuringNotification = true;
+            } else if (race === 'fail') {
+              expect(await store.failWorkflowRun(run.id, 'competing failure')).toEqual({
+                failed: true,
+              });
+              racedDuringNotification = true;
             }
           },
           getStreamingMode: () => 'batch',
@@ -103,15 +106,26 @@ test.each([
     } finally {
       unsubscribe();
     }
-    expect(await Promise.all(liveFailureStatuses)).toEqual(cancel ? [] : ['failed']);
-    expect(cancelledDuringNotification).toBe(cancel);
-    expect(await store.getWorkflowRunStatus(run.id)).toBe(cancel ? 'cancelled' : 'failed');
+    // The run's own failure is announced only when its write committed it; the
+    // competing writer announces through its own path, not this executor's.
+    expect(liveFailures).toEqual(
+      race === 'none' ? [expect.stringContaining(`DAG workflow '${run.workflow_name}'`)] : []
+    );
+    expect(racedDuringNotification).toBe(race !== 'none');
+    expect(await store.getWorkflowRunStatus(run.id)).toBe(
+      race === 'cancel' ? 'cancelled' : 'failed'
+    );
     const events = await store.listWorkflowEvents(run.id);
     expect(events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(
-      cancel ? 1 : 0
+      race === 'cancel' ? 1 : 0
     );
-    expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(
-      cancel ? 0 : 1
+    const failures = events.filter(event => event.event_type === 'workflow_failed');
+    expect(failures.map(event => event.data.error)).toEqual(
+      race === 'cancel'
+        ? []
+        : race === 'fail'
+          ? ['competing failure']
+          : [expect.stringContaining(`DAG workflow '${run.workflow_name}'`)]
     );
   }
 );

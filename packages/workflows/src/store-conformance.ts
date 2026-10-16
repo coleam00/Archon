@@ -2382,7 +2382,7 @@ export function describeWorkflowStoreConformance(
       async mode => {
         const run = await running(store);
         const write = (): ReturnType<
-          IWorkflowStore['completeWorkflowRun' | 'cancelWorkflowRun']
+          IWorkflowStore['completeWorkflowRun' | 'failWorkflowRun' | 'cancelWorkflowRun']
         > =>
           mode === 'complete'
             ? store.completeWorkflowRun(run.id, { duration_ms: 5 })
@@ -2395,13 +2395,15 @@ export function describeWorkflowStoreConformance(
         if (mode === 'complete') {
           expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
           expect(results.filter(result => result.status === 'rejected')).toHaveLength(7);
-        } else if (mode === 'fail') {
-          for (const result of results) expect(result.status).toBe('fulfilled');
         } else {
           for (const result of results) expect(result.status).toBe('fulfilled');
-          expect(
-            results.filter(result => result.status === 'fulfilled' && result.value?.cancelled)
-          ).toHaveLength(1);
+          const won = results.filter(
+            result =>
+              result.status === 'fulfilled' &&
+              result.value !== undefined &&
+              ('failed' in result.value ? result.value.failed : result.value.cancelled)
+          );
+          expect(won).toHaveLength(1);
         }
         const events = await store.listWorkflowEvents(run.id);
         expect(events).toHaveLength(1);
@@ -2496,7 +2498,9 @@ export function describeWorkflowStoreConformance(
         const events = await store.listWorkflowEvents(run.id);
         const reports = [...harness.terminalReports()];
 
-        await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' });
+        expect(
+          await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' })
+        ).toEqual({ failed: false });
 
         expect(await store.getWorkflowRun(run.id)).toEqual(before);
         expect(await store.listWorkflowEvents(run.id)).toEqual(events);
@@ -2514,7 +2518,7 @@ export function describeWorkflowStoreConformance(
         await rejection(store.completeWorkflowRun(pending.id, { duration_ms: 0 }))
       ).toBeInstanceOf(Error);
       expect(await types(store, pending.id)).toEqual([]);
-      await store.failWorkflowRun(pending.id, 'setup failed');
+      expect(await store.failWorkflowRun(pending.id, 'setup failed')).toEqual({ failed: true });
       expect(await store.cancelWorkflowRun(pending.id)).toEqual({ cancelled: true });
       const paused = await running(store);
       await store.pauseWorkflowRun(paused.id, approval);

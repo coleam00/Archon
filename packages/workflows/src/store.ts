@@ -922,7 +922,9 @@ export interface IWorkflowStore
   ): Promise<void>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.
-   * An already-terminal run is a no-op; missing runs and other start states reject.
+   * `failed` is false when the run was already terminal: a no-op that leaves the winning
+   * outcome in place, so the caller must not announce its own failure. Missing runs and
+   * other start states reject.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces
@@ -932,7 +934,7 @@ export interface IWorkflowStore
     id: string,
     error: string,
     options?: { exitReason?: RunExitReason; signal?: RunStopSignal }
-  ): Promise<void>;
+  ): Promise<{ failed: boolean }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
