@@ -228,7 +228,10 @@ test('concurrent Pi deliveries stay private through consumption and are removed 
     expect(path).toBeDefined();
     if (!path) throw new Error('missing auth');
     paths.push(path);
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    // Windows stat mode bits do not represent POSIX file permissions.
+    if (process.platform !== 'win32') {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
     const auth = JSON.parse(await readFile(path, 'utf8')) as { openai: { key: string } };
     deliveredKeys.push(auth.openai.key);
     await Promise.resolve();
