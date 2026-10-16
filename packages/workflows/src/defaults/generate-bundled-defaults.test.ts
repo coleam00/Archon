@@ -1,6 +1,5 @@
 /**
- * Regression tests for the untracked-file guard in
- * scripts/generate-bundled-defaults.ts (#1578).
+ * Integration tests for bundle generation, merge layout and the untracked-file guard.
  *
  * Drives the real script via spawnSync inside an isolated mkdtempSync git
  * repo, pointed at the throwaway repo via the BUNDLED_DEFAULTS_REPO_ROOT test seam.
@@ -24,7 +23,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { BundledScriptPack } from './bundled-script-pack';
@@ -110,7 +109,52 @@ function runScript(repoRoot: string, args: string[] = []): { exitCode: number; s
   };
 }
 
-describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+describe('generate-bundled-defaults', () => {
+  it('merges independent edits to adjacent script, shared, command and workflow files', async () => {
+    const repoRoot = createRepo();
+    try {
+      const pack = join(repoRoot, '.archon/workflows', BASE_PACK);
+      const sources = ['alpha', 'beta'].map(name => ({
+        [`${name}/${name}.yaml`]: `name: ${name}\n`,
+        [`${name}/commands/run.md`]: `# ${name}\n`,
+        [`tracked-flow/scripts/${name}.ts`]: `console.log('${name}');\n`,
+        [`.shared/${name}.ts`]: `export const name = '${name}';\n`,
+      }));
+      const writeSources = (files: Record<string, string>, suffix = ''): void => {
+        for (const [path, content] of Object.entries(files)) {
+          mkdirSync(dirname(join(pack, path)), { recursive: true });
+          writeFileSync(join(pack, path), content + suffix);
+        }
+      };
+      for (const files of sources) writeSources(files);
+      runGit(repoRoot, ['add', '.archon/workflows']);
+      const snapshot = (name: string): string => {
+        expect(runScript(repoRoot)).toEqual({ exitCode: 0, stderr: '' });
+        const path = join(repoRoot, name);
+        cpSync(join(repoRoot, OUTPUT_REL), path);
+        return path;
+      };
+      const base = snapshot('base.ts');
+      writeSources(sources[0], '// first edit\n');
+      const ours = snapshot('ours.ts');
+      writeSources(sources[0]);
+      writeSources(sources[1], '// second edit\n');
+      const theirs = snapshot('theirs.ts');
+      const merge = spawnSync('git', ['merge-file', '-p', ours, base, theirs], {
+        encoding: 'utf8',
+      });
+      expect(merge.stderr).toBe('');
+      expect(merge.status).toBe(0);
+      writeSources(sources[0], '// first edit\n');
+      const combined = snapshot('combined.ts');
+      expect(merge.stdout).toBe(readFileSync(combined, 'utf8'));
+      expect(merge.stdout).not.toMatch(/^\/\/ .*\(\d+ total\)/m);
+      expect(runScript(repoRoot, ['--check'])).toEqual({ exitCode: 0, stderr: '' });
+    } finally {
+      await removeTempTree(repoRoot);
+    }
+  });
+
   it('ignores unindexed packs and fails without publishing when an indexed pack is missing', async () => {
     const repoRoot = createRepo();
     try {
