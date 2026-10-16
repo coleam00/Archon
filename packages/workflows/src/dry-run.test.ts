@@ -1117,6 +1117,46 @@ describe('dryRunWorkflow', () => {
     expect(result.missingStubs).toEqual([]);
   });
 
+  test('nonnumeric conditions allow OR fallback and record ordinary false skips', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'numeric-fallback',
+      nodes: [
+        { id: 'a', prompt: 'score' },
+        { id: 'b', prompt: 'status' },
+        {
+          id: 'fallback',
+          prompt: 'fallback',
+          depends_on: ['a', 'b'],
+          when: "$a.output > 50 || $b.output == 'ok'",
+        },
+        {
+          id: 'both',
+          prompt: 'both',
+          depends_on: ['a', 'b'],
+          when: "$a.output > 50 && $b.output == 'ok'",
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { a: 'N/A', b: 'ok', fallback: 'ran' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'fallback')).toMatchObject({
+      state: 'stubbed',
+      output: 'ran',
+    });
+    expect(result.trace.find(entry => entry.nodeId === 'both')).toMatchObject({
+      state: 'skipped',
+      reason: 'when_condition_false',
+      cause: { kind: 'condition', expr: "$a.output > 50 && $b.output == 'ok'" },
+    });
+    expect(result.missingStubs).toEqual([]);
+  });
+
   test('fails an object-valued condition field instead of recording a false skip', async () => {
     const workflow = makeTestWorkflow({
       name: 'structured-condition',

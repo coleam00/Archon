@@ -9,7 +9,7 @@
  *                     `with:` — see `resolveInputRef`)
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
  *                     (the parser rejects a non-numeric RHS; a non-numeric output
- *                     fails closed at run time)
+ *                     makes that atom false at run time)
  *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
  *                     (numbers and booleans may be written without surrounding quotes)
  *   Compound AND/OR:  "$a.output == 'X' && $b.output != 'Y'"
@@ -232,7 +232,7 @@ function evaluateAtom(
   nodeOutputs: Map<string, NodeOutput>,
   inputs: Record<string, JsonValue> | undefined,
   loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined
-): { result: boolean; parsed: boolean } {
+): boolean {
   const { ref, operator, expected } = atom;
 
   // Reference resolution may throw — OutputRefError for an unresolvable `.field` ref
@@ -251,7 +251,7 @@ function evaluateAtom(
     const expectedNum = parseFloat(expected);
     if (!Number.isFinite(actualNum)) {
       getLog().debug({ expr, actual, expected }, 'condition_numeric_parse_failed');
-      return { result: false, parsed: false };
+      return false;
     }
     if (operator === '<') result = actualNum < expectedNum;
     else if (operator === '>') result = actualNum > expectedNum;
@@ -273,7 +273,7 @@ function evaluateAtom(
         },
     'condition_evaluated'
   );
-  return { result, parsed: true };
+  return result;
 }
 
 /**
@@ -310,14 +310,7 @@ export function evaluateCondition(
     let orClauseResult = true;
 
     for (const atom of orClause) {
-      const { result, parsed } = evaluateAtom(
-        atom,
-        trimmed,
-        nodeOutputs,
-        inputs,
-        options?.loopPrevOutputs
-      );
-      if (!parsed) return { result: false, parsed: false }; // fail-closed on any parse error
+      const result = evaluateAtom(atom, trimmed, nodeOutputs, inputs, options?.loopPrevOutputs);
       if (!result) {
         orClauseResult = false;
         break; // short-circuit AND

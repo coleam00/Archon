@@ -4712,6 +4712,69 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     });
   });
 
+  it('nonnumeric conditions allow OR fallback and record ordinary false skips', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'ok' };
+      yield { type: 'result', sessionId: 'numeric-fallback' };
+    });
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'N/A' };
+      yield { type: 'result', sessionId: 'numeric-score' };
+    });
+    const both = "$a.output > 50 && $b.output == 'ok'";
+    const nodes: DagNode[] = [
+      { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'score' } },
+      { id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'status' }, depends_on: ['a'] },
+      {
+        id: 'fallback',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'fallback' },
+        depends_on: ['a', 'b'],
+        when: "$a.output > 50 || $b.output == 'ok'",
+      },
+      {
+        id: 'both',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'both' },
+        depends_on: ['a', 'b'],
+        when: both,
+      },
+    ];
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'numeric-fallback',
+        cwd: testDir,
+        workflow: { name: 'numeric-fallback', nodes },
+        workflowRun: makeWorkflowRun('numeric-fallback'),
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(3);
+    const events = persistedEvents(mockDeps.store);
+    expect(
+      events.find(event => event.step_name === 'fallback' && event.event_type === 'node_completed')
+    ).toBeDefined();
+    expect(
+      events
+        .filter(event => event.event_type === 'node_skipped')
+        .map(event => ({
+          node: event.step_name,
+          reason: event.data?.reason,
+          cause: event.data?.cause,
+        }))
+    ).toEqual([
+      { node: 'both', reason: 'when_condition', cause: { kind: 'condition', expr: both } },
+    ]);
+    expect(deliveredMessages(platform).some(message => message.includes('unparseable'))).toBe(
+      false
+    );
+  });
+
   it('sends a platform warning message naming the node and stating it was skipped', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

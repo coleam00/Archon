@@ -357,11 +357,55 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$n.output.score >= '0.9'", outputs).result).toBe(true);
   });
 
-  it('numeric operator: fail-closed when actual is not numeric', () => {
-    const res = evaluateCondition("$n.output > '5'", new Map([['n', makeOutput('hello')]]));
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(false);
+  it.each(['>', '>=', '<', '<='])(
+    '%s treats nonnumeric runtime values as false and permits OR fallback',
+    operator => {
+      for (const actual of ['N/A', '', 'pending', 'NaN', 'Infinity', '-Infinity']) {
+        const outputs = new Map([
+          ['a', makeOutput(actual)],
+          ['b', makeOutput('ok')],
+        ]);
+        const numeric = `$a.output ${operator} 50`;
+        expect(evaluateCondition(numeric, outputs)).toEqual({ result: false, parsed: true });
+        expect(evaluateCondition(`${numeric} && $b.output == 'ok'`, outputs)).toEqual({
+          result: false,
+          parsed: true,
+        });
+        expect(evaluateCondition(`${numeric} || $b.output == 'ok'`, outputs)).toEqual({
+          result: true,
+          parsed: true,
+        });
+        expect(evaluateCondition(`${numeric} || $b.output == 'no'`, outputs)).toEqual({
+          result: false,
+          parsed: true,
+        });
+      }
+    }
+  );
+
+  it('continues to the next OR clause after a nonnumeric atom inside an AND clause', () => {
+    const outputs = new Map([
+      ['a', makeOutput('N/A')],
+      ['b', makeOutput('ok')],
+    ]);
+    expect(
+      evaluateCondition(
+        "$b.output == 'ok' && $a.output > 50 && $missing.output.field == 'x' || $b.output == 'ok'",
+        outputs
+      )
+    ).toEqual({ result: true, parsed: true });
   });
+
+  it.each(['not-valid', "$a.output > 'high'", "$1invalid.output == 'ok'"])(
+    'rejects malformed syntax before evaluating a true OR branch: %s',
+    invalid => {
+      const outputs = new Map([['b', makeOutput('ok')]]);
+      expect(evaluateCondition(`$b.output == 'ok' || ${invalid}`, outputs)).toEqual({
+        result: false,
+        parsed: false,
+      });
+    }
+  );
 
   it('numeric operator: a non-numeric literal is a parse failure, not a comparison', () => {
     const res = evaluateCondition("$n.output > 'abc'", new Map([['n', makeOutput('10')]]));
