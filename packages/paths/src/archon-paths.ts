@@ -1090,18 +1090,18 @@ export async function createProjectSourceSymlink(
 ): Promise<void> {
   const linkPath = getProjectSourcePath(owner, repo);
 
-  try {
-    const stats = await lstat(linkPath);
-    if (stats.isSymbolicLink()) {
-      // Symlink already exists - check if it points to the right place
-      const existing = await readlink(linkPath);
-      if (normalize(existing) === normalize(targetPath)) {
-        return; // Already correct
-      }
-      throw new Error(
-        `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
-      );
-    }
+  const stats = await lstat(linkPath).catch((error: unknown) => {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    return null;
+  });
+  if (stats?.isSymbolicLink()) {
+    const existing = await readlink(linkPath);
+    if (normalize(existing) === normalize(targetPath)) return;
+    throw new Error(
+      `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
+    );
+  }
+  if (stats) {
     if (!stats.isDirectory()) {
       throw new Error(`Source path at ${linkPath} already contains a file; expected ${targetPath}`);
     }
@@ -1112,12 +1112,6 @@ export async function createProjectSourceSymlink(
         `Source directory at ${linkPath} already contains another checkout; expected ${targetPath}`
       );
     }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw error;
-    }
-    // ENOENT is expected - symlink doesn't exist yet
   }
 
   // Remove the empty directory created by ensureProjectStructure (force handles ENOENT)

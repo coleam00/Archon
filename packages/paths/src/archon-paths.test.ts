@@ -1420,6 +1420,16 @@ describe('createProjectSourceSymlink', () => {
     expect(stats.isSymbolicLink()).toBe(false);
   });
 
+  test('preserves a populated source when its requested target is missing', async () => {
+    await ensureProjectStructure('acme', 'widget');
+    const source = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(source, 'README.md'), 'foreign checkout');
+    await expect(
+      createProjectSourceSymlink('acme', 'widget', join(tempTarget, 'missing'))
+    ).rejects.toThrow();
+    expect(readFileSync(join(source, 'README.md'), 'utf8')).toBe('foreign checkout');
+  });
+
   test('refuses a source path occupied by a regular file', async () => {
     const source = getProjectSourcePath('acme', 'widget');
     await mkdir(getProjectRoot('acme', 'widget'), { recursive: true });
