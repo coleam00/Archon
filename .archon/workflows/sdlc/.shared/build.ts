@@ -7,8 +7,9 @@
  * know whether the item waits for it.
  */
 
+import { type QualifiedPr, sameRepo } from './forge.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
-import type { Pickup, Stage, WorkItem } from './workitem.ts';
+import type { Pickup, Stage, TriageFacts, WorkItem } from './workitem.ts';
 
 /** What a build choice does when a person picks it; archon-build-queue.yaml declares the same enum. */
 export const BUILD_EFFECTS = ['continue', 'park'] as const;
@@ -96,6 +97,47 @@ export function countedRounds(doc: WorkItem): number {
   const triaged = doc.facts.triage?.at ?? '';
   const since = answered > triaged ? answered : triaged;
   return build.rounds.filter(round => round.at > since).length;
+}
+
+/**
+ * The item's pull request: the latest round's that opened one, else the one triage
+ * routed the item to continue. A stored URL that is not a pull request of the item's
+ * repository is refused, not guessed around.
+ */
+export function itemPullRequest(
+  rounds: readonly BuildRound[],
+  triage: TriageFacts | undefined,
+  repo: QualifiedPr['repo']
+): QualifiedPr | null {
+  const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
+  if (url === undefined) {
+    return triage?.pull_request == null ? null : { repo, number: triage.pull_request };
+  }
+  const parsed = URL.canParse(url) ? new URL(url) : null;
+  const match = parsed === null ? null : /^\/(.+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
+  if (
+    parsed === null ||
+    match === null ||
+    !sameRepo({ host: parsed.hostname, path: match[1] ?? '' }, repo)
+  ) {
+    throw new Error(`round pr_url ${url} is not a pull request of ${repo.host}/${repo.path}`);
+  }
+  return { repo, number: Number(match[2]) };
+}
+
+/**
+ * The branch a round with no pull request to continue opens one from. The run-id
+ * suffix keeps a name from being reused: after a closed pull request or a failed
+ * create, the non-forcing push onto the old branch would refuse every round.
+ */
+export function buildBranch(number: number, title: string, runId: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  return ['build/' + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
 }
 
 export interface BuildChange {

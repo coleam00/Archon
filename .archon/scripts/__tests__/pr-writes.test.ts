@@ -266,15 +266,72 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(publishPr({ inputs: { INPUTS_PULL_REQUEST: 'null' } }).code).toBe(0);
   });
 
-  it('refuses a named pull request whose head is not the recorded branch, before pushing', () => {
+  it('pushes a continued pull request to its own head, not the branch prepare recorded', () => {
+    const result = publishPr({
+      target: { existing: 42, head: 'archon/task-local' },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
+  });
+
+  it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
+    const result = publishPr({ target: { existing: 42 }, gh: { pr: { state } } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`pull request 42 is ${state.toLowerCase()}; nothing is pushed`);
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+  });
+
+  it('opens the pull request from the branch the caller named', () => {
+    const result = publishPr({
+      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr create') && call.includes('--head build/7-an-issue-run12345'))).toBe(true);
+    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+  });
+
+  it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
+    const result = publishPr({
+      target: { head: 'archon/task-local' },
+      inputs: { INPUTS_BRANCH: 'feature' },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(result.stderr).toContain('already has this head');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+  });
+
+  it('opens its own pull request from the caller-named branch when prepare found one on another head', () => {
     const result = publishPr({
       target: { existing: 42 },
-      gh: { pr: { headRefName: 'somebody-elses-branch' } },
+      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
     });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('not the recorded');
-    const remote = spawnSync('git', ['ls-remote', '--heads', 'upstream', 'feature'], { cwd: result.cwd, encoding: 'utf8' });
-    expect(remote.stdout.trim()).toBe('');
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr create') && call.includes('--head build/7-an-issue-run12345'))).toBe(true);
+    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+  });
+
+  it('continues a named pull request on its own head even when the caller also selected a branch', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      inputs: { INPUTS_PULL_REQUEST: '42', INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
   it('fails loudly when forge is selected but unavailable, never falling back to gh', () => {
@@ -284,6 +341,12 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('ARCHON_CLI_COMMAND is not set');
   });
 });
+
+/** The commit the `upstream` remote holds for a branch, or empty when it has none. */
+function remoteHead(cwd: string, branch: string): string {
+  const remote = spawnSync('git', ['ls-remote', 'upstream', `refs/heads/${branch}`], { cwd, encoding: 'utf8' });
+  return remote.stdout.trim().split(/\s/)[0] ?? '';
+}
 
 function publishReview(options: ScriptOptions = {}): ScriptRun {
   return runPackScript('review/scripts/publish-review', {

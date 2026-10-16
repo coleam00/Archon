@@ -5,15 +5,20 @@
  * writes only that claim. A closed issue goes to `closed`, which apply parks without
  * an agent. Eval claims nothing and writes nothing outside the run's artifacts: it
  * reads the named issue's body at `as_of` and replays the rounds it was given.
+ *
+ * It also resolves the item's pull request as the forge reports it now. An open one
+ * whose head is in the item's repository is the pull request the round continues;
+ * otherwise the round opens one from a new branch named after the issue.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BUILD_PICKUP, type BuildRound, countedRounds } from '../../.shared/build.ts';
-import type { QualifiedPr } from '../../.shared/forge.ts';
+import { BUILD_PICKUP, type BuildRound, buildBranch, countedRounds, itemPullRequest } from '../../.shared/build.ts';
+import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { issueBodyAt, viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
+import { viewPr } from '../../.shared/pr.ts';
 import { isObject } from '../../.shared/typed.ts';
 import { claimNext, parseMode, parseOrder, readWorkItem, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
@@ -67,6 +72,30 @@ function writeIssue(title: string, url: string, body: string, asOf: string): voi
   writeFileSync(join(dir, 'issue.md'), `# ${title}\n\n${url}, ${when}.\n\n${body}\n`);
 }
 
+/** For an open item, exactly one of `continues` and `branch` is set. */
+interface ItemPr {
+  readonly pull_request: PrRecord | null;
+  readonly continues: number | null;
+  readonly branch: string;
+}
+
+const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
+
+function resolvePr(
+  subject: QualifiedPr,
+  title: string,
+  doc: WorkItem | null,
+  rounds: readonly BuildRound[],
+  runId: string
+): ItemPr {
+  const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
+  const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
+  if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
+    return { pull_request: pr, continues: pr.number, branch: '' };
+  }
+  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId) };
+}
+
 function emitItem(
   path: 'closed' | 'route' | 'answer',
   subject: QualifiedPr,
@@ -74,7 +103,8 @@ function emitItem(
   doc: WorkItem | null,
   rounds: readonly BuildRound[],
   recorded: BuildRound | null,
-  atCap: boolean
+  atCap: boolean,
+  itemPr: ItemPr
 ): void {
   emit({
     path,
@@ -86,6 +116,7 @@ function emitItem(
     recorded,
     at_cap: atCap,
     policy_defaults: POLICY_DEFAULTS,
+    ...itemPr,
   });
 }
 
@@ -116,7 +147,8 @@ function main(): void {
       doc,
       replay.slice(0, -1),
       recorded,
-      replay.length >= limit
+      replay.length >= limit,
+      resolvePr(subject, issue.title, doc, replay, runId)
     );
     return;
   }
@@ -133,19 +165,23 @@ function main(): void {
       recorded: null,
       at_cap: false,
       policy_defaults: POLICY_DEFAULTS,
+      ...NO_ITEM_PR,
     });
     return;
   }
   const issue = viewIssue(doc.subject);
   writeIssue(issue.title, issue.url, issue.body, '');
+  const closed = issue.state === 'closed';
+  const rounds = doc.facts.build?.rounds ?? [];
   emitItem(
-    issue.state === 'closed' ? 'closed' : 'route',
+    closed ? 'closed' : 'route',
     doc.subject,
     issue.url,
     doc,
-    doc.facts.build?.rounds ?? [],
+    rounds,
     null,
-    countedRounds(doc) + 1 >= limit
+    countedRounds(doc) + 1 >= limit,
+    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId)
   );
 }
 

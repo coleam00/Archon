@@ -125,8 +125,7 @@ nodes:
       type: object
       properties:
         delivered: { type: boolean }
-        # The delivery's pull request, ready or not; '' when no delivery opened one,
-        # or when a node failure kept the report from learning it.
+        # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }
         summary: { type: string }
       required: [delivered, pr_url, summary]

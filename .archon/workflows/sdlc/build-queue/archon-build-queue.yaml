@@ -91,7 +91,16 @@ nodes:
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
         policy_defaults: { type: string }
-      required: [path, item, url, record, brief, rounds, recorded, at_cap, policy_defaults]
+        # The item's pull request as the forge reports it now: the latest round's that
+        # recorded one, or the one triage routed it to continue; else null.
+        pull_request: { type: [object, 'null'] }
+        # The number of that pull request when the round continues it: it is open and
+        # its head is in the item's repository. Null otherwise.
+        continues: { type: [integer, 'null'] }
+        # The branch the round opens its pull request from when it continues none: a new
+        # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
+        branch: { type: string }
+      required: [path, item, url, record, brief, rounds, recorded, at_cap, policy_defaults, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -108,6 +117,7 @@ nodes:
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
+      pull_request: { from: "$facts.output.pull_request" }
     output_format:
       type: object
       properties:
@@ -152,10 +162,12 @@ nodes:
 
   - id: ship
     include: archon-ship
-    depends_on: [route]
+    depends_on: [facts, route]
     when: "$route.output.decision == 'launch' && $INPUTS.mode == 'live'"
     with:
       target: "$route.output.brief"
+      pull_request: "$facts.output.continues"
+      branch: "$facts.output.branch"
 
   - id: answer
     command: answer
