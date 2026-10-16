@@ -808,6 +808,48 @@ describe('git utilities', () => {
       expect(failure.stderr).toContain('not a git repository');
     });
 
+    test('invalid global config stays unclassified across repository absence consumers', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-config-')));
+      const config = join(root, 'global-config');
+      await writeFile(config, '[invalid');
+      const previous = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = config;
+      try {
+        const failure = await git
+          .execFileAsync('git', ['-C', root, 'status'])
+          .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(git.GitFailure);
+        if (!(failure instanceof git.GitFailure)) throw new Error('expected GitFailure');
+        expect(failure.kind).toBe('unclassified');
+        expect(failure.code).toBe(128);
+        expect(failure.stderr).toContain(config);
+        if (failure.stderr === undefined) throw new Error('expected Git stderr');
+        for (const inspect of [
+          () => git.findRepoRoot(root),
+          () => git.listWorktrees(repo(root)),
+          () => git.isBranchMerged(repo(root), branch('topic'), branch('main')),
+          () => git.isPatchEquivalent(repo(root), branch('topic'), 'main'),
+          () =>
+            git.isPatchEquivalent(repo(root), branch('topic'), 'main', {
+              throwOnExpectedError: true,
+            }),
+          () => git.isAncestorOf(repo(root), 'main'),
+          () => git.getLastCommitDate(repo(root)),
+        ]) {
+          await expect(inspect()).rejects.toThrow(failure.stderr);
+        }
+        expect(await git.hasUncommittedChanges(repo(root))).toBe(true);
+        const sync = await git.syncRepository(repo(root), branch('main'));
+        expect(sync.ok).toBe(false);
+        if (sync.ok || sync.error.code !== 'unknown')
+          throw new Error('expected unknown sync failure');
+        expect(sync.error.message).toContain(failure.stderr);
+      } finally {
+        if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    });
+
     test('symlinked subdirectories preserve repository failures across absence consumers', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-symlink-')));
       const source = join(root, 'source');

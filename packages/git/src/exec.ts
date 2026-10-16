@@ -142,9 +142,17 @@ export async function execFileAsync(
         !(options?.env?.GIT_DIR ?? process.env.GIT_DIR)
       ) {
         try {
-          if (!(await hasRepositoryMarker(path))) kind = 'not_repository';
+          if (!(await hasRepositoryMarker(path))) {
+            // Repository discovery also exits 128 for invalid configuration. Verify
+            // Git can load its configuration before treating absence as the cause.
+            await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {
+              windowsHide: true,
+              ...options,
+            });
+            kind = 'not_repository';
+          }
         } catch {
-          // An unreadable marker cannot establish that a repository is absent.
+          // Failed inspection leaves the original Git evidence unclassified.
         }
       }
       throw new GitFailure(kind, detail, cause);
