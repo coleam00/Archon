@@ -62,12 +62,15 @@ export async function recordWorktreeAdoption(
  * Register a worktree the provider just returned, so `isolation list`, `cleanup` and
  * `complete` see it. Every path that creates a worktree registers it through here.
  *
- * If the insert fails, a worktree this call created is removed so no checkout is left
- * without a record; an adopted one may be in use elsewhere and stays. The insert error
- * is rethrown, and a failed removal is logged without masking it.
+ * After a failed insert, remove a created checkout only when the store confirms no
+ * active registration remains. A commit may reject after writing, so an unreadable
+ * store must preserve the checkout. Rethrow the insert error even if cleanup fails.
  */
 export async function registerWorktree(
-  deps: { store: Pick<IIsolationStore, 'create'>; provider: Pick<IIsolationProvider, 'destroy'> },
+  deps: {
+    store: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow'>;
+    provider: Pick<IIsolationProvider, 'destroy'>;
+  },
   env: WorktreeCreationEnvironment,
   canonicalRepoPath: RepoPath,
   record: Omit<CreateEnvironmentParams, 'provider' | 'working_path' | 'branch_name'>
@@ -93,6 +96,21 @@ export async function registerWorktree(
       'isolation_store_create_failed'
     );
     if (env.metadata.provenance === 'created') {
+      let registered: IsolationEnvironmentRow | null;
+      try {
+        registered = await deps.store.findActiveByWorkflow(
+          record.codebase_id,
+          record.workflow_type,
+          record.workflow_id
+        );
+      } catch (lookupError) {
+        createLogger('isolation.store').error(
+          { err: lookupError, worktreePath: env.workingPath },
+          'isolation_store_rollback_unconfirmed'
+        );
+        throw storeError;
+      }
+      if (registered) throw storeError;
       await removeCreatedWorktree(deps.provider, env.workingPath, {
         canonicalRepoPath,
         creationId: env.metadata.creationId,

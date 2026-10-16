@@ -33,13 +33,13 @@ export interface RegisteredWorktree {
  * Create a task worktree and register its isolation record. Every launch path that
  * makes a worktree outside the isolation resolver goes through here; both register
  * through `registerWorktree`, which removes a worktree this call created when the
- * record cannot be written.
+ * store confirms the failed write left no active registration.
  *
  * A provider failure is rethrown with the classified, actionable message; the git or
  * filesystem error stays on `cause`. The caller configures isolation first.
  */
 export async function createRegisteredWorktree(
-  isolation: Pick<IIsolationStore, 'create'>,
+  isolation: Pick<IIsolationStore, 'create' | 'findActiveByWorkflow'>,
   input: RegisteredWorktreeInput
 ): Promise<RegisteredWorktree> {
   const provider = getIsolationProvider();

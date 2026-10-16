@@ -368,7 +368,10 @@ test('unchanged legacy registration remains adoptable after an integer-like meta
 
 test('a worktree whose record cannot be written is removed and the insert error rethrown', async () => {
   const insertError = new Error('database is locked');
-  const failing = { create: async (): Promise<never> => Promise.reject(insertError) };
+  const failing = {
+    findActiveByWorkflow: isolation.findActiveByWorkflow,
+    create: async (): Promise<never> => Promise.reject(insertError),
+  };
   const input = {
     request: {
       workflowType: 'task' as const,
@@ -402,7 +405,13 @@ test('a reused worktree stays when its re-registration cannot be written', async
   const insertError = new Error('database is locked');
 
   await expect(
-    createRegisteredWorktree({ create: async () => Promise.reject(insertError) }, input)
+    createRegisteredWorktree(
+      {
+        findActiveByWorkflow: isolation.findActiveByWorkflow,
+        create: async () => Promise.reject(insertError),
+      },
+      input
+    )
   ).rejects.toBe(insertError);
 
   expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
