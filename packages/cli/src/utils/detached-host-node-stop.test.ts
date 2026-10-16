@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import {
   recordNodeProcessTrees,
   runSubprocess,
 } from '@archon/workflows/subprocess';
+import { currentNodeProcessRecorder } from '../../../workflows/src/node-process-trees';
 
 const trackTempRoot = trackTempRoots();
 const posixTest = process.platform === 'win32' ? test.skip : test;
@@ -23,6 +24,47 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
+
+test('detached stop retains each recorded root and both ends of its cleanup failure', async () => {
+  const trees = recordNodeProcessTrees(false);
+  const recorder = currentNodeProcessRecorder();
+  if (!recorder) throw new Error('Expected recorder');
+  const pids = [10, 20, 30];
+  for (const pid of pids) {
+    recorder.roots.set(pid, {
+      end: async () => {
+        throw new Error(
+          `taskkill denied for ${pid}; ${'x'.repeat(700)}; ancestry unproved for ${pid}`
+        );
+      },
+      disarm: () => {},
+    });
+  }
+  const log = spyOn(console, 'error').mockImplementation(() => {});
+  const signal = spyOn(process, 'kill').mockImplementation(() => {
+    throw new Error('Must not signal an owner after failed preparation');
+  });
+  const runId = crypto.randomUUID();
+  const owner = await startRunLiveOwner(runId, {
+    detachedProcessPid: process.pid,
+    beforeTerminate: endRecordedNodeProcessTrees,
+  });
+  try {
+    const target = await requestDetachedRunStop(runId);
+    const error = await target.stop().catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected stop refusal');
+    for (const pid of pids) {
+      expect(error.message).toContain(`${pid} (taskkill denied for ${pid}`);
+      expect(error.message).toContain(`ancestry unproved for ${pid})`);
+    }
+    expect(signal).not.toHaveBeenCalled();
+  } finally {
+    await owner.close();
+    trees.release();
+    signal.mockRestore();
+    log.mockRestore();
+  }
+});
 
 test('a stopped host node settles only after the controller releases its termination lease', async () => {
   const readyPath = join(
