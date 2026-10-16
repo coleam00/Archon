@@ -4843,6 +4843,8 @@ function attentionStreamText(
       return [
         `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
       ];
+    case 'resumed':
+      return [`Run ${line.runId} resumed (${line.status}).`];
     case 'owner_lost':
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +

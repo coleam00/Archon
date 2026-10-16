@@ -317,6 +317,9 @@ describe('watchAttentionQueue', () => {
     });
     await caughtUp();
     await store.resumeWorkflowRun(runId);
+    await store.failWorkflowRun(runId, 'out-of-scope failure');
+    await caughtUp();
+    await store.resumeWorkflowRun(runId);
     await store.completeWorkflowRun(runId, { duration_ms: 1 });
     await store.completeWorkflowRun(before, { duration_ms: 1 });
     await caughtUp();
@@ -367,6 +370,55 @@ describe('watchAttentionQueue', () => {
     // The late pause is already held from the snapshot, so its replayed event adds nothing.
     expect(second.lines.filter(attentionOf(late.runId))).toHaveLength(1);
   });
+
+  test.each([false, true])(
+    'a failed run resumes on the cursor feed (batched: %s)',
+    async batched => {
+      const store = await makeStore();
+      let held = false;
+      const holding: IWorkflowStore = Object.create(store);
+      holding.readWorkflowEventsAfter = (cursor, options) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, options);
+      const stream = await watch(holding, { labels: { ci: 'pr' }, bookmarkIntervalMs: 0 });
+      const runId = await running(store);
+      try {
+        await store.failWorkflowRun(runId, 'node failed');
+        const terminal = await stream.next(ofRun(runId, 'terminal'));
+        if (terminal.type !== 'terminal') throw new Error('expected terminal');
+        held = batched;
+        await store.resumeWorkflowRun(runId);
+        if (batched) await store.completeWorkflowRun(runId, { duration_ms: 1 });
+        const row = await store.getWorkflowRun(runId);
+        const head = await store.getWorkflowEventHead();
+        held = false;
+        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        const changes = stream.lines.filter(line => 'runId' in line && line.runId === runId);
+        expect(changes).toMatchObject([
+          { type: 'terminal', status: 'failed' },
+          { type: 'resumed', status: 'running', runId, project: { key: '_cwd/alpha' } },
+          ...(batched ? [{ type: 'terminal', status: 'completed' }] : []),
+        ]);
+        const resumed = changes[1];
+        expect(resumed).toHaveProperty('cursor');
+        expect(resumed).not.toHaveProperty('cursor', terminal.cursor);
+
+        const replay = await watch(store, { after: terminal.cursor, bookmarkIntervalMs: 0 });
+        try {
+          await replay.next(line => line.type === 'bookmark' && line.cursor === head);
+          expect(replay.lines.filter(line => 'runId' in line && line.runId === runId)).toEqual(
+            changes.slice(1)
+          );
+        } finally {
+          await replay.close();
+        }
+        expect(await store.getWorkflowRun(runId)).toEqual(row);
+      } finally {
+        await stream.close();
+      }
+    }
+  );
 
   test('a cursor the store did not issue rejects before any line', async () => {
     const store = await makeStore();

@@ -222,6 +222,55 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   await replay.stop();
 }, 180_000);
 
+test('the text stream reports a failed run resuming', async () => {
+  const fixture = makeFixture({
+    'watch-fail':
+      'name: watch-fail\ndescription: Resume stream fixture.\nnodes:\n' +
+      '  - id: warmup\n    bash: "echo ready"\n' +
+      '  - id: fail\n    depends_on: [warmup]\n    bash: "exit 1"\n',
+  });
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  watchers.add(child);
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  const until = async (expected: string): Promise<void> => {
+    while (!text.includes(expected)) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error(`stdout ended before ${expected}: ${text}`);
+      text += decoder.decode(value, { stream: true });
+    }
+  };
+  try {
+    await until('Ctrl-C stops.');
+    const runId = await launchDetached(fixture, 'watch-fail');
+    const failed = `Run ${runId} failed`;
+    await until(failed);
+    const resumed = await runCli(fixture, [
+      'workflow',
+      'resume',
+      runId,
+      '--cwd',
+      fixture.projectRoot,
+      '--detach',
+      '--json',
+    ]);
+    if (resumed.exitCode !== 0)
+      throw new Error(`resume failed: ${resumed.stderr || resumed.stdout}`);
+    const running = `Run ${runId} resumed (running).`;
+    await until(running);
+    expect(text.indexOf(failed)).toBeLessThan(text.indexOf(running));
+    await statusOf(fixture, runId, 'failed');
+    activeRunIds.delete(runId);
+  } finally {
+    reader.releaseLock();
+    child.kill('SIGTERM');
+    const exitCode = await child.exited;
+    watchers.delete(child);
+    if (process.platform !== 'win32') expect(exitCode).toBe(0);
+  }
+}, 180_000);
+
 test('the text stream exits 0 at its first line after the reader closes stdout', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
   const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
