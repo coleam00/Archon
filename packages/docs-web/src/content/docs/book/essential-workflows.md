@@ -59,6 +59,8 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 **What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
 
+`--input pull_request=<number>` has delivery finish that open PR whichever route triage takes; a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
+
 **Delivering one part of a multi-part plan**: When an approved plan splits the work into several PRs, tell the run which part it delivers and which contract items each part owns, quoting each item as the contract states it:
 
 ```bash

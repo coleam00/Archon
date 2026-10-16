@@ -33,6 +33,12 @@ inputs:
       Let triage write its derived labels to the tracker item — true or false.
       Off by default. Forwarded unchanged to triage; a scheduled ship run is the
       only place an unattended intake can turn it on.
+  pull_request:
+    default: ""
+    description: >-
+      The number of an open pull request this run continues, as the caller
+      resolved it; empty or `null` when it names none. Delivery finishes it
+      whichever route triage takes; triage naming a different one refuses the run.
   branch:
     default: ""
     description: >-
@@ -103,6 +109,22 @@ nodes:
     depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
+  # The pull request delivery continues has one owner: the caller's number when it
+  # resolved one, else triage's `continue` route. Two different numbers refuse
+  # before delivery spends.
+  - id: continues
+    script: continues
+    runtime: bun
+    depends_on: [triage]
+    with:
+      caller: "$INPUTS.pull_request"
+      triage: { from: "$triage.output.pull_request" }
+    output_format:
+      type: object
+      properties:
+        pull_request: { type: [integer, 'null'] }
+      required: [pull_request]
+
   - id: deliver
     include: archon-deliver
     with:
@@ -116,12 +138,12 @@ nodes:
         triage.md itself is the verified work order. When triage.md routes this
         run to continue an open pull request, the work is to finish that pull
         request.
-      pull_request: "$triage.output.pull_request"
+      pull_request: "$continues.output.pull_request"
       branch: "$INPUTS.branch"
     # One join into delivery: the direct or continue route, a rooted investigation,
     # or a ready plan. A negative judgment skips delivery; a failed producer fails
     # the run.
-    depends_on: [triage, inv, planned]
+    depends_on: [triage, continues, inv, planned]
     trigger_rule: none_failed_min_one_success
     # `&&` short-circuits, so a skipped producer's output is never read.
     when: "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
@@ -194,8 +216,7 @@ nodes:
             - not_rooted
             # a planning stop, or a review that needs a check only a person can make
             - needs_human
-        # The delivery's pull request, ready or not; '' when no delivery opened one,
-        # or when a node failure kept the report from learning it.
+        # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }
         summary: { type: string }
       required: [delivered, reason, pr_url, summary]

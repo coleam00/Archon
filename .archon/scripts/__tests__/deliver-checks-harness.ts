@@ -36,6 +36,8 @@ export interface GhPr {
   readonly headRefName?: string;
   readonly headRefOid?: string;
   readonly baseRefName?: string;
+  /** The head repository's owner; omitted, the head is in the `--repo` repository. */
+  readonly headRepositoryOwner?: { readonly login: string };
 }
 
 export interface GhFake {
@@ -178,7 +180,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       ...pr,
       url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
       headRepository: { name },
-      headRepositoryOwner: { login: owner },
+      headRepositoryOwner: pr.headRepositoryOwner ?? { login: owner },
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };

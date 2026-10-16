@@ -14,6 +14,7 @@ facts:
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: null
+  continues: null
   branch: "build/7-stub-fixture"
 route:
   decision: launch

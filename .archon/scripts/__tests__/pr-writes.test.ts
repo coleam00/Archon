@@ -278,6 +278,13 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
   });
 
+  it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
+    const result = publishPr({ target: { existing: 42 }, gh: { pr: { state } } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`pull request 42 is ${state.toLowerCase()}; nothing is pushed`);
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+  });
+
   it('opens the pull request from the branch the caller named', () => {
     const result = publishPr({
       inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },

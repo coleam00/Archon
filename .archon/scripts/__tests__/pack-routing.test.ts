@@ -193,6 +193,43 @@ describe("deliver's terminal outcome", () => {
   });
 });
 
+describe("deliver's report after a node failure", () => {
+  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
+    JSON.parse(
+      runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+        artifacts: { 'listing.json': JSON.stringify({ runId: 'run', errors: [], ...listing }), ...artifacts },
+      }).stdout
+    ) as { reason: string; pr_url: string };
+
+  it('names the pull request a round published before the failure, so the next run continues it', () => {
+    const published = failedReport(
+      { artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] } },
+      { 'nodes/publish.json': JSON.stringify({ number: 42, url: PR_URL }) }
+    );
+    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
+    expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
+  });
+});
+
+describe("ship's continued pull request", () => {
+  const continues = (caller: string, triage: string): { code: number; stdout: string; stderr: string } =>
+    runPackScript('ship/scripts/continues', { inputs: { INPUTS_CALLER: caller, INPUTS_TRIAGE: triage } });
+
+  it("is the caller's whichever route triage took, else triage's", () => {
+    expect(JSON.parse(continues('42', 'null').stdout)).toEqual({ pull_request: 42 });
+    expect(JSON.parse(continues('', '42').stdout)).toEqual({ pull_request: 42 });
+    expect(JSON.parse(continues('42', '42').stdout)).toEqual({ pull_request: 42 });
+    expect(JSON.parse(continues('null', 'null').stdout)).toEqual({ pull_request: null });
+  });
+
+  it('refuses when the caller and triage name different pull requests', () => {
+    const result = continues('42', '43');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller resolved pull request 42, but triage routed the run to continue 43');
+  });
+});
+
 describe("deliver's round", () => {
   interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>

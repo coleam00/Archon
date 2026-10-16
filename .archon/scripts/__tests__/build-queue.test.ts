@@ -32,7 +32,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -249,7 +249,7 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: { state?: 'OPEN' | 'CLOSED' | 'MERGED'; headRefOid?: string }; writeLost?: boolean } = {}
+  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
@@ -346,18 +346,25 @@ describe('the build queue scripts', () => {
     // A failed round after the pull request's round opened none; the item's PR is still 42.
     const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
     seed(at, triaged({}, record({ rounds })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, branch: 'feature' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
     seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, branch: 'feature' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
     seed(at, triaged({ claim: null }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, branch: 'build/7-an-issue-run-1' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
 
-  test('a closed pull request keeps the item off its branch', () => {
+  test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
     const at = install();
     seed(at, triaged({}, record({ rounds: [round('r1', AT)] })));
-    const output = ok(run(at, 'facts', {}, { pr: { state: 'CLOSED' } }));
-    expect(output).toMatchObject({ pull_request: { number: 42, state: 'closed' }, branch: 'build/7-an-issue-run-1' });
+    const closed = ok(run(at, 'facts', {}, { pr: { state: 'CLOSED' } }));
+    expect(closed).toMatchObject({ pull_request: { number: 42, state: 'closed' }, continues: null, branch: 'build/7-an-issue-run-1' });
+    seed(at, triaged({ claim: null }, record({ rounds: [round('r1', AT)] })));
+    const fork = ok(run(at, 'facts', {}, { pr: { headRepositoryOwner: { login: 'someone-else' } } }));
+    expect(fork).toMatchObject({
+      pull_request: { number: 42, state: 'open', head_repo: { path: 'someone-else/repo' } },
+      continues: null,
+      branch: 'build/7-an-issue-run-1',
+    });
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {

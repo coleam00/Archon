@@ -114,6 +114,11 @@ nodes:
               rebase, and resolve every conflict it names. Record every disposition — fixed, declined with its
               reason or evidence, or unrelated — in implementation.md.
 
+              The open pull request this delivery continues, as its caller
+              resolved it (empty or `null` when it named none):
+              $INPUTS.pull_request. When it names one, the work is to finish that
+              pull request.
+
               Accepted work order:
               $INPUTS.work
 
@@ -307,8 +312,7 @@ nodes:
         reason:
           type: string
           enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap, failed]
-        # The pull request, ready or not; '' when no round opened one, or when a node
-        # failure kept the report from learning it.
+        # The pull request, ready or not; '' when no round opened one.
         pr_url: { type: string }
         # The last round's CI re-run: none, or how the one re-run of failed jobs ended.
         ci_rerun: { type: string, enum: [none, green, red] }

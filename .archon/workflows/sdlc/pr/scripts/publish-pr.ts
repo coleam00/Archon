@@ -9,9 +9,9 @@
  * Whether this work already has a pull request is decided here, not in a prompt: an
  * open pull request for the recorded head IS the pull request, and a second one is
  * never opened for it. A run continuing a pull request pushes to that pull request's
- * own head as the forge reports it, not to the branch prepare declared, and by merge
- * only — the push never forces, so a head that is not an ancestor of this commit
- * refuses.
+ * own head as the forge reports it, not to the branch prepare declared, and only
+ * while it is open. The push is by merge only — it never forces, so a head that is
+ * not an ancestor of this commit refuses.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_REPO / INPUTS_HEAD_REPO: `{host, path}` of the base and head repositories.
@@ -56,6 +56,9 @@ function publish(): PrRecord {
   if (existing !== null) {
     const view = viewPr({ repo, number: existing }, source);
     const prHeadRepo = view.pr.head_repo;
+    if (view.pr.state !== 'open') {
+      throw new Error(`pull request ${String(existing)} is ${view.pr.state}; nothing is pushed`);
+    }
     if (prHeadRepo === null) {
       throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
     }

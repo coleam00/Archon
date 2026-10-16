@@ -6,9 +6,9 @@
  * an agent. Eval claims nothing and writes nothing outside the run's artifacts: it
  * reads the named issue's body at `as_of` and replays the rounds it was given.
  *
- * It also resolves the item's pull request as the forge reports it now, and the branch
- * the round publishes to: an open pull request's head in the item's repository, so
- * the round updates that pull request, else a new branch named after the issue.
+ * It also resolves the item's pull request as the forge reports it now. An open one
+ * whose head is in the item's repository is the pull request the round continues;
+ * otherwise the round opens one from a new branch named after the issue.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -72,10 +72,14 @@ function writeIssue(title: string, url: string, body: string, asOf: string): voi
   writeFileSync(join(dir, 'issue.md'), `# ${title}\n\n${url}, ${when}.\n\n${body}\n`);
 }
 
+/** Exactly one of `continues` and `branch` is set on an item's path. */
 interface ItemPr {
   readonly pull_request: PrRecord | null;
+  readonly continues: number | null;
   readonly branch: string;
 }
+
+const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
 
 function resolvePr(
   subject: QualifiedPr,
@@ -86,11 +90,10 @@ function resolvePr(
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
   const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
-  const continued = pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo);
-  return {
-    pull_request: pr,
-    branch: continued ? pr.head : buildBranch(subject.number, title, runId),
-  };
+  if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
+    return { pull_request: pr, continues: pr.number, branch: '' };
+  }
+  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId) };
 }
 
 function emitItem(
@@ -162,8 +165,7 @@ function main(): void {
       recorded: null,
       at_cap: false,
       policy_defaults: POLICY_DEFAULTS,
-      pull_request: null,
-      branch: '',
+      ...NO_ITEM_PR,
     });
     return;
   }
@@ -179,7 +181,7 @@ function main(): void {
     rounds,
     null,
     countedRounds(doc) + 1 >= limit,
-    closed ? { pull_request: null, branch: '' } : resolvePr(doc.subject, issue.title, doc, rounds, runId)
+    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId)
   );
 }
 
