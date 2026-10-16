@@ -70,8 +70,8 @@ nodes:
         source: { type: string, enum: [gh, forge] }
       required: [source]
 
-  # One round: implement → draft PR → review → (simplify → reshape → rereview → CI) →
-  # threads. Open review findings, an unresolved review thread, or a red CI the change
+  # One round: implement → draft PR → review → (simplify → reshape → rereview) →
+  # settle-threads → CI → threads. Open review findings, an unresolved review thread, or a red CI the change
   # caused, start another round. Each
   # round's implementer is a fresh agent that reads the previous round's review
   # report and ci.md, and each later round's review reads only its delta. The pr step runs every round, so every round's commits are
@@ -206,29 +206,6 @@ nodes:
             part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
-        # CI is the project's full validation: implementers run only focused checks.
-        # Fresh: CI reads the PR, not simplify's or reshape's conversation.
-        - id: ci
-          command: ci
-          model: medium
-          context: fresh
-          mutates_checkout: false
-          depends_on: [review, simplify, rereview]
-          trigger_rule: none_failed_min_one_success
-          with:
-            pr: "$pr.output"
-            source: "$forge.output.source"
-          # `&&` short-circuits, so a skipped node's output is never read.
-          when: "$review.output.ready == true && $simplify.output.findings == false || $review.output.ready == true && $simplify.output.findings == true && $rereview.output.ready == true"
-          output_format:
-            type: object
-            properties:
-              state: { type: string, enum: [green, pr_caused, other] }
-              # Whether the agent re-ran failed jobs it judged other, and how that ended.
-              rerun: { type: string, enum: [none, green, red] }
-              summary: { type: string, pattern: '\S' }
-            required: [state, rerun, summary]
-
         # Review threads are work too, whoever opened them. This round's implementer
         # judged the threads the previous round read; this agent checks each
         # disposition at the head and writes the reply each settled thread gets.
@@ -237,7 +214,7 @@ nodes:
           model: medium
           context: fresh
           mutates_checkout: false
-          depends_on: [pr, review, rereview, ci]
+          depends_on: [pr, review, rereview]
           trigger_rule: none_failed_min_one_success
           when: "$LOOP_PREV.threads.output.open > 0"
           with:
@@ -256,6 +233,31 @@ nodes:
               needs_human: { type: boolean }
               summary: { type: string, pattern: '\S' }
             required: [answers, needs_human, summary]
+
+        # CI is the project's full validation: implementers run only focused checks.
+        # Fresh: CI reads the PR, not simplify's or reshape's conversation.
+        - id: ci
+          command: ci
+          model: medium
+          context: fresh
+          mutates_checkout: false
+          # After settle-threads: a failed settle skips CI, so the pull request the
+          # previous round's threads read put back to draft stays a draft.
+          depends_on: [review, simplify, rereview, settle-threads]
+          trigger_rule: none_failed_min_one_success
+          with:
+            pr: "$pr.output"
+            source: "$forge.output.source"
+          # `&&` short-circuits, so a skipped node's output is never read.
+          when: "$review.output.ready == true && $simplify.output.findings == false || $review.output.ready == true && $simplify.output.findings == true && $rereview.output.ready == true"
+          output_format:
+            type: object
+            properties:
+              state: { type: string, enum: [green, pr_caused, other] }
+              # Whether the agent re-ran failed jobs it judged other, and how that ended.
+              rerun: { type: string, enum: [none, green, red] }
+              summary: { type: string, pattern: '\S' }
+            required: [state, rerun, summary]
 
         # Posts and resolves settle-threads' answers, then reads what is still open,
         # after CI so threads posted during the round count. gh alone: the forge

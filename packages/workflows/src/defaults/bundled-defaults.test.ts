@@ -477,8 +477,8 @@ describe('bundled-defaults', () => {
         'simplify',
         'reshape',
         'rereview',
-        'ci',
         'settle-threads',
+        'ci',
         'threads',
         'round',
       ]);

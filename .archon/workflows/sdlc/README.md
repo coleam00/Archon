@@ -68,7 +68,10 @@ open, so the round ends `threads_open` instead of ready. The next round's
 implementer judges each thread like a blocking finding, fixing it or declining it
 with evidence; `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
-the pull request back. A thread no agent can settle ends the run `needs_human`. The
+the pull request back. A thread no agent can settle ends the run `needs_human`.
+`settle-threads` runs before CI and a failed one skips it, so the pull request stays
+the draft the previous round left; a failed `threads` node puts it back to draft
+before the run fails. The
 pack's own review verdict is unchanged: threads gate delivery, not the review.
 
 A pull request counts as ready only at the commit its review comment stamps. The

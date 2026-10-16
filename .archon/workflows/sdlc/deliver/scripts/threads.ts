@@ -10,7 +10,8 @@
  *
  * The unresolved threads go to `$ARTIFACTS_DIR/threads.md`, quoted as untrusted review
  * data, for the next round's implementer to judge. A pull request with an open thread
- * goes back to draft, so it never stays ready over unjudged review.
+ * goes back to draft, so it never stays ready over unjudged review; so does one whose
+ * threads this node failed to read or settle, since CI may have marked it ready.
  *
  * Bound inputs (canonical text in env):
  * - INPUTS_PR: the round's pull-request record.
@@ -20,7 +21,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parsePrRecord, record, type QualifiedPr } from '../../.shared/forge.ts';
+import { parsePrRecord, record, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { markPrDraft } from '../../.shared/pr.ts';
 
@@ -183,8 +184,19 @@ function threadsReport(url: string, threads: readonly Thread[]): string {
   ].join('\n');
 }
 
+/** Puts the pull request back to draft after a failure, naming why when that fails too. */
+function draftAfterFailure(pr: QualifiedPr): string {
+  try {
+    markPrDraft(pr, 'gh');
+    return '';
+  } catch (error) {
+    return `; it may still be ready: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+let pr: PrRecord | undefined;
 try {
-  const pr = parsePrRecord(nullableJson(process.env.INPUTS_PR));
+  pr = parsePrRecord(nullableJson(process.env.INPUTS_PR));
   const answers = parseAnswers(nullableJson(text(process.env.INPUTS_ANSWERS)));
   let read = readThreads(pr);
   if (answers.length > 0) {
@@ -206,5 +218,6 @@ try {
         : `${String(open.length)} review threads are unresolved on ${pr.url}; the pull request is a draft until they are judged.`,
   });
 } catch (error) {
-  refuse(`threads: ${error instanceof Error ? error.message : String(error)}`);
+  const reason = error instanceof Error ? error.message : String(error);
+  refuse(`threads: ${reason}${pr === undefined ? '' : draftAfterFailure(pr)}`);
 }
