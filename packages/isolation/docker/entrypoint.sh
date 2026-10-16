@@ -22,6 +22,8 @@
 # Other startup failures exit without permitting a privilege escalation.
 # All real work arrives later via `docker exec`.
 set -euo pipefail
+# Reserve 78 for the explicit FUSE failure below, regardless of command exit codes.
+trap 'exit 1' ERR
 
 WS="${ARCHON_WORKSPACE_PATH:?ARCHON_WORKSPACE_PATH must be set}"
 MODE="${ARCHON_OVERLAY_MODE:-native}"

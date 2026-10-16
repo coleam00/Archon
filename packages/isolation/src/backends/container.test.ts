@@ -332,12 +332,15 @@ describe('ContainerBackend.prepare', () => {
   );
 
   test.each([
-    ['fuse', false, true],
-    ['native', false, false],
-    ['fuse', true, false],
+    ['fuse', 'none', 0, true],
+    ['native', 'none', 0, false],
+    ['fuse', 'rm', 73, false],
+    ['fuse', 'rm', 78, false],
+    ['fuse', 'mkdir', 73, false],
+    ['fuse', 'mkdir', 78, false],
   ] as const)(
-    'runner %s failure (startup: %s) permits native fallback: %s',
-    async (mode, startupFailure, fallback) => {
+    'runner %s failure (%s exits %s) permits native fallback: %s',
+    async (mode, startupCommand, startupStatus, fallback) => {
       const entrypoint = readFileSync(
         new URL('../../docker/entrypoint.sh', import.meta.url),
         'utf8'
@@ -347,8 +350,8 @@ describe('ContainerBackend.prepare', () => {
         [
           '-c',
           `
-      rm() { :; }
-      mkdir() { return ${startupFailure ? 73 : 0}; }
+      rm() { return ${startupCommand === 'rm' ? startupStatus : 0}; }
+      mkdir() { return ${startupCommand === 'mkdir' ? startupStatus : 0}; }
       fuse-overlayfs() { return 1; }
       mount() { return 1; }
       export ARCHON_WORKSPACE_PATH=/workspace ARCHON_OVERLAY_MODE=${mode}
