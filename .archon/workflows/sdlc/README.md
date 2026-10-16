@@ -403,8 +403,9 @@ are the operator's and stay outside the pack and the repository.
   a duplicate's backlink to that row's mapped canonical copy. A duplicate destination
   elsewhere fails the check. The bench snapshots all issues and issue comments in the
   source and scratch repositories, so concurrent changes there can invalidate a batch.
-  Any other new or edited comment fails `posted_text`; eval
-  permits no posted text. Recorded batches retain their recorded check values and
+  Any other new or edited comment in those monitored repositories fails `posted_text`;
+  eval permits no posted text there. Posts to other repositories are outside the bench's view.
+  Recorded batches retain their recorded check values and
   need a rerun to measure this behavior. The work item keeps no
   summary, maintainer recommendation or links, so a live verdict shows none. A
   scratch repository may not be the set's own or another version's. Its remote

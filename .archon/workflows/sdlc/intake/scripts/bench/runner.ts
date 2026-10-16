@@ -288,12 +288,14 @@ export function readCopies(outDir: string, label: string, repo: Repo): Record<st
   return copies.copies as Record<string, number>;
 }
 
-function canonicalIssue(row: Row): QualifiedPr | undefined {
-  const url = row.known.canonical;
-  if (url === undefined) return undefined;
+function canonicalCopyKey(url: string): string {
+  return `canonical:${url}`;
+}
+
+function canonicalIssue(url: string): QualifiedPr {
   const parsed = new URL(url);
   const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)$/.exec(parsed.pathname);
-  if (parsed.protocol !== 'https:' || match === null) throw new Error(`row ${row.id}: invalid canonical issue URL ${url}`);
+  if (parsed.protocol !== 'https:' || match === null) throw new Error(`invalid canonical issue URL ${url}`);
   return { repo: { host: parsed.host, path: match[1] }, number: Number(match[2]) };
 }
 
@@ -315,12 +317,13 @@ export function copyRows(outDir: string, label: string, scratch: Scratch, rows: 
   }
   for (const row of rows) {
     if (row.body_from !== 'creation') throw new Error(`row ${row.id}: creation text is unavailable; refusing a live copy`);
-    const item = canonicalIssue(row);
-    if (item !== undefined) {
-      const id = `canonical:${row.known.canonical}`;
+    const url = row.known.canonical;
+    if (url !== undefined) {
+      const item = canonicalIssue(url);
+      const id = canonicalCopyKey(url);
       if (copies[id] === undefined) {
         const created = issueAtCreation(item, viewIssue(item));
-        if (created.body_from !== 'creation') throw new Error(`${String(row.known.canonical)}: creation text is unavailable; refusing a live copy`);
+        if (created.body_from !== 'creation') throw new Error(`${url}: creation text is unavailable; refusing a live copy`);
         copy(id, created.title, created.body);
       }
     }
@@ -1021,15 +1024,13 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       if (scratch === undefined) return { row, resolved, cwd };
       const number = scratch.copies[row.id];
       if (number === undefined) throw new Error(`${resolved.version.label}: row ${row.id} has no copy; run copy first`);
-      return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number, canonical: scratch.copies[`canonical:${String(row.known.canonical)}`] } };
+      const canonical = row.known.canonical === undefined ? undefined : scratch.copies[canonicalCopyKey(row.known.canonical)];
+      return { row, resolved, cwd, live: { repo: scratch.scratch.repo, number, canonical } };
     })
   );
   const originals = [
     ...rows.map(row => ({ repo: set.repo, number: row.number })),
-    ...rows.flatMap(row => {
-      const item = canonicalIssue(row);
-      return item === undefined ? [] : [item];
-    }),
+    ...rows.flatMap(row => row.known.canonical === undefined ? [] : [canonicalIssue(row.known.canonical)]),
   ];
   const requiredIssues = [
     ...originals,
@@ -1057,7 +1058,7 @@ export async function runBatch(options: BatchOptions): Promise<{ lines: Line[]; 
       allowed.set(key, [...(allowed.get(key) ?? []), comment.body]);
     }
   }
-  const setPrefixes = originals.map(item => `${item.repo.host}/${item.repo.path}#`.toLowerCase());
+  const setPrefixes = originals.map(item => issueKey(item.repo, 0).slice(0, -1));
   const onSet = (snap: Snapshot): Snapshot => ({
     issues: Object.fromEntries(Object.entries(snap.issues).filter(([key]) => setPrefixes.some(prefix => key.startsWith(prefix)))),
     state: snap.state,

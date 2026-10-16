@@ -481,6 +481,14 @@ describe('bench run', () => {
     }
   });
 
+  it('leaves independent posts to other repositories outside the monitored check', () => {
+    const result = benchLive({
+      issues: [...[9, 11, 12].map(number => ({ number, labels: [], comments: 0 })), { number: 77, repo: { host: 'github.com', path: 'other/repo' }, labels: [], comments: 0 }],
+      posted: [{ number: 77, body: 'Outside the monitored repositories' }],
+    });
+    expect([result.status, result.checks[0]?.checks.posted_text.ok]).toEqual([0, true]);
+  });
+
   it('checks comments beyond the first page', () => {
     const issues = [9, 11, 12, 101].map(number => ({ number, labels: [], comments: number === 101 ? 100 : 0 }));
     const result = benchLive({ issues, posted: [{ number: 101, body: 'Unexpected comment on page two' }] });
