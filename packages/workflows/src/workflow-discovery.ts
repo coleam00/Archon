@@ -1022,6 +1022,7 @@ export async function discoverWorkflows(
   const discoverInstalled = async (): Promise<{
     workflows: WorkflowWithSource[];
     support: WorkflowWithSource[];
+    reservedNames: ReadonlySet<string>;
   }> => {
     const workflows: WorkflowWithSource[] = [];
     const support: WorkflowWithSource[] = [];
@@ -1039,6 +1040,7 @@ export async function discoverWorkflows(
         Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
       )
     );
+    const reservedNames = new Set(catalogEntrypoints);
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;
       const loaded = await loadPackWorkflows(
@@ -1071,6 +1073,7 @@ export async function discoverWorkflows(
       for (const file of loaded.files) {
         const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
         const qualified = installedWorkflowName(pack, entry ?? file.parsed.workflow.name);
+        reservedNames.add(qualified);
         if (entry !== undefined) entrypoints.add(qualified);
         const authoredName = file.parsed.workflow.name;
         const targets = qualifiedByName.get(authoredName) ?? [];
@@ -1151,7 +1154,7 @@ export async function discoverWorkflows(
         (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
       }
     }
-    return { workflows, support };
+    return { workflows, support, reservedNames };
   };
 
   /**
@@ -1164,12 +1167,9 @@ export async function discoverWorkflows(
     allErrors.push(...legacy.errors);
     const installed = await discoverInstalled();
     await assertCapturedFilesPresent(verifiedFiles);
-    const installedNames = new Set(
-      [...installed.workflows, ...installed.support].map(entry => entry.workflow.name)
-    );
     const workflows: WorkflowWithSource[] = [];
     for (const entry of legacy.workflows) {
-      if (installedNames.has(entry.workflow.name)) {
+      if (installed.reservedNames.has(entry.workflow.name)) {
         allErrors.push({
           filename: entry.workflow.name,
           error: `The ${entry.source} workflow named '${entry.workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
