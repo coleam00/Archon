@@ -244,8 +244,8 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
     for (let attempt = 0; attempt < 2; attempt++) {
       // @ts-expect-error - exercise registration followed by readiness as the webhook does
       const routed = await adapter.getOrCreateCodebaseForRepo('acme', 'api');
-      // @ts-expect-error - token acquisition fails before cloning
       await expect(
+        // @ts-expect-error - token acquisition fails before cloning
         adapter.ensureRepoReady('acme', 'api', 'main', routed.repoPath, false)
       ).rejects.toThrow('token unavailable');
     }
