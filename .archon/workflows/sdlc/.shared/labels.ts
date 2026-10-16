@@ -4,7 +4,9 @@
  * Every label the pack writes is declared here with its color and description,
  * and every stage that writes labels goes through `writeLabels`. Stages are
  * joined by labels, one stage's exit label being the next stage's entry label,
- * so a name declared anywhere else is a copy that can drift.
+ * so a name declared anywhere else is a copy that can drift. The attention-item
+ * label the pack writes is declared here too; it lives on an engine pause, not on
+ * the forge, so it has no color.
  */
 
 import { forgeSource, invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
@@ -57,6 +59,9 @@ export const PACK_LABELS = {
 } as const satisfies Record<string, LabelSpec>;
 
 export type PackLabel = keyof typeof PACK_LABELS;
+
+/** The label the attention manager sets on an attention item a person must decide. */
+export const ATTENTION_ESCALATED = { key: 'attention', value: 'maintainer' } as const;
 
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);

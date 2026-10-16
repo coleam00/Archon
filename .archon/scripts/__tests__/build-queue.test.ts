@@ -489,9 +489,9 @@ describe('the build queue scripts', () => {
     });
     const output = ok(ruled);
     const heading = output.section as string;
-    expect(heading).toMatch(/^Current scope \(maintainer ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)$/);
+    expect(heading).toMatch(/^Current scope \(ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)$/);
     expect(ruled.bodies).toEqual([
-      `The contract.\n\n\n## ${heading}\n\nSynthesis and publish may gate on head_matches too.\n\nThe maintainer's words: Only for this item.\n`,
+      `The contract.\n\n\n## ${heading}\n\nSynthesis and publish may gate on head_matches too.\n\nThe answer's text: Only for this item.\n`,
     ]);
     const build = stored(at).value?.facts.build;
     expect(stored(at).value?.claim).toBeNull();
