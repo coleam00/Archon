@@ -18,7 +18,9 @@ nodes:
     loop_group:
       max_iterations: 1
       fresh_context: true
-      until_bash: test $settle.output.done = true
+      until_bash: |
+        done=$settle.output.done
+        test "$done" = "true"
       nodes:
         - id: prepare
           script: prepare
