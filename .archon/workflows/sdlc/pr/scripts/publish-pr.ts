@@ -47,8 +47,8 @@ type Repo = QualifiedPr['repo'];
  * Review compares that recorded head with its checkout, so recording a stale one
  * fails the round with a false head mismatch.
  */
-function awaitHead(read: () => PrRecord, pushed: string): PrRecord {
-  let pr = read();
+function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read()): PrRecord {
+  let pr = first;
   for (let attempt = 0; pr.head_revision !== pushed && attempt < 12; attempt++) {
     Bun.sleepSync(5_000);
     pr = read();
@@ -101,7 +101,7 @@ function publish(): PrRecord {
   const open = findOpenPrByHead(repo, headRepo, head, source);
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
-    return awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision);
+    return awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
   }
 
   const bodyPath = text(process.env.INPUTS_BODY);
