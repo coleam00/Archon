@@ -1,6 +1,7 @@
 /**
- * The host CLI for intake script tests: `workflow get <id> --json` answers from the
- * status table in `INTAKE_RUN_STATUSES`; every other command runs the real CLI.
+ * The host CLI for intake and discoveries script tests: `workflow get <id> --json`
+ * answers from the status table in `INTAKE_RUN_STATUSES`, `workflow runs --json` from
+ * the rows in `RUN_LISTING`; every other command runs the real CLI.
  *
  * The real CLI runs as a surface write, outside any run, in `INTAKE_STATE_CWD` when
  * set: inside a run it would refuse with exit 5, because its store has no such run.
@@ -10,7 +11,11 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
-if (argv[0] === 'workflow' && argv[1] === 'get') {
+if (argv[0] === 'workflow' && argv[1] === 'runs') {
+  // The project's run listing, from `RUN_LISTING` (a JSON array of run rows).
+  const runs = JSON.parse(process.env.RUN_LISTING ?? '[]') as unknown[];
+  process.stdout.write(JSON.stringify({ runs, total: runs.length, scopeFallback: false }));
+} else if (argv[0] === 'workflow' && argv[1] === 'get') {
   const statuses = JSON.parse(process.env.INTAKE_RUN_STATUSES ?? '{}') as Record<string, string>;
   const status = statuses[argv[2]];
   process.stdout.write(
