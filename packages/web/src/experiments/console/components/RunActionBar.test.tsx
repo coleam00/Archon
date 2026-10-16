@@ -69,7 +69,7 @@ test('the attention banner Resume action dispatches one resume request and no ga
   }
 });
 
-test('a usage-limit wait in the banner shows its reset and Abandon, and no gate controls', () => {
+test('a provider-limit wait in the banner shows its reset, Resume and Abandon, and no gate controls', () => {
   const resumeAt = '2026-10-12T05:00:00.000Z';
   const run = toRun({
     id: 'limited',
@@ -87,6 +87,6 @@ test('a usage-limit wait in the banner shows its reset and Abandon, and no gate 
   expect(html).toContain('implement');
   expect(html).toContain(new Date(resumeAt).toLocaleString());
   expect(html).toContain('Abandon');
+  expect(html).toContain('Resume');
   expect(html).not.toContain('Continue');
-  expect(html).not.toContain('Resume');
 });

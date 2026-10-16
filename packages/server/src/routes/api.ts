@@ -4414,8 +4414,8 @@ export function registerApiRoutes(
       case 'usage_limit':
         return {
           error:
-            `Run is waiting for a provider usage limit to reset at ${attention.resumeAt}; it ` +
-            'has no gate to resolve and continues by itself.',
+            `Run hit a provider usage or rate limit and tries again by itself at ` +
+            `${attention.resumeAt}; it has no gate to resolve.`,
         };
       case 'stalled_tool_calls':
       case 'terminal':

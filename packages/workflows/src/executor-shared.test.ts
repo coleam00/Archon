@@ -32,6 +32,9 @@ import {
   retainStreamTail,
   getRetryDelayMs,
   RATE_LIMIT_RETRY_DELAY_MS,
+  RATE_LIMIT_PAUSE_DELAY_MS,
+  rateLimitResumeAt,
+  aggregateProviderFailure,
   nodeFailureKindOf,
   retryClassOf,
   safeSendMessage,
@@ -954,6 +957,67 @@ describe('getRetryDelayMs', () => {
     }
     expect(getRetryDelayMs('transient', 0, 3000)).toBe(3000);
     expect(getRetryDelayMs('transient', 2, 3000)).toBe(12000);
+  });
+});
+
+describe('rateLimitResumeAt', () => {
+  const now = Date.parse('2026-10-16T12:00:00.000Z');
+
+  it("waits for the provider's reported reset while it is still ahead", () => {
+    const resetAt = '2026-10-16T12:30:00.000Z';
+    expect(rateLimitResumeAt({ class: 'rate_limited', evidence: '429', resetAt }, now)).toBe(
+      Date.parse(resetAt)
+    );
+  });
+
+  it('backs off 5 to 15 minutes without a reset, or once the reported one has passed', () => {
+    const random = Math.random;
+    try {
+      for (const resetAt of [undefined, '2026-10-16T11:59:00.000Z']) {
+        const failure = { class: 'rate_limited' as const, evidence: '429', resetAt };
+        Math.random = () => 0;
+        expect(rateLimitResumeAt(failure, now)).toBe(now + RATE_LIMIT_PAUSE_DELAY_MS / 2);
+        Math.random = () => 0.999999;
+        expect(rateLimitResumeAt(failure, now)).toBe(
+          now + Math.round(RATE_LIMIT_PAUSE_DELAY_MS * 1.499999)
+        );
+      }
+    } finally {
+      Math.random = random;
+    }
+  });
+});
+
+describe('aggregateProviderFailure', () => {
+  const sooner = {
+    class: 'rate_limited' as const,
+    evidence: '429',
+    resetAt: '2026-10-16T12:10:00Z',
+  };
+  const later = {
+    class: 'quota_exhausted' as const,
+    evidence: 'session limit',
+    resetAt: '2026-10-16T13:00:00Z',
+  };
+
+  it('reports a lone failed descendant unchanged, whatever its class', () => {
+    const auth = { class: 'auth' as const, evidence: 'bad key' };
+    expect(aggregateProviderFailure([auth])).toBe(auth);
+    expect(aggregateProviderFailure([undefined])).toBeUndefined();
+  });
+
+  it('reports nothing when a provider limit sits beside any other failure', () => {
+    expect(aggregateProviderFailure([sooner, undefined])).toBeUndefined();
+    expect(
+      aggregateProviderFailure([later, { class: 'transient', evidence: 'socket hang up' }])
+    ).toBeUndefined();
+  });
+
+  it('reports the latest reset among several limits, and a resetless usage limit over any', () => {
+    const noReset = { class: 'rate_limited' as const, evidence: '429' };
+    expect(aggregateProviderFailure([noReset, sooner, later])).toBe(later);
+    const unwaitable = { class: 'quota_exhausted' as const, evidence: 'session limit' };
+    expect(aggregateProviderFailure([later, unwaitable])).toBe(unwaitable);
   });
 });
 

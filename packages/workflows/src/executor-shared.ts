@@ -54,6 +54,53 @@ const OVERLOAD_MAX_DELAY_MS = 300_000;
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
+/**
+ * Center of the wait after a rate limit outlasts its retries and the provider gave no reset;
+ * jitter widens it to ±50% in {@link rateLimitResumeAt}.
+ */
+export const RATE_LIMIT_PAUSE_DELAY_MS = 10 * 60_000;
+
+/**
+ * When a run paused by a rate limit that outlasted its retries tries again, in epoch ms:
+ * the provider's reported reset while it is still ahead, otherwise a jittered backoff so
+ * runs limited together do not wake in lockstep. A seconds-scale `retryAfterMs` hint is
+ * deliberately not a deadline here: it would wake the run straight into another full retry
+ * cycle.
+ */
+export function rateLimitResumeAt(failure: ProviderFailure, now: number): number {
+  const reportedReset = failure.resetAt === undefined ? Number.NaN : Date.parse(failure.resetAt);
+  if (reportedReset > now) return reportedReset;
+  return now + Math.round(RATE_LIMIT_PAUSE_DELAY_MS * (0.5 + Math.random()));
+}
+
+/**
+ * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
+ * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
+ * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
+ * when every one is a provider limit, so the wait never pauses a run beside an unrelated
+ * failure that each continuation would repeat. Among limits, a usage limit without a reported
+ * reset wins because the run cannot wait on it; otherwise the latest reported reset does.
+ */
+export function aggregateProviderFailure(
+  failures: readonly (ProviderFailure | undefined)[]
+): ProviderFailure | undefined {
+  if (failures.length <= 1) return failures[0];
+  const limits = failures.filter(
+    (failure): failure is ProviderFailure =>
+      failure?.class === 'rate_limited' || failure?.class === 'quota_exhausted'
+  );
+  if (limits.length < failures.length) return undefined;
+  const unwaitable = limits.find(
+    failure => failure.class === 'quota_exhausted' && failure.resetAt === undefined
+  );
+  if (unwaitable !== undefined) return unwaitable;
+  const reportedReset = (failure: ProviderFailure): number =>
+    failure.resetAt === undefined ? Number.NEGATIVE_INFINITY : Date.parse(failure.resetAt);
+  return limits.reduce((latest, failure) =>
+    reportedReset(failure) > reportedReset(latest) ? failure : latest
+  );
+}
+
 export function effectiveRetryMaxRetries(
   configuredMaxRetries: number,
   retryClass: RetryClass | undefined,
