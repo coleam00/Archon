@@ -129,6 +129,16 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 
 ---
 
+#### `archon-worktree-cleanup`
+
+Runs `archon isolation cleanup --merged` across every registered project: each worktree whose pull request merged goes, with the branch Archon created and its remote branch. A worktree with uncommitted changes, a live run, or commits its pull request did not carry stays. `include_closed: "true"` also removes worktrees whose pull request was closed.
+
+**When to use it**: You run Archon without a server, whose cleanup schedule already does this, and merged worktrees pile up. Add the schedule binding the SDLC pack README's "Worktree cleanup" section shows; the pack installs none.
+
+**What it produces**: The cleanup report on the node's output. It changes no code.
+
+---
+
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -264,6 +274,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into any PR that is behind it) |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
+| `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

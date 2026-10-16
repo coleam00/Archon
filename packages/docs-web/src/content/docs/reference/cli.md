@@ -715,8 +715,28 @@ The engine persists this record with the terminal status transition, including d
 runs and failures before a reporting node. It contains observed node states and skip
 causes, the selected `returns:` value or its explicit unavailability, and an artifact
 manifest. Historical runs without a record and active resumed runs report `null`.
+
 An event-query failure exits non-zero with `error: "workflow_events_unavailable"` in
 JSON; it does not masquerade as a missing historical record.
+
+When the run holds proof that it created its worktree, the record has
+`worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
+was clean, fully on a remote and unpublished, so the engine removes it after the
+completion write, keeping the branch. The record is written before the removal, so a
+removal that is refused because work appeared in the meantime, or that fails, leaves the
+checkout and is logged. Otherwise it is
+`{ "disposition": "retained", "reason": ... }` with an optional `detail`:
+
+| Reason | Meaning |
+|---|---|
+| `resumable` | The run failed and can resume; `workflow abandon` or the stale sweep releases it |
+| `cancelled` | The run was cancelled; `workflow abandon` releases it |
+| `workspace_retained` | The originating platform keeps its workspaces |
+| `in_use` | Another claimable run uses the checkout; `detail` names it |
+| `uncommitted_changes` | The checkout has uncommitted changes |
+| `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
+| `published_branch` | The configured remote has the branch; `isolation cleanup --merged` removes it after its PR merges |
+| `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
 It survives later file deletion, but does not preserve file contents or contain previews.
@@ -1481,13 +1501,27 @@ A **failed** run keeps its environment only until its outcome is settled:
   or its PR is merged. `--include-closed` also removes it once its PR is closed.
 - The stale sweep removes it once the run has been inactive since it failed for longer
   than the stale window (`[days]` here; `STALE_THRESHOLD_DAYS` for the server and chat).
-  An environment whose worktree HEAD or branch holds a commit on no remote is kept and
-  reported as `failed run <id> has <n> unpushed commit(s)`.
 
 The output names each failed run whose environment it removed, with the reason:
 `merged`, `PR closed`, or `stale`. Removal leaves the run's status unchanged. Resuming
 it afterwards fails with `the working path from the run no longer exists`; start a
 fresh run. To discard a failed run sooner, use `workflow abandon`.
+
+Age alone never removes work that exists nowhere else. The stale sweep, here and in the
+server's scheduled cleanup and chat `/worktree cleanup stale`, keeps any environment whose
+worktree HEAD or branch holds a commit on no remote, whether or not a run owns it. It
+reports a failed run's environment as `failed run <id> has <n> unpushed commit(s)`, and
+any other as `<n> unpushed commit(s); remove it explicitly with archon complete <branch> --force`.
+The scheduled cleanup keeps an environment whose checkout is missing the same way while
+the branch Archon created for it holds such a commit.
+
+A completed run removes the worktree it created when it completes, if the checkout is
+clean, every commit on its HEAD and branch is on a remote, and the configured remote
+does not advertise the branch. The removal keeps the branch, so the run can still be
+adopted. A branch that was published waits for `--merged`, which also deletes it. When
+the remote cannot be read, the worktree stays and the record says `check_failed`. The
+run's `terminal_record.worktree_disposition` says what happened and why (see
+[`workflow get`](#workflow-get)).
 
 ### `validate workflows [name]`
 
