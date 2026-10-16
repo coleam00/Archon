@@ -12,6 +12,8 @@ facts:
   recorded: null
   at_cap: true
   policy_defaults: "/stub/policy"
+  pull_request: null
+  branch: "build/7-stub-fixture"
 route:
   decision: launch
   brief: "stub: continue PR 8"

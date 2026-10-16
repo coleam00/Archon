@@ -33,6 +33,13 @@ inputs:
       Let triage write its derived labels to the tracker item — true or false.
       Off by default. Forwarded unchanged to triage; a scheduled ship run is the
       only place an unattended intake can turn it on.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it,
+      forwarded unchanged to delivery. When an open pull request already has that
+      head, the push updates it instead of opening another. Empty opens it from the
+      checkout's branch.
 
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
@@ -110,6 +117,7 @@ nodes:
         run to continue an open pull request, the work is to finish that pull
         request.
       pull_request: "$triage.output.pull_request"
+      branch: "$INPUTS.branch"
     # One join into delivery: the direct or continue route, a rooted investigation,
     # or a ready plan. A negative judgment skips delivery; a failed producer fails
     # the run.

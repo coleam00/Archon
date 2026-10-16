@@ -10,6 +10,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 - The brief the last decision left for this launch: `$INPUTS.brief`. Empty means the item has not been launched yet, or a re-triage started it over.
 - The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default.
 - The project's direction document, where it has one, only when whether the item is in scope depends on it.
+- The item's pull request as the forge reports it now: `$INPUTS.pull_request`. It is its latest round's, or the one triage routed it to continue; null means it has none. An open one whose head is in the item's repository is continued: the round pushes onto its head, so the same pull request updates. Ask when it is closed or merged, or its head lives in another repository, unless a dated scope section or a maintainer's recorded answer already rules on it.
 
 ## Decide
 

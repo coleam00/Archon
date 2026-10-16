@@ -506,6 +506,10 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
+  A round for an item with an open pull request in its repository pushes onto that
+  pull request's head, so the same pull request updates; otherwise the round opens its
+  pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
+  merged pull request, or one from a fork, is asked about.
 - **Give up.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `give-up` agent compares their reviews. Each round finding new defects

@@ -23,6 +23,12 @@ inputs:
       The number of an open pull request this delivery continues instead of opening
       one, as a caller resolved it. Empty or `null` when the caller names none; the
       run can still continue one it was launched onto.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it. When an
+      open pull request already has that head, the push updates it instead of
+      opening another. Empty opens it from the checkout's branch.
   work:
     default: ""
     description: >-
@@ -119,6 +125,7 @@ nodes:
           with:
             draft: "true"
             pull_request: "$INPUTS.pull_request"
+            branch: "$INPUTS.branch"
 
         - id: review
           include: archon-review
