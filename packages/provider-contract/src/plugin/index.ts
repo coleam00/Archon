@@ -4,6 +4,7 @@ export {
   PLUGIN_MAX_MESSAGE_BYTES,
   rpcMessageSchema,
   PluginProtocolError,
+  PluginProtocolMismatchError,
   PluginRemoteError,
   type PluginIO,
 } from './rpc';
