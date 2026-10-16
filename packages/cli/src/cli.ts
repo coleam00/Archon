@@ -512,6 +512,9 @@ async function main(): Promise<number> {
 
     // Fixture testing reads workflow files only — handle before git validation.
     if (command === 'workflow' && subcommand === 'test') {
+      if (!existsSync(cwd)) {
+        return await fail(jsonFlag, `Error: Directory does not exist: ${cwd}`);
+      }
       const target = positionals[2];
       try {
         const { workflowTestCommand } = await loadRoute(() => import('./commands/workflow'));

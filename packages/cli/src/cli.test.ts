@@ -1898,9 +1898,8 @@ describe('pre-dispatch gates --json error envelope', () => {
 
 describe('workflow test --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
-    // A --cwd that does not exist makes findRepoRoot throw inside the
-    // `workflow test` handler — the only reachable error path without a full
-    // fixture project. The envelope, not the message, is the contract.
+    // A --cwd that does not exist is the only reachable error path without a
+    // full fixture project. The envelope, not the message, is the contract.
     const { status, envelope } = spawnJsonError([
       'workflow',
       'test',

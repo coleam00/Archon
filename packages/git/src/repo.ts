@@ -488,9 +488,9 @@ function stderrOf(error: unknown): string {
 /**
  * Git reports these causes only as stderr lines, not exit codes. Matching whole
  * fatal lines keeps a URL, path, or branch name from changing the result. An
- * HTTP 403 is curl's status text at the end of whatever fatal line Git or its
- * credential helper prints. The cause only chooses the guidance a GitResult
- * reports; it never decides retry.
+ * HTTP 403 matches on curl's status text ending a fatal line, whatever prefix
+ * precedes it. The cause only chooses the guidance a GitResult reports; it
+ * never decides retry.
  */
 function reportedCause(error: unknown): 'missing' | 'denied' | 'no_space' | undefined {
   const stderr = stderrOf(error);
