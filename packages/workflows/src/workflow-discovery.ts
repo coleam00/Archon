@@ -1040,7 +1040,7 @@ export async function discoverWorkflows(
         Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
       )
     );
-    const reservedNames = new Set(catalogEntrypoints);
+    const reservedNames = new Set([...catalogEntrypoints].map(name => name.toLowerCase()));
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;
       const loaded = await loadPackWorkflows(
@@ -1073,7 +1073,7 @@ export async function discoverWorkflows(
       for (const file of loaded.files) {
         const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
         const qualified = installedWorkflowName(pack, entry ?? file.parsed.workflow.name);
-        reservedNames.add(qualified);
+        reservedNames.add(qualified.toLowerCase());
         if (entry !== undefined) entrypoints.add(qualified);
         const authoredName = file.parsed.workflow.name;
         const targets = qualifiedByName.get(authoredName) ?? [];
@@ -1163,23 +1163,21 @@ export async function discoverWorkflows(
    * global file can shadow an installed workflow.
    */
   const finish = async (scope?: string): Promise<WorkflowLoadResult> => {
-    const legacy = await expandScope(workflowsByFile);
-    allErrors.push(...legacy.errors);
     const installed = await discoverInstalled();
-    await assertCapturedFilesPresent(verifiedFiles);
-    const workflows: WorkflowWithSource[] = [];
-    for (const entry of legacy.workflows) {
-      if (installed.reservedNames.has(entry.workflow.name)) {
+    for (const [filename, { workflow, source }] of workflowsByFile) {
+      if (installed.reservedNames.has(workflow.name.toLowerCase())) {
         allErrors.push({
-          filename: entry.workflow.name,
-          error: `The ${entry.source} workflow named '${entry.workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
+          filename: workflow.name,
+          error: `The ${source} workflow named '${workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
           errorType: 'validation_error',
         });
-        continue;
+        workflowsByFile.delete(filename);
       }
-      workflows.push(entry);
     }
-    workflows.push(...installed.workflows);
+    const legacy = await expandScope(workflowsByFile);
+    allErrors.push(...legacy.errors);
+    await assertCapturedFilesPresent(verifiedFiles);
+    const workflows = [...legacy.workflows, ...installed.workflows];
     if (roots.kind === 'captured') {
       const failure = allErrors.find(
         error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)

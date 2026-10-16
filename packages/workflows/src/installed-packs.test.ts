@@ -206,7 +206,7 @@ describe('installed packs in the catalog', () => {
         const resolution = resolveFanOutChildDefinition(
           { ...deps, providers: providerRegistry },
           project,
-          REVIEW
+          'ACME/Review-Kit:REVIEW'
         );
         if (fault === 'unreadable') {
           await expect(resolution).rejects.toMatchObject({ code: 'EACCES' });
@@ -466,8 +466,8 @@ describe('installed packs in the catalog', () => {
     'loop include',
   ] as const) {
     const field = reference.includes('workflow') ? 'workflow' : 'include';
-    const callerNodes = (target: string): string => {
-      if (reference === 'loop include') {
+    const callerNodes = (target: string, form = reference): string => {
+      if (form === 'loop include') {
         return `  - id: group
     loop_group:
       until_bash: exit 0
@@ -478,8 +478,8 @@ describe('installed packs in the catalog', () => {
 `;
       }
       return `  - id: child
-    ${field}: ${target}
-${reference.startsWith('fan-out') ? `    fan_out:\n      items: '["a"]'\n      as: item\n` : ''}`;
+    ${form.includes('workflow') ? 'workflow' : 'include'}: ${target}
+${form.startsWith('fan-out') ? `    fan_out:\n      items: '["a"]'\n      as: item\n` : ''}`;
     };
 
     for (const entrypoint of [false, true]) {
@@ -528,49 +528,89 @@ ${reference.startsWith('fan-out') ? `    fan_out:\n      items: '["a"]'\n      a
 
     for (const source of ['project', 'global'] as const) {
       for (const entrypoint of [false, true]) {
-        test(`rejected installed ${reference} cannot fall back to a ${source} shadow (${entrypoint ? 'entrypoint' : 'support'})`, async () => {
-          const requested = 'ACME/review-kit:HeLpEr';
-          await install({
-            id: ID,
-            name: 'review-kit',
-            commit: COMMIT_A,
-            entrypoints: {
-              healthy: 'healthy/workflow.yaml',
-              ...(entrypoint ? { review: 'review/workflow.yaml' } : {}),
-            },
-            files: {
-              'review/workflow.yaml': `name: review\ndescription: Caller\nnodes:\n${callerNodes(requested)}`,
-              'healthy/workflow.yaml':
-                'name: healthy\ndescription: Healthy\nnodes:\n  - id: done\n    bash: echo healthy\n',
-              'first/workflow.yaml':
-                'name: helper\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
-              'second/workflow.yaml':
-                'name: HELPER\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
-            },
+        for (const shadowName of [
+          REVIEW,
+          'ACME/review-kit:review',
+          'acme/REVIEW-KIT:review',
+          'acme/review-kit:REVIEW',
+        ]) {
+          test(`rejected installed ${reference} cannot fall back to a ${source} shadow ${shadowName} (${entrypoint ? 'entrypoint' : 'support'})`, async () => {
+            const requested = 'ACME/review-kit:HeLpEr';
+            await install({
+              id: ID,
+              name: 'review-kit',
+              commit: COMMIT_A,
+              entrypoints: {
+                healthy: 'healthy/workflow.yaml',
+                ...(entrypoint ? { review: 'review/workflow.yaml' } : {}),
+              },
+              files: {
+                'review/workflow.yaml': `name: review\ndescription: Caller\nnodes:\n${callerNodes(requested)}`,
+                'healthy/workflow.yaml':
+                  'name: healthy\ndescription: Healthy\nnodes:\n  - id: done\n    bash: echo healthy\n',
+                'first/workflow.yaml':
+                  'name: helper\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+                'second/workflow.yaml':
+                  'name: HELPER\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n',
+              },
+            });
+            const folder =
+              source === 'project'
+                ? join(project, '.archon', 'workflows')
+                : join(home, 'workflows');
+            await mkdir(folder, { recursive: true });
+            await writeFile(
+              join(folder, 'shadow.yaml'),
+              `name: ${shadowName}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
+            );
+            for (const outer of [
+              'include',
+              'workflow',
+              'fan-out include',
+              'fan-out workflow',
+              'loop include',
+            ] as const) {
+              await writeFile(
+                join(folder, `${outer.replaceAll(' ', '-')}.yaml`),
+                `name: outer-${outer.replaceAll(' ', '-')}\ndescription: Outer\nnodes:\n${callerNodes(shadowName, outer)}`
+              );
+            }
+            const catalog = await discover();
+            expect(
+              names([...catalog.workflows, ...(catalog.support ?? [])]).filter(
+                name => name.toLowerCase() === REVIEW
+              )
+            ).toEqual([]);
+            for (const outer of ['include', 'fan-out include', 'loop include']) {
+              expect(names(catalog.workflows)).not.toContain(`outer-${outer.replaceAll(' ', '-')}`);
+            }
+            for (const outer of ['workflow', 'fan-out workflow']) {
+              expect(
+                catalog.workflows.find(
+                  entry => entry.workflow.name === `outer-${outer.replaceAll(' ', '-')}`
+                )?.workflow.nodes[0]
+              ).toMatchObject({ workflow: shadowName });
+            }
+            expect(names(catalog.workflows)).toContain('acme/review-kit:healthy');
+            expect(catalog.errors.find(error => error.filename === shadowName)?.error).toContain(
+              `The ${source} workflow named '${shadowName}' is not loaded: that name belongs to an installed plugin.`
+            );
+            const diagnostic = catalog.errors.find(error => error.workflowName === REVIEW);
+            if (!diagnostic) throw new Error('Missing installed caller diagnostic');
+            expect(diagnostic).toMatchObject({
+              filename: 'acme/review-kit/review/workflow.yaml',
+              errorType: 'validation_error',
+            });
+            expect(diagnostic.error).toContain(`Ambiguous workflow '${requested}'`);
+            await expect(
+              resolveFanOutChildDefinition(
+                { ...deps, providers: providerRegistry },
+                project,
+                shadowName
+              )
+            ).resolves.toEqual({ unresolved: diagnostic.error });
           });
-          const folder =
-            source === 'project' ? join(project, '.archon', 'workflows') : join(home, 'workflows');
-          await mkdir(folder, { recursive: true });
-          await writeFile(
-            join(folder, 'shadow.yaml'),
-            `name: ${REVIEW}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
-          );
-          const catalog = await discover();
-          expect(names([...catalog.workflows, ...(catalog.support ?? [])])).not.toContain(REVIEW);
-          expect(catalog.errors.find(error => error.filename === REVIEW)?.error).toContain(
-            `The ${source} workflow named '${REVIEW}' is not loaded: that name belongs to an installed plugin.`
-          );
-          const diagnostic = catalog.errors.find(error => error.workflowName === REVIEW);
-          if (!diagnostic) throw new Error('Missing installed caller diagnostic');
-          expect(diagnostic).toMatchObject({
-            filename: 'acme/review-kit/review/workflow.yaml',
-            errorType: 'validation_error',
-          });
-          expect(diagnostic.error).toContain(`Ambiguous workflow '${requested}'`);
-          await expect(
-            resolveFanOutChildDefinition({ ...deps, providers: providerRegistry }, project, REVIEW)
-          ).resolves.toEqual({ unresolved: diagnostic.error });
-        });
+        }
       }
     }
 
