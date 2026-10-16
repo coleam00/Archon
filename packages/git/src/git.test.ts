@@ -3303,6 +3303,58 @@ branch refs/heads/feature/auth
       expect(JSON.stringify(mockLogger.error.mock.calls)).toContain('***');
     });
 
+    test.each(['', '\n', '\r\n'])(
+      'classifies HTTP 403 clone stderr as permission denied (ending %j)',
+      async ending => {
+        const token = 'rejected-clone-token';
+        const failure = new git.GitFailure(
+          'unclassified',
+          'git clone failed',
+          Object.assign(new Error('git exited'), {
+            code: 128,
+            stderr: `fatal: credential ${token} rejected: The requested URL returned error: 403${ending}`,
+          })
+        );
+        execSpy.mockRejectedValue(failure);
+        mockLogger.error.mockClear();
+
+        const result = await git.cloneRepository(
+          'https://gitlab.example.test/group/project.git',
+          repo('/tmp/target'),
+          { credentials: { username: 'oauth2', password: token } }
+        );
+
+        expect(result).toEqual({
+          ok: false,
+          error: { code: 'permission_denied', path: '/tmp/target' },
+        });
+        expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
+        expect(JSON.stringify(mockLogger.error.mock.calls)).toContain(
+          'The requested URL returned error: 403'
+        );
+        expect(failure.kind).toBe('unclassified');
+      }
+    );
+
+    test.each([
+      ['fatal: Authentication failed', 'The requested URL returned error: 403'],
+      ['fatal: Authentication failed: HTTP 403', 'git clone failed'],
+      ['fatal: The requested URL returned error: 4030\n', 'git clone failed'],
+      ['fatal: The requested URL returned error: 500\n', 'git clone failed'],
+    ])('keeps other clone failures unclassified: %s', async (stderr, message) => {
+      execSpy.mockRejectedValue(Object.assign(new Error(message), { code: 128, stderr }));
+
+      const result = await git.cloneRepository(
+        'https://gitlab.example.test/group/project.git',
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: `${message}\n${stderr}` },
+      });
+    });
+
     test('keeps text-only repository-not-found failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('fatal: repository not found'));
 

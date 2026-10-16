@@ -486,6 +486,17 @@ export async function cloneRepository(
       { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
       'clone_repository_failed'
     );
+    // Git exposes the HTTP status only in stderr, not its process exit code.
+    // Limit this diagnostic mapping to clone results; isolation kinds stay structured.
+    if (
+      parsedUrl &&
+      error instanceof Error &&
+      'stderr' in error &&
+      typeof error.stderr === 'string' &&
+      /\bThe requested URL returned error: 403(?:\r?\n|$)/.test(error.stderr)
+    ) {
+      return { ok: false, error: { code: 'permission_denied', path: targetPath } };
+    }
     return { ok: false, error: { code: 'unknown', message: sanitizedMessage } };
   }
 }
