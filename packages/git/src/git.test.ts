@@ -2959,26 +2959,6 @@ branch refs/heads/feature/auth
     });
   });
 
-  describe('fetchRemote', () => {
-    test.each([
-      'already exists',
-      'cannot lock ref: unable to update local ref',
-      'permission denied',
-      'timeout',
-    ])('does not retry or replace a failure containing %s', async text => {
-      const error = Object.assign(new Error(text), { code: 128, stderr: `full stderr: ${text}` });
-      const spy = spyOn(git, 'execFileAsync').mockRejectedValue(error);
-      try {
-        await expect(git.fetchRemote(repo('/workspace/repo'), 'origin', 'main')).rejects.toBe(
-          error
-        );
-        expect(spy).toHaveBeenCalledTimes(1);
-      } finally {
-        spy.mockRestore();
-      }
-    });
-  });
-
   describe('getDefaultRemote', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 

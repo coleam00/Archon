@@ -140,22 +140,6 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
   }
 }
 
-/** Git does not expose a distinct ref-lock exit code; unclassified failures are never retried. */
-export async function fetchRemote(
-  repoPath: RepoPath,
-  remote: string,
-  refspec: string | undefined,
-  options?: { timeoutMs?: number }
-): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync(
-    'git',
-    ['-C', repoPath, 'fetch', remote, ...(refspec === undefined ? [] : [refspec])],
-    {
-      timeout: options?.timeoutMs,
-    }
-  );
-}
-
 /**
  * Sync workspace with its remote.
  * Fetches the base branch from the remote, then updates local state according to mode.
@@ -190,7 +174,9 @@ export async function syncWorkspace(
 
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
   try {
-    await fetchRemote(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
+    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
+      timeout: 60000,
+    });
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {
@@ -509,9 +495,6 @@ export async function cloneRepository(
  * Runs sequential fetch + reset --hard. If fetch fails, reset is skipped.
  * Uses execFileAsync (no shell interpolation) for safety.
  *
- * Note: the reset uses the `cwd` option; the fetch goes through
- * fetchRemote, which uses `-C`. Both are functionally equivalent.
- *
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
  * @param remote - Remote name to fetch from (default: 'origin')
@@ -523,7 +506,7 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await fetchRemote(repoPath, remote, undefined, { timeoutMs: 60000 });
+    await execFileAsync('git', ['-C', repoPath, 'fetch', remote], { timeout: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_fetch_failed');

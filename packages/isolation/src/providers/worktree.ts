@@ -20,7 +20,6 @@ import {
   isSameWorktreePath,
   isWorktreeRegistered,
   readWorktreeRegistration,
-  fetchRemote,
   findWorktreeByBranch,
   getCanonicalRepoPath,
   getCurrentBranchStrict,
@@ -1694,9 +1693,11 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       );
     } else {
-      await fetchRemote(toRepoPath(repoPath), remote, `pull/${prNumber}/head:${reviewBranch}`, {
-        timeoutMs: GIT_OPERATION_TIMEOUT_MS,
-      });
+      await execFileAsync(
+        'git',
+        ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head:${reviewBranch}`],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
 
       try {
         await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
@@ -1806,9 +1807,11 @@ export class WorktreeProvider implements IIsolationProvider {
     const remoteRefName = `refs/remotes/${remoteRef}`;
     let source: 'local' | 'remote' | 'fast_forwarded' = 'local';
     if (remoteExists) {
-      await fetchRemote(toRepoPath(repoPath), remote, `+${localRefName}:${remoteRefName}`, {
-        timeoutMs: GIT_OPERATION_TIMEOUT_MS,
-      });
+      await execFileAsync(
+        'git',
+        ['-C', repoPath, 'fetch', remote, `+${localRefName}:${remoteRefName}`],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
       if (!localExists) {
         source = 'remote';
       } else {
