@@ -12,13 +12,14 @@ import { VALIDATE_CHECKS, parseOnly, selectChecks, runCheckCommands } from './va
 const track = trackTempRoots();
 
 describe('validate check selection', () => {
-  test('defaults omit formatting and fixtures', () => {
+  test('defaults include formatting and omit fixtures', () => {
     expect(selectChecks([]).map(check => check.id)).toEqual([
       'cli-import-boundary',
       'package-edges',
       'generated-files',
       'type-check',
       'lint',
+      'format',
       'installer',
       'tests',
     ]);
