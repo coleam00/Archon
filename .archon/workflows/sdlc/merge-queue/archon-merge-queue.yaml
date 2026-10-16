@@ -3,10 +3,11 @@ description: |
   The merge queue: merges the pull requests the build queue finished, and stops only
   for decisions that belong to a person. Each run claims every waiting item with
   intake's claim, up to limit. One sweep agent orders their pull requests, merges the
-  default branch into any that conflict, regenerates generated files with their owning
+  default branch into any behind it, regenerates generated files with their owning
   scripts, and merges what policy allows, one at a time, through a gate script that
-  refuses unless the trusted review verdict says Ready at the head, CI is green there
-  and no review thread is unresolved, and merges pinned to that head. A pull request
+  refuses unless the trusted review verdict says Ready at the head, CI is green there,
+  no review thread is unresolved and the head contains the default branch, and merges
+  pinned to that head. A pull request
   whose verdict a push made stale gets a delta review in the same run. After a batch
   the sweep checks the default branch's CI. A clear case acts on its own; anything
   unclear pauses as one attention item whose answer is a declared choice. With mode

@@ -589,15 +589,18 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   queue's last round delivered. One already merged or closed is recorded without the
   agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
-  head, whether it merges cleanly, its size, CI and unresolved review threads at the
+  head, how many commits of the default branch it lacks, whether it merges cleanly, its size, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
   else can post a verdict. The trusted report is written under the run's
   `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
   review.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
-  It merges the default branch into any that conflict, resolving each conflict and
-  regenerating generated files with their owning script, and pushes without force. A
+  It merges the default branch into any whose head lacks commits of it, resolving each
+  conflict and regenerating generated files with their owning script, and pushes
+  without force. Each merge moves the default branch, so the pull requests after it
+  sync and wait for their delta review and CI: a sweep merges at most one pull request
+  that was not already up to date. A
   push, by the sweep or anyone else, makes the verdict stale, and so does a comment
   published before verdicts were stamped: one such pull request gets a delta review in
   the same run, through an included `archon-review` continuing from its last report,
@@ -610,7 +613,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
   refuses unless the verdict says Ready at the head, CI is green there and no review
   thread is unresolved, and the pull request is open, not a draft, into the default
-  branch and at the head the sweep named. It merges with `--match-head-commit`,
+  branch, at the head the sweep named, and that head contains the default branch's
+  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
   writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
   request that reads back unmerged, as when the forge queues merges, loses its receipt
   and fails the gate.

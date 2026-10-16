@@ -5,7 +5,8 @@
  *
  * It reads the pull request fresh and refuses unless the trusted review verdict says
  * Ready at `head`, CI is green at `head`, no review thread is unresolved, and the pull
- * request is open, not a draft, into the default branch and still at `head`. Without
+ * request is open, not a draft, into the default branch, still at `head`, and `head`
+ * contains the default branch's head. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
  * receipt as soon as the forge accepts the merge, and reads the merge back. A pull
  * request that reads back unmerged, as on a branch whose merges the forge queues, loses

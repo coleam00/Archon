@@ -204,6 +204,10 @@ export interface PrFacts {
   readonly is_draft: boolean;
   readonly base: string;
   readonly default_branch: string;
+  /** The default branch's head when the pull request was read. */
+  readonly default_head: string;
+  /** How many commits of the default branch at `default_head` the pull request's head lacks. */
+  readonly behind: number;
   readonly head: string;
   readonly head_revision: string;
   readonly merge_commit: string | null;
@@ -328,6 +332,26 @@ const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { reposi
   }
 } }`;
 
+const BEHIND_QUERY = `query($owner: String!, $name: String!, $head: String!) { repository(owner: $owner, name: $name) {
+  defaultBranchRef { target { oid } compare(headRef: $head) { behindBy } }
+} }`;
+
+/**
+ * The default branch's head and how many of its commits `head` lacks. The gate merges
+ * only a head that contains the default branch, so the CI and review at that head
+ * judged the composed result, not the change alone.
+ */
+function readBehind(repo: QualifiedPr['repo'], head: string): { default_head: string; behind: number } {
+  const [owner, name] = repo.path.split('/');
+  const ref = record(graphql(repo.host, BEHIND_QUERY, { owner: owner ?? '', name: name ?? '', head }).defaultBranchRef);
+  const oid = record(ref?.target)?.oid;
+  const behind = record(ref?.compare)?.behindBy;
+  if (typeof oid !== 'string' || typeof behind !== 'number') {
+    throw new Error(`${repo.path} cannot compare ${head} with its default branch`);
+  }
+  return { default_head: oid, behind };
+}
+
 /** One snapshot of everything the gate and the sweep read about a pull request. */
 export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRead {
   const [owner, name] = pr.repo.path.split('/');
@@ -346,6 +370,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
   }
   const unresolved = threadNodes.filter(thread => thread?.isResolved !== true);
   const review = trustedReview(pr, maintainers);
+  const { default_head, behind } = readBehind(pr.repo, row.headRefOid);
   const state = String(row.state).toLowerCase();
   return {
     facts: {
@@ -356,6 +381,8 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
       is_draft: row.isDraft === true,
       base: String(row.baseRefName),
       default_branch: defaultBranch,
+      default_head,
+      behind,
       head: String(row.headRefName),
       head_revision: row.headRefOid,
       merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
@@ -376,7 +403,8 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
  * Why the pull request may not merge at `head`; empty when it may. The three facts the
  * queue's contract names are the verdict, CI and the threads, each at the head; the
  * rest keep the merge on an open, non-draft pull request into the default branch at
- * exactly the commit that was judged.
+ * exactly the commit that was judged, and that commit containing the default branch's
+ * head, so what was judged is what the merge produces.
  */
 export function gateRefusals(facts: PrFacts, head: string): string[] {
   const refusals: string[] = [];
@@ -386,6 +414,9 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
     refusals.push(`it targets ${facts.base}, not the default branch ${facts.default_branch}`);
   }
   if (facts.head_revision !== head) refusals.push(`its head is ${facts.head_revision}, not ${head}`);
+  if (facts.behind > 0) {
+    refusals.push(`it lacks ${String(facts.behind)} commits of ${facts.default_branch} at ${facts.default_head}`);
+  }
   const { verdict } = facts;
   if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
   else if (verdict.reviewed !== facts.head_revision) {

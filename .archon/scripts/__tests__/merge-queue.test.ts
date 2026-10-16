@@ -81,6 +81,8 @@ const FACTS: PrFacts = {
   is_draft: false,
   base: 'dev',
   default_branch: 'dev',
+  default_head: OLD,
+  behind: 0,
   head: 'feature',
   head_revision: HEAD,
   merge_commit: null,
@@ -104,7 +106,7 @@ describe('the merge record and the gate', () => {
     expect(mergeWaits(item({ ...BUILT, at: '2026-10-16T02:00:00.000Z' }, merge('parked')))).toBe(true);
   });
 
-  test('the gate passes only a Ready verdict, green CI and no open thread, all at the pinned head', () => {
+  test('the gate passes only a Ready verdict, green CI and no open thread, all at a pinned head that contains the default branch', () => {
     expect(gateRefusals(FACTS, HEAD)).toEqual([]);
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head);
     expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([
@@ -118,6 +120,7 @@ describe('the merge record and the gate', () => {
     expect(refused({ checks: { state: 'red', failing: ['lint'], pending: [] } })).toEqual(['CI at its head is red (lint)']);
     expect(refused({ threads: { unresolved: 2, urls: [] } })).toEqual(['2 review threads are unresolved']);
     expect(refused({}, OLD)).toEqual([`its head is ${HEAD}, not ${OLD}`]);
+    expect(refused({ behind: 3 })).toEqual([`it lacks 3 commits of dev at ${OLD}`]);
     expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toEqual([
       'it is closed',
       'it is a draft',
@@ -249,6 +252,8 @@ interface FakePr {
   readonly unreadableAfterMerge?: boolean;
   /** `gh pr merge` succeeds and the pull request stays open, as when the forge queues merges. */
   readonly queuesMerge?: boolean;
+  /** Commits of the default branch the head lacks. */
+  readonly behind?: number;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
 }
@@ -289,6 +294,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       commits: { nodes: [{ commit: { oid: forgePr.headRefOid, statusCheckRollup: rollup } }] },
       reviewThreads: { totalCount: forgePr.threadTotal ?? forgePr.threads, nodes: Array.from({ length: forgePr.threads }, () => ({ isResolved: false, comments: { nodes: [{ url: 'thread' }] } })) },
     } } } }));
+  }
+  if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('compare(headRef')) {
+    answered();
+    return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: ${JSON.stringify(OLD)} }, compare: { behindBy: forgePr.behind ?? 0 } } } } }));
   }
   if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('defaultBranchRef { name target')) {
     answered();
@@ -441,14 +450,18 @@ describe('the merge queue scripts', () => {
     expect(existsSync(join(gated.artifacts, 'merge/receipts/42.json'))).toBe(false);
   }, 60_000);
 
-  test('the gate refuses a verdict on an older commit, a red check or an open thread, and merges nothing', () => {
+  test('the gate refuses a verdict on an older commit, a head behind the default branch, a red check or an open thread, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const stale = run(at, 'gate', {}, { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, 'old') }] });
     expect(stale.code).toBe(1);
     expect(JSON.parse(stale.stdout)).toMatchObject({ refusals: [`its Ready verdict is for ${OLD}, not its head`], merge_commit: null });
-    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1 } });
-    expect(JSON.parse(red.stdout).refusals).toEqual(['CI at its head is red (test)', '1 review threads are unresolved']);
+    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
+    expect(JSON.parse(red.stdout).refusals).toEqual([
+      `it lacks 2 commits of dev at ${OLD}`,
+      'CI at its head is red (test)',
+      '1 review threads are unresolved',
+    ]);
     for (const result of [stale, red]) {
       expect(merges(result)).toEqual([]);
       expect(existsSync(join(result.artifacts, 'receipts'))).toBe(false);
