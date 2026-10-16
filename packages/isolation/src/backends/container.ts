@@ -896,10 +896,7 @@ export class ContainerBackend implements IIsolationBackend {
       failures.set('logs', error);
     }
     const errors = [...failures.values()];
-    const Failure =
-      fuseMountFailed && !failures.has('inspect') && !failures.has('logs')
-        ? FuseMountFailure
-        : IsolationFailure;
+    const Failure = fuseMountFailed && !failures.has('logs') ? FuseMountFailure : IsolationFailure;
     throw new Failure(
       'unclassified',
       `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}` +

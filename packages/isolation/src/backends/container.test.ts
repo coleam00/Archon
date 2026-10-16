@@ -513,6 +513,50 @@ describe('ContainerBackend.prepare', () => {
     expect(docker.calls.find(c => c[0] === 'volume' && c[1] === 'rm')).toBeDefined();
   });
 
+  test.each(['{{.State.Running}}', '{{.State.ExitCode}}'])(
+    'a recovered %s inspection permits confirmed FUSE fallback after cleanup',
+    async failedInspection => {
+      const store = fakeStore();
+      let runs = 0;
+      let inspectionFailed = false;
+      const docker = fakeDocker(args => {
+        if (args[0] === 'run') {
+          runs++;
+          return { stdout: `cid-${runs}\n`, stderr: '' };
+        }
+        if (args[0] === 'exec' && args.includes('test') && runs === 1)
+          throw new IsolationFailure('unclassified', 'sentinel absent');
+        if (args[0] === 'inspect') {
+          if (args.includes(failedInspection) && !inspectionFailed) {
+            inspectionFailed = true;
+            throw new IsolationFailure('unclassified', 'temporary inspection failure');
+          }
+          return {
+            stdout: args.includes('{{.State.ExitCode}}') ? '78\n' : 'false\n',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.prepare({ codebase: FOLDER });
+      expect(inspectionFailed).toBe(true);
+      expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-2' });
+      expect(store.created?.metadata).toMatchObject({ overlayMode: 'native' });
+      const fuseRun = docker.calls.find(args => args[0] === 'run');
+      const containerName = fuseRun?.[fuseRun.indexOf('--name') + 1];
+      const cleanup = docker.calls.findIndex(
+        args => args[0] === 'rm' && args.at(-1) === containerName
+      );
+      const privilegedRun = docker.calls.findIndex(
+        args => args[0] === 'run' && args.includes('SYS_ADMIN')
+      );
+      expect(cleanup).toBeGreaterThanOrEqual(0);
+      expect(privilegedRun).toBeGreaterThan(cleanup);
+      expect(runs).toBe(2);
+    }
+  );
+
   test('a transient inspect ERROR does NOT trigger the native fallback (keeps polling)', async () => {
     const store = fakeStore();
     let runCount = 0;
