@@ -470,6 +470,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(request.body).toContain(REPORT);
     // The comment names the commit it reviewed from the round's own record, not the report text.
     expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
+    expect(request.body.split('\n')[2]).toBe('Verdict: ready');
     expect(result.forge.join(' ')).not.toContain(REPORT);
   });
 

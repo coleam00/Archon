@@ -25,6 +25,8 @@ export interface GhCommentRow {
   readonly body: string;
   /** The issue it is on; omitted for the pull request. */
   readonly issue?: number;
+  /** The author's login; omitted reports no author. */
+  readonly author?: string;
 }
 
 /** The pull request `gh pr view --json` reports, before any write in the run. */
@@ -334,7 +336,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const onIssue = commentsOn === pr.number ? undefined : commentsOn;
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
-      const rows = page === 1 ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row) })) : [];
+      const rows = page === 1 ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
       return result(0, JSON.stringify(rows));
     }
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
@@ -368,6 +370,8 @@ export interface ScriptOptions {
   readonly artifacts?: Readonly<Record<string, string>>;
   /** The script's working directory, for one that reads a git checkout. Defaults to a scratch directory. */
   readonly cwd?: string;
+  /** Command-line arguments, for a script an agent runs rather than a node; `{ARTIFACTS}` resolves as in inputs. */
+  readonly args?: readonly string[];
 }
 
 export interface PackScriptRunner {
@@ -467,7 +471,7 @@ else {
     env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
   }
 
-  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`)], {
+  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',

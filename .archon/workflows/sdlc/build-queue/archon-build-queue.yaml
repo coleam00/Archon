@@ -15,7 +15,7 @@ description: |
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Build queue"), or an operator replays a recorded stop in eval mode.
   NOT for: triaging an item (archon-intake), delivering one item by hand
-  (archon-ship), or merging.
+  (archon-ship), or merging (archon-merge-queue).
 
 requires: [github]
 

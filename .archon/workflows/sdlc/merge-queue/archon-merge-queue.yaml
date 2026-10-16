@@ -1,0 +1,246 @@
+name: archon-merge-queue
+description: |
+  The merge queue: merges the pull requests the build queue finished, and stops only
+  for decisions that belong to a person. Each run claims every waiting item with
+  intake's claim, up to limit. One sweep agent orders their pull requests, merges the
+  default branch into any behind it, regenerates generated files with their owning
+  scripts, and merges what policy allows, one at a time, through a gate script that
+  refuses unless the trusted review verdict says Ready at the head, CI is green there,
+  no review thread is unresolved and the head contains the default branch, and merges
+  pinned to that head. A pull request
+  whose verdict a push made stale gets a delta review in the same run. After a batch
+  the sweep checks the default branch's CI. A clear case acts on its own; anything
+  unclear pauses as one attention item whose answer is a declared choice. With mode
+  eval the run claims, pushes and merges nothing: it decides the replayed pull requests
+  from the facts recorded for them and returns the decisions as its output.
+
+  Use when: a trigger binding the operator installed starts it (see the SDLC pack
+  README, "Merge queue"), or an operator replays recorded merge decisions in eval mode.
+  NOT for: delivering or fixing a pull request (archon-build-queue, archon-ship), or
+  reviewing one by hand (archon-review).
+
+requires: [github]
+
+inputs:
+  repo_host:
+    description: The forge host of the repository whose pull requests the queue merges.
+  repo_path:
+    description: The owner/name path of that repository.
+  order:
+    default: '["urgency desc","importance desc","size asc","created asc"]'
+    description: >-
+      The order items are claimed in, intake's format; the sweep then orders the pull
+      requests it merges.
+  limit:
+    default: "10"
+    description: The most items one run claims.
+  merge_method:
+    default: "squash"
+    description: How the gate merges, squash or merge.
+  mode:
+    default: "live"
+    description: >-
+      live or eval. Eval claims, pushes and merges nothing: it decides the pull
+      requests in replay from the facts recorded with each and returns the decisions
+      as the record's evaluation. Any other value refuses the run at facts.
+  replay:
+    default: "[]"
+    description: >-
+      Eval only. The decisions to replay, as a JSON array of {number, at, facts}: the
+      pull request, when the decision was made, and the facts as they were recorded then.
+
+returns: record
+
+nodes:
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, record, sweep] }
+        # The default branch, its head and CI there, read once before the sweep; null in eval.
+        base: { type: [object, 'null'] }
+        # The claimed pull requests the sweep decides, each with its facts snapshot.
+        items: { type: array, items: { type: object } }
+        # Claimed items settled without the sweep: merged or closed already, or no pull request.
+        settled: { type: array, items: { type: object } }
+        # The gate command the sweep runs to merge; empty in eval.
+        gate: { type: string }
+        policy_defaults: { type: string }
+      required: [path, base, items, settled, gate, policy_defaults]
+
+  - id: sweep
+    command: sweep
+    depends_on: [facts]
+    when: "$facts.output.path == 'sweep'"
+    model: large
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      base: { from: "$facts.output.base" }
+      items: { from: "$facts.output.items" }
+      gate: "$facts.output.gate"
+    output_format:
+      type: object
+      properties:
+        decisions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              action: { type: string, enum: [merged, review, return, ask, wait] }
+              class: { type: string, enum: [clear, unclear] }
+              # The head the decision is about: the merged head, or the head a sync pushed.
+              head: { type: string, pattern: '^[0-9a-f]{7,64}$' }
+              synced: { type: boolean }
+              reran: { type: boolean }
+              reason: { type: string, pattern: '\S' }
+              # On return, what the build queue's next round starts from; on ask, what a
+              # return choice launches. Empty otherwise.
+              brief: { type: string }
+              attention:
+                type: [object, 'null']
+                additionalProperties: false
+                properties:
+                  what: { type: string, pattern: '\S' }
+                  why: { type: string, pattern: '\S' }
+                  recommendation: &recommendation
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      choice: { type: string }
+                      why: { type: string, pattern: '\S' }
+                      evidence: { type: string, pattern: '\S' }
+                      confidence: { type: string, enum: [low, medium, high] }
+                      would_change: { type: string, pattern: '\S' }
+                    required: [choice, why, evidence, confidence, would_change]
+                  choices:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        id: &choice_id { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+                        label: &choice_label { type: string, pattern: '\S' }
+                        does: &choice_does { type: string, pattern: '\S' }
+                        effect: { type: string, enum: [merge, return, park] }
+                        ruling: { type: string }
+                      required: [id, label, does, effect, ruling]
+                  if_unanswered: &if_unanswered { type: string, pattern: '\S' }
+                  links: &links { type: array, items: { type: string } }
+                required: [what, why, recommendation, choices, if_unanswered, links]
+            required: [number, action, class, head, synced, reran, reason, brief, attention]
+        # The pull request this run's delta review covers, and the report it continues
+        # from; both empty when no review is due.
+        review_url: { type: string }
+        review_prior: { type: string }
+        dev:
+          type: object
+          additionalProperties: false
+          properties:
+            state: { type: string, enum: [unchecked, green, red] }
+            rerun: { type: string, enum: [none, green, red] }
+            summary: { type: string }
+            attention:
+              type: [object, 'null']
+              additionalProperties: false
+              properties:
+                what: { type: string, pattern: '\S' }
+                why: { type: string, pattern: '\S' }
+                recommendation: *recommendation
+                choices:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      id: *choice_id
+                      label: *choice_label
+                      does: *choice_does
+                      effect: { type: string, enum: [hold] }
+                      ruling: { type: string }
+                    required: [id, label, does, effect, ruling]
+                if_unanswered: *if_unanswered
+                links: *links
+              required: [what, why, recommendation, choices, if_unanswered, links]
+          required: [state, rerun, summary, attention]
+        summary: { type: string }
+      required: [decisions, review_url, review_prior, dev, summary]
+
+  # The sweep left the checkout at the head of the pull request it names, so the
+  # review's own head check holds.
+  - id: review
+    include: archon-review
+    depends_on: [sweep]
+    when: "$sweep.output.review_url != '' && $INPUTS.mode == 'live'"
+    with:
+      scope: "$sweep.output.review_url"
+      prior_report: "$sweep.output.review_prior"
+
+  # Checks the decisions, reads back every pull request and records one decision per
+  # item; raises at most one attention item. Eval writes nothing and returns them.
+  # all_done: a failed delta review must not lose the record of what the sweep already
+  # merged; a failed facts or sweep still fails this node through its bindings.
+  - id: record
+    script: record
+    runtime: bun
+    depends_on: [facts, sweep, review]
+    trigger_rule: all_done
+    with:
+      path: "$facts.output.path"
+      items: { from: "$facts.output.items" }
+      settled: { from: "$facts.output.settled" }
+      sweep: { from: "$sweep.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        merged: { type: array, items: { type: integer } }
+        summary: { type: string }
+        # The attention message; empty when nothing is asked.
+        attention: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+            required: [id, label]
+        class: { type: string, enum: ['', pr, dev] }
+        # What the ruling node needs to act on the answer; null when nothing is asked.
+        asked: { type: [object, 'null'] }
+        # Null in live. In eval, every decision and the attention item live would raise.
+        evaluation: { type: [object, 'null'] }
+      required: [merged, summary, attention, options, class, asked, evaluation]
+
+  # A paused run gives its resource slot back, so the next scheduled sweep can merge
+  # other pull requests while this one waits.
+  - id: ask
+    depends_on: [record]
+    when: "$record.output.attention != ''"
+    wait:
+      attention: "$record.output.attention"
+      form: select
+      options: "$record.output.options"
+      labels:
+        merge: "$record.output.class"
+
+  - id: ruling
+    script: ruling
+    runtime: bun
+    depends_on: [record, ask]
+    with:
+      asked: { from: "$record.output.asked" }
+      choice: "$ask.output.decision"
+      text: "$ask.output.text"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [merge, return, park, hold] }
+        section: { type: string }
+        summary: { type: string }
+      required: [decision, section, summary]
