@@ -744,13 +744,15 @@ describe('terminal workflow transitions — real SQLite', () => {
   test('only the winning terminal transition inserts an event', async () => {
     await seed('terminal-race', 'running', "datetime('now')");
 
-    const outcomes = await Promise.allSettled([
+    const [completion, failure] = await Promise.allSettled([
       completeWorkflowRun('terminal-race', { duration_ms: 7 }),
       failWorkflowRun('terminal-race', 'lost race'),
     ]);
 
-    expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
     const run = await getWorkflowRun('terminal-race');
+    const completed = run?.status === 'completed';
+    expect(completion.status).toBe(completed ? 'fulfilled' : 'rejected');
+    expect(failure).toEqual({ status: 'fulfilled', value: { failed: !completed } });
     expect(
       (await countEvents('terminal-race', 'workflow_completed')) +
         (await countEvents('terminal-race', 'workflow_failed'))

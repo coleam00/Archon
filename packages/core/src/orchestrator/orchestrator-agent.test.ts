@@ -502,7 +502,7 @@ mock.module('../utils/error', () => ({
 
 const mockFailPreparedRun = mock<
   import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
->(async () => {});
+>(async () => ({ failed: true }));
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
@@ -2461,7 +2461,7 @@ describe('workflow dispatch routing', () => {
     mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
     capturedSourceOwnerCalls.length = 0;
     mockFailPreparedRun.mockReset();
-    mockFailPreparedRun.mockResolvedValue(undefined);
+    mockFailPreparedRun.mockResolvedValue({ failed: true });
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
