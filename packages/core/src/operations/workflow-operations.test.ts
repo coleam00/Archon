@@ -114,9 +114,6 @@ const isolationStore: IIsolationStore = {
   listActive: () => {
     throw new Error('Unexpected isolation lookup');
   },
-  listByCodebase: () => {
-    throw new Error('Unexpected isolation lookup');
-  },
   getById: mock(async () => null),
   findActiveByWorkflow: () => {
     throw new Error('Unexpected isolation lookup');

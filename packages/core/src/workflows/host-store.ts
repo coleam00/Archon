@@ -44,6 +44,7 @@ export interface IWorkflowHostStore {
     ): Promise<MessageRow>;
   };
   isolation: IIsolationStore & {
+    listByCodebase(codebaseId: string): Promise<readonly IsolationEnvironmentRow[]>;
     findLatestByCodebaseAndWorkingPath(
       codebaseId: string,
       workingPath: string,

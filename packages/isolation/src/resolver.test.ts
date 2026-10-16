@@ -52,7 +52,6 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
   return {
     getById: async () => null,
     findActiveByWorkflow: async () => null,
-    listByCodebase: async () => [],
     listActive: async () => [],
     create: async env =>
       makeEnvRow({

@@ -335,7 +335,9 @@ for (const persistence of ['sql', 'file'] as const) {
       }
       if (newer) {
         expect(await target.getById(newer.id)).toEqual(newer);
-        expect(await target.listByCodebase(codebaseId)).toEqual([newer]);
+        expect((await target.listActive()).filter(row => row.codebase_id === codebaseId)).toEqual([
+          newer,
+        ]);
       }
       expect(existsSync(env.working_path)).toBe(true);
     });

@@ -1318,7 +1318,6 @@ describe('manage_run authorization refusal', () => {
           isolation: {
             getById: async () => null,
             findActiveByWorkflow: unexpected,
-            listByCodebase: unexpected,
             listActive: unexpected,
             create: unexpected,
             updateStatus: unexpected,

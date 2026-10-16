@@ -28,7 +28,6 @@ export interface IIsolationStore {
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
   listActive(): Promise<readonly IsolationEnvironmentRow[]>;
-  listByCodebase(codebaseId: string): Promise<readonly IsolationEnvironmentRow[]>;
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
   /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
   updateMetadata(

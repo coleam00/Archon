@@ -42,7 +42,6 @@ async function setup(): Promise<void> {
       isolation: {
         getById: async () => null,
         findActiveByWorkflow: async () => null,
-        listByCodebase: async () => [],
         listActive: async () => [],
         create: async () => {
           throw new Error('unused');
