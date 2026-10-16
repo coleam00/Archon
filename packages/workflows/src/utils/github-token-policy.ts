@@ -27,16 +27,15 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { GH_DOTCOM_TOKEN_KEYS, GH_ENTERPRISE_TOKEN_KEYS } from '@archon/paths/github-token-env';
 
 /**
  * Every env var gh reads a token from: github.com, GitHub Enterprise Server, and
  * Copilot. A per-user run sets each one itself, so none of the host's reaches it.
  */
 const SENSITIVE_KEYS = [
-  'GH_TOKEN',
-  'GITHUB_TOKEN',
-  'GH_ENTERPRISE_TOKEN',
-  'GITHUB_ENTERPRISE_TOKEN',
+  ...GH_DOTCOM_TOKEN_KEYS,
+  ...GH_ENTERPRISE_TOKEN_KEYS,
   'COPILOT_GITHUB_TOKEN',
 ] as const;
 

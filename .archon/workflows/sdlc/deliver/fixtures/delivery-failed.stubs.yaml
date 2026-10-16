@@ -1,5 +1,6 @@
 # Outcome: failed. The real assert-changed guard refuses, so `rounds` fails and
 # `outcome` is skipped; `report` completes not ready with reason failed, and the run fails.
+forge: { source: forge }
 implement__implement:
   done: true
   green: false

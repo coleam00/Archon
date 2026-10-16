@@ -29,6 +29,8 @@ describe('remote identity', () => {
       'git@github.com:owner/repo.git',
       'ssh://git@ssh.github.com:443/owner/repo.git',
       'git@ssh.github.com:owner/repo.git',
+      'git@SSH.GitHub.COM:owner/repo.git',
+      'ssh://git@SSH.GitHub.COM:443/owner/repo.git',
     ]) {
       expect(urlRepo(url)).toEqual({ host: 'github.com', path: 'owner/repo' });
     }

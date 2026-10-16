@@ -1,6 +1,7 @@
 # Dry-run fixture: the run continues pull request 7. Prepare is told to bring that
 # pull request's current description up to date, read from the forge with the
 # repository named, since the artifacts directory it writes the body to is not a checkout.
+forge: { source: forge }
 prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: 7, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: continues pull request 7" }
 publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 fixture:
@@ -8,4 +9,4 @@ fixture:
   inputs:
     pull_request: "7"
   resolved-text-contains:
-    prepare: "When this run continues an existing pull request, the body is its current description brought up to date for this round: read it with `gh pr view <number> --repo <owner>/<repo> --json body`"
+    prepare: "the body is its current description brought up to date for this round: read it through the source this run selected, `forge`"

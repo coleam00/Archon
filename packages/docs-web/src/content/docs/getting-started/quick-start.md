@@ -60,6 +60,13 @@ Put steering last, after the problem is stated. Leading with an implementation n
 to your first guess and hides better answers; adding it at the end constrains *how* without
 replacing *what*.
 
+The SDLC workflows, such as `archon-ship` below, open and update the pull request
+through the GitHub CLI (`gh`) by default. Authenticate with `gh auth login` or set
+`GH_TOKEN` in `~/.archon/.env`. To opt into the forge path, install a compatible plugin
+with every operation the pack uses and set `ARCHON_SDLC_FORGE=forge`; the released
+GitHub plugin v0.11.1 lacks required operations. See
+[Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+
 A brief worth running looks like this:
 
 ```bash

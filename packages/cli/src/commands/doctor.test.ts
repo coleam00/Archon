@@ -1,7 +1,7 @@
 /**
  * Tests for `archon doctor` check functions.
  *
- * Uses spyOn for `@archon/git.execFileAsync` and `globalThis.fetch`.
+ * Uses spies for subprocesses and fetch.
  * Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
@@ -10,11 +10,11 @@ import { tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
-import * as git from '@archon/git';
 import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
+import { REQUIRED_FORGE_OPERATIONS } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -22,7 +22,8 @@ import {
   checkProviderDeprecation,
   checkDatabase,
   checkConnectedProviders,
-  checkGhAuth,
+  checkGitHubApp,
+  checkSdlcForge,
   checkAssistantLogin,
   type AssistantLoginDeps,
   checkWorkspaceWritable,
@@ -55,11 +56,77 @@ spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
 
-describe('checkGhAuth', () => {
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+describe('gh credential-source reporting', () => {
+  it.each([
+    { host: 'github.com', env: { GH_TOKEN: 'first', GITHUB_TOKEN: 'second' }, source: 'GH_TOKEN' },
+    { host: 'tenant.ghe.com', env: { GITHUB_TOKEN: 'second' }, source: 'GITHUB_TOKEN' },
+    {
+      host: 'ghe.example.com',
+      env: { GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GH_ENTERPRISE_TOKEN',
+    },
+    {
+      host: 'ghe.example.com',
+      env: { GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GITHUB_ENTERPRISE_TOKEN',
+    },
+  ])('$host uses $source', async ({ host, env, source }) => {
+    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(
+      argv =>
+        ({
+          exitCode: 0,
+          stdout: Buffer.from(
+            (argv as string[])[0] === 'git'
+              ? `remote.origin.url https://${host}/example/repo.git`
+              : ''
+          ),
+          stderr: Buffer.from(''),
+        }) as ReturnType<typeof Bun.spawnSync>
+    );
+    try {
+      const result = await checkSdlcForge(env);
+      expect(result.status).toBe('pass');
+      expect(result.message).toContain(`source: ${source}`);
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+});
+
+describe('selected forge diagnostics', () => {
+  const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
+    'names %s after checking capabilities and read access',
+    async credentialSource => {
+      const spawn = spyOn(Bun, 'spawnSync').mockReturnValue({
+        exitCode: 0,
+        stdout: Buffer.from('remote.origin.url https://github.com/coleam00/Archon.git'),
+        stderr: Buffer.from(''),
+      } as ReturnType<typeof Bun.spawnSync>);
+      const probe = mock(async (op: string) => ({
+        value: op === 'metadata' ? { capabilities: REQUIRED_FORGE_OPERATIONS } : null,
+        credentialSource: op === 'metadata' ? undefined : credentialSource,
+      }));
+      try {
+        const result = await checkSdlcForge({ ARCHON_SDLC_FORGE: 'forge' }, probe);
+        expect(result.status).toBe('pass');
+        expect(result.message).toContain(`source: ${credentialSource}`);
+        expect(probe.mock.calls.map(call => call[0])).toEqual(['metadata', 'pr.view']);
+        expect(probe).toHaveBeenLastCalledWith('pr.view', {
+          selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
+        });
+      } finally {
+        spawn.mockRestore();
+      }
+    }
+  );
+});
+
+describe('checkGitHubApp', () => {
+  let execSpy: ReturnType<typeof spyOn<typeof Bun, 'spawnSync'>>;
 
   beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
+    execSpy = spyOn(Bun, 'spawnSync');
   });
 
   afterEach(() => {
@@ -80,7 +147,7 @@ describe('checkGhAuth', () => {
         { GITHUB_APP_PRIVATE_KEY: privateKey.replaceAll('\n', '\\n') },
         { GITHUB_APP_PRIVATE_KEY_PATH: keyPath },
       ]) {
-        expect(await checkGhAuth({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
+        expect(await checkGitHubApp({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
           label: 'GitHub App',
           status: 'pass',
           message: 'App mode configured (local configuration valid; GitHub access not checked)',
@@ -107,7 +174,7 @@ describe('checkGhAuth', () => {
       { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: '/missing/archon-key.pem' },
       { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey, GITHUB_TOKEN: 'pat-secret' },
     ]) {
-      const result = await checkGhAuth(env);
+      const result = await checkGitHubApp(env);
       expect(result.label).toBe('GitHub App');
       expect(result.status).toBe('fail');
       expect(result.message).not.toContain(privateKey);
@@ -125,7 +192,7 @@ describe('checkGhAuth', () => {
     try {
       expect(
         await doctorCommand([
-          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
         ])
       ).toBe(1);
       const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
@@ -142,43 +209,15 @@ describe('checkGhAuth', () => {
     try {
       expect(
         await doctorCommand([
-          () => checkGhAuth({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
         ])
       ).toBe(0);
       expect(JSON.stringify(output.mock.calls)).toContain('GitHub App');
-      expect(await doctorCommand([() => checkGhAuth({ GITHUB_APP_ID: '123' })])).toBe(1);
+      expect(await doctorCommand([() => checkGitHubApp({ GITHUB_APP_ID: '123' })])).toBe(1);
       expect(JSON.stringify(output.mock.calls)).not.toContain(privateKey);
     } finally {
       output.mockRestore();
     }
-  });
-
-  it('returns skip when no GitHub token is set', async () => {
-    const result = await checkGhAuth({});
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('GitHub not configured');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('runs gh auth check when only GH_TOKEN is set', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
-  });
-
-  it('returns pass when gh auth status succeeds', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GITHUB_TOKEN: 'ghp_x' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
-  });
-
-  it('returns fail when gh auth status throws', async () => {
-    execSpy.mockRejectedValue(new Error('not logged in'));
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('not logged in');
   });
 });
 
@@ -1042,9 +1081,13 @@ describe('doctorCommand', () => {
     throw new Error(`${label} blew up`);
   };
 
+  const summary = (): string | undefined =>
+    logSpy.mock.calls.map(args => String(args[0] ?? '')).at(-1);
+
   it('returns 0 when every check passes', async () => {
     const exit = await doctorCommand([passing('A'), passing('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('All checks passed.');
   });
 
   it('returns 0 when checks are pass + skip (skip is not a failure)', async () => {
@@ -1080,6 +1123,7 @@ describe('doctorCommand', () => {
     // must still reach the operator rather than being swallowed.
     const exit = await doctorCommand([passing('A'), warning('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('No check failed; 1 warning(s) above.');
 
     const warnLine = logSpy.mock.calls
       .map(args => String(args[0] ?? ''))

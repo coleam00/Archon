@@ -94,12 +94,13 @@ const REPO_SCOPE_REFUSED_KEYS = [
  */
 export function loadArchonEnv(
   cwd: string = process.cwd(),
-  options: { afterUserLoad?: () => void } = {}
+  options: { afterUserLoad?: () => void; env?: NodeJS.ProcessEnv } = {}
 ): void {
+  const env = options.env ?? process.env;
   const logLevelBefore = process.env.LOG_LEVEL;
-  const homePath = getArchonEnvPath();
+  const homePath = getArchonEnvPath(env);
   if (existsSync(homePath)) {
-    const result = config({ path: homePath, override: true, quiet: true });
+    const result = config({ path: homePath, processEnv: env, override: true, quiet: true });
     if (result.error) {
       console.error(`Error loading .env from ${homePath}: ${result.error.message}`);
       console.error('Hint: Check for syntax errors in your .env file.');
@@ -135,7 +136,7 @@ export function loadArchonEnv(
       );
       process.exit(1);
     }
-    Object.assign(process.env, parsed);
+    Object.assign(env, parsed);
     const count = Object.keys(parsed).length;
     if (count > 0 && isVerboseBoot()) {
       process.stderr.write(

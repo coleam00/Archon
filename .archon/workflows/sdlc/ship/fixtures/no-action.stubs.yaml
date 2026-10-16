@@ -1,5 +1,6 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. Triage is explicit,
 # every delivery node stays skipped, and the real outcome node returns the reason.
+forge: { source: forge }
 triage__triage:
   decision:
     contract: NO_ACTION

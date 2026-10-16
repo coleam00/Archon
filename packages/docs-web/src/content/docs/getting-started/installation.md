@@ -165,6 +165,12 @@ for full details and install-layout paths.
 
 ```bash
 archon version
+```
+
+Run the setup checks from a checkout with a forge remote:
+
+```bash
+cd /path/to/your/repo
 archon doctor     # lists installed providers and their diagnostics
 ```
 

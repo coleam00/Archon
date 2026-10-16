@@ -536,6 +536,19 @@ const scopedOnlyHelp: HelpEntry[] = [
     spec: 'state list [--prefix <p>]',
     description: 'List document names with their latest revision and writer, never values',
   },
+  {
+    command: 'forge',
+    subcommand: 'metadata',
+    spec: 'forge metadata',
+    description:
+      'Inspect trusted plugin metadata for a host without credentials or forge operations',
+    scopedFlags: [
+      {
+        spec: '--data <json>',
+        description: 'JSON object with the forge host, for example {"host":"github.com"}',
+      },
+    ],
+  },
   ...Object.entries(forgeOperationDescriptions)
     .filter(([op]) => op !== 'resolve')
     .map(([subcommand, description]) => ({

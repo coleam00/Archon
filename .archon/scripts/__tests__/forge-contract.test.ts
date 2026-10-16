@@ -1,6 +1,8 @@
 import { providerRegistry } from '@archon/providers';
 import { expect, test } from 'bun:test';
 import {
+  forgeErrorSchema,
+  forgeRequestSchema,
   type ForgeRequest,
   type ForgeResponse,
   type ForgeMutationFailure,
@@ -10,7 +12,10 @@ import { join } from 'path';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
+  FORGE_SOURCES,
+  record,
   parseQualifiedPr,
+  REMEDY,
   type PrRecord,
   type QualifiedPr,
   type MergeRequest,
@@ -56,6 +61,13 @@ test('standalone pack consumes the owning qualified identity and pull-request re
     maintainer_can_modify: null,
   });
   expect(producesPrRecord(consumesPrRecord(pr))).toEqual(pr);
+});
+
+// A remedy keyed by a kind the contract no longer names would never be shown.
+test("every refusal remedy is keyed by a kind the forge contract's errors carry", () => {
+  expect(forgeErrorSchema.shape.kind.options).toEqual(
+    expect.arrayContaining(Object.keys(REMEDY))
+  );
 });
 
 // archon-review's scope node declares the pull request that publish-review then
@@ -239,4 +251,111 @@ test('standalone new-operation projections carry typed request and result eviden
       },
     }).landed.commit
   ).toBe('landed');
+});
+
+test('all four preflight source validators conform to the pack source selector', () => {
+  for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
+    const file = `archon-${folder}.yaml`;
+    const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
+    if (!parsed.workflow) throw new Error('invalid preflight workflow');
+    const first = parsed.workflow.nodes[0];
+    if (!first || !('output_format' in first)) throw new Error('missing preflight schema');
+    expect(record(record(first.output_format?.properties)?.source)?.enum).toEqual(FORGE_SOURCES);
+  }
+});
+
+test('every node of the four preflighted flows runs after the forge check', () => {
+  for (const folder of ['deliver', 'pr', 'ship', 'upkeep']) {
+    const file = `archon-${folder}.yaml`;
+    const parsed = parseWorkflow(readFileSync(join(import.meta.dir, `../../workflows/sdlc/${folder}/${file}`), 'utf8'), file, providerRegistry);
+    if (!parsed.workflow) throw new Error(`invalid workflow ${file}`);
+    const dependsOn = new Map(parsed.workflow.nodes.map(node => [node.id, node.depends_on ?? []]));
+    const afterForge = (id: string): boolean =>
+      (dependsOn.get(id) ?? []).some(dep => dep === 'forge' || afterForge(dep));
+    const early = [...dependsOn.keys()].filter(id => id !== 'forge' && !afterForge(id));
+    expect({ file, early }).toEqual({ file, early: [] });
+  }
+});
+
+test('operator guidance describes the gh default and forge host login source', () => {
+  const root = join(import.meta.dir, '../../..');
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split('## [')[1] ?? '';
+  const docker = readFileSync(join(root, 'packages/docs-web/src/content/docs/deployment/docker.md'), 'utf8');
+  expect(changelog.includes('forge path does not read your `gh` login')).toBe(false);
+  expect(docker.includes('read this login only when')).toBe(false);
+});
+
+test('both onboarding guides explain the default and compatible forge opt-in', () => {
+  for (const guide of ['getting-started/quick-start.md', 'book/first-five-minutes.md']) {
+    const text = readFileSync(
+      join(import.meta.dir, '../../../packages/docs-web/src/content/docs', guide),
+      'utf8'
+    );
+    expect(text).toContain('GitHub CLI (`gh`) by default');
+    expect(text).toContain('`ARCHON_SDLC_FORGE=forge`');
+    expect(text).toContain('compatible plugin');
+  }
+});
+
+test('preflight capabilities cover concrete pack calls and agent command instructions', async () => {
+  const { REQUIRED_FORGE_OPERATIONS } = await import('../../workflows/sdlc/.shared/forge-check');
+  const root = join(import.meta.dir, '../../workflows/sdlc');
+  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
+    .filter(file => file !== '.shared/forge-check.ts')
+    .map(file => readFileSync(join(root, file), 'utf8'));
+  const used = forgeRequestSchema.options
+    .map(schema => schema.shape.op.value)
+    .filter(op =>
+      sources.some(text =>
+        ["'" + op + "'", '"' + op + '"', '`' + op + '`', 'forge ' + op + ' '].some(
+          token => text.includes(token)
+        )
+      )
+    );
+  expect(used).toContain('checks.state');
+  expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
+});
+
+test('standalone host response projection preserves credential attribution and metadata', async () => {
+  const { cliForgeResponseSchema, cliForgeMetadataRequestSchema } =
+    await import('../../../packages/forge/src/cli-response');
+  const { forgeResult } = await import('../../workflows/sdlc/.shared/forge');
+  const metadata = {
+    protocol: 1,
+    name: 'github',
+    version: 'test',
+    forge: 'github',
+    hosts: ['github.com'],
+    capabilities: ['pr.view'],
+    token_env: ['GH_TOKEN'],
+  };
+  const request = cliForgeMetadataRequestSchema.parse({
+    operationId: 'meta',
+    op: 'metadata',
+    host: 'github.com',
+  });
+  const response = cliForgeResponseSchema.parse({
+    operationId: request.operationId,
+    ok: true,
+    result: { op: request.op, value: metadata },
+  });
+  expect(forgeResult(request.op, response, 0)).toEqual(metadata);
+  for (const ok of [true, false]) {
+    const response = cliForgeResponseSchema.parse({
+      operationId: 'read',
+      ok,
+      credentialSource: 'GH_TOKEN',
+      ...(ok
+        ? { result: { op: 'pr.view', value: null } }
+        : { error: { kind: 'authorization', message: 'Rejected' } }),
+    });
+    let source: string | undefined;
+    const read = () =>
+      forgeResult('pr.view', response, ok ? 0 : 1, value => {
+        source = value;
+      });
+    if (ok) expect(read()).toBeNull();
+    else expect(read).toThrow('source: GH_TOKEN');
+    expect(source).toBe('GH_TOKEN');
+  }
 });

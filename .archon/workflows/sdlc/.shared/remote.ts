@@ -36,6 +36,7 @@ export function urlRepo(url: string): Repo | undefined {
     host = scp[1];
     path = scp[2];
   }
+  host = host.toLowerCase();
   // GitHub's SSH endpoint on port 443 serves the same repositories as github.com.
   if (host === 'ssh.github.com') host = 'github.com';
   path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
@@ -43,19 +44,36 @@ export function urlRepo(url: string): Repo | undefined {
   return { host, path };
 }
 
-/** The one remote whose URL names `repo`, undefined when none does; refuses on several. */
-export function findRemote(repo: Repo): string | undefined {
+/** Every configured remote's name and the repository its URL names, if any. */
+function remotes(): { readonly name: string; readonly repo: Repo | undefined }[] {
   const listed = git('config', '--get-regexp', '^remote\\..*\\.url$');
   // Exit 1 means no remote is configured at all; anything else non-zero is a failure.
   if (listed.code !== 0 && listed.code !== 1) {
     throw new Error(`git config --get-regexp failed: ${listed.stderr}`);
   }
-  const names = new Set<string>();
-  for (const line of listed.stdout.split('\n')) {
+  return listed.stdout.split('\n').flatMap(line => {
     const space = line.indexOf(' ');
-    if (space === -1) continue;
-    const named = urlRepo(line.slice(space + 1));
-    if (named && sameRepo(named, repo)) names.add(line.slice('remote.'.length, space - '.url'.length));
+    if (space === -1) return [];
+    return [
+      { name: line.slice('remote.'.length, space - '.url'.length), repo: urlRepo(line.slice(space + 1)) },
+    ];
+  });
+}
+
+/** The distinct repositories this checkout's remotes name. */
+export function remoteRepos(): Repo[] {
+  const repos: Repo[] = [];
+  for (const { repo } of remotes()) {
+    if (repo && !repos.some(known => sameRepo(known, repo))) repos.push(repo);
+  }
+  return repos;
+}
+
+/** The one remote whose URL names `repo`, undefined when none does; refuses on several. */
+export function findRemote(repo: Repo): string | undefined {
+  const names = new Set<string>();
+  for (const remote of remotes()) {
+    if (remote.repo && sameRepo(remote.repo, repo)) names.add(remote.name);
   }
   if (names.size > 1) {
     throw new Error(

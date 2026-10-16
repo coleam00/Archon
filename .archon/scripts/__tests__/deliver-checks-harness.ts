@@ -60,6 +60,10 @@ export interface GhFake {
   readonly issues?: readonly GhIssue[];
   /** The issue `gh api repos/<path>/issues/<n>` reads; number 7 by default. Labels come from `issueLabels`. */
   readonly issue?: GhApiIssue;
+  /** stderr for a failed `gh auth status --active --hostname`, for every host or per host; omit for an authenticated gh. */
+  readonly authFail?: string | Readonly<Record<string, string>>;
+  /** stderr for a refused repository read, keyed by host/path. */
+  readonly repoReadFail?: Readonly<Record<string, string>>;
 }
 
 /** The issue facts `gh api .../issues/<n>` reports. */
@@ -99,8 +103,8 @@ export interface GhIssue {
 export type ForgeFake =
   /** No `ARCHON_CLI_COMMAND` at all. */
   | { readonly kind: 'no-host' }
-  /** The real CLI with an empty Archon home: no forge plugin is installed. */
-  | { readonly kind: 'no-plugin' }
+  /** The real CLI with a scratch Archon home whose config holds this `forge:` section. */
+  | { readonly kind: 'home'; readonly config: Readonly<Record<string, unknown>> }
   /** This exact host command, as the CLI and server would publish it. */
   | { readonly kind: 'command'; readonly argv: readonly string[] }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
@@ -178,6 +182,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
+  if (text.startsWith('auth status --active --hostname ')) {
+    const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
+    return failure === undefined ? result(0) : result(1, '', failure);
+  }
+  if (argv.length === 5 && argv[1] === 'api' && argv[2] === '--hostname' && argv[4].split('/').length === 3 && argv[4].startsWith('repos/')) {
+    const failure = fake.repoReadFail?.[argv[3] + '/' + argv[4].slice('repos/'.length)];
+    return failure === undefined ? result(0, '{}') : result(1, '', failure);
+  }
   if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
   if (text.startsWith('label create')) { if (fake.writeFail) return result(1, '', fake.writeFail); labels.add(argv[3]); return result(0); }
   if (text.startsWith('issue edit')) {
@@ -412,9 +424,10 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     ),
   };
   const forge = options.forge ?? { kind: 'fake' };
-  if (forge.kind === 'no-plugin') {
+  if (forge.kind === 'home') {
     const home = join(root, 'home');
     mkdirSync(home);
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify({ forge: forge.config }));
     Object.assign(env, {
       ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, '--no-env-file', CLI_ENTRY]),
       ARCHON_HOME: home,

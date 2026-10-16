@@ -3,14 +3,13 @@
  *
  * One switch selects the source for every forge read and write this pack makes:
  *
- *   gh     the default. The GitHub CLI, as the pack has always used it.
+ *   gh     the default. The GitHub CLI.
  *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
- *          reached through the host command (`ARCHON_CLI_COMMAND`) the CLI and
- *          server publish.
+ *          reached through the host command (`ARCHON_CLI_COMMAND`).
  *
  * The source is never inferred from what happens to be installed, and a selected
  * source that cannot answer fails the operation rather than falling back to the
- * other. A container execution receives neither variable, so it uses `gh`.
+ * other.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,17 +17,47 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
-export type ForgeSource = 'gh' | 'forge';
+export const FORGE_SOURCES = ['gh', 'forge'] as const;
+export type ForgeSource = (typeof FORGE_SOURCES)[number];
 
 // Read here, not in each calling script: the unbound-env checker scans a node-bound
 // script's own text but never follows its imports, so a bare process.env read in a
 // shared module like this one never trips a false "unbound variable" warning.
-export function forgeSource(): ForgeSource {
-  const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
-  if (selected === '' || selected === 'gh') return 'gh';
-  if (selected === 'forge') return 'forge';
+export function forgeSource(env: NodeJS.ProcessEnv = process.env): ForgeSource {
+  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
+  if (selected === '') return 'gh';
+  const source = FORGE_SOURCES.find(source => source === selected);
+  if (source) return source;
   throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
+
+/** The GitHub forge plugin install id. */
+export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
+
+const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
+// Per-user GitHub mode scrubs the shared token from a run started by a user who has
+// not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
+const SETUP =
+  'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
+  `\`archon plugin add ${GITHUB_FORGE_PLUGIN}\`, and set \`GH_TOKEN\` in ` +
+  "Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when configured, or `/.archon/.env` in Docker), " +
+  'set `GITHUB_TOKEN`, use `gh auth login`, or configure GitHub App mode. When per-user GitHub ' +
+  'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
+  '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
+  USE_GH;
+
+/**
+ * The operator's next step for each refusal the forge contract types as their setup's,
+ * keyed by its `error.kind`.
+ */
+export const REMEDY = {
+  no_plugin_for_host: SETUP,
+  no_credential: SETUP,
+  unsupported_op:
+    `For github.com, \`archon plugin update ${GITHUB_FORGE_PLUGIN}\` installs the ` +
+    'latest released plugin, which may not support this operation either. ' +
+    USE_GH,
+} as const;
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
@@ -143,7 +172,8 @@ export class ForgeOperationError extends Error {
  */
 export function invokeForge(
   op: string,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  credential?: (source: string) => void
 ): Record<string, unknown> | null {
   const command = archonCommand();
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
@@ -151,6 +181,7 @@ export function invokeForge(
   try {
     writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
     const result = Bun.spawnSync([...command, 'forge', op, '--json', '--data-file', path], {
+      env: process.env,
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -161,36 +192,53 @@ export function invokeForge(
       const detail = result.stderr.toString().trim();
       throw new Error(`forge ${op} failed${detail === '' ? '' : `: ${detail}`}`);
     }
-    const response = record(parsed);
-    if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
-      throw new Error(`forge ${op} returned an unexpected response envelope`);
-    }
-    // Exit 2 is the host saying it could not audit an operation that did complete.
-    // The response on stdout is the real outcome, so the result is still a result;
-    // losing it here would report a performed write as a failure.
-    if (response.ok === true && result.exitCode === 2) {
-      note(`forge ${op} completed but the host could not record it in the run's audit log.`);
-    } else if (response.ok !== true || result.exitCode !== 0) {
-      const mutation = record(response.mutation);
-      const error = record(response.error);
-      const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
-      const message = typeof error?.message === 'string' ? error.message : 'operation failed';
-      throw new ForgeOperationError(
-        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
-        mutation
-      );
-    }
-    const body = record(response.result);
-    if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
-    // A read may answer "there is none": `pr.view` by head returns null when the
-    // branch has no open pull request.
-    if (body.value === null) return null;
-    const value = record(body.value);
-    if (!value) throw new Error(`forge ${op} returned the wrong result`);
-    return value;
+    return forgeResult(op, parsed, result.exitCode, credential);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+export function forgeResult(
+  op: string,
+  parsed: unknown,
+  exitCode: number,
+  credential?: (source: string) => void
+): Record<string, unknown> | null {
+  const response = record(parsed);
+  if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
+    throw new Error(`forge ${op} returned an unexpected response envelope`);
+  }
+  const source =
+    typeof response.credentialSource === 'string' ? response.credentialSource : undefined;
+  if (source) credential?.(source);
+  // Exit 2 is the host saying it could not audit an operation that did complete.
+  // The response on stdout is the real outcome, so the result is still a result;
+  // losing it here would report a performed write as a failure.
+  if (response.ok === true && exitCode === 2) {
+    note(`forge ${op} completed but the host could not record it in the run's audit log.`);
+  } else if (response.ok !== true || exitCode !== 0) {
+    const mutation = record(response.mutation);
+    const error = record(response.error);
+    const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+    const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+    const kind = typeof error?.kind === 'string' ? error.kind : undefined;
+    const remedy =
+      kind !== undefined && Object.hasOwn(REMEDY, kind)
+        ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
+        : '';
+    throw new ForgeOperationError(
+      `forge ${op} ${outcome ?? 'failed'}: ${message}${source ? ` (source: ${source})` : ''}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
+      mutation
+    );
+  }
+  const body = record(response.result);
+  if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
+  // A read may answer "there is none": `pr.view` by head returns null when the
+  // branch has no open pull request.
+  if (body.value === null) return null;
+  const value = record(body.value);
+  if (!value) throw new Error(`forge ${op} returned the wrong result`);
+  return value;
 }
 
 function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {

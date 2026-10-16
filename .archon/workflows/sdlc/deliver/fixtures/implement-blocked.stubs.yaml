@@ -1,5 +1,6 @@
 # Outcome: not ready, implement_blocked. Red the change introduced never reaches a
 # pull request: pr is skipped, and the real round script ends the rounds.
+forge: { source: forge }
 implement__implement:
   done: true
   green: false

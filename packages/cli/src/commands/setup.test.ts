@@ -147,6 +147,22 @@ ARCHON_CODEX_ACCOUNT_ID=account1
       expect(checkExistingConfig(envPath)?.hasCodex).toBe(false);
     });
 
+    it('tells a forge-plugin token apart from the GitHub webhook platform', () => {
+      const envDir = join(TEST_DIR, '.archon-forge');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(envPath, 'GH_TOKEN=ghp_forge\n');
+      expect(checkExistingConfig(envPath)).toMatchObject({
+        platforms: { github: false },
+      });
+
+      writeFileSync(envPath, 'GH_TOKEN=ghp_x\nGITHUB_TOKEN=ghp_x\nWEBHOOK_SECRET=secret\n');
+      expect(checkExistingConfig(envPath)).toMatchObject({
+        platforms: { github: true },
+      });
+    });
+
     it('detects existing Pi configuration from a Pi API key env var', () => {
       const envDir = join(TEST_DIR, '.archon-pi');
       mkdirSync(envDir, { recursive: true });
@@ -1136,11 +1152,8 @@ describe('setup provider selection', () => {
     '%s setup uses diagnostics and persists the selected default for multiple providers',
     async mode => {
       const root = mkdtempSync(join(tmpdir(), 'archon-setup-providers-'));
-      const saved = {
-        HOME: process.env.HOME,
-        USERPROFILE: process.env.USERPROFILE,
-        ARCHON_HOME: process.env.ARCHON_HOME,
-      };
+      const savedEnv = { ...process.env };
+      delete process.env.DEFAULT_AI_ASSISTANT;
       process.env.HOME = root;
       process.env.USERPROFILE = root;
       process.env.ARCHON_HOME = join(root, 'archon');
@@ -1162,7 +1175,9 @@ describe('setup provider selection', () => {
         return chosen.value;
       });
       const input = spyOn(prompts, 'text').mockResolvedValue('');
-      const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+      const confirm = spyOn(prompts, 'confirm').mockImplementation(
+        async options => options.message === 'Run `archon doctor` now to verify your setup?'
+      );
       const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
       const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
       const install = mock(async (_ids: readonly string[]) => undefined);
@@ -1177,6 +1192,8 @@ describe('setup provider selection', () => {
       const doctor = spyOn(doctorModule, 'doctorCommand').mockResolvedValue(0);
       try {
         expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
+        expect(doctor).toHaveBeenCalledWith();
+        expect(process.env).toMatchObject({ DEFAULT_AI_ASSISTANT: 'codex' });
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);
         expect(diagnose.mock.calls).toEqual([['claude'], ['codex']]);
         expect(info.mock.calls.flat().join('')).toContain('provider-owned check');
@@ -1190,10 +1207,12 @@ describe('setup provider selection', () => {
       } finally {
         for (const spy of [selection, input, confirm, detect, info, collect, platforms, doctor])
           spy.mockRestore();
-        for (const key of ['HOME', 'USERPROFILE', 'ARCHON_HOME'] as const) {
-          if (saved[key] === undefined) delete process.env[key];
-          else process.env[key] = saved[key];
+        // Restore in place: replacing process.env leaves Bun's native env holding the
+        // temp root, which os.homedir() still reads through USERPROFILE on Windows.
+        for (const key of Object.keys(process.env)) {
+          if (!(key in savedEnv)) delete process.env[key];
         }
+        Object.assign(process.env, savedEnv);
         await removeTempTree(root);
       }
     }

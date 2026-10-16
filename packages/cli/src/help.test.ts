@@ -459,3 +459,10 @@ it('every supported attachment verb has scoped help, with aliases scoped only', 
     }
   }
 });
+
+it('documents host metadata separately from plugin operations', () => {
+  const scoped = renderHelp('forge', 'metadata');
+  expect(scoped).toContain('without credentials or forge operations');
+  expect(scoped).toContain('"host":"github.com"');
+  expect(renderHelp()).not.toContain('forge metadata');
+});

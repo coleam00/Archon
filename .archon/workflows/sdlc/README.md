@@ -74,26 +74,54 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every pull-request and issue read and write
-this pack makes. CI is read by the `ci` agent node, not through this switch.
-[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected,
-[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, and
-[`.shared/issue.ts`](.shared/issue.ts) owns the issue read, each returning the same
-shapes from either source:
+One switch selects the source for every pull-request, issue and check read and
+write this pack makes. [`.shared/forge.ts`](.shared/forge.ts) owns which one a run
+selected, [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes,
+and [`.shared/issue.ts`](.shared/issue.ts) owns the issue read, each returning the
+same shapes from either source:
 
-- **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
-  needs only the authenticated `gh` the pack has always used.
-- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge` in the environment Archon
-  runs with, for example `~/.archon/.env`. Operations then go through
-  `archon forge`, which needs a forge plugin installed for the PR's host (see the
-  forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command that the
-  CLI and server publish at startup.
+- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge`. Operations go through `archon forge`, which needs a forge
+  plugin installed for the repository's host, a credential that plugin accepts
+  (for GitHub, the host tries `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth login`;
+  GitHub App mode supplies a run token; see the forge
+  reference in the docs), and the `ARCHON_CLI_COMMAND` host command that the CLI
+  and server publish at startup.
+- **`gh` (default).** Optionally set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs
+  with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
+  qualified PR, with the authenticated `gh` login.
 
-The source is never picked from what happens to be installed. When `forge` is
-selected and cannot answer (no host command, no plugin for the host, a failed
-operation), the node refuses; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
-forge source is for host execution: a container execution receives neither
-`ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
+The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
+Keep `gh` as the default until a compatible release passes a real-PR check.
+
+The switch does not cover standalone `archon-review`: given a pull-request number,
+URL or branch, or run on a branch with an open pull request, it reads that pull
+request with `gh pr view` and `gh pr diff`. Inside delivery it reviews the recorded
+pull request and reads nothing from the forge.
+
+The source is never picked from what happens to be installed. When the selected
+source cannot answer (no host command, no plugin for the host, no credential, a
+failed operation), the node refuses; neither source falls back to the other. Any
+other value of `ARCHON_SDLC_FORGE` refuses too. A container execution receives no
+`ARCHON_CLI_COMMAND`, so the forge source refuses there. A container also receives
+only the project's configured env, never `~/.archon/.env`, so select `gh` for it in
+the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
+
+`archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
+([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
+can act after worktree setup and before any agent spends: on `forge`, host metadata
+must advertise every operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`,
+then one authenticated repository read for
+the repositories the checkout's remotes name, at least one of which must answer
+(`pr.view` by head, which every released GitHub plugin supports; it proves read
+access, not write access); on
+`gh`, active authentication (`gh auth status --active --hostname <host>`) plus a
+repository read (`gh api --hostname <host> repos/<path>`) for the repositories the
+remotes name. One readable repository is sufficient, including a readable mirror;
+this proves read access, not write access, which is first proven by the first write.
+The gh check first refuses a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
+otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
+has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
+`source` is what the `ci` and `update-pr-body` agents act through.
 
 ## Public writes belong to a script
 
@@ -112,12 +140,13 @@ on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. Three agents write directly with `gh`: the structure pass's
-implementer pushes its own commit to the pull request's branch, and CI pushes a
+the forge contract. Three agents write directly: the structure pass's implementer
+pushes its own commit to the pull request's branch with `git`, and CI pushes a
 head that was left behind before it judges anything, ending `other` if it cannot;
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
-draft around its CI wait. No script reads an
+draft around its CI wait. The last two act through the source the `forge` node
+certified, bound to them as a typed input. No script reads an
 agent-written file to find out what to write.
 
 Which remote holds a repository is decided by its configured URL, never by the
@@ -126,8 +155,12 @@ and whose `upstream` is the canonical repository fetches the base and pushes the
 head where they belong.
 
 That split is also what keeps the source switch out of the prompts. A prompt that
-branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it
-and the agents never see it.
+branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it,
+and an agent that acts on the forge receives the certified `source` value instead.
+The two exceptions are triage's read of the repository's labels and implement's
+check that it sits on the pull request it was launched onto, which name the switch
+because `archon-triage` and `archon-implement` also run without a `forge` node
+before them.
 
 ## Deterministic scripts
 
@@ -606,3 +639,20 @@ the same project gate on two pinned parts and their composed tree. Its `interact
 result remains red; delivery holds it rather than treating it as inherited or
 environmental. The report retains revision, tree and check evidence for an existing
 merger to consume. It does not install a queue or authorize a merge.
+
+## CI agent eval
+
+The fast-rerun eval runs the shipped CI command through the Claude provider with
+in-memory forge responses. A rerun returns a newer attempt that is already green,
+with a changed check-unit ID. The state read either shows it immediately or first
+returns the old failed attempt on the same revision. The agent must read through
+the stale attempt, finish green, leave the PR ready, and record the newer attempt
+in its reports within the tool-call budget.
+
+Run it explicitly with native Claude authentication (it makes paid model calls):
+
+```bash
+ARCHON_TEST_CI_AGENT=1 bun run test .archon/scripts/__tests__/ci-rerun-agent.test.ts
+```
+
+Ordinary package tests skip this live eval. It has no real forge access.

@@ -6,11 +6,6 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const trackTempRoot = trackTempRoots();
 
-// Each case cold-imports the whole server graph in a fresh Bun process. Under the parallel CI
-// suite that alone measured 5 s on ubuntu and 10.8 s on Windows, so the default budget is too
-// small for the work, not a sign of a hang (the child exits as soon as the import finishes).
-const SERVER_IMPORT_BUDGET_MS = 30_000;
-
 test.each(['user', 'repository'])(
   'standalone server entry preserves its launching CLI command after %s env loading',
   async scope => {
@@ -38,7 +33,7 @@ test.each(['user', 'repository'])(
         const { runServerEntry } = await import(${JSON.stringify(join(import.meta.dir, 'bin.ts'))});
         process.env.ARCHON_CLI_COMMAND = cliCommand;
         await runServerEntry(['--cli-version', '1.2.3'], process.env, async () => {
-          await import(${JSON.stringify(join(import.meta.dir, 'index.ts'))});
+          await import(${JSON.stringify(join(import.meta.dir, 'boot/load-env.ts'))});
           return { startServer: async () => {
             if (process.env.ARCHON_CLI_COMMAND !== cliCommand) {
               throw new Error('Server entry lost the binary CLI host command');
@@ -61,6 +56,5 @@ test.each(['user', 'repository'])(
     ]);
     expect(stderr).not.toContain('Server entry lost the binary CLI host command');
     expect(exitCode).toBe(0);
-  },
-  SERVER_IMPORT_BUDGET_MS
+  }
 );

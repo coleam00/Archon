@@ -1,12 +1,14 @@
 # Outcome: delivered. One round: the review passes, simplify finds a smaller shape,
 # the implementer adopts it and pushes, a light review of that delta (the code lens
 # alone) passes, and the CI agent sees green and marks the pull request ready. round and outcome run for real.
+forge: { source: forge }
 implement__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: implemented; focused checks pass"
 implement__assert-changed: "3 files changed"
+pr__forge: { source: forge }
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
@@ -67,4 +69,7 @@ update-pr-body: { changed: false, summary: "stub: the description is still accur
 fixture:
   expect: completed
   reached: [reshape__implement, rereview__code, rereview__synthesize, ci, round, update-pr-body, outcome]
+  resolved-text-contains:
+    ci: '"repo":{"host":"github.com","path":"example/repo"},"number":1'
+    update-pr-body: "the source this run selected, `forge`:"
 exec-code: true

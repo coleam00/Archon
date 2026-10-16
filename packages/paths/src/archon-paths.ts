@@ -333,8 +333,8 @@ export function getLegacyHomeWorkflowsPath(): string {
  * Get the home-scope archon env file path (~/.archon/.env).
  * This is the archon-owned env location loaded by every entry point.
  */
-export function getArchonEnvPath(): string {
-  return join(getArchonHome(), '.env');
+export function getArchonEnvPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getArchonHome(env), '.env');
 }
 
 /**

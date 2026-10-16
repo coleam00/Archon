@@ -579,11 +579,15 @@ instead.
 
 ### GitHub CLI Authentication
 
-`GH_TOKEN` from `.env` is picked up automatically. Alternatively:
+`GH_TOKEN` from `.env` is picked up automatically. Alternatively, log in inside the container for `gh` and `git`. The forge opt-in also reads this login after trying `GH_TOKEN` and `GITHUB_TOKEN`:
 
 ```bash
-docker compose exec app gh auth login
+docker compose exec -u appuser -e HOME=/home/appuser app gh auth login
 ```
+
+The server and this command use `/home/appuser`; its `.config/gh` login is on the persisted user-home volume.
+
+With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` with no `GITHUB_TOKEN` set rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.
 
 Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
 
@@ -604,6 +608,8 @@ A workflow pack, from a public GitHub repository that publishes one:
 ```bash
 docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 ```
+
+The bundled SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`, `archon-pr`) use `gh` by default. To opt into this plugin, set `ARCHON_SDLC_FORGE=forge` and install a release supporting every pack operation (v0.11.1 is insufficient). Configure a credential inside the container: the host tries `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Prefer `GH_TOKEN` in the compose `.env`, or [GitHub App mode](/adapters/github-app-setup/). The host machine's `gh` login is not shared automatically. To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 Both land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
 
