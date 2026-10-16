@@ -44586,7 +44586,7 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
   async function complete(
