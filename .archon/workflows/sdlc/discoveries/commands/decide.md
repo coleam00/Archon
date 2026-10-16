@@ -18,7 +18,7 @@ For every record in the queue:
 
 1. **Verify the claim at the base.** Read the code the evidence cites with `git show $INPUTS.base_sha:<path>` and `git grep <pattern> $INPUTS.base_sha`. Never check out, switch, reset or edit anything. A record's file:line evidence was true when its run wrote it; the base may have moved since. Do not run tests or probes: a claim you cannot settle by reading is unverified.
 2. **Check memory.** A key in `discovery-decisions.md` that describes the same defect is the same discovery, however differently it is worded. Use its key.
-3. **Search the tracker**, read-only: open and recently closed issues and pull requests that may already cover it. On GitHub, `gh issue list --repo $INPUTS.repo_host/$INPUTS.repo_path --state all --search "<terms>"` and `gh pr list` with the same flags. Read an issue before you say it covers a record.
+3. **Search the tracker**, read-only: open and recently closed issues and pull requests that may already cover it. On GitHub, `gh issue list --repo $INPUTS.repo_host/$INPUTS.repo_path --state all --search "<terms>"` and `gh pr list` with the same flags. Read an issue and its comments (`gh issue view <n> --comments` with the same `--repo`) before you say it covers a record or that nothing does: the evidence an issue already holds is often in a comment, not its body.
 4. **Merge duplicates.** Records from different runs, or several records in one run, that describe one defect are one decision: list every one of their refs under it. Related defects that one change would fix may share one filed issue the same way.
 5. **Decide** under the policy.
 
