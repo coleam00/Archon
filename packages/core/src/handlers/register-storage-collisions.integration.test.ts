@@ -1245,22 +1245,26 @@ describe('project storage collisions', () => {
     expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
 
-  test('a second clone of a registered remote is refused, naming the registered checkout', async () => {
-    const root = await makeHome();
-    const first = await gitCheckout(join(root, 'prod', 'app'), 'https://github.com/acme/app.git');
-    const second = await gitCheckout(join(root, 'dev', 'app'), 'git@github.com:acme/app.git');
-    const registered = await registerRepository(first);
+  test.each(['https://github.com/acme/app.git', 'https://github.com/acme/app.git/'])(
+    'a second clone of a registered remote is refused, naming the registered checkout: %s',
+    async remote => {
+      const root = await makeHome();
+      const first = await gitCheckout(join(root, 'prod', 'app'), remote);
+      const second = await gitCheckout(join(root, 'dev', 'app'), 'git@github.com:acme/app.git');
+      const registered = await registerRepository(first);
+      expect(registered.name).toBe('acme/app');
 
-    const error = await registerRepository(second).then(
-      () => undefined,
-      (err: unknown) => err as Error
-    );
+      const error = await registerRepository(second).then(
+        () => undefined,
+        (err: unknown) => err as Error
+      );
 
-    expect(error?.message).toContain('"acme/app"');
-    expect(error?.message).toContain(first);
-    expect(error?.message).toContain('worktree');
-    expect((await listCodebases()).map(codebase => codebase.id)).toEqual([registered.codebaseId]);
-  });
+      expect(error?.message).toContain('"acme/app"');
+      expect(error?.message).toContain(first);
+      expect(error?.message).toContain('worktree');
+      expect((await listCodebases()).map(codebase => codebase.id)).toEqual([registered.codebaseId]);
+    }
+  );
 
   test('a remote already registered under a suffix is still refused', async () => {
     const root = await makeHome();

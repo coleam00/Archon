@@ -653,7 +653,7 @@ export async function registerRepository(
   // Try to build owner/repo name from remote URL
   let name = repoName;
   if (remoteUrl) {
-    const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
+    const cleaned = remoteUrl.replace(/\/+$/, '').replace(/\.git$/, '');
     let workingRemote = cleaned;
     const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
     if (sshRemoteMatch) {
