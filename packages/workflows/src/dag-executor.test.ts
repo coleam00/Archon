@@ -44575,6 +44575,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
 });
 
 describe('executeDagWorkflow -- completed run worktree release', () => {
+  const proof = { envId: 'env-release', creationId: 'creation-release' };
   let testDir: string;
 
   beforeEach(async () => {
@@ -44592,22 +44593,34 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
   async function complete(
     disposition: WorktreeDisposition | null,
     release: () => Promise<void> = async () => {}
-  ): Promise<{ order: string[]; store: MockWorkflowStore; released: boolean }> {
+  ): Promise<{
+    order: string[];
+    store: MockWorkflowStore;
+    released: boolean;
+    seen: WorkflowRun[];
+  }> {
     const order: string[] = [];
+    const seen: WorkflowRun[] = [];
     let released = false;
     const mockDeps = createMockDeps();
     mockDeps.store.completeWorkflowRun.mockImplementation(async () => {
       order.push('complete');
     });
+    // The in-memory run predates the proof a pre-created run's row receives later.
+    mockDeps.store.getWorkflowRun.mockImplementation(async id =>
+      makeWorkflowRun(id, { metadata: { owned_worktree: proof } })
+    );
     const deps: MockWorkflowDeps<MockWorkflowStore> = {
       ...mockDeps,
       completedRunWorktree: {
-        assess: async () => {
+        assess: async run => {
           order.push('assess');
+          seen.push(run);
           return disposition;
         },
-        release: async () => {
+        release: async run => {
           order.push('release');
+          seen.push(run);
           released = true;
           await release();
         },
@@ -44626,13 +44639,14 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
         workflowRun: makeWorkflowRun('release-run-id'),
       })
     );
-    return { order, store: mockDeps.store, released };
+    return { order, store: mockDeps.store, released, seen };
   }
 
   it('records the assessment in the completion and releases only after the write', async () => {
-    const { order, store } = await complete({ disposition: 'release' });
+    const { order, store, seen } = await complete({ disposition: 'release' });
 
     expect(order).toEqual(['assess', 'complete', 'release']);
+    expect(seen.map(run => run.metadata.owned_worktree)).toEqual([proof, proof]);
     expect(store.completeWorkflowRun.mock.calls[0]?.[2]).toMatchObject({
       worktree_disposition: { disposition: 'release' },
     });

@@ -418,6 +418,13 @@ describe('createWorkflowDeps', () => {
     });
     expect(mockGetUserGithubAuthor).toHaveBeenCalledWith('user-1');
   });
+  test('only the SQL host gets the SQL completed-run worktree release', () => {
+    expect(createWorkflowDeps().completedRunWorktree).toEqual({
+      assess: expect.any(Function),
+      release: expect.any(Function),
+    });
+    expect(createWorkflowDeps(createWorkflowStore(), 'files').completedRunWorktree).toBeUndefined();
+  });
   test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
     const deps = createWorkflowDeps();
     expect(deps.store).toBeDefined();

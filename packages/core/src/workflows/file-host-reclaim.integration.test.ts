@@ -41,56 +41,61 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
   if (code) throw new Error(error);
 }
 
+async function fileHostWithWorktree() {
+  setPlatformPolicies([]);
+  const home = roots(await realpath(await mkdtemp(join(tmpdir(), 'file-reclaim-'))));
+  process.env.ARCHON_HOME = home;
+  process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
+  process.env.DATABASE_URL = '';
+  const repo = join(home, 'repo');
+  await mkdir(repo);
+  await git(repo, 'init', '-q', '-b', 'main');
+  await git(repo, 'config', 'user.name', 'Test');
+  await git(repo, 'config', 'user.email', 'test@example.com');
+  await git(repo, 'config', 'commit.gpgsign', 'false');
+  await writeFile(join(repo, 'file'), 'initial');
+  await git(repo, 'add', 'file');
+  await git(repo, 'commit', '-qm', 'initial');
+  const remote = join(home, 'remote.git');
+  await mkdir(remote);
+  await git(remote, 'init', '--bare', '-q');
+  await git(repo, 'remote', 'add', 'origin', remote);
+  await git(repo, 'push', '-q', 'origin', 'main');
+  const config = async () => ({
+    baseBranch: toBranchName('main'),
+    remote: 'origin',
+    path: '.worktrees',
+  });
+  configureIsolation(config);
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'repo',
+    default_cwd: repo,
+  });
+  const created = await new WorktreeProvider(config).create({
+    canonicalRepoPath: toRepoPath(repo),
+    codebaseId: codebase.id,
+    codebaseName: 'repo',
+    workflowType: 'task',
+    identifier: 'release',
+  });
+  if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+  const env = await host.records.isolation.create({
+    codebase_id: codebase.id,
+    workflow_type: 'task',
+    workflow_id: 'release',
+    working_path: created.workingPath,
+    branch_name: created.branchName,
+    metadata: { worktree_creation_id: created.metadata.creationId },
+  });
+  return { home, repo, host, codebase, created, creationId: created.metadata.creationId, env };
+}
+
 test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as const)(
   'file abandonment reclaims its own checkout and respects a %s claimant without SQL',
   async claimant => {
-    setPlatformPolicies([]);
-    const home = roots(await realpath(await mkdtemp(join(tmpdir(), 'file-reclaim-'))));
-    process.env.ARCHON_HOME = home;
-    process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
-    process.env.DATABASE_URL = '';
-    const repo = join(home, 'repo');
-    await mkdir(repo);
-    await git(repo, 'init', '-q', '-b', 'main');
-    await git(repo, 'config', 'user.name', 'Test');
-    await git(repo, 'config', 'user.email', 'test@example.com');
-    await git(repo, 'config', 'commit.gpgsign', 'false');
-    await writeFile(join(repo, 'file'), 'initial');
-    await git(repo, 'add', 'file');
-    await git(repo, 'commit', '-qm', 'initial');
-    const remote = join(home, 'remote.git');
-    await mkdir(remote);
-    await git(remote, 'init', '--bare', '-q');
-    await git(repo, 'remote', 'add', 'origin', remote);
-    await git(repo, 'push', '-q', 'origin', 'main');
-    const config = async () => ({
-      baseBranch: toBranchName('main'),
-      remote: 'origin',
-      path: '.worktrees',
-    });
-    configureIsolation(config);
-    const host = await createFileWorkflowHost(join(home, 'store'));
-    const codebase = await host.records.codebases.createCodebase({
-      name: 'repo',
-      default_cwd: repo,
-    });
-    const created = await new WorktreeProvider(config).create({
-      canonicalRepoPath: toRepoPath(repo),
-      codebaseId: codebase.id,
-      codebaseName: 'repo',
-      workflowType: 'task',
-      identifier: 'release',
-    });
-    if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
-    const env = await host.records.isolation.create({
-      codebase_id: codebase.id,
-      workflow_type: 'task',
-      workflow_id: 'release',
-      working_path: created.workingPath,
-      branch_name: created.branchName,
-      metadata: { worktree_creation_id: created.metadata.creationId },
-    });
-    const proof = { envId: env.id, creationId: created.metadata.creationId };
+    const { home, repo, host, codebase, created, creationId, env } = await fileHostWithWorktree();
+    const proof = { envId: env.id, creationId };
     const run = await host.deps.store.createWorkflowRun({
       workflow_name: 'release',
       user_message: '',
@@ -149,3 +154,28 @@ test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as cons
   },
   30000
 );
+
+test('a completed file run releases its clean checkout without SQL', async () => {
+  const { repo, host, codebase, created, creationId, env } = await fileHostWithWorktree();
+  const run = await host.deps.store.createWorkflowRun({
+    workflow_name: 'release',
+    user_message: '',
+    codebase_id: codebase.id,
+    working_path: created.workingPath,
+    metadata: { owned_worktree: { envId: env.id, creationId } },
+  });
+  await host.deps.store.claimPendingWorkflowRun(run.id);
+  const running = await host.deps.store.getWorkflowRun(run.id);
+  if (!running) throw new Error('Expected the run');
+
+  expect(await host.deps.completedRunWorktree?.assess(running)).toEqual({
+    disposition: 'release',
+  });
+  await host.deps.store.completeWorkflowRun(run.id, { duration_ms: 1 });
+  await host.deps.completedRunWorktree?.release(running);
+
+  expect(existsSync(created.workingPath)).toBe(false);
+  expect((await host.records.isolation.getById(env.id))?.status).toBe('destroyed');
+  await git(repo, 'rev-parse', '--verify', created.branchName);
+  expect(sqlOpen).not.toHaveBeenCalled();
+}, 30000);
