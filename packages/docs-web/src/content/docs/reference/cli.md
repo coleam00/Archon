@@ -116,7 +116,7 @@ archon setup --spawn              # open in a new terminal window
 | Flag | Effect |
 |------|--------|
 | `--scope home` | Write to `~/.archon/.env` (default). Applies to every project. |
-| `--scope project` | Write to `<cwd>/.archon/.env`. Overrides user scope for this repo only. |
+| `--scope project` | Write to `<cwd>/.archon/.env`. Overrides user scope for this repo only, except CLI `GH_CONFIG_DIR` and inherited workflow identity; see [forge configuration](/reference/forge/#plugin-configuration). |
 | `--force` | Overwrite the target file wholesale instead of merging. A timestamped backup is still written. |
 | `--providers <ids>` | Install comma-separated maintained providers (claude, codex, pi), skipping the provider selection question. Auth and configuration prompts still run. |
 | `--spawn` | Open setup wizard in a new terminal window. |
@@ -1677,7 +1677,7 @@ At startup, the CLI removes every key named in the CWD project env files from `p
 On startup, the CLI:
 1. Strips keys named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
 2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
-3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Same verbosity gate as step 2.
+3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope except `GH_CONFIG_DIR` and inherited workflow identity). Same verbosity gate as step 2. The CLI preserves the user-scope `GH_CONFIG_DIR`, including its absence; inside a workflow, an inherited login directory takes precedence over both files. See [forge configuration](/reference/forge/#plugin-configuration).
 4. Auto-enables global Claude auth if no explicit tokens are set.
 
 `<cwd>/.env` is never loaded — it belongs to the target project. See [Configuration Reference: `.env` File Locations](/reference/configuration/#env-file-locations) for the full three-path model.
