@@ -1516,10 +1516,11 @@ The scheduled cleanup keeps an environment whose checkout is missing the same wa
 the branch Archon created for it holds such a commit.
 
 A completed run removes the worktree it created when it completes, if the checkout is
-clean, every commit on its HEAD and branch is on a remote, and the branch has no
-remote-tracking branch on the configured remote. It keeps the branch, so the run can
-still be adopted. A branch that was published waits for `--merged`, which also deletes
-it. The run's `terminal_record.worktree_disposition` says what happened and why (see
+clean, every commit on its HEAD and branch is on a remote, and the configured remote
+does not advertise the branch. The removal keeps the branch, so the run can still be
+adopted. A branch that was published waits for `--merged`, which also deletes it. When
+the remote cannot be read, the worktree stays and the record says `check_failed`. The
+run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
 
 ### `validate workflows [name]`
