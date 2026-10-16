@@ -385,27 +385,53 @@ describe('owned worktree release', () => {
     expect(await status()).toBe('active');
   });
 
-  test('a removal that fails while still registered can be retried', async () => {
-    const originalExec = gitModule.execFileAsync;
-    const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
-      async (file, args, options) => {
-        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
-          throw new Error('simulated remove failure');
-        return originalExec(file, args, options);
+  test.each(['sql', 'file'] as const)(
+    '%s: a removal that fails while still registered can be retried',
+    async persistence => {
+      const target =
+        persistence === 'sql'
+          ? store
+          : (
+              await (
+                await import('../workflows/file-host')
+              ).createFileWorkflowHost(join(root, 'store'))
+            ).records.isolation;
+      if (persistence === 'file') {
+        env = await target.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'release',
+          working_path: env.working_path,
+          branch_name: toBranchName(env.branch_name),
+          metadata: env.metadata,
+        });
+        run.metadata = {
+          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+        };
       }
-    );
-    try {
-      await expect(reclaimRunWorktree(run, store)).rejects.toThrow('simulated remove failure');
-    } finally {
-      failing.mockRestore();
-    }
-    expect(await status()).toBe('active');
-    expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+      const originalExec = gitModule.execFileAsync;
+      const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (file, args, options) => {
+          if (file === 'git' && args.includes('worktree') && args.includes('remove'))
+            throw new Error('simulated remove failure');
+          return originalExec(file, args, options);
+        }
+      );
+      try {
+        await expect(reclaimRunWorktree(run, target)).rejects.toThrow('simulated remove failure');
+      } finally {
+        failing.mockRestore();
+      }
+      expect(existsSync(join(env.working_path, 'file'))).toBe(true);
+      expect((await target.getById(env.id))?.status).toBe('active');
+      expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
 
-    await reclaimRunWorktree(run, store);
-    expect(existsSync(env.working_path)).toBe(false);
-    expect(await status()).toBe('destroyed');
-  });
+      const result = await reclaimRunWorktree(run, target);
+      expect(result.released?.path).toBe(env.working_path);
+      expect(existsSync(env.working_path)).toBe(false);
+      expect((await target.getById(env.id))?.status).toBe('destroyed');
+    }
+  );
 
   test('discards uncommitted work, hidden index flags, and unpushed commits; keeps the branch', async () => {
     const wt = env.working_path;
