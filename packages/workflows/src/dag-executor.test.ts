@@ -40294,6 +40294,78 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
   });
+
+  it('passes no deadline to the resumed until_bash probe when the group declares no timeout', async () => {
+    mockSendQueryDag.mockClear();
+    const store = createEscalationStore('run-escalation-no-timeout');
+    const approvedDecision = { decision: 'approve', text: '' };
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['grp.work', { output: 'work output' }],
+      [
+        'grp.check',
+        { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
+      ],
+    ]);
+    const workflowRun = makeWorkflowRun('run-escalation-no-timeout', {
+      metadata: {
+        approval: {
+          nodeId: 'grp',
+          message: 'Continue?',
+          type: 'approval',
+          bodyGateId: 'check',
+          iteration: 1,
+          decisions: [{ id: 'approve' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        } satisfies ApprovalContext,
+      },
+    });
+    const undeclaredWorkflow: WorkflowDefinition = {
+      ...gateTerminatedLoopGroupWorkflow(),
+      nodes: [
+        dagNodeSchema.parse({
+          id: 'grp',
+          loop_group: {
+            until_bash: 'echo UNDECLARED; [ $check.output.decision = "approve" ]',
+            max_iterations: 5,
+            nodes: [
+              { id: 'work', prompt: 'do work' },
+              {
+                id: 'check',
+                depends_on: ['work'],
+                approval: {
+                  message: 'Continue?',
+                  decisions: [{ id: 'approve' }, { id: 'revise' }],
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    };
+
+    const execSpy = spyOn(git, 'execFileAsync');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: ready(undeclaredWorkflow),
+          workflowRun,
+          priorCompletedNodes,
+        })
+      );
+      const resumeProbe = execSpy.mock.calls.find(call =>
+        (call[1] as string[]).some(arg => arg.includes('UNDECLARED'))
+      );
+      expect(resumeProbe).toBeDefined();
+      expect(resumeProbe?.[2]?.timeout).toBeUndefined();
+    } finally {
+      execSpy.mockRestore();
+    }
+    // No fresh iteration ran, so the probe above came from the resume branch.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
 });
 
 // A pause asks about the work; it is not the work. The group's output reads past it
@@ -43759,8 +43831,8 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
     }
   });
 
-  // A node that declares no timeout reaches the exec boundary with no deadline at every
-  // call site that used to fall back to an engine default.
+  // A node that declares no timeout reaches the exec boundary with no deadline. The loop
+  // until_bash site is covered above and the resumed loop_group probe in the #2967 block.
   it.each([
     ['bash node', { id: 'b', bash: 'echo UNDECLARED' }],
     ['script node', { id: 's', script: 'console.log("UNDECLARED")', runtime: 'bun' }],
