@@ -46,9 +46,9 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ loadArchonEnv(cwd)  — both loads use override: true             │
+│ loadCliEnv(cwd) — wraps loadArchonEnv with identity protection  │
 │   1. ~/.archon/.env        (home scope)                         │
-│   2. <cwd>/.archon/.env    (repo scope, wins over home)         │
+│   2. <cwd>/.archon/.env    (repo scope, exceptions below)       │
 │   Emits one [archon] loaded N keys from <path> line per file    │
 │   when N > 0 and ARCHON_VERBOSE_BOOT=1 or LOG_LEVEL=debug/trace.│
 └─────────────────────────────────┬───────────────────────────────┘
@@ -79,6 +79,8 @@ packages/cli/
 ```
 
 **Code:** `packages/cli/src/cli.ts`
+
+Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
 
 **Project resolution:**
 
