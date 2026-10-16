@@ -1,0 +1,18 @@
+# Dry-run fixture: no finished run has undecided discoveries, so no agent runs.
+facts:
+  path: idle
+  base: { branch: dev, sha: "stub-sha" }
+  policy_defaults: "/stub/policy"
+outcome:
+  mode: live
+  summary: "stub: No finished run has undecided discoveries."
+  written: []
+  dropped: []
+  asked: []
+  question: ""
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, outcome]
+exec-code: true
