@@ -110,10 +110,9 @@ describe('dockerPreflight', () => {
     }
   });
 
-  test('a confirmed missing image keeps the build remedy', async () => {
+  test('a missing image keeps the build remedy', async () => {
     const runner: DockerRunner = async args => {
       if (args[0] === 'version') return { stdout: '28.2.2', stderr: '' };
-      if (args[1] === 'ls') return { stdout: '\n', stderr: '' };
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Error: No such image: archon-runner:test';
       throw new IsolationFailure('unclassified', extractDockerError(err), err);
@@ -144,30 +143,6 @@ describe('extractDockerError', () => {
 
   test('falls back to the error message when no stderr', () => {
     expect(extractDockerError(new Error('boom\ntrace'))).toBe('boom\ntrace');
-  });
-});
-
-describe('Docker failure classification', () => {
-  test('an image inspection failure stays unclassified with its full evidence', async () => {
-    const stderr = 'permission denied\nNo such image: fix/timeout-retry';
-    const cause = Object.assign(new Error('image inspect failed'), { code: 1, stderr });
-    const runner: DockerRunner = async args => {
-      if (args[0] === 'version') return { stdout: '28', stderr: '' };
-      throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
-    };
-    const error = await dockerPreflight('fix/timeout-retry', runner).catch(
-      (error: unknown) => error
-    );
-    if (!(error instanceof Error)) throw new Error('expected Docker failure');
-    expect(error.cause).toBeInstanceOf(IsolationFailure);
-    if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
-    expect(error.cause.cause).toBe(cause);
-    expect(isKnownIsolationError(error)).toBe(false);
-    expect(classifyIsolationError(error)).toContain(stderr);
-    expect(classifyIsolationError(error)).toContain('exit code 1');
-    expect(classifyIsolationError(error)).toContain('Cannot inspect image');
-    expect(classifyIsolationError(error)).not.toContain('Timed out');
-    expect(classifyIsolationError(error)).not.toContain('runner image is missing');
   });
 });
 
@@ -204,19 +179,28 @@ test.each([
   );
 });
 
-test('image preflight preserves typed timeout without build advice', async () => {
-  const failure = new IsolationFailure('timeout', 'image inspection timed out');
+test.each([
+  ['timeout', new IsolationFailure('timeout', 'image inspection timed out')],
+  [
+    'unclassified exit',
+    new IsolationFailure(
+      'unclassified',
+      'image inspect failed',
+      Object.assign(new Error('image inspect failed'), { code: 1, stderr: 'original stderr' })
+    ),
+  ],
+])('any image inspection failure (%s) reads as a missing runner image', async (_, failure) => {
   const runner: DockerRunner = async args => {
     if (args[0] === 'version') return { stdout: '28', stderr: '' };
     throw failure;
   };
   const error = await dockerPreflight('image', runner).catch((error: unknown) => error);
-  expect(error).toBe(failure);
+  expect(error).toBeInstanceOf(IsolationFailure);
   if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
-  expect(error.kind).toBe('timeout');
-  expect(error.message).toBe('image inspection timed out');
-  expect(classifyIsolationError(error)).toContain('Timed out');
-  expect(classifyIsolationError(error)).not.toContain('docker build');
+  expect(error.kind).toBe('runner_image_missing');
+  expect(error.cause).toBe(failure);
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toContain('The Archon runner image is missing');
 });
 
 test('dockerCli propagates invalid process options as programming errors', async () => {

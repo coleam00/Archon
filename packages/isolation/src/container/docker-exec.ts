@@ -86,10 +86,6 @@ export async function dockerCli(
  * Verify the Docker daemon is reachable and the runner image is present, BEFORE
  * any volume/container is created — so a missing daemon or image fails fast with
  * an actionable message instead of a half-created environment.
- *
- * A failed inspect alone does not prove an image is missing, so the image is
- * reported missing only when listing it confirms absence; any other inspect
- * failure keeps Docker's evidence unclassified.
  */
 export async function dockerPreflight(
   image: string,
@@ -124,22 +120,11 @@ export async function dockerPreflight(
   try {
     await runner(['image', 'inspect', image], { timeout: 15_000 });
   } catch (err) {
-    if (!(err instanceof IsolationFailure) || err.kind !== 'unclassified') throw err;
+    if (!(err instanceof IsolationFailure)) throw err;
     const detail = extractDockerError(err);
-    const missing = await runner(['image', 'ls', '--quiet', image], { timeout: 15_000 }).then(
-      ({ stdout }) => stdout.trim() === '',
-      () => false
-    );
-    if (missing)
-      throw new IsolationFailure(
-        'runner_image_missing',
-        `No such image: '${image}'. Build the runner image first: ` +
-          `docker build -t ${image} -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker (${detail})`,
-        err
-      );
     throw new IsolationFailure(
-      'unclassified',
-      `Cannot inspect image '${image}'. Check Docker and the configured image, or build it: ` +
+      'runner_image_missing',
+      `No such image: '${image}'. Build the runner image first: ` +
         `docker build -t ${image} -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker (${detail})`,
       err
     );
