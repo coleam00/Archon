@@ -2425,7 +2425,10 @@ describe('setup provider selection dispatch', () => {
   for (const entry of cases) {
     it(`forwards ${entry.name} through setup validation without prompting`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'archon-setup-dispatch-'));
+      const cwd = join(root, 'repo');
+      mkdirSync(cwd);
       const preload = join(root, 'preload.ts');
+      writeFileSync(join(root, '.env'), 'GITHUB_TOKEN=file-token\n');
       writeFileSync(
         preload,
         `
@@ -2441,10 +2444,10 @@ mock.module(setupPath, () => ({
       const selected = await selectSetupProviders(options.providers,
         async ids => { installs.push(...ids); },
         async () => { prompts++; return ['claude']; });
-      console.log(JSON.stringify({ providers: options.providers, selected, installs, prompts }));
+      console.log(JSON.stringify({ providers: options.providers, selected, installs, prompts, inheritedToken: options.inheritedEnv?.GITHUB_TOKEN, effectiveToken: process.env.GITHUB_TOKEN }));
       return 0;
     } catch (error) {
-      console.log(JSON.stringify({ error: error.message, installs, prompts }));
+      console.log(JSON.stringify({ error: error.message, installs, prompts, inheritedToken: options.inheritedEnv?.GITHUB_TOKEN, effectiveToken: process.env.GITHUB_TOKEN }));
       return 1;
     }
   },
@@ -2454,9 +2457,9 @@ mock.module(setupPath, () => ({
       try {
         const result = spawnSync(
           process.execPath,
-          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'setup', ...entry.args, '--cwd', root],
+          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'setup', ...entry.args, '--cwd', cwd],
           {
-            cwd: root,
+            cwd,
             encoding: 'utf8',
             timeout: testTimeout(10_000),
             env: {
@@ -2469,6 +2472,8 @@ mock.module(setupPath, () => ({
               PI_CODING_AGENT_DIR: join(root, 'pi'),
               ARCHON_TELEMETRY_DISABLED: '1',
               ARCHON_PROVIDERS: entry.env,
+              GITHUB_TOKEN: 'shell-token',
+              WORKFLOW_ID: '',
             },
           }
         );
@@ -2481,7 +2486,11 @@ mock.module(setupPath, () => ({
           .find(line => line.startsWith('{'));
         expect(line).toBeDefined();
         const dispatched: unknown = JSON.parse(line!);
-        expect(dispatched).toMatchObject({ prompts: 0 });
+        expect(dispatched).toMatchObject({
+          prompts: 0,
+          inheritedToken: 'shell-token',
+          effectiveToken: 'file-token',
+        });
         if (entry.selected === null) {
           expect(dispatched).toMatchObject({
             installs: [],

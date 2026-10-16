@@ -48,6 +48,7 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 
 | Permission       | Access       | Used for                                          |
 | ---------------- | ------------ | ------------------------------------------------- |
+| Actions          | Read & Write | Observing GitHub Actions workflow runs and rerunning failed CI |
 | Checks           | Read         | Waking workflow CI waits when a check concludes   |
 | Contents         | Read & Write | Cloning, reading repo metadata, pushing branches, and merging pull requests |
 | Workflows        | Read & Write | Required only when runs create or change files under `.github/workflows/` |
@@ -88,7 +89,7 @@ Install the App on every org or personal account that holds repos your team oper
 
 ## Step 6: Configure Archon
 
-Add the following to your `.env` (or `~/.archon/.env`):
+Add the following to `~/.archon/.env` for the install or `<cwd>/.archon/.env` for the project:
 
 ```dotenv
 GITHUB_APP_ID=123456                 # numeric App ID, visible on the App settings page
