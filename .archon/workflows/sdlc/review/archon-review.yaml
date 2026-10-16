@@ -16,8 +16,9 @@ description: |
   declined (`light` runs the general code reviewer alone, for a CI fix); one
   continuation reviewer carries the prior findings forward.
 
-  When reviewing a PR, the final synthesized report is posted to it as one
-  canonical comment, edited in place on re-review.
+  When the checkout matches the PR head, the final synthesized report is posted
+  to it as one canonical comment, edited in place on re-review. A head mismatch
+  stops before review and returns the command to rerun on the PR branch.
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
@@ -348,16 +349,7 @@ nodes:
     output_type: review-report
     output_format: *review_verdict
 
-  # Reviewers' scratch worktrees are removed by the workflow once every lens and
-  # the deciding agent have settled, whether they succeeded or failed.
-  - id: prune-scratch
-    script: prune-scratch
-    runtime: bun
-    depends_on: [synthesize]
-    trigger_rule: all_done
-    with:
-      lens: ""
-
+  # Standalone runs show the first completed sink, so the verdict precedes cleanup.
   - id: result
     depends_on: [scope, publish]
     trigger_rule: none_failed_min_one_success
@@ -369,9 +361,9 @@ nodes:
     script: |
       const verdict = JSON.parse(process.env.INPUTS_VERDICT);
       console.log(JSON.stringify(JSON.parse(process.env.INPUTS_HEAD_MATCHES) ? verdict : {
-        ready: false, action: "none",
+        ready: false, action: "needs_human",
         findings_summary: require("node:fs").readFileSync(process.env.ARTIFACTS_DIR + "/review/scope.md", "utf8"),
-        report: JSON.parse(process.env.INPUTS_SCOPE_REPORT), discoveries: [], contract_left: []
+        report: JSON.parse(process.env.INPUTS_SCOPE_REPORT), discoveries: [], contract_left: ["PR head mismatch prevented contract review."]
       }));
     output_format:
       <<: *review_verdict
@@ -382,3 +374,13 @@ nodes:
           properties:
             <<: *report_properties
             path: { type: string, enum: [review/report.md, review/scope.md] }
+
+  # Reviewers' scratch worktrees are removed by the workflow once every lens and
+  # the deciding agent have settled, whether they succeeded or failed.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [synthesize]
+    trigger_rule: all_done
+    with:
+      lens: ""

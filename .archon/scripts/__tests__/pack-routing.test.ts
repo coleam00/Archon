@@ -206,6 +206,7 @@ describe("deliver's round", () => {
           INPUTS_RED_CAUSE: '',
           INPUTS_IMPLEMENT_SUMMARY: 'built',
           INPUTS_PR_URL: PR_URL,
+          INPUTS_REVIEW_REPORT: 'review/report.md',
           INPUTS_REVIEW_READY: 'true',
           INPUTS_REVIEW_ACTION: 'none',
           INPUTS_REVIEW_SUMMARY: 'clean',
@@ -301,8 +302,34 @@ describe("deliver's round", () => {
     expect(round(blocked).contract_left).toBeNull();
   });
 
+  it.each(['REVIEW', 'REREVIEW'])(
+    'stops a %s preflight without advancing the report cursor or clearing coverage',
+    review => {
+      for (const priorReport of ['', '/earlier/report.md']) {
+        const ended = round({
+          INPUTS_PRIOR_REPORT: priorReport,
+          [`INPUTS_${review}_READY`]: 'false',
+          [`INPUTS_${review}_ACTION`]: 'needs_human',
+          [`INPUTS_${review}_REPORT`]: 'review/scope.md',
+          [`INPUTS_${review}_SUMMARY`]: 'Rerun: archon workflow run archon-review --branch feature',
+          [`INPUTS_${review}_CONTRACT_LEFT`]: '["PR head mismatch prevented contract review."]',
+          INPUTS_CI: 'null',
+        });
+        expect(ended).toMatchObject({
+          done: true,
+          ready: false,
+          reason: 'needs_human',
+          prior_report: priorReport,
+          contract_left: ['PR head mismatch prevented contract review.'],
+        });
+        expect(ended.summary).toContain('--branch feature');
+      }
+    }
+  );
+
   it('points the next round at the published review report', () => {
     expect(round({}).prior_report).toEndWith('/review/report.md');
+    expect(round({ INPUTS_REREVIEW_READY: 'true', INPUTS_REREVIEW_REPORT: 'review/report.md' }).prior_report).toEndWith('/review/report.md');
     expect(round({ INPUTS_GREEN: 'false', INPUTS_PRIOR_REPORT: '/earlier/report.md', INPUTS_REVIEW_READY: 'null' }).prior_report).toBe(
       '/earlier/report.md'
     );

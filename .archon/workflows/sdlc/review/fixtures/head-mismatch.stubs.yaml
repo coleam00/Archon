@@ -8,11 +8,11 @@ scope:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 result:
   ready: false
-  action: none
+  action: needs_human
   findings_summary: "Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
   discoveries: []
-  contract_left: []
+  contract_left: ["PR head mismatch prevented contract review."]
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed

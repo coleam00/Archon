@@ -3,6 +3,10 @@ import { describe, it, expect } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { inputEnvVars } from '../dag-executor';
+import { resolveWorkflow } from '../graph-plan';
+import { dryRunWorkflow } from '../dry-run';
+import { parseFixtureFile } from '../fixture-runner';
 import { evaluateCondition } from '../condition-evaluator';
 import type { NodeOutput } from '../schemas';
 import { join } from 'path';
@@ -15,6 +19,7 @@ import {
 } from './bundled-defaults';
 import {
   formatPackagedResourceReference,
+  qualifyWorkflowResources,
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
@@ -979,7 +984,7 @@ describe('bundled-defaults', () => {
       );
       if (!parsed.workflow) throw new Error(parsed.error.error);
       const result = parsed.workflow.nodes.find(node => node.id === 'result');
-      if (result?.kind !== 'exec' || !result.output_format)
+      if (result?.kind !== 'exec' || !result.output_format || !result.with)
         throw new Error('result is not a typed exec');
       const root = track(mkdtempSync(join(tmpdir(), 'archon-review-result-')));
       mkdirSync(join(root, 'review'));
@@ -1000,12 +1005,42 @@ describe('bundled-defaults', () => {
         { published: null, headMatches: false },
         { published: null, headMatches: true },
       ]) {
+        const outputs = new Map<string, NodeOutput>([
+          [
+            'scope',
+            {
+              state: 'completed',
+              output: JSON.stringify({ head_matches: headMatches, report: scopeReport }),
+            },
+          ],
+          [
+            'publish',
+            published === null && !headMatches
+              ? {
+                  state: 'skipped',
+                  output: '',
+                  cause: { kind: 'condition', expr: '$scope.output.head_matches == true' },
+                }
+              : { state: 'completed', output: JSON.stringify(published) },
+          ],
+        ]);
+        const env = inputEnvVars(
+          result,
+          {
+            workflowRun: { id: 'run', user_message: '', metadata: {} },
+            artifactsDir: root,
+            stateDir: root,
+            baseBranch: 'dev',
+            docsDir: root,
+            nodeOutputs: outputs,
+            loopBodyScopes: [],
+          },
+          undefined
+        );
         const child = Bun.spawn([process.execPath, '-e', result.script], {
           env: {
             ...process.env,
-            INPUTS_VERDICT: JSON.stringify(published),
-            INPUTS_HEAD_MATCHES: JSON.stringify(headMatches),
-            INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
+            ...env,
             ARTIFACTS_DIR: root,
           },
           stdout: 'pipe',
@@ -1020,17 +1055,43 @@ describe('bundled-defaults', () => {
             ? published
             : {
                 ready: false,
-                action: 'none',
+                action: 'needs_human',
                 findings_summary: message,
                 report: scopeReport,
                 discoveries: [],
-                contract_left: [],
+                contract_left: ['PR head mismatch prevented contract review.'],
               }
         );
         expect(validateStructuredOutput(actual, result.output_format).valid).toBe(
           !headMatches || published !== null
         );
       }
+    });
+
+    it('shows the mismatch command in the top-level summary alongside cleanup', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const owner = BUNDLED_WORKFLOW_OWNERS['archon-review'];
+      if (!owner) throw new Error('review has no owner');
+      qualifyWorkflowResources(parsed.workflow, { ...owner, source: 'bundled' });
+      const workflow = resolveWorkflow(parsed.workflow);
+      const { stubs } = parseFixtureFile(
+        readFileSync(
+          join(REPO_ROOT, '.archon/workflows/sdlc/review/fixtures/head-mismatch.stubs.yaml'),
+          'utf8'
+        ),
+        'head-mismatch.stubs.yaml'
+      );
+      expect(workflow.plan.sinks).toEqual(['result', 'prune-scratch']);
+      const run = await dryRunWorkflow({ workflow, cwd: REPO_ROOT, userMessage: '', stubs });
+      expect(run.outcome, JSON.stringify(run)).toBe('completed');
+      expect(run.summary).toContain('archon workflow run archon-review --input scope=');
+      expect(run.summary).toContain('--branch feature');
+      expect(run.trace.find(node => node.nodeId === 'prune-scratch')?.state).toBe('stubbed');
     });
 
     it('publishes the review report from a deterministic node, not the reviewer', () => {
