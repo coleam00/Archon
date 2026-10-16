@@ -53,6 +53,8 @@ const track = trackTempRoots();
 const REPO = { host: 'github.com', path: 'o/r' };
 const SCRIPT = join(import.meta.dir, '../../workflows/sdlc/intake/scripts/bench/bench.ts');
 const FAKE = join(import.meta.dir, 'fake-intake-bench-cli.ts');
+// The fake answers `gh`, so issue reads must not go through the default forge plugin.
+const GH_FORGE = { ...process.env, ARCHON_SDLC_FORGE: 'gh' };
 
 function ok(cwd: string, ...args: string[]): string {
   const result = spawnSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], {
@@ -656,7 +658,7 @@ describe('bench run', () => {
     const result = spawnSync(
       process.execPath,
       ['--preload', join(cli, 'preload.ts'), SCRIPT, 'select', '--repo', 'github.com/o/r', '--set', join(out, 'pinned.json'), '--dispositions', join(out, 'dispositions.json'), ...counts],
-      { cwd: repo, encoding: 'utf8' }
+      { cwd: repo, encoding: 'utf8', env: GH_FORGE }
     );
     expect(result.stderr).toBe('');
     const pinned = JSON.parse(readFileSync(join(out, 'pinned.json'), 'utf8')) as BenchSet;

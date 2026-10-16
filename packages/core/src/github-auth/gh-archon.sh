@@ -13,38 +13,41 @@
 # set itself) passes through unchanged. When a refresh is due but fails, the
 # shim exits 1 without running `gh`: a stale token would only turn the failure
 # into a later 401. The token travels in the environment only, never in argv
-# or output.
-
-self="$0"
-real_gh=""
-saved_ifs=$IFS
-IFS=:
-set -f
-for dir in $PATH; do
-  [ -n "$dir" ] || continue
-  candidate="$dir/gh"
-  if [ -f "$candidate" ] && [ -x "$candidate" ] && ! [ "$candidate" -ef "$self" ]; then
-    real_gh="$candidate"
-    break
-  fi
-done
-set +f
-IFS=$saved_ifs
-
-if [ -z "$real_gh" ]; then
-  printf 'gh (archon shim): no gh executable found on PATH\n' >&2
-  exit 127
-fi
-
-case "${GH_TOKEN:-}" in
-  ghs_*) ;;
-  *) exec "$real_gh" "$@" ;;
-esac
+# or output, except for the explicit `gh auth token` credential request.
 
 fail() {
   printf 'gh (archon shim): cannot refresh the GitHub App token: %s\n' "$1" >&2
   exit 1
 }
+
+self="$0"
+exec_real_gh() {
+  real_gh=""
+  saved_ifs=$IFS
+  IFS=:
+  set -f
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    candidate="$dir/gh"
+    if [ -f "$candidate" ] && [ -x "$candidate" ] && ! [ "$candidate" -ef "$self" ]; then
+      real_gh="$candidate"
+      break
+    fi
+  done
+  set +f
+  IFS=$saved_ifs
+
+  if [ -z "$real_gh" ]; then
+    printf 'gh (archon shim): no gh executable found on PATH\n' >&2
+    exit 127
+  fi
+  exec "$real_gh" "$@"
+}
+
+case "${GH_TOKEN:-}" in
+  ghs_*) ;;
+  *) exec_real_gh "$@" ;;
+esac
 
 # git-credential-archon owns the loopback request and the repository check. It
 # exits 0 with no password on failure, after printing its own diagnostic.
@@ -56,7 +59,14 @@ if [ -z "$token" ]; then
   fail 'credential helper returned no token'
 fi
 
+# Forge operations use this credential request without needing the real CLI.
+if [ "$#" -eq 4 ] && [ "$1" = auth ] && [ "$2" = token ] && \
+  [ "$3" = --hostname ] && [ "$4" = github.com ]; then
+  printf '%s\n' "$token"
+  exit 0
+fi
+
 GH_TOKEN=$token
 GITHUB_TOKEN=$token
 export GH_TOKEN GITHUB_TOKEN
-exec "$real_gh" "$@"
+exec_real_gh "$@"

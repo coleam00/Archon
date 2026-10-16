@@ -1,5 +1,5 @@
 /**
- * The forge opt-in, end to end: the pack's publishing scripts drive the real
+ * The forge source, end to end: the pack's publishing scripts drive the real
  * `archon forge` command, its dispatch, and the real GitHub plugin
  * process, which talks to a fake GitHub (./fake-github-fetch.ts).
  *
@@ -128,7 +128,7 @@ process.exitCode = await forgeCommand(
   return { argv: [process.execPath, '--no-env-file', cli], statePath };
 }
 
-describe('the forge opt-in delivers through plugin operations', () => {
+describe('the forge source delivers through plugin operations', () => {
   it('creates a draft and upserts one review comment', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {

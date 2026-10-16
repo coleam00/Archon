@@ -12,8 +12,6 @@ description: |
   or deciding fork-vs-replace questions (that is a human decision the
   assessment will surface, not make).
 
-requires: [github]
-
 inputs:
   target:
     default: ""
@@ -31,11 +29,23 @@ returns: outcome
 outcome_field: delivered
 
 nodes:
+  # Refuses the run before any agent spends when the selected forge source cannot
+  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  - id: forge
+    script: forge-check
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        source: { type: string, enum: [gh, forge] }
+      required: [source]
+
   # The assessment stage is advisory and inline (not a composed package): the
   # judge-and-return shape appears here for the second time after triage — rule
   # of three says extract on the third package that needs it, not now.
   - id: assess
     command: assess
+    depends_on: [forge]
     # Advisory on both counts, and the engine holds both: it fails this node with
     # the touched paths named if the checkout is modified, and it refuses the
     # artifact pointer below if the report it names does not exist.

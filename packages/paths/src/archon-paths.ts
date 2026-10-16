@@ -333,8 +333,8 @@ export function getLegacyHomeWorkflowsPath(): string {
  * Get the home-scope archon env file path (~/.archon/.env).
  * This is the archon-owned env location loaded by every entry point.
  */
-export function getArchonEnvPath(): string {
-  return join(getArchonHome(), '.env');
+export function getArchonEnvPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getArchonHome(env), '.env');
 }
 
 /**
@@ -397,16 +397,17 @@ export function getWorkflowFolderSearchPaths(): string[] {
 export async function findMarkdownFilesRecursive(
   rootPath: string,
   relativePath = '',
-  options?: { maxDepth?: number }
+  options?: { maxDepth?: number; onMissing?: (path: string, error: unknown) => void }
 ): Promise<{ commandName: string; relativePath: string }[]> {
   return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
 }
 
 /** Discover executable commands in one scope: one folder deep, first name wins. */
 export async function findCommandFiles(
-  rootPath: string
+  rootPath: string,
+  onMissing?: (path: string, error: unknown) => void
 ): ReturnType<typeof findMarkdownFilesRecursive> {
-  const entries = await findMarkdownFilesRecursive(rootPath, '', { maxDepth: 1 });
+  const entries = await findMarkdownFilesRecursive(rootPath, '', { maxDepth: 1, onMissing });
   const seen = new Set<string>();
   return entries.filter(({ commandName }) => {
     if (seen.has(commandName)) return false;
@@ -421,7 +422,8 @@ function shouldSkipSymlinkTargetError(err: NodeJS.ErrnoException): boolean {
 
 async function getEntryKind(
   entryPath: string,
-  entry: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean }
+  entry: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean },
+  onMissing?: (path: string, error: unknown) => void
 ): Promise<'directory' | 'file' | 'other' | null> {
   if (entry.isSymbolicLink()) {
     try {
@@ -431,6 +433,7 @@ async function getEntryKind(
       return 'other';
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') onMissing?.(entryPath, e);
       if (shouldSkipSymlinkTargetError(err)) return null;
       throw err;
     }
@@ -441,11 +444,15 @@ async function getEntryKind(
   return 'other';
 }
 
-async function getReachableRealPath(path: string): Promise<string | null> {
+async function getReachableRealPath(
+  path: string,
+  onMissing?: (path: string, error: unknown) => void
+): Promise<string | null> {
   try {
     return await realpath(path);
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') onMissing?.(path, e);
     if (shouldSkipSymlinkTargetError(err)) return null;
     throw err;
   }
@@ -454,7 +461,7 @@ async function getReachableRealPath(path: string): Promise<string | null> {
 async function findMarkdownFilesRecursiveImpl(
   rootPath: string,
   relativePath: string,
-  options: { maxDepth?: number } | undefined,
+  options: Parameters<typeof findMarkdownFilesRecursive>[2],
   visitedRealPaths: Set<string>
 ): Promise<{ commandName: string; relativePath: string }[]> {
   const maxDepth = options?.maxDepth ?? Infinity;
@@ -467,7 +474,10 @@ async function findMarkdownFilesRecursiveImpl(
       visitedRealPaths.add(await realpath(fullPath));
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') return results;
+      if (err.code === 'ENOENT') {
+        options?.onMissing?.(fullPath, e);
+        return results;
+      }
       throw err;
     }
   }
@@ -477,7 +487,10 @@ async function findMarkdownFilesRecursiveImpl(
     entries = await readdir(fullPath, { withFileTypes: true });
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return results;
+    if (err.code === 'ENOENT') {
+      options?.onMissing?.(fullPath, e);
+      return results;
+    }
     throw err;
   }
 
@@ -495,7 +508,7 @@ async function findMarkdownFilesRecursiveImpl(
     }
 
     const entryPath = join(fullPath, entry.name);
-    const entryKind = await getEntryKind(entryPath, entry);
+    const entryKind = await getEntryKind(entryPath, entry, options?.onMissing);
     if (entryKind === null) continue;
 
     if (entryKind === 'directory') {
@@ -504,7 +517,7 @@ async function findMarkdownFilesRecursiveImpl(
       // folders support one level of grouping like `defaults/`).
       if (currentDepth >= maxDepth) continue;
 
-      const realChild = await getReachableRealPath(entryPath);
+      const realChild = await getReachableRealPath(entryPath, options?.onMissing);
       if (!realChild) continue;
       if (visitedRealPaths.has(realChild)) continue;
 

@@ -4643,7 +4643,8 @@ export interface components {
             | 'unrecognized_gate_type'
             | 'child_pointer_missing'
             | 'child_run_missing'
-            | 'child_chain_too_deep';
+            | 'child_chain_too_deep'
+            | 'source_release_not_continued';
           detail: string;
         }
       | {
@@ -5341,6 +5342,7 @@ export interface components {
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
       filename: string;
+      workflowName?: string;
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
@@ -6270,7 +6272,8 @@ export interface components {
             | 'unrecognized_gate_type'
             | 'child_pointer_missing'
             | 'child_run_missing'
-            | 'child_chain_too_deep';
+            | 'child_chain_too_deep'
+            | 'source_release_not_continued';
           detail: string;
         };
     AttentionQueueCountsResponse: {
@@ -6433,7 +6436,8 @@ export interface components {
               | 'unrecognized_gate_type'
               | 'child_pointer_missing'
               | 'child_run_missing'
-              | 'child_chain_too_deep';
+              | 'child_chain_too_deep'
+              | 'source_release_not_continued';
             detail: string;
           }
         | unknown;

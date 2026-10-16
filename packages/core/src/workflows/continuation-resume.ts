@@ -1,5 +1,6 @@
 import { resolveRunSourceCapture, WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import {
+  CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
@@ -22,6 +23,7 @@ import {
   answeredPauseContinuation,
   isContainerRun,
   isScheduledWorkflowResume,
+  readSourceRelease,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -162,6 +164,8 @@ export async function resumeRunContinuation(
 }
 
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
+  const release = run.status === 'paused' ? readSourceRelease(run.metadata) : undefined;
+  if (release) return { kind: 'source', ...release };
   const wait = pendingWorkflowWaitDeadline(run);
   if (wait) return deadlineWaitCursor(wait);
   const answered = answeredPauseContinuation(run);
@@ -258,7 +262,7 @@ export async function wakeDueWorkflowContinuations(
         try {
           await store.deferWorkflowContinuation(
             run.id,
-            new Date(now.getTime() + 60_000).toISOString(),
+            new Date(now.getTime() + CONTINUATION_RETRY_MS).toISOString(),
             cursor
           );
         } catch (error) {

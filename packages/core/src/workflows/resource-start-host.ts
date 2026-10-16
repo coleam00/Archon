@@ -44,7 +44,10 @@ import {
   type ResourceStartDisposition,
   type ResourceStartRunMetadata,
 } from '@archon/workflows/schemas/resource-start';
-import type { WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
+import {
+  findWorkflowLoadError,
+  type WorkflowExecutionResult,
+} from '@archon/workflows/schemas/workflow';
 import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -118,9 +121,7 @@ async function prepareBinding(
       discovered.workflows.map(entry => entry.workflow)
     );
     if (!workflow) {
-      const loadError = discovered.errors.find(
-        error => error.filename.replace(/\.ya?ml$/, '') === intent.launch.workflowName
-      );
+      const loadError = findWorkflowLoadError(discovered.errors, intent.launch.workflowName);
       throw new Error(
         loadError
           ? `Workflow '${intent.launch.workflowName}' failed to load: ${loadError.error}`

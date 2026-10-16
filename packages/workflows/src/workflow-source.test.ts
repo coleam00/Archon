@@ -34,7 +34,9 @@ import {
   resolveChildDiscoveryRoot,
   resolveRunSourceCapture,
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  isSourceReadFailure,
 } from './workflow-source';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -1114,4 +1116,36 @@ test('an unreadable captured file preserves the structural type and cause', asyn
   } finally {
     reader.mockRestore();
   }
+});
+
+describe('isSourceReadFailure', () => {
+  const systemError = (code: string, syscall: string): Error =>
+    Object.assign(new Error(`${code}: ${syscall}`), { code, syscall });
+
+  test.each([
+    [
+      'an unavailable capture',
+      new WorkflowSourceUnavailableError('/capture', systemError('EACCES', 'scandir')),
+      true,
+    ],
+    [
+      'a capture read and found wrong',
+      new WorkflowSourceIntegrityError('captured source has changed'),
+      false,
+    ],
+    ['a raw system error', systemError('EMFILE', 'open'), true],
+    [
+      'a system error wrapped as cause',
+      new Error('discovery failed', { cause: systemError('EIO', 'read') }),
+      true,
+    ],
+    [
+      'an error with a code but no syscall',
+      Object.assign(new Error('x'), { code: 'EACCES' }),
+      false,
+    ],
+    ['a duplicate script name', new Error("Duplicate script name 'check'"), false],
+  ])('%s → %p', (_label, error, expected) => {
+    expect(isSourceReadFailure(error)).toBe(expected);
+  });
 });

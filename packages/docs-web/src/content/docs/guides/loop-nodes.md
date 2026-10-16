@@ -151,8 +151,9 @@ starts. For a workflow composed through `include:`, Archon resolves and compiles
 the command body during load-time composition so its node references and declared
 inputs are proven before the child joins the parent's flat DAG. A matching file
 that is unreadable fails closed; Archon never falls through to a lower-precedence
-command with the same name. A missing, empty, unreadable, or non-hermetic included
-command fails before a fresh AI turn.
+command with the same name. A missing, empty, or non-hermetic included command fails before a fresh AI turn.
+If an admitted run cannot read its captured command on this host, Archon pauses
+it for source continuation; a later host that can read the capture can resume it.
 
 Once loaded, the text behaves identically to an inline `prompt`: all the
 variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`),

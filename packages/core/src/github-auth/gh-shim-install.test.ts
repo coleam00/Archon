@@ -5,7 +5,7 @@
  * a real loopback server, and a fake `gh` reports the token it received.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, unlink, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveBashPath } from '@archon/git';
@@ -59,7 +59,8 @@ describe.skipIf(process.platform === 'win32')('gh shim in a workflow run', () =>
   });
 
   async function runGh(
-    command: string
+    command: string,
+    path = `${fakeBin}:${process.env.PATH ?? ''}`
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     const environment = await resolveWorkflowGithubEnvironment(
       {
@@ -79,7 +80,7 @@ describe.skipIf(process.platform === 'win32')('gh shim in a workflow run', () =>
       },
       'codebase-1',
       undefined,
-      { envVars: { PATH: `${fakeBin}:${process.env.PATH ?? ''}` } }
+      { envVars: { PATH: path } }
     );
     try {
       const { stdout, stderr } = await runSubprocess(
@@ -109,6 +110,29 @@ describe.skipIf(process.platform === 'win32')('gh shim in a workflow run', () =>
       { path: '/internal/git-credential', body: { host: 'github.com', path: 'acme/demo' } },
     ]);
   });
+
+  test.each([true, false])(
+    'App credential request without a real gh (refresh succeeds: %s)',
+    async succeeds => {
+      await unlink(join(fakeBin, 'gh'));
+      for (const tool of ['bash', 'dirname', 'sed', 'curl', 'wc']) {
+        const executable = Bun.which(tool);
+        if (!executable) throw new Error(`Missing test tool: ${tool}`);
+        await symlink(executable, join(fakeBin, tool));
+      }
+      if (!succeeds) respond = () => Response.json({});
+      const { exitCode, stdout, stderr } = await runGh(
+        'gh auth token --hostname github.com',
+        fakeBin
+      );
+      expect(exitCode, stderr).toBe(succeeds ? 0 : 1);
+      expect(stdout).toBe(succeeds ? 'ghs_fresh\n' : '');
+      if (!succeeds) expect(stderr).toContain('cannot refresh the GitHub App token');
+      expect(requests).toEqual([
+        { path: '/internal/git-credential', body: { host: 'github.com', path: 'acme/demo' } },
+      ]);
+    }
+  );
 
   test('a token a step sets itself passes through unchanged', async () => {
     const { stdout } = await runGh('GH_TOKEN=gho_step gh api user');

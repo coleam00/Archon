@@ -359,7 +359,7 @@ describe('resolveWorkflowAdoption', () => {
   });
 });
 
-test.each(['token', 'legacy'] as const)(
+test.each(['token', 'legacy', 'destroyed'] as const)(
   'reuse lane refuses a same-path %s registration replaced after selection',
   async kind => {
     const selected = envRow({
@@ -376,8 +376,14 @@ test.each(['token', 'legacy'] as const)(
         {
           getById: async () => ({
             ...selected,
-            metadata:
-              kind === 'token' ? { worktree_registration_id: 'replacement' } : { legacy: true },
+            ...(kind === 'destroyed'
+              ? { status: 'destroyed' as const }
+              : {
+                  metadata:
+                    kind === 'token'
+                      ? { worktree_registration_id: 'replacement' }
+                      : { legacy: true },
+                }),
           }),
         },
         lane

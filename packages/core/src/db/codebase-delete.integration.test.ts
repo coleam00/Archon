@@ -257,3 +257,82 @@ test('cleanup supports legacy registrations and rejects their identical re-regis
     expect(await getCodebase(project.id)).toBeNull();
   }
 });
+
+for (const legacy of [false, true]) {
+  test(`retiring the same registration is idempotent (legacy: ${legacy})`, async () => {
+    const { createCodebase } = await import('./codebases');
+    const { create, getById, markWorktreeDestroyed, updateMetadata } =
+      await import('./isolation-environments');
+    const project = await createCodebase({
+      name: 'idempotent-retire',
+      default_cwd: '/repos/retire',
+    });
+    const input = {
+      codebase_id: project.id,
+      workflow_type: 'task' as const,
+      workflow_id: 'retire',
+      working_path: '/repos/retire/task',
+      branch_name: toBranchName('task'),
+    };
+    const created = await create(input);
+    if (legacy) {
+      await db.query(
+        "UPDATE remote_agent_isolation_environments SET metadata = '{}' WHERE id = $1",
+        [created.id]
+      );
+    }
+    const observed = (await getById(created.id))!;
+    await markWorktreeDestroyed(observed);
+    const destroyed = (await getById(created.id))!;
+    await markWorktreeDestroyed(observed);
+    await markWorktreeDestroyed(destroyed);
+    expect(await getById(created.id)).toEqual(destroyed);
+    await expect(updateMetadata(created.id, { adopted: true }, destroyed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    if (legacy) {
+      await updateMetadata(created.id, { replaced: true });
+      const replaced = await getById(created.id);
+      await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+      expect(await getById(created.id)).toEqual(replaced);
+    }
+    await db.query(
+      "UPDATE remote_agent_isolation_environments SET status = 'active' WHERE id = $1",
+      [created.id]
+    );
+    const replacement = await create(input);
+    expect(replacement.id).toBe(observed.id);
+    await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+    expect(await getById(created.id)).toEqual(replacement);
+    await markWorktreeDestroyed(replacement);
+    await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+  });
+}
+
+test('legacy writer replacement cannot be retired by a stale cleanup observation', async () => {
+  const { createCodebase } = await import('./codebases');
+  const { getById, markWorktreeDestroyed, listByCodebase } =
+    await import('./isolation-environments');
+  const project = await createCodebase({
+    name: 'legacy-writer',
+    default_cwd: '/repos/legacy-writer',
+  });
+  await db.query(
+    `INSERT INTO remote_agent_isolation_environments
+     (codebase_id, workflow_id, workflow_type, provider, working_path, branch_name, metadata)
+     VALUES ($1, '42', 'issue', 'worktree', '/repos/legacy-writer/old', 'old', '{}')`,
+    [project.id]
+  );
+  const original = (await listByCodebase(project.id))[0];
+  if (!original) throw new Error('Expected legacy registration');
+  await db.query(
+    "UPDATE remote_agent_isolation_environments SET working_path = '/repos/legacy-writer/new', branch_name = 'new' WHERE id = $1",
+    [original.id]
+  );
+  await expect(markWorktreeDestroyed(original)).rejects.toThrow('changed during cleanup');
+  expect(await getById(original.id)).toMatchObject({
+    status: 'active',
+    working_path: '/repos/legacy-writer/new',
+    branch_name: 'new',
+  });
+});

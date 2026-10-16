@@ -60,6 +60,63 @@ it('plugin rejection guidance lists only public commands', async () => {
 });
 
 describe('forge user trust boundary', () => {
+  it('resolves a workflow probe without changing the host environment', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-probe-env-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    writeFileSync(
+      join(home, '.env'),
+      'GH_TOKEN=home-token\nGH_CONFIG_DIR=user-login\nGIT_CONFIG_PARAMETERS=home-helpers\n'
+    );
+    writeFileSync(
+      join(repo, '.archon/.env'),
+      'GH_TOKEN=repo-token\nGH_CONFIG_DIR=repo-login\nGIT_CONFIG_PARAMETERS=repo-helpers\n'
+    );
+    const host = { ...process.env };
+    try {
+      for (const token of ['app-token', '']) {
+        const env = {
+          ARCHON_HOME: home,
+          GH_CONFIG_DIR: 'workflow-login',
+          GIT_CONFIG_PARAMETERS: "'credential.helper='",
+          GH_TOKEN: token,
+        };
+        const trusted = await loadCliEnv(repo, { env, preserveGithubCredentials: true });
+        expect(trusted.GH_CONFIG_DIR).toBe('workflow-login');
+        expect(trusted.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        expect(env.GH_CONFIG_DIR).toBe('workflow-login');
+        expect(env.GIT_CONFIG_PARAMETERS).toBe("'credential.helper='");
+        expect(env.GH_TOKEN).toBe(token);
+      }
+      expect(process.env).toEqual(host);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  it.each([undefined, 'user-login'])(
+    'does not pass a repo stored-login redirect to workflow children (user login: %s)',
+    async login => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-login-env-'));
+      const home = join(root, 'home');
+      const repo = join(root, 'repo');
+      mkdirSync(home);
+      mkdirSync(join(repo, '.archon'), { recursive: true });
+      if (login) writeFileSync(join(home, '.env'), `GH_CONFIG_DIR=${login}\n`);
+      writeFileSync(join(repo, '.archon/.env'), 'GH_CONFIG_DIR=repo-login\n');
+      const env: NodeJS.ProcessEnv = { ARCHON_HOME: home };
+      try {
+        const trusted = await loadCliEnv(repo, { env });
+        expect(trusted.GH_CONFIG_DIR).toBe(login);
+        expect(env.GH_CONFIG_DIR).toBe(login);
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
+
   it('refuses to start when the repo .archon/.env sets ARCHON_HOME', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-repo-home-refused-'));
     const repo = join(root, 'repo');
@@ -111,7 +168,7 @@ describe('forge user trust boundary', () => {
           run: true,
           inherited: undefined,
           repoEnv: true,
-          gets: 'repo-test-token',
+          gets: key === 'GH_CONFIG_DIR' ? 'home-test-token' : 'repo-test-token',
         },
         {
           name: 'engine',

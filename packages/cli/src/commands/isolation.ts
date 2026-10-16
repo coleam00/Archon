@@ -180,7 +180,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
           `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
         );
       }
-      await isolationDb.updateStatus(env.id, 'destroyed');
+      await isolationDb.markWorktreeDestroyed(env);
       console.log(
         lock.kind === 'released'
           ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`

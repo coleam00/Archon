@@ -815,7 +815,7 @@ describe('workflows database', () => {
       expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
       expect(query).toContain("NOT IN ('child_workflow', 'fan_out', 'writeback')");
       expect(query).toContain("ORDER BY CASE WHEN COALESCE(metadata->>'continuation_retry_at'");
-      expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25]);
+      expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25, 0]);
     });
 
     test('lists typed outputs for exact open event waits and skips malformed rows', async () => {
@@ -901,7 +901,15 @@ describe('workflows database', () => {
       expect(JSON.parse(params[1] as string)).toEqual({
         continuation_retry_at: '2026-08-25T10:01:00.000Z',
       });
-      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null, 'wait-occurrence']);
+      expect(params.slice(2)).toEqual([
+        wait.resumeAt,
+        wait.nodeId,
+        null,
+        null,
+        'wait-occurrence',
+        null,
+        null,
+      ]);
     });
 
     test('keys quota backoff to the exact attempt cursor', async () => {
@@ -915,7 +923,15 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("CAST(metadata->'scheduled_resume'->>'attempt' AS INTEGER) = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null, null]);
+      expect(params.slice(2)).toEqual([
+        '2026-08-25T10:00:00.000Z',
+        null,
+        2,
+        null,
+        null,
+        null,
+        null,
+      ]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {
@@ -1785,17 +1801,16 @@ describe('workflows database', () => {
       expect(updateQuery).toContain('metadata = metadata || $3::jsonb');
       // $1 = id, $2 = ORPHAN_RESUME_STALE_DAYS. The day param MUST be bound or the
       // CAS predicate's `< $2 days` references an unbound placeholder (PR #1830 C1).
-      expect(updateParams).toEqual([
-        'workflow-run-123',
-        1,
-        JSON.stringify({
-          tool_call_attention: null,
-          error: null,
-          stop_reason: null,
-          continuation_retry_at: null,
-          capacity_wait: null,
-        }),
-      ]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
+      expect(JSON.parse(String(updateParams[2]))).toEqual({
+        tool_call_attention: null,
+        error: null,
+        stop_reason: null,
+        continuation_retry_at: null,
+        capacity_wait: null,
+        source_release: null,
+        execution_claim: expect.any(String),
+      });
       // Third call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
@@ -1838,17 +1853,16 @@ describe('workflows database', () => {
       expect(updateQuery).toContain("status = 'running' AND");
       // The stale-orphan arm references $2 — it MUST be bound to the day count.
       expect(updateQuery).toContain('$2');
-      expect(updateParams).toEqual([
-        'workflow-run-123',
-        1,
-        JSON.stringify({
-          tool_call_attention: null,
-          error: null,
-          stop_reason: null,
-          continuation_retry_at: null,
-          capacity_wait: null,
-        }),
-      ]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
+      expect(JSON.parse(String(updateParams[2]))).toEqual({
+        tool_call_attention: null,
+        error: null,
+        stop_reason: null,
+        continuation_retry_at: null,
+        capacity_wait: null,
+        source_release: null,
+        execution_claim: expect.any(String),
+      });
     });
 
     test('preserves the cleared error as a workflow_resumed event (CAS winner only)', async () => {

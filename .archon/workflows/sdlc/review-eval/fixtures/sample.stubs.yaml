@@ -4,6 +4,7 @@ review__policy: { defaults: "fixture-policy-defaults" }
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: true, docs: true, reason: "stub: every lens" }
 review__scope:
+  head_matches: true
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
@@ -19,13 +20,14 @@ review__synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
-review__publish:
+review__publish: &published_verdict
   ready: false
   action: correct
   findings_summary: "stub: one blocking finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+review__result: *published_verdict
 review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 simplify__simplify: { findings: true }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"

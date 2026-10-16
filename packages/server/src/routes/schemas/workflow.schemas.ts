@@ -18,6 +18,7 @@ import {
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
 import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
+  workflowLoadErrorSchema as engineWorkflowLoadErrorSchema,
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
 import {
@@ -41,13 +42,9 @@ export const workflowDefinitionSchema = engineWorkflowDefinitionSchema.meta({
 });
 
 /** A workflow load error entry returned in GET /api/workflows `errors` field. */
-export const workflowLoadErrorSchema = z
-  .object({
-    filename: z.string(),
-    error: z.string(),
-    errorType: z.enum(['read_error', 'parse_error', 'validation_error']),
-  })
-  .openapi('WorkflowLoadError');
+export const workflowLoadErrorSchema = engineWorkflowLoadErrorSchema.meta({
+  id: 'WorkflowLoadError',
+});
 
 /**
  * Workflow source — project-defined, bundled default, or home-scoped (global).

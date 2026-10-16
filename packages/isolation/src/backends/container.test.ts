@@ -35,6 +35,7 @@ function fakeStore(): IIsolationStore & {
     async getById(id) {
       return rows.get(id) ?? null;
     },
+    listActive: async () => [],
     async findActiveByWorkflow() {
       return null;
     },
@@ -65,6 +66,9 @@ function fakeStore(): IIsolationStore & {
     async updateStatus(id, status) {
       const row = rows.get(id);
       if (row) row.status = status;
+    },
+    async markWorktreeDestroyed() {
+      throw new Error('Unexpected worktree retirement');
     },
     async countActiveByCodebase() {
       return 0;

@@ -21,7 +21,8 @@
     "./skills": "./src/skills.ts",
     "./process-owner": "./src/process-owner.ts",
     "./duration": "./src/duration.ts",
-    "./regexp": "./src/regexp.ts"
+    "./regexp": "./src/regexp.ts",
+    "./github-token-env": "./src/github-token-env.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

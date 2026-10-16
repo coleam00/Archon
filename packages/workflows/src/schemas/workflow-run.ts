@@ -184,7 +184,7 @@ export function workflowWaitStepName(wait: WorkflowWaitContext): string {
 export function pausedAttentionWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowAttentionWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
 }
@@ -193,7 +193,7 @@ export function pausedAttentionWait(
 export function pausedUsageLimitWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowUsageLimitWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   return isWorkflowWaitContext(wait) && wait.kind === 'quota' ? wait : undefined;
 }
@@ -495,7 +495,7 @@ export type WorkflowDeadlineWaitContext = Extract<WorkflowWaitContext, { resumeA
 export function pendingWorkflowWaitDeadline(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowDeadlineWaitContext | undefined {
-  if (run.status !== 'paused') return undefined;
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
   const wait = run.metadata.wait;
   if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
   return wait;
@@ -535,7 +535,8 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || isContainerRun(run)) return undefined;
+  if (run.status !== 'paused' || isContainerRun(run) || readSourceRelease(run.metadata))
+    return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {
     if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)
@@ -792,6 +793,31 @@ export function readCapacityWait(
   metadata: Record<string, unknown> | undefined
 ): z.infer<typeof capacityWaitSchema> | undefined {
   const parsed = capacityWaitSchema.safeParse(metadata?.[CAPACITY_WAIT_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Key under which a run released after this host could not read its frozen source
+ * (#4209) records where it stopped: `{ nodeId, releaseId, releasedAt, path? }`. Written by
+ * `releaseRunForUnreadableSource`, cleared by `resumeWorkflowRun`. It makes the paused
+ * run a due `source` continuation, so any host that can read the source continues it.
+ */
+export const SOURCE_RELEASE_METADATA_KEY = 'source_release';
+
+const sourceReleaseSchema = z.object({
+  nodeId: z.string().min(1),
+  releaseId: z.string().uuid().optional(),
+  releasedAt: z.string().datetime({ offset: true }),
+  path: z.string().optional(),
+});
+
+export type SourceRelease = z.infer<typeof sourceReleaseSchema>;
+
+/** Typed view of the source release; undefined when the run carries none this build can read. */
+export function readSourceRelease(
+  metadata: Record<string, unknown> | undefined
+): SourceRelease | undefined {
+  const parsed = sourceReleaseSchema.safeParse(metadata?.[SOURCE_RELEASE_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -1187,13 +1213,14 @@ export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string(
 export type GateAddress = z.infer<typeof gateAddressSchema>;
 
 /**
- * Why a run cannot be described. An enum rather than prose alone because the
+ * Why a run cannot be described, or why nothing will continue it unless someone looks.
+ * An enum rather than prose alone because the
  * reasons are not interchangeable to a reader: `assertRejectable` still rejects a
  * run whose gate metadata is unreadable, but must refuse one whose gate type this
  * build does not know — and no caller should tell those apart by matching strings.
  *
  * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
- * and `child_pointer_missing` come from
+ * `child_pointer_missing`, and `source_release_not_continued` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
  * produced by a reader that follows a `blocked_on_child` or `blocked_on_children`
  * pointer into the store (`resolveRunAttention`); the projection is pure and never does.
@@ -1205,6 +1232,7 @@ export const runAttentionUnreadableReasonSchema = z.enum([
   'child_pointer_missing',
   'child_run_missing',
   'child_chain_too_deep',
+  'source_release_not_continued',
 ]);
 export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
@@ -1371,6 +1399,20 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
   }
   if (run.status !== 'paused') return null;
 
+  // A release is written only by the running -> paused transition and cleared on resume,
+  // so while it is present it is why the run is paused; any gate or wait beside it is
+  // history. The host continues a released run, except a container run.
+  const release = readSourceRelease(run.metadata);
+  if (release) {
+    return isContainerRun(run)
+      ? unreadableAttention(
+          run.id,
+          'source_release_not_continued',
+          `paused because a host could not read its frozen source for node '${release.nodeId}'; a container run is only resumed by hand`
+        )
+      : null;
+  }
+
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
     return { kind: 'usage_limit', runId: run.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
@@ -1391,9 +1433,9 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 
   const raw = run.metadata?.approval;
   if (raw === undefined) {
-    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is
-    // a run parked with nothing that describes why, which nothing but an outside
-    // response can unstick.
+    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is a
+    // run parked with nothing that describes why, which nothing but an outside response
+    // can unstick.
     return isWorkflowWaitContext(run.metadata?.wait)
       ? null
       : unreadableAttention(
@@ -1477,7 +1519,8 @@ export type QueuedRunAttention = Extract<
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
  * pause someone must answer, a paused run waiting for a provider usage limit to reset,
- * which an operator may want to see or cancel, or a paused run nothing can read, which
+ * which an operator may want to see or cancel, or a paused run nothing can read or will
+ * continue, which
  * needs someone to look. The queue's list and single read both build items by this one rule.
  */
 export function queuedRunAttention(

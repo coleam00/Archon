@@ -2,6 +2,7 @@
 # item blocked, every delivery node stays skipped, and the real outcome node
 # completes with delivered: false and an outcome that names the requested work as
 # not done, never as a delivery nobody needed.
+forge: { source: forge }
 triage__triage:
   decision: { contract: BLOCKED, blocked_reason: "stub: waits on the forge contract's merge operation", blocked_by: ["https://github.com/example/repo/issues/1"] }
   type: { value: feature, reason: "stub: asks for new behavior" }

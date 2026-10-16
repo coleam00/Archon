@@ -590,6 +590,32 @@ nodes:
       expect(claims).toBe(0);
     });
 
+    it('claims a released run even when it has no completed nodes', async () => {
+      let claims = 0;
+      const resumed = makeRun({ id: 'released-run', status: 'running' });
+      const store = makeStore({
+        resumeWorkflowRun: async () => {
+          claims += 1;
+          return resumed;
+        },
+        getWorkflowRun: async () => ({ ...resumed, status: 'completed' as const }),
+      });
+      const admission = await makeEngine(makeDeps(providers, store)).resume({
+        ...resumeCallInput(),
+        run: makeRun({
+          id: 'released-run',
+          status: 'paused',
+          metadata: {
+            source_release: { nodeId: 'check', releasedAt: '2026-08-24T11:00:00.000Z' },
+          },
+        }),
+      });
+      expect(admission).toMatchObject({ accepted: true, runId: 'released-run' });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      await admission.settled;
+      expect(claims).toBe(1);
+    });
+
     it('preserves hydration and lost-claim errors before admission', async () => {
       const hydrationError = new Error('snapshot read failed');
       const caughtHydrationError = await captureRejection(
