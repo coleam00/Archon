@@ -1040,6 +1040,7 @@ describe('project storage collisions', () => {
   });
 
   test.each([
+    ['forge-a:acme/api.git', 'forge-b:acme/api.git'],
     ['https://forge.example:8443/acme/api.git', 'https://forge.example:9443/acme/api.git'],
     ['https://forge.example/acme/API.git', 'https://forge.example/acme/api.git'],
   ])('distinct remotes keep separate identities (%s, %s)', async (aUrl, bUrl) => {
@@ -1049,6 +1050,29 @@ describe('project storage collisions', () => {
     expect(b.codebaseId).not.toBe(a.codebaseId);
     expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
+
+  test.each(['sql', 'file'] as const)(
+    'username-free SCP remote supports equivalent lookup and refusal (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const path = await gitCheckout(join(root, 'api'), 'forge-a:acme/api.git');
+      const registered = await registerInStore(store, path);
+      for (const url of ['git@forge-a:acme/api.git', 'https://forge-a/acme/api.git']) {
+        expect((await store.findCodebaseByRepoUrl(url))?.id).toBe(registered.codebaseId);
+        await expect(
+          store.createCodebase({
+            name: 'duplicate',
+            default_cwd: join(root, 'other'),
+            repository_url: url,
+          })
+        ).rejects.toThrow(path);
+      }
+    }
+  );
 
   test('a linked worktree of the registered clone still resolves to its project', async () => {
     const root = await makeHome();

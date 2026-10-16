@@ -131,7 +131,7 @@ export async function remoteIdentity(url: string, cwd = process.cwd()): Promise<
     .trim()
     .replace(/\/+$/, '')
     .replace(/\.git$/, '');
-  const scp = /^[^@/]+@([^:/]+):(.+)$/.exec(cleaned);
+  const scp = !cleaned.includes('://') ? /^(?:[^@/:]+@)?([^:/]+):(.+)$/.exec(cleaned) : null;
   let parsed: URL | undefined;
   try {
     parsed = new URL(cleaned);
