@@ -97,6 +97,16 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 ---
 
+#### `archon-discoveries`
+
+Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, or ask a maintainer. Scripts perform only the writes it declared. With `mode: eval` it writes nothing and returns every decision.
+
+**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. Start it by hand, or add the schedule binding the SDLC pack README's "Discoveries" section shows; the pack installs none.
+
+**What it produces**: Filed issues and evidence comments, and one decision record per discovery (`archon state list --prefix discoveries/decisions/`), so a discovery is decided once and a maintainer's answer is remembered.
+
+---
+
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -229,6 +239,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
+| `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |
