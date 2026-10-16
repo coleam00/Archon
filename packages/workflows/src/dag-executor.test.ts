@@ -44956,7 +44956,9 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
 
   async function complete(
     disposition: WorktreeDisposition | null,
-    release: () => Promise<void> = async () => {}
+    release: () => Promise<void> = async () => {},
+    readRun: (id: string) => Promise<WorkflowRun | null> = async id =>
+      makeWorkflowRun(id, { metadata: { owned_worktree: proof } })
   ): Promise<{
     order: string[];
     store: MockWorkflowStore;
@@ -44971,9 +44973,7 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
       order.push('complete');
     });
     // The in-memory run predates the proof a pre-created run's row receives later.
-    mockDeps.store.getWorkflowRun.mockImplementation(async id =>
-      makeWorkflowRun(id, { metadata: { owned_worktree: proof } })
-    );
+    mockDeps.store.getWorkflowRun.mockImplementation(readRun);
     const deps: MockWorkflowDeps<MockWorkflowStore> = {
       ...mockDeps,
       completedRunWorktree: {
@@ -45034,5 +45034,15 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
 
     expect(order).toEqual(['assess', 'complete', 'release']);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('completes the run without a disposition when the run cannot be re-read', async () => {
+    const { order, store } = await complete({ disposition: 'release' }, undefined, async () => {
+      throw new Error('store unavailable');
+    });
+
+    expect(order).toEqual(['complete']);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun.mock.calls[0]?.[2]).not.toHaveProperty('worktree_disposition');
   });
 });

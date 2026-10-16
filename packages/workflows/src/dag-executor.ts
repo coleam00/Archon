@@ -204,7 +204,10 @@ import {
   type ProviderEventHandler,
 } from './provider-events';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
-import { WORKTREE_DISPOSITION_METADATA_KEY } from './schemas/terminal-record';
+import {
+  WORKTREE_DISPOSITION_METADATA_KEY,
+  type WorktreeDisposition,
+} from './schemas/terminal-record';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { evaluateCondition } from './condition-evaluator';
@@ -11783,6 +11786,32 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
 }
 
 /**
+ * Decide what happens to a completed run's worktree. The check is optional cleanup, so a
+ * failure leaves the disposition unset and never blocks the completion write.
+ */
+async function assessCompletedWorktree(
+  deps: WorkflowDeps,
+  workflowRun: WorkflowRun
+): Promise<{ completedRun: WorkflowRun; worktreeDisposition?: WorktreeDisposition | null }> {
+  if (!deps.completedRunWorktree) return { completedRun: workflowRun };
+  try {
+    // Read fresh: a pre-created run's `owned_worktree` proof is stamped on the row after
+    // this object was loaded.
+    const completedRun = (await deps.store.getWorkflowRun(workflowRun.id)) ?? workflowRun;
+    return {
+      completedRun,
+      worktreeDisposition: await deps.completedRunWorktree.assess(completedRun),
+    };
+  } catch (err) {
+    getLog().warn(
+      { err, workflowRunId: workflowRun.id },
+      'workflow.completed_worktree_assess_failed'
+    );
+    return { completedRun: workflowRun };
+  }
+}
+
+/**
  * Execute a complete DAG workflow.
  * Called from executeWorkflow() in executor.ts.
  */
@@ -12762,12 +12791,7 @@ export async function executeDagWorkflow(
   });
   emitter.unregisterRun(workflowRun.id);
 
-  // Read fresh: a pre-created run's `owned_worktree` proof is stamped on the row after
-  // this object was loaded.
-  const completedRun = deps.completedRunWorktree
-    ? ((await deps.store.getWorkflowRun(workflowRun.id)) ?? workflowRun)
-    : workflowRun;
-  const worktreeDisposition = await deps.completedRunWorktree?.assess(completedRun);
+  const { completedRun, worktreeDisposition } = await assessCompletedWorktree(deps, workflowRun);
 
   await requireTerminalStatusWrite(
     deps.store.completeWorkflowRun(
