@@ -22132,6 +22132,53 @@ describe('executeDagWorkflow -- script nodes', () => {
         });
       }
 
+      for (const runtime of ['bun', 'uv'] as const) {
+        it(`a failed script remains terminal when it makes captured source unreadable (${runtime})`, async () => {
+          const scripts = join(testDir, '.archon/scripts');
+          await mkdir(scripts, { recursive: true });
+          const extension = runtime === 'bun' ? 'ts' : 'py';
+          await writeFile(
+            join(scripts, `helper.${extension}`),
+            runtime === 'bun' ? 'export const value = 1;' : 'value = 1'
+          );
+          await writeFile(
+            join(scripts, `fail.${extension}`),
+            runtime === 'bun'
+              ? "import { chmodSync, writeFileSync } from 'node:fs'; import { join, dirname } from 'node:path'; writeFileSync(process.env.USER_MESSAGE!, 'ran'); chmodSync(join(dirname(import.meta.path), 'helper.ts'), 0); throw new Error('ORIGINAL_SCRIPT_FAILURE');"
+              : "import os\nfrom pathlib import Path\nPath(os.environ['USER_MESSAGE']).write_text('ran')\nPath(__file__).with_name('helper.py').chmod(0)\nraise RuntimeError('ORIGINAL_SCRIPT_FAILURE')"
+          );
+          const capture = await scriptCapture(join(testDir, 'unused'));
+          const helper = join(capture.captureRoot, `project/.archon/scripts/helper.${extension}`);
+          const marker = join(testDir, 'side-effect');
+          const deps = createMockDeps();
+          try {
+            await executeDagWorkflow(
+              dagOptions({
+                deps,
+                cwd: testDir,
+                workflowRun: { ...makeWorkflowRun('failed-source'), user_message: marker },
+                workflowSourceRoots: capture.roots,
+                workflow: {
+                  name: 'failed-source',
+                  nodes: [dagNodeSchema.parse({ id: 'fail', script: 'fail', runtime })],
+                },
+              })
+            );
+            expect(await readFile(marker, 'utf8')).toBe('ran');
+            await expect(readFile(helper)).rejects.toMatchObject({ code: 'EACCES' });
+          } finally {
+            await chmod(helper, 0o644);
+          }
+          expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(deps.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(
+            persistedEvents(deps.store).find(
+              event => event.event_type === 'node_failed' && event.step_name === 'fail'
+            )?.data
+          ).toMatchObject({ error: expect.stringContaining('ORIGINAL_SCRIPT_FAILURE') });
+        });
+      }
+
       it('a named-script timeout keeps its skip policy when the source becomes unreadable', async () => {
         const scripts = join(testDir, '.archon/scripts');
         await mkdir(scripts, { recursive: true });

@@ -4046,6 +4046,19 @@ async function executeScriptNode(
     }
   }
 
+  // After dispatch, a rejection may follow user side effects; source recovery must not
+  // replace that outcome. Recheck while execution is still known not to have started.
+  const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
+  if (selected) {
+    try {
+      await Promise.all([...(verifiedScriptFiles ?? [selected.path])].map(path => readFile(path)));
+    } catch (error) {
+      if (isSourceReadFailure(error, verifiedScriptFiles))
+        throw new RunSourceUnreadableError(stepName, error);
+      throw error;
+    }
+  }
+
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
     const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
@@ -4060,33 +4073,6 @@ async function executeScriptNode(
         nodeId: node.id,
         label: '<script>',
       },
-    }).catch(async (error: unknown) => {
-      if (isSubprocessTimeout(error as RawSubprocessRejection)) throw error;
-      // Runtimes reopen the entry and its imports. Read the verified inventory again;
-      // stderr cannot distinguish unreadable source from an ordinary script failure.
-      const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
-      if (selected) {
-        try {
-          await Promise.all(
-            [...(verifiedScriptFiles ?? [selected.path])].map(path => readFile(path))
-          );
-        } catch (sourceError) {
-          getLog().warn(
-            {
-              ...formatSubprocessFailure(
-                error as RawSubprocessRejection,
-                `Script node '${node.id}'`
-              ).logFields,
-              nodeId: node.id,
-            },
-            'script_subprocess_rejection_before_source_failure'
-          );
-          if (isSourceReadFailure(sourceError, verifiedScriptFiles))
-            throw new RunSourceUnreadableError(stepName, sourceError);
-          throw sourceError;
-        }
-      }
-      throw error;
     });
 
     // Trim trailing newline from stdout (common shell behavior)
