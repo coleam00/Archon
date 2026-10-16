@@ -208,7 +208,7 @@ export function ActiveRunCard({
         {run.status === 'paused' && inputPromoted ? (
           <div className="mt-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
             {run.attention?.kind === 'usage_limit'
-              ? 'Waiting for a provider limit to clear — see the banner at the top.'
+              ? 'Waiting on a provider limit — see the banner at the top.'
               : 'Waiting for your input — see the banner at the top.'}
           </div>
         ) : null}

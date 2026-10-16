@@ -4356,7 +4356,7 @@ export async function workflowStatusCommand(
 }
 
 function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
-  return `  Wait:   provider usage or rate limit at '${nodeId}' — continues after it clears at ${resumeAt}`;
+  return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
 }
 
 function formatToolAttention(
@@ -4422,8 +4422,8 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
       return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
     case 'usage_limit':
       return (
-        `Run ${watchedRunId} is waiting for a provider usage or rate limit to clear at ` +
-        `${attention.resumeAt}, then continues by itself.`
+        `Run ${watchedRunId} hit a provider usage or rate limit and tries again by itself at ` +
+        `${attention.resumeAt}.`
       );
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
@@ -4617,7 +4617,7 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       break;
     case 'usage_limit':
       lines.push(
-        `    ${item.node}: provider usage or rate limit reached; continues by itself after it clears at ${item.resetAt}`,
+        `    ${item.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
         `    Retry sooner with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `resume ${item.runId}`)}, or stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
       );
       break;

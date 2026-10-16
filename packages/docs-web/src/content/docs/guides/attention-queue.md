@@ -10,8 +10,9 @@ sidebar:
 ---
 
 The attention queue exposes paused runs that need an answer or inspection, and provider
-limit waits (a used-up usage limit, or a rate limit that outlasted its retries) that
-continue automatically once the limit clears. A person, an agent,
+limit waits (a used-up usage limit, or a rate limit that outlasted its retries). A
+provider-limit wait retries automatically at its deadline, the provider's `resetAt` or the
+computed backoff, and pauses again if the limit persists. A person, an agent,
 or a workflow can list the items, follow them as a stream, and read one, all as JSON.
 Branch on `kind` before acting: only `attention` and `awaiting_response` accept answers;
 `usage_limit` needs no answer, and `unreadable` needs inspection. A single-run read returns
@@ -72,8 +73,8 @@ they cannot disagree about what a run needs.
 - **`kind`** says which action applies. `attention` is a `wait: attention` pause: answer it in
   its `form` with `answer`, or the `respond`/`approve`/`reject` shorthand. `awaiting_response`
   is an approval gate: answer it with `approve`, `reject` or `respond`. `usage_limit` is a
-  run waiting for a provider limit to clear: `node` hit the limit and `resetAt` is when the
-  run tries again. It covers a used-up usage limit the provider reported a reset for, and a
+  run paused on a provider limit: `node` hit the limit and `resetAt` is when the run tries
+  again. It covers a used-up usage limit the provider reported a reset for, and a
   rate limit (HTTP 429) that was still refusing the node after its retries. For a usage
   limit, `resetAt` is the provider's reset. For a rate limit, it is the provider's reset
   when one was reported, otherwise a computed backoff of 5 to 15 minutes. The item needs no

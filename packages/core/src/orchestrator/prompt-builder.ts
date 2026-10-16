@@ -188,9 +188,9 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   if (attention.kind === 'usage_limit') {
     return (
       header +
-      `Run \`${runId}\` (**${workflowName}**) is paused until a provider usage or rate limit ` +
-      `clears at ${attention.resumeAt}, and then continues on its own. It has no gate you can ` +
-      `resolve. Resume it only if the user wants to try sooner: \`${cmd(`resume ${runId}`)}\`. ` +
+      `Run \`${runId}\` (**${workflowName}**) is paused on a provider usage or rate limit and ` +
+      `tries again on its own at ${attention.resumeAt}; if the limit persists, it pauses ` +
+      `again. It has no gate you can resolve. Resume it only if the user wants to try sooner: \`${cmd(`resume ${runId}`)}\`. ` +
       `Abandon it only if the user wants it stopped: \`${cmd(`abandon ${runId}`)}\`.`
     );
   }

@@ -5089,7 +5089,7 @@ describe('workflowStatusCommand', () => {
       });
     else
       expect(consoleSpy).toHaveBeenCalledWith(
-        "  Wait:   provider usage or rate limit at 'implement' — continues after it clears at 2026-10-15T14:00:00.000Z"
+        "  Wait:   provider usage or rate limit at 'implement' — tries again at 2026-10-15T14:00:00.000Z"
       );
   });
 
@@ -6723,7 +6723,7 @@ describe('workflowGetCommand', () => {
       "  Wait:   event 'checks.complete' until 2026-08-25T10:00:00.000Z"
     );
     expect(consoleSpy).toHaveBeenCalledWith(
-      "  Wait:   provider usage or rate limit at 'implement' — continues after it clears at 2026-08-25T12:00:00.000Z"
+      "  Wait:   provider usage or rate limit at 'implement' — tries again at 2026-08-25T12:00:00.000Z"
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       '  Resume: scheduled for 2026-08-25T11:00:00.000Z (attempt 1/2)'

@@ -1315,9 +1315,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  *
  * `runAttention` returns null for ordinary progress without an advisory, including
  * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
- * `usage_limit` is a run waiting for a provider usage limit to reset, or for a rate limit
- * that outlasted its retries to clear: it needs no answer and continues by itself at
- * `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
+ * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
+ * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate

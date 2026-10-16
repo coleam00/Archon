@@ -86,9 +86,9 @@ const itemBase = {
  * One queue item. `kind` is the run-attention kind it was built from: `attention` is a
  * `wait: attention` pause, answered with `answer`; `awaiting_response` is a gate,
  * answered with `approve`, `reject` or `respond`; `usage_limit` is a run waiting for a
- * provider usage limit, or a rate limit that outlasted its retries, to clear at `resetAt`
- * (the provider's reported reset, or a computed backoff for a rate limit), which continues
- * by itself and needs no answer; `unreadable` is a paused run nothing can describe, which someone has to look at
+ * provider usage limit, or a rate limit that outlasted its retries, that tries again by
+ * itself at `resetAt` (the provider's reported reset, or a computed backoff for a rate
+ * limit) and needs no answer; `unreadable` is a paused run nothing can describe, which someone has to look at
  * and resume or abandon.
  */
 export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
