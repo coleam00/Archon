@@ -3163,6 +3163,7 @@ export async function executeWorkflow(
       prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
+    config.userCredentialEnvKeys = Object.keys(userProviderEnv);
     for (const key of Object.keys(userProviderEnv)) {
       protectedEnvKeys.add(key);
     }

@@ -249,7 +249,13 @@ function parseModelsJson(raw: string): unknown {
       json += ' ';
     } else json += char;
   }
-  return JSON.parse(json);
+  // Pi permits trailing commas while leaving quoted commas untouched.
+  return JSON.parse(
+    json.replace(
+      /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g,
+      (match, tail: string | undefined) => tail ?? match
+    )
+  );
 }
 
 /**

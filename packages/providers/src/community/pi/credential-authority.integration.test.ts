@@ -30,30 +30,39 @@ for (const authoritative of [false, true]) {
     await writeFile(authPath, JSON.stringify({ anthropic: { type: 'api_key', key: 'user-key' } }));
     await writeFile(
       join(root, 'models.json'),
-      `// native JSONC configuration\n${JSON.stringify({
-        providers: {
-          anthropic: {
-            apiKey: 'host-key',
-            headers: { Authorization: 'Bearer host', 'x-api-key': 'host', 'X-Project': 'kept' },
-            models: [
-              {
-                id: 'custom-model',
-                headers: {
-                  Authorization: 'Bearer custom-host',
-                  'x-api-key': 'custom-host',
-                  'X-Model': 'kept',
+      `// native JSONC configuration\n${JSON.stringify(
+        {
+          providers: {
+            anthropic: {
+              apiKey: 'host-key',
+              headers: {
+                Authorization: 'Bearer host',
+                'x-api-key': 'host',
+                'X-Project': 'kept',
+                'X-Syntax': 'quoted,} and ,]',
+              },
+              models: [
+                {
+                  id: 'custom-model',
+                  headers: {
+                    Authorization: 'Bearer custom-host',
+                    'x-api-key': 'custom-host',
+                    'X-Model': 'kept',
+                  },
+                },
+              ],
+              modelOverrides: {
+                'claude-sonnet-4-5': {
+                  headers: { AUTHORIZATION: 'Bearer model-host', 'X-Model': 'kept' },
                 },
               },
-            ],
-            modelOverrides: {
-              'claude-sonnet-4-5': {
-                headers: { AUTHORIZATION: 'Bearer model-host', 'X-Model': 'kept' },
-              },
             },
+            openai: { baseUrl: 'https://example.invalid' },
           },
-          openai: { baseUrl: 'https://example.invalid' },
         },
-      })}`
+        null,
+        2
+      ).replace(/\n(\s*[}\]])/g, ',\n$1')}`
     );
     const { runtime, release } = await createRequestModelRuntime(
       options => ModelRuntime.create({ ...options, refreshOnCreate: false }),
@@ -77,6 +86,7 @@ for (const authoritative of [false, true]) {
         expect(result?.auth.apiKey).toBe('user-key');
         const headers = result?.auth.headers ?? {};
         expect(headers['X-Project']).toBe('kept');
+        expect(headers['X-Syntax']).toBe('quoted,} and ,]');
         expect(headers['X-Model']).toBe('kept');
         const authHeaders = Object.keys(headers).filter(name =>
           ['authorization', 'x-api-key'].includes(name.toLowerCase())

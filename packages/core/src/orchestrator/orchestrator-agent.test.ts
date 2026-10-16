@@ -6110,7 +6110,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as {
       env?: Record<string, string>;
       protectedEnvKeys?: readonly string[];
+      userCredentialEnvKeys?: readonly string[];
     };
+    expect(requestOptions?.userCredentialEnvKeys).toEqual(['OPENROUTER_API_KEY']);
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
     expect(requestOptions?.protectedEnvKeys).toEqual(['OPENROUTER_API_KEY']);
   });

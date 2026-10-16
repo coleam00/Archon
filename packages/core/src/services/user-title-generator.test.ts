@@ -147,6 +147,10 @@ test('a delivered credential replaces same-name project env and carries protecti
     OTHER: 'kept',
   });
   expect(send.mock.calls[0]?.[3]?.protectedEnvKeys).toContain('ANTHROPIC_API_KEY');
+  expect(send.mock.calls[0]?.[3]?.userCredentialEnvKeys).toEqual([
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_API_KEY',
+  ]);
   expect(read).toHaveBeenCalledWith('user-a', 'anthropic');
 });
 test('native solo titles do not look up the vault, even with an authenticated user', async () => {
@@ -270,6 +274,7 @@ for (const provider of ['claude', 'codex', 'pi', 'copilot']) {
     let authPath: string | undefined;
     send.mockImplementation(async function* (_prompt, _cwd, _session, options) {
       if (provider === 'pi') {
+        expect(options?.userCredentialEnvKeys).toEqual([PI_AUTH_PATH_ENV]);
         authPath = options?.env?.[PI_AUTH_PATH_ENV];
         expect(authPath).toBeDefined();
         if (!authPath) throw new Error('missing auth');
@@ -285,6 +290,7 @@ for (const provider of ['claude', 'codex', 'pi', 'copilot']) {
               : 'COPILOT_GITHUB_TOKEN';
         expect(options?.env?.[key]).toBe('user-token');
         expect(options?.protectedEnvKeys).toContain(key);
+        expect(options?.userCredentialEnvKeys).toContain(key);
       }
       yield { type: 'agent_message_chunk', text: 'Generated title' };
       yield { type: 'result' };

@@ -200,7 +200,7 @@ function selectResolvedModelId(
 
 function deliveredClaudeCredential(options: SendQueryOptions | undefined): string | undefined {
   return ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'].find(
-    key => options?.protectedEnvKeys?.includes(key) && options.env?.[key]
+    key => options?.userCredentialEnvKeys?.includes(key) && options.env?.[key]
   );
 }
 
@@ -234,6 +234,9 @@ export function buildRequestSubprocessEnv(
       'CLAUDE_CODE_USE_BEDROCK',
       'CLAUDE_CODE_USE_VERTEX',
       'CLAUDE_CODE_USE_FOUNDRY',
+      'CLAUDE_CODE_USE_MANTLE',
+      'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+      'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
     ]) {
       env[key] = '0';
     }

@@ -79,6 +79,7 @@ for (const family of ['api_key', 'subscription'] as const) {
             ...delivered,
           },
           protectedEnvKeys: Object.keys(delivered),
+          userCredentialEnvKeys: Object.keys(delivered),
           purpose: 'title-generation',
         }
       ))
@@ -115,7 +116,7 @@ test(
           ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: '',
           ARCHON_CODEX_CHATGPT_ACCOUNT_ID: '',
         },
-        protectedEnvKeys: ['GIT_AUTHOR_NAME'],
+        protectedEnvKeys: ['CODEX_API_KEY'],
         purpose: 'title-generation',
       }
     )) {

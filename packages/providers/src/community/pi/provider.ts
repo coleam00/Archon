@@ -430,7 +430,8 @@ interface PiAuthEnv {
 function piAuthEnv(
   configEnv: Readonly<Record<string, string>> | undefined,
   requestEnv: Readonly<Record<string, string>> | undefined,
-  protectedEnvKeys?: readonly string[]
+  protectedEnvKeys?: readonly string[],
+  userCredentialEnvKeys?: readonly string[]
 ): PiAuthEnv {
   const credentialEnv: Record<string, string> = { ...configEnv };
   for (const [key, value] of Object.entries(process.env)) {
@@ -446,7 +447,7 @@ function piAuthEnv(
     credentialEnv,
     credentialValues: collectCredentialValues(credentialEnv, protectedEnvKeys),
     protectedEnvKeys,
-    deliveredEnvKeys: (protectedEnvKeys ?? []).filter(key => Boolean(requestEnv?.[key])),
+    deliveredEnvKeys: (userCredentialEnvKeys ?? []).filter(key => Boolean(requestEnv?.[key])),
   };
 }
 
@@ -809,7 +810,12 @@ export class PiProvider implements IAgentProvider {
     }
 
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
-    const authEnv = piAuthEnv(piConfig.env, requestOptions?.env, requestOptions?.protectedEnvKeys);
+    const authEnv = piAuthEnv(
+      piConfig.env,
+      requestOptions?.env,
+      requestOptions?.protectedEnvKeys,
+      requestOptions?.userCredentialEnvKeys
+    );
     let requestModelRuntime: RequestModelRuntime & { authPath?: string };
     try {
       requestModelRuntime = await createPiModelRuntime(piCodingAgent, parsed.provider, authEnv);

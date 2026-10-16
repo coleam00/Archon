@@ -2708,6 +2708,7 @@ export async function handleMessage(
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
+      userCredentialEnvKeys: Object.keys(userProviderEnv),
       model: chatRequest.model,
       appendSystemPrompt: systemAppend,
     };

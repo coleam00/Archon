@@ -19274,6 +19274,7 @@ describe('executeDagWorkflow -- env var injection', () => {
             GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
           },
           protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
+          userCredentialEnvKeys: ['ANTHROPIC_API_KEY'],
         },
       })
     );
@@ -19286,6 +19287,7 @@ describe('executeDagWorkflow -- env var injection', () => {
       GIT_AUTHOR_NAME: 'connected-author',
       GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
+    expect(optionsArg?.userCredentialEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
     expect(optionsArg?.protectedEnvKeys).toEqual([
       'ANTHROPIC_API_KEY',
       'GIT_AUTHOR_NAME',

@@ -187,7 +187,7 @@ function codexLogin(env: Record<string, string>): CodexLogin | undefined {
 function codexLaunch(
   assistantConfig: Record<string, unknown> | undefined,
   requestEnv?: Record<string, string>,
-  protectedEnvKeys?: readonly string[]
+  userCredentialEnvKeys?: readonly string[]
 ): {
   config: CodexProviderDefaults;
   env: Record<string, string>;
@@ -199,10 +199,10 @@ function codexLaunch(
   );
   const env = { ...baseEnv, ...requestEnv };
   const deliveredKey =
-    protectedEnvKeys?.includes(CODEX_CREDENTIAL_ENV.apiKey) &&
+    userCredentialEnvKeys?.includes(CODEX_CREDENTIAL_ENV.apiKey) &&
     requestEnv?.[CODEX_CREDENTIAL_ENV.apiKey];
   const deliveredSubscription =
-    protectedEnvKeys?.includes(CODEX_CREDENTIAL_ENV.chatgptAccessToken) &&
+    userCredentialEnvKeys?.includes(CODEX_CREDENTIAL_ENV.chatgptAccessToken) &&
     requestEnv?.[CODEX_CREDENTIAL_ENV.chatgptAccessToken];
   if (deliveredKey) {
     delete env[CODEX_CREDENTIAL_ENV.chatgptAccessToken];
@@ -1197,7 +1197,7 @@ export class CodexProvider implements IAgentProvider {
     const launch = codexLaunch(
       requestOptions?.assistantConfig,
       requestOptions?.env,
-      requestOptions?.protectedEnvKeys
+      requestOptions?.userCredentialEnvKeys
     );
     const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
@@ -1288,7 +1288,7 @@ export class CodexProvider implements IAgentProvider {
         resumeSessionId: resumeThreadId,
         forkSession: requestOptions?.forkSession === true,
         authoritativeCredential: Object.values(CODEX_CREDENTIAL_ENV).some(
-          key => requestOptions?.protectedEnvKeys?.includes(key) && requestOptions.env?.[key]
+          key => requestOptions?.userCredentialEnvKeys?.includes(key) && requestOptions.env?.[key]
         ),
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',

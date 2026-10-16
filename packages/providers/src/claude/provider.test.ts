@@ -3493,6 +3493,7 @@ describe('sendQuery decomposition behaviors', () => {
         nodeConfig: { nodeId: 'title' },
         env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-token' },
         protectedEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+        userCredentialEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
       })) {
       }
       const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;

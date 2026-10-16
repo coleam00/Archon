@@ -67,6 +67,7 @@ export async function generateTitleForUser(
               env = deliverCredential(record.provider, credential).env;
             }
             options.env = { ...options.env, ...env };
+            options.userCredentialEnvKeys = Object.keys(env);
             options.protectedEnvKeys = [...(options.protectedEnvKeys ?? []), ...Object.keys(env)];
           }
         }
