@@ -479,21 +479,20 @@ export function validateCloneUrl(
   return { ok: true, url: parsed.href, httpUrl: parsed };
 }
 
+function stderrOf(error: unknown): string {
+  return error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
+    ? error.stderr
+    : '';
+}
+
 /**
  * Git reports these causes only as stderr lines, not exit codes. Matching whole
  * fatal lines keeps a URL, path, or branch name from changing the result. The
  * cause only chooses the guidance a GitResult reports; it never decides retry.
  */
 function reportedCause(error: unknown): 'missing' | 'denied' | 'no_space' | undefined {
-  const stderr =
-    error instanceof Error && 'stderr' in error && typeof error.stderr === 'string'
-      ? error.stderr
-      : '';
-  if (
-    /^fatal: repository '.*' not found\r?$/m.test(stderr) ||
-    /^ERROR: Repository not found\.\r?$/m.test(stderr)
-  )
-    return 'missing';
+  const stderr = stderrOf(error);
+  if (/^fatal: repository '.*' not found\r?$/m.test(stderr)) return 'missing';
   if (
     /^fatal: (?:Authentication failed for|could not read (?:Username|Password) for) '/m.test(
       stderr
@@ -542,7 +541,12 @@ export async function cloneRepository(
       { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
       'clone_repository_failed'
     );
-    const cause = reportedCause(error);
+    // GitHub over SSH prints this before the generic "Could not read from remote
+    // repository" line. Dev reported it as not found on clone but as denied on
+    // fetch, so only clone reads it.
+    const cause = /^ERROR: Repository not found\.\r?$/m.test(stderrOf(error))
+      ? 'missing'
+      : reportedCause(error);
     if (cause === 'missing') return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
     if (cause === 'denied')
       return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
@@ -588,8 +592,9 @@ export async function syncRepository(
     });
   } catch (error) {
     const err = error as Error;
-    const stderr = 'stderr' in err && typeof err.stderr === 'string' ? err.stderr : '';
-    if (stderr.startsWith(`fatal: ambiguous argument '${remote}/${branch}': unknown revision`)) {
+    if (
+      stderrOf(err).startsWith(`fatal: ambiguous argument '${remote}/${branch}': unknown revision`)
+    ) {
       return { ok: false, error: { code: 'branch_not_found', branch } };
     }
     getLog().error({ err, repoPath, branch, remote }, 'sync_repository_reset_failed');

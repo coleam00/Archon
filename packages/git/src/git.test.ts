@@ -3717,6 +3717,10 @@ branch refs/heads/feature/auth
         { code: 'permission_denied', path: '/workspace/repo' },
       ],
       [
+        'ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n',
+        { code: 'permission_denied', path: '/workspace/repo' },
+      ],
+      [
         'fatal: write error: No space left on device\n',
         { code: 'no_space', path: '/workspace/repo' },
       ],
