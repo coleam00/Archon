@@ -10,6 +10,7 @@ import { TierResolutionError } from '@archon/workflows/model-validation';
 import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 import type { ProviderFailure } from '@archon/provider-contract';
 import { MissingProjectDirectoryError } from '@archon/isolation';
+import { ConnectedCredentialUnavailableError } from '../credentials/unavailable-error';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -100,6 +101,12 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
   // names the CLI command, the console panel, and the docs URL): deliver it
   // verbatim.
   if (error instanceof TierResolutionError) {
+    return `⚠️ ${message}`;
+  }
+
+  // Authored reconnect guidance. It names a credential, so the marker check below would
+  // otherwise erase it into "unexpected error".
+  if (error instanceof ConnectedCredentialUnavailableError) {
     return `⚠️ ${message}`;
   }
 

@@ -25,6 +25,18 @@ describe('attention queue arguments', () => {
     expect(() => parseAttentionLabelPairs([pair])).toThrow('Expected a label as key=value');
   });
 
+  // Assigning `__proto__` to a plain object sets the prototype, so an accepted key would
+  // vanish: a write would be dropped and a filter would match every item.
+  test('refuses __proto__ as a key instead of dropping it', () => {
+    expect(() => parseAttentionLabelPairs(['__proto__=x'])).toThrow(
+      "'__proto__' cannot be a label key"
+    );
+    expect(() => parseAttentionQueueRequest({ labels: ['__proto__=x'] })).toThrow(
+      "'__proto__' cannot be a label key"
+    );
+    expect(() => parseAttentionQueueOrder('label:__proto__')).toThrow('invalid label key');
+  });
+
   test('refuses a key given twice rather than letting one win', () => {
     expect(() => parseAttentionLabelPairs(['ci=a', 'ci=b'])).toThrow("Label 'ci' is given twice");
   });

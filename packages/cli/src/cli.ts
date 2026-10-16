@@ -29,6 +29,7 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
+const inheritedEnv = { ...process.env };
 const forgeTrustedEnv = await loadCliEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
@@ -693,6 +694,7 @@ async function main(): Promise<number> {
         });
         const providers = (values.providers as string | undefined) ?? process.env.ARCHON_PROVIDERS;
         const setupExitCode = await setupCommand({
+          inheritedEnv,
           spawn: spawnFlag,
           repoPath,
           scope,
@@ -1015,7 +1017,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowRunsCommand(workflowHost, effectiveCwd, {
+            return await workflowRunsCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
@@ -1023,7 +1025,6 @@ async function main(): Promise<number> {
               open: values.open as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             });
-            break;
           }
 
           case 'resume': {
@@ -1045,8 +1046,7 @@ async function main(): Promise<number> {
             if (!abandonRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow abandon <run-id>');
             }
-            await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
-            break;
+            return await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
           }
 
           case 'cancel': {
@@ -1054,8 +1054,7 @@ async function main(): Promise<number> {
             if (!cancelRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow cancel <run-id>');
             }
-            await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
-            break;
+            return await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
           }
 
           case 'approve': {

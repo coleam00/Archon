@@ -260,7 +260,7 @@ describe('mintOpenAiOAuthApiKey', () => {
     const creds = {
       access: 'a1',
       refresh: 'r1',
-      expires: Date.now() + 60_000,
+      expires: Date.now() + 60 * 60_000,
       accountId: 'acct-42',
       id_token: 'i1',
     };
@@ -272,7 +272,7 @@ describe('mintOpenAiOAuthApiKey', () => {
   test('legacy/corrupt row with no usable access token → null, no throw (S1)', async () => {
     // The narrow parameter type is a write-time promise; decrypted rows can
     // still be junk — simulate one via the same assertion the store performs.
-    const corrupt = { expires: Date.now() + 60_000 } as unknown as Parameters<
+    const corrupt = { expires: Date.now() + 60 * 60_000 } as unknown as Parameters<
       typeof mintOpenAiOAuthApiKey
     >[0];
     expect(await mintOpenAiOAuthApiKey(corrupt)).toBeNull();
@@ -294,5 +294,22 @@ describe('mintOpenAiOAuthApiKey', () => {
     expect(out!.apiKey).toBe(ACCESS_WITH_ACCOUNT);
     expect(out!.newCredentials.id_token).toBe('keep-me');
     expect(out!.newCredentials.refresh).toBe('r2');
+  });
+
+  test('a blob that expires within five minutes refreshes before delivery', async () => {
+    // Codex gets only the access token, and Archon cannot refresh it mid-turn.
+    stubTokenEndpoint(200, {
+      access_token: ACCESS_WITH_ACCOUNT,
+      refresh_token: 'r2',
+      expires_in: 3600,
+    });
+    const out = await mintOpenAiOAuthApiKey({
+      access: 'a1',
+      refresh: 'r1',
+      expires: Date.now() + 60_000,
+      accountId: 'acct-42',
+      id_token: 'i1',
+    });
+    expect(out!.apiKey).toBe(ACCESS_WITH_ACCOUNT);
   });
 });

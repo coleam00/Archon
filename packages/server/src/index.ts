@@ -70,6 +70,7 @@ import { AttentionRouter } from './services/attention-router';
 import { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,
+  registerGitlabWebhookRoute,
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
 } from './routes/webhooks';
@@ -113,7 +114,8 @@ import {
   captureArchonActive,
   getSourceWebDistDir,
 } from '@archon/paths';
-import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,
@@ -123,6 +125,8 @@ import {
   getSignupMode,
   isArchonOwnedAuthPath,
 } from './auth';
+// From the pure config module: tests mock './auth', and the header name must stay real.
+import { webAuthHeaderName } from './auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -810,27 +814,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // GitLab webhook endpoint
   if (gitlab) {
-    app.post('/webhooks/gitlab', async c => {
-      const eventType = c.req.header('x-gitlab-event');
-
-      try {
-        const token = c.req.header('x-gitlab-token');
-        if (!token) {
-          return c.json({ error: 'Missing token header' }, 400);
-        }
-
-        const payload = await c.req.text();
-
-        gitlab.handleWebhook(payload, token).catch((error: unknown) => {
-          getLog().error({ err: error, eventType }, 'gitlab.webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType }, 'gitlab.webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGitlabWebhookRoute(app, gitlab);
     getLog().info('gitlab_webhook_registered');
   }
 
@@ -897,7 +881,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Security guardrail (advisory): the web identity header (ARCHON_WEB_AUTH_HEADER,
-  // default X-Archon-User) is trusted as-is — Archon attributes web requests to
+  // see webAuthHeaderName) is trusted as-is — Archon attributes web requests to
   // whoever the header names. That is only sound when Archon is reachable SOLELY
   // through a reverse proxy that authenticates and sets the header (loopback bind).
   // On a non-loopback bind any client that can reach the port can forge it:
@@ -914,7 +898,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled() || isWebAuthEnabled();
   if (webAuthHeaderTrustActive && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     getLog().warn(
-      { hostname, headerName: process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User' },
+      { hostname, headerName: webAuthHeaderName() },
       'web_auth.header_trust_on_public_bind'
     );
   }

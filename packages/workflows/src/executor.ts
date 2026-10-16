@@ -133,7 +133,7 @@ export type {
   ChildIsolationResult,
 } from './child-isolation';
 import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
-import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { GITHUB_TOKEN_KEYS, resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
   hasRunModelOverrides,
   RUN_MODEL_BINDINGS_METADATA_KEY,
@@ -259,7 +259,10 @@ export async function resolveWorkflowGithubEnvironment(
   const bot: Record<string, string> = installation
     ? { GH_TOKEN: installation.token, GITHUB_TOKEN: installation.token }
     : {};
-  const user = await resolveUserGithubEnvForWorkflow(deps, userId);
+  const { env: user, protectedKeys: userProtectedKeys } = await resolveUserGithubEnvForWorkflow(
+    deps,
+    userId
+  );
   // Only the App token is refreshed; a per-user token or scrub replaces it.
   const ghShim =
     installation && user.GH_TOKEN === undefined
@@ -272,7 +275,7 @@ export async function resolveWorkflowGithubEnvironment(
       ...new Set([
         ...(environment.protectedEnvKeys ?? []),
         ...Object.keys(bot),
-        ...Object.keys(user),
+        ...userProtectedKeys,
       ]),
     ],
   };
@@ -338,9 +341,9 @@ function resolveGithubCliShimEnv(
 async function resolveUserGithubEnvForWorkflow(
   deps: WorkflowGithubDeps,
   userId: string | undefined
-): Promise<Record<string, string>> {
+): Promise<{ env: Record<string, string>; protectedKeys: string[] }> {
   const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
-  if (!perUserEnabled) return {};
+  if (!perUserEnabled) return { env: {}, protectedKeys: [] };
   let userToken: string | undefined;
   if (userId && deps.getUserGithubToken) {
     try {
@@ -350,14 +353,18 @@ async function resolveUserGithubEnvForWorkflow(
     }
   }
   const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  // The scrub's GH_CONFIG_DIR and GIT_CONFIG_PARAMETERS redirect config; they are not
+  // secrets. Protecting them would redact their values from every node's output.
+  const protectedKeys = Object.keys(env).filter(key => GITHUB_TOKEN_KEYS.includes(key));
   if (userId && deps.getUserGithubAuthor) {
     const author = await deps.getUserGithubAuthor(userId);
     if (author) {
       env.GIT_AUTHOR_NAME = author.name;
       env.GIT_AUTHOR_EMAIL = author.email;
+      protectedKeys.push('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL');
     }
   }
-  return env;
+  return { env, protectedKeys };
 }
 
 /**
@@ -3156,6 +3163,7 @@ export async function executeWorkflow(
       prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
+    config.userCredentialEnvKeys = Object.keys(userProviderEnv);
     for (const key of Object.keys(userProviderEnv)) {
       protectedEnvKeys.add(key);
     }

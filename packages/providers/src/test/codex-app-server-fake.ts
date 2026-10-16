@@ -6,6 +6,8 @@
  * Every frame it sends is typed with the protocol generated from the pinned Codex, so a
  * regeneration that renames or adds a field fails type-check here.
  */
+import type { DynamicToolCallParams } from '../codex/protocol/v2/DynamicToolCallParams';
+import type { DynamicToolCallResponse } from '../codex/protocol/v2/DynamicToolCallResponse';
 import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
@@ -46,6 +48,7 @@ type CommandExecution = Extract<ThreadItem, { type: 'commandExecution' }>;
 type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
 
 export interface FakeTurnScript {
+  toolCalls?: DynamicToolCallParams[];
   account?: GetAccountResponse['account'];
   /** `requiresOpenaiAuth` in the default `account/read` answer (default true). */
   requiresOpenaiAuth?: boolean;
@@ -93,11 +96,13 @@ export interface FakeProcess {
   env: Record<string, string>;
   binary: string;
   requests: FakeRequest[];
+  toolResponses: { id: string; result: DynamicToolCallResponse }[];
   /** Notification methods the client sent. */
   notifications: string[];
   signals: string[];
   stdinEnded: boolean;
   send: (notification: ServerNotification) => void;
+  callTool: (params: DynamicToolCallParams) => void;
   exit: (code: number) => void;
   /** Request methods in the order the client sent them. */
   readonly methods: string[];
@@ -110,6 +115,7 @@ export const TURN_ID = 'turn-1';
 type OutgoingFrame =
   | { id: number | string; result: unknown }
   | { id: number | string; error: { code: number; message: string } }
+  | { id: number | string; method: 'item/tool/call'; params: DynamicToolCallParams }
   | ServerNotification;
 
 export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): Spawner & {
@@ -134,10 +140,12 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       env: options.env,
       binary: command,
       requests: [],
+      toolResponses: [],
       notifications: [],
       signals: [],
       stdinEnded: false,
       send: notification => send(notification),
+      callTool: params => send({ id: params.callId, method: 'item/tool/call', params }),
       exit: code => close(code, null),
       get methods() {
         return this.requests.map(request => request.method);
@@ -197,6 +205,23 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
 
     // Like the real server, nothing but `initialize` is served before the client
     // acknowledges with the `initialized` notification.
+    const finishTurn = (): void => {
+      for (const frame of turn.notifications ?? []) send(frame);
+      if (turn.exitCode !== undefined) close(turn.exitCode, null);
+      else if (turn.completion !== null) {
+        const completion = turn.completion ?? { status: 'completed' };
+        completeTurn(completion.status, completion.error ?? null);
+      }
+    };
+    let callIndex = 0;
+    const nextToolCall = (): void => {
+      const params = turn.toolCalls?.[callIndex];
+      if (!params) {
+        finishTurn();
+        return;
+      }
+      send({ id: `host-tool-${String(callIndex++)}`, method: 'item/tool/call', params });
+    };
     let initialized = false;
     let experimentalApi = false;
     let buffered = '';
@@ -208,7 +233,12 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         buffered = buffered.slice(newline + 1);
         newline = buffered.indexOf('\n');
         const message = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
-        if (typeof message.method !== 'string') continue;
+        if (typeof message.method !== 'string') {
+          const response = JSON.parse(line) as { id: string; result: DynamicToolCallResponse };
+          record.toolResponses.push(response);
+          nextToolCall();
+          continue;
+        }
         if (message.id === undefined) {
           record.notifications.push(message.method);
           if (message.method === 'initialized') initialized = true;
@@ -251,13 +281,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           case 'turn/start':
             activeThreadId = (message.params as { threadId: string }).threadId;
             send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
-            for (const frame of turn.notifications ?? []) send(frame);
-            if (turn.exitCode !== undefined) {
-              close(turn.exitCode, null);
-            } else if (turn.completion !== null) {
-              const completion = turn.completion ?? { status: 'completed' };
-              completeTurn(completion.status, completion.error ?? null);
-            }
+            nextToolCall();
             break;
           case 'turn/interrupt':
             if (turn.ignoreInterrupt) break;
@@ -272,6 +296,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
                   'accountResponse' in turn
                     ? turn.accountResponse
                     : ({
+                        workspaceRouting: null,
                         account: turn.account ?? null,
                         requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
                       } satisfies GetAccountResponse),
@@ -353,6 +378,10 @@ function threadOf(id: string): Thread {
   return {
     id,
     sessionId: id,
+    environments: null,
+    extra: null,
+    canAcceptDirectInput: null,
+    daybreakEnabled: null,
     forkedFromId: null,
     parentThreadId: null,
     preview: '',
@@ -386,6 +415,9 @@ function threadStartResponse(id: string): ThreadStartResponse {
   return {
     thread: threadOf(id),
     model: 'gpt-fake',
+    runtimeWorkspaceRoots: [],
+    activePermissionProfile: null,
+    multiAgentMode: 'explicitRequestOnly',
     modelProvider: 'openai',
     serviceTier: null,
     disabledPluginIds: [],
@@ -402,6 +434,7 @@ function threadResumeResponse(id: string): ThreadResumeResponse {
   return {
     ...threadStartResponse(id),
     collaborationMode: null,
+    initialTurnsPage: null,
     turnsBackwardsCursor: null,
     itemsBackwardsCursor: null,
   };
@@ -437,6 +470,7 @@ function configReadResponse(servers: string[]): ConfigReadResponse {
       model_verbosity: null,
       service_tier: null,
       analytics: null,
+      apps: null,
       browser_use: null,
       computer_use: null,
       desktop: null,

@@ -97,6 +97,9 @@ in through `include:`. Project, bundled, and installed workflows use only the ch
 Captured runs, including continuations, use the captured copy of the home YAML's
 directory. An absolute path uses exactly that path and bypasses relative lookup.
 
+This also applies to optional declarations: a home workflow whose optional `mcp:` file is
+missing from the checkout but present next to its YAML runs with those servers.
+
 Only a missing file permits fallback. An unreadable or invalid checkout config fails
 instead of loading a home config. A missing-file error lists every location tried, in
 order; optional missing declarations record `config_missing` and warn with those locations.

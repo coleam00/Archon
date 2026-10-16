@@ -28,6 +28,7 @@ import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   findInstalledSkillNames,
   parseSettingSources,
+  DEFAULT_SETTING_SOURCES,
   projectSkillSearchRoots,
   skillSearchRoots,
 } from '@archon/paths/skills';
@@ -731,10 +732,8 @@ export async function validateWorkflowResources(
         const sources =
           provider !== undefined && providerCaps?.settingSources
             ? (nodeSources ??
-              parseSettingSources(config?.assistants?.[provider]?.settingSources) ?? [
-                'project',
-                'user',
-              ])
+              parseSettingSources(config?.assistants?.[provider]?.settingSources) ??
+              DEFAULT_SETTING_SOURCES)
             : undefined;
         const searchRoots = discovery
           ? declaredSkillRoots(discovery, cwd, {

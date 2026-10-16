@@ -41,10 +41,6 @@ A template is substituted in one pass. Each reference written in the template re
 
 If `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` is NOT present anywhere in the prompt template but context exists (e.g., from a GitHub issue), it is automatically appended at the end after a `---` separator.
 
-## Escaped Dollar Signs
-
-Use `\$` to produce a literal `$` in command files (prevents variable substitution).
-
 ## NOT Supported: `$1` … `$9` Positional Arguments
 
 Despite older docs suggesting otherwise, positional `$1`…`$9` are **not substituted** by the workflow engine — command files and prompts receive the whole message only, via `$ARGUMENTS`/`$USER_MESSAGE`. (A legacy positional-substitution helper exists in the codebase but is not wired into the execution path.) Parse arguments inside the prompt or with a `bash:`/`script:` node instead.

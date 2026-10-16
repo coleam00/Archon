@@ -1168,6 +1168,13 @@
             "type": "string"
           }
         },
+        "userCredentialEnvKeys": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "maxBudgetUsd": {
           "type": "number"
         },
