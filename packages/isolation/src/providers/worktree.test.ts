@@ -3206,8 +3206,15 @@ describe('WorktreeProvider', () => {
           hints: { workflowType: 'issue', workflowId: '42' },
           platformType: 'web',
         });
+        const result = await resolution;
+        expect(result.status).toBe('blocked');
+        if (result.status !== 'blocked') throw new Error('expected blocked result');
+        expect(result.reason).toBe('creation_failed');
         if (path === 'ancestry') {
-          const error = await resolution.catch((error: unknown) => error);
+          expect(result.userMessage).toContain('merge-base failed');
+          expect(result.userMessage).toContain('original git evidence');
+          expect(result.userMessage).toContain('exit code 128');
+          const error = await provider.create(baseRequest).catch((error: unknown) => error);
           expect(error).toBeInstanceOf(Error);
           if (!(error instanceof Error)) throw error;
           expect(error.cause).toMatchObject({ cause });
@@ -3215,9 +3222,6 @@ describe('WorktreeProvider', () => {
           expect(error.message).toContain('original git evidence');
           expect(error.message).toContain('exit code 128');
         } else {
-          const result = await resolution;
-          expect(result.status).toBe('blocked');
-          if (result.status !== 'blocked') throw new Error('expected blocked result');
           expect(result.userMessage).toContain('Permission denied');
         }
       });
