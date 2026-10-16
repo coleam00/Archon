@@ -236,7 +236,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           const rows = await environments();
           const row = rows.find(row => row.id === id);
           if (!row) throw new Error(`Isolation environment ${id} not found`);
-          if (observed && !sameWorktreeRegistration(row, observed)) {
+          if (observed && (row.status !== 'active' || !sameWorktreeRegistration(row, observed))) {
             throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
           }
           row.metadata = { ...row.metadata, ...metadata };

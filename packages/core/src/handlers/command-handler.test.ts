@@ -1794,6 +1794,23 @@ describe('CommandHandler', () => {
           expect(mockUpdateConversation).toHaveBeenCalled();
         });
 
+        test('detaches the conversation when its worktree registration was already destroyed', async () => {
+          const destroyed = { ...featXEnv, status: 'destroyed' as const };
+          mockIsolationEnvDbGet.mockResolvedValue(destroyed);
+          mockGetActiveSession.mockResolvedValue(null);
+          const conversation = makeConversation({
+            ...conversationWithCodebase,
+            isolation_env_id: destroyed.id,
+          });
+          const result = await handleCommand(conversation, '/worktree remove', operator);
+          expect(result.success).toBe(true);
+          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(destroyed);
+          expect(mockUpdateConversation).toHaveBeenCalledWith(conversation.id, {
+            isolation_env_id: null,
+            cwd: '/workspace/my-repo',
+          });
+        });
+
         test('keeps the conversation on a registration recreated during removal', async () => {
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
           mockGetActiveSession.mockResolvedValue(null);

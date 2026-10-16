@@ -184,7 +184,14 @@ test('file host retires only the observed worktree registration', async () => {
   expect(await store.getById(observed.id)).toEqual(replacement);
   await store.markWorktreeDestroyed(replacement);
   expect((await store.getById(replacement.id))?.status).toBe('destroyed');
-  await expect(store.markWorktreeDestroyed(replacement)).rejects.toThrow('changed during cleanup');
+  await store.markWorktreeDestroyed(replacement);
+  const destroyed = (await store.getById(replacement.id))!;
+  await store.markWorktreeDestroyed(destroyed);
+  expect(await store.getById(replacement.id)).toEqual(destroyed);
+  await expect(store.markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+  await expect(store.updateMetadata(destroyed.id, { adopted: true }, destroyed)).rejects.toThrow(
+    'changed during adoption'
+  );
 });
 
 test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
@@ -220,4 +227,40 @@ test('file host refuses legacy tokenless replacements within its atomic adoption
     expect(await store.getById(created.id)).toEqual(replacement);
     await store.updateMetadata(replacement.id, { adopted: true }, replacement);
   }
+});
+
+test('file host retirement is idempotent for a legacy registration and fences replacements', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'legacy-retire-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const store = (await createFileWorkflowHost(root)).records.isolation;
+  const created = await store.create({
+    codebase_id: 'cb',
+    workflow_type: 'task',
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  });
+  const observed = { ...created, metadata: {} };
+  await commit(root, [], async () => ({
+    result: undefined,
+    changes: { documents: { 'host/isolation.json': [observed] } },
+  }));
+  await store.markWorktreeDestroyed(observed);
+  const destroyed = (await store.getById(observed.id))!;
+  await store.markWorktreeDestroyed(observed);
+  await store.markWorktreeDestroyed(destroyed);
+  expect(await store.getById(observed.id)).toEqual(destroyed);
+  await expect(store.updateMetadata(destroyed.id, { adopted: true }, destroyed)).rejects.toThrow(
+    'changed during adoption'
+  );
+  const replacement = { ...destroyed, metadata: { replaced: true } };
+  await commit(root, [], async () => ({
+    result: undefined,
+    changes: { documents: { 'host/isolation.json': [replacement] } },
+  }));
+  await expect(store.markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+  expect(await store.getById(observed.id)).toEqual(replacement);
 });

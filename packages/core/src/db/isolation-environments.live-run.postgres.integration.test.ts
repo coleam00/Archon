@@ -119,6 +119,32 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
     expect((await getById(created.id))?.status).toBe('destroyed');
   });
 
+  for (const legacy of [false, true]) {
+    test(`retirement of the observed registration is idempotent (legacy: ${legacy})`, async () => {
+      const created = await createEnv(`pg-idempotent-${legacy}`);
+      if (legacy)
+        await db.query(
+          "UPDATE remote_agent_isolation_environments SET metadata = '{}'::jsonb WHERE id = $1",
+          [created.id]
+        );
+      const observed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      const destroyed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      await markWorktreeDestroyed(destroyed);
+      expect(await getById(created.id)).toEqual(destroyed);
+      await expect(updateMetadata(created.id, { adopted: true }, destroyed)).rejects.toThrow(
+        'changed during adoption'
+      );
+      if (legacy) {
+        await updateMetadata(created.id, { replaced: true });
+        const replacement = await getById(created.id);
+        await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+        expect(await getById(created.id)).toEqual(replacement);
+      }
+    });
+  }
+
   async function seedConversation(id: string, envId: string | null): Promise<void> {
     // One param per column: $1 doubles as a UUID id and a varchar platform id,
     // and Postgres rejects the shared parameter's inconsistent deduction.

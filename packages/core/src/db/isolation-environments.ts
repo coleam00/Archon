@@ -221,7 +221,7 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
 }
 
 /**
- * SQL that holds only while the row is still the observed active worktree registration.
+ * SQL that holds only while the row is still the observed worktree registration.
  * Placeholders start at `$${first}`. Older writers do not rotate a registration token,
  * so a tokenless observation is fenced with the whole observed snapshot instead.
  */
@@ -232,7 +232,7 @@ function observedRegistrationPredicate(
   const $ = (offset: number): string => `$${String(first + offset)}`;
   const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const sqlite = getDatabaseType() === 'sqlite';
-  const sql = ` AND provider = 'worktree' AND status = 'active'
+  const sql = ` AND provider = 'worktree'
        AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
        AND working_path = ${$(1)}${
          legacy
@@ -304,7 +304,7 @@ export async function updateMetadata(
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
      SET metadata = ${getDialect().jsonMerge('metadata', 1)}
-     WHERE id = $2${predicate?.sql ?? ''}`,
+     WHERE id = $2${predicate ? ` AND status = 'active'${predicate.sql}` : ''}`,
     [JSON.stringify(metadata), id, ...(predicate?.params ?? [])]
   );
 

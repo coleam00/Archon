@@ -24,12 +24,12 @@ export interface IIsolationStore {
     metadata: Record<string, unknown>,
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
+  /** Container status changes and worktree rollback; retire worktrees with markWorktreeDestroyed. */
   updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void>;
   /**
-   * Retire the observed worktree registration, atomically, only while it is still the
-   * row's active registration. A re-registration keeps the row id, so a write by id
-   * alone would retire a replacement whose checkout is live. Throws
-   * WorktreeRegistrationChangedError when the registration changed or was already retired.
+   * Retire only the observed worktree registration, atomically. Succeeds if that
+   * registration is already destroyed; throws WorktreeRegistrationChangedError
+   * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
