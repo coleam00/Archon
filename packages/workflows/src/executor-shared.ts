@@ -74,31 +74,42 @@ export function rateLimitResumeAt(failure: ProviderFailure, now: number): number
 }
 
 /**
+ * When the provider-limit wait would try a failed limit again, in epoch ms: a rate limit's
+ * {@link rateLimitResumeAt}, a usage limit's reported reset. Undefined for a usage limit
+ * without a reported reset, which the run cannot wait on, and for any other failure.
+ */
+export function providerLimitResumeAt(failure: ProviderFailure, now: number): number | undefined {
+  if (failure.class === 'rate_limited') return rateLimitResumeAt(failure, now);
+  if (failure.class === 'quota_exhausted' && failure.resetAt !== undefined) {
+    return Date.parse(failure.resetAt);
+  }
+  return undefined;
+}
+
+/**
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
  * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
  * when every one is a provider limit, so the wait never pauses a run beside an unrelated
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
- * reset wins because the run cannot wait on it; otherwise the latest reported reset does.
+ * reset wins because the run cannot wait on it; otherwise the latest
+ * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
  */
 export function aggregateProviderFailure(
-  failures: readonly (ProviderFailure | undefined)[]
+  failures: readonly (ProviderFailure | undefined)[],
+  now: number
 ): ProviderFailure | undefined {
   if (failures.length <= 1) return failures[0];
-  const limits = failures.filter(
-    (failure): failure is ProviderFailure =>
-      failure?.class === 'rate_limited' || failure?.class === 'quota_exhausted'
-  );
-  if (limits.length < failures.length) return undefined;
-  const unwaitable = limits.find(
-    failure => failure.class === 'quota_exhausted' && failure.resetAt === undefined
-  );
-  if (unwaitable !== undefined) return unwaitable;
-  const reportedReset = (failure: ProviderFailure): number =>
-    failure.resetAt === undefined ? Number.NEGATIVE_INFINITY : Date.parse(failure.resetAt);
-  return limits.reduce((latest, failure) =>
-    reportedReset(failure) > reportedReset(latest) ? failure : latest
-  );
+  const limits: { failure: ProviderFailure; resumeAt: number | undefined }[] = [];
+  for (const failure of failures) {
+    if (failure?.class !== 'rate_limited' && failure?.class !== 'quota_exhausted') return undefined;
+    limits.push({ failure, resumeAt: providerLimitResumeAt(failure, now) });
+  }
+  const unwaitable = limits.find(limit => limit.resumeAt === undefined);
+  if (unwaitable !== undefined) return unwaitable.failure;
+  return limits.reduce((latest, limit) =>
+    (limit.resumeAt ?? 0) > (latest.resumeAt ?? 0) ? limit : latest
+  ).failure;
 }
 
 export function effectiveRetryMaxRetries(

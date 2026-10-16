@@ -268,7 +268,7 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   effectiveRetryMaxRetries,
-  rateLimitResumeAt,
+  providerLimitResumeAt,
   aggregateProviderFailure,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -5145,7 +5145,8 @@ async function executeLoopGroupBody(
     if (failedBodyOutputs.length > 0) {
       const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
       const providerFailure = aggregateProviderFailure(
-        failedBodyOutputs.map(({ output }) => output.providerFailure)
+        failedBodyOutputs.map(({ output }) => output.providerFailure),
+        Date.now()
       );
       const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
       getLog().warn(
@@ -9394,7 +9395,10 @@ async function executeComposeFanOutNode(
       };
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
-        const providerFailure = aggregateProviderFailure(failed.map(o => o.providerFailure));
+        const providerFailure = aggregateProviderFailure(
+          failed.map(o => o.providerFailure),
+          Date.now()
+        );
         const outcome: ComposeInstanceOutcome = {
           status: 'failed',
           output: '',
@@ -9536,7 +9540,8 @@ async function executeComposeFanOutNode(
         totalCostUsd,
         totalTokens,
         aggregateProviderFailure(
-          outcomes.filter(o => o.status !== 'completed').map(o => o.providerFailure)
+          outcomes.filter(o => o.status !== 'completed').map(o => o.providerFailure),
+          Date.now()
         )
       );
     }
@@ -12216,15 +12221,11 @@ export async function executeDagWorkflow(
     for (const [nodeId, output] of runCtx.nodeOutputs) {
       if (output.state !== 'failed') continue;
       const failure = output.providerFailure;
-      let resumeAt: number;
-      if (failure?.class === 'rate_limited') {
-        resumeAt = rateLimitResumeAt(failure, now);
-      } else if (failure?.class === 'quota_exhausted') {
-        if (failure.resetAt === undefined) return skip(nodeId, 'reset_unavailable');
-        resumeAt = Date.parse(failure.resetAt);
-      } else {
+      if (failure?.class !== 'rate_limited' && failure?.class !== 'quota_exhausted') {
         return undefined;
       }
+      const resumeAt = providerLimitResumeAt(failure, now);
+      if (resumeAt === undefined) return skip(nodeId, 'reset_unavailable');
       if (latest === undefined || resumeAt > latest.resumeAt)
         latest = { nodeId, resumeAt, cause: failure.class };
     }

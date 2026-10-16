@@ -989,6 +989,7 @@ describe('rateLimitResumeAt', () => {
 });
 
 describe('aggregateProviderFailure', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z');
   const sooner = {
     class: 'rate_limited' as const,
     evidence: '429',
@@ -1002,22 +1003,33 @@ describe('aggregateProviderFailure', () => {
 
   it('reports a lone failed descendant unchanged, whatever its class', () => {
     const auth = { class: 'auth' as const, evidence: 'bad key' };
-    expect(aggregateProviderFailure([auth])).toBe(auth);
-    expect(aggregateProviderFailure([undefined])).toBeUndefined();
+    expect(aggregateProviderFailure([auth], now)).toBe(auth);
+    expect(aggregateProviderFailure([undefined], now)).toBeUndefined();
   });
 
   it('reports nothing when a provider limit sits beside any other failure', () => {
-    expect(aggregateProviderFailure([sooner, undefined])).toBeUndefined();
+    expect(aggregateProviderFailure([sooner, undefined], now)).toBeUndefined();
     expect(
-      aggregateProviderFailure([later, { class: 'transient', evidence: 'socket hang up' }])
+      aggregateProviderFailure([later, { class: 'transient', evidence: 'socket hang up' }], now)
     ).toBeUndefined();
   });
 
-  it('reports the latest reset among several limits, and a resetless usage limit over any', () => {
+  it('reports the latest resume deadline among several limits, and a resetless usage limit over any', () => {
     const noReset = { class: 'rate_limited' as const, evidence: '429' };
-    expect(aggregateProviderFailure([noReset, sooner, later])).toBe(later);
+    expect(aggregateProviderFailure([noReset, sooner, later], now)).toBe(later);
     const unwaitable = { class: 'quota_exhausted' as const, evidence: 'session limit' };
-    expect(aggregateProviderFailure([later, unwaitable])).toBe(unwaitable);
+    expect(aggregateProviderFailure([later, unwaitable], now)).toBe(unwaitable);
+  });
+
+  it('ranks a resetless rate limit by its backoff, so an expired usage limit beside it still waits', () => {
+    const noReset = { class: 'rate_limited' as const, evidence: '429' };
+    const expired = {
+      class: 'quota_exhausted' as const,
+      evidence: 'session limit',
+      resetAt: '2026-10-16T11:00:00Z',
+    };
+    expect(aggregateProviderFailure([expired, noReset], now)).toBe(noReset);
+    expect(aggregateProviderFailure([noReset, expired], now)).toBe(noReset);
   });
 });
 
