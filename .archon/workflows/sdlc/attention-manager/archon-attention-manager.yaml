@@ -1,0 +1,94 @@
+name: archon-attention-manager
+description: |
+  The attention manager: answers the attention queue's clear items from the project's
+  own documents and leaves the rest to a person. Each run takes the oldest open select
+  item no person was asked about and no earlier run decided. One agent decides it from
+  the item, the paused run's artifacts, the issue it concerns, the project's steering
+  documents and its earlier rulings: answer with one of the item's declared choices and
+  a ruling that cites its sources, or escalate. A script turns that into the outcome,
+  escalating any answer that is low confidence, cites nothing or names a choice the
+  item does not declare. It records the decision as a state document, then answers the
+  item, labels it for a person, or with autonomy none only records the recommendation,
+  and reads the write back. With mode eval the run decides the item it is given and
+  writes nothing.
+
+  Use when: a schedule binding the operator installed starts it (see the SDLC pack
+  README, "Attention manager"), or an operator replays an item in eval mode.
+  NOT for: raising questions, or answering message-form waits and gates.
+
+inputs:
+  autonomy:
+    default: "none"
+    description: >-
+      none or answer. With none the manager never answers: it records what it would
+      answer and still labels the items a person must decide. Any other value refuses
+      the run at facts.
+  mode:
+    default: "live"
+    description: >-
+      live or eval. Eval decides the item in the item input, reads no queue and writes
+      no record, answer or label, and returns the outcome and the write live would make
+      as apply's evaluation. Any other value refuses the run at facts.
+  item:
+    default: ""
+    description: >-
+      Eval only. One queue item as `archon workflow attention <run-id> --json` prints it
+      under item. Live refuses a non-empty value.
+
+returns: apply
+
+# No node here waits for an answer, so a manager run never becomes an attention item:
+# the manager cannot answer an item it raised.
+nodes:
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, decide] }
+        item: { type: [object, 'null'] }
+        policy_defaults: { type: string }
+      required: [path, item, policy_defaults]
+
+  - id: decide
+    command: decide
+    depends_on: [facts]
+    when: "$facts.output.path == 'decide'"
+    model: large
+    mutates_checkout: false
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      item: { from: "$facts.output.item" }
+      mode: "$INPUTS.mode"
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [answer, escalate] }
+        choice: { type: string }
+        ruling: { type: string, pattern: '\S' }
+        sources: { type: array, items: { type: string, pattern: '\S' } }
+        confidence: { type: string, enum: [low, medium, high] }
+        reason: { type: string, pattern: '\S' }
+      required: [decision, choice, ruling, sources, confidence, reason]
+
+  - id: apply
+    script: apply
+    runtime: bun
+    depends_on: [facts, decide]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      item: { from: "$facts.output.item" }
+      decision: { from: "$decide.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [idle, answered, escalated, recommended, moved] }
+        summary: { type: string }
+        # The decision record's state document; empty when nothing was recorded.
+        record: { type: string }
+        # Null in live. In eval: the item, the agent's decision, the outcome and the write.
+        evaluation: { type: [object, 'null'] }
+      required: [decision, summary, record, evaluation]

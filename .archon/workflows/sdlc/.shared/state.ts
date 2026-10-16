@@ -10,7 +10,7 @@ import { archonCommand, record } from './forge.ts';
 
 const STATE_CONFLICT = 3;
 
-function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
+export function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
   const result = Bun.spawnSync([...archonCommand(), ...args], {
     // Bun spawns with the environment as the process started unless given the live one.
     env: process.env,
@@ -27,7 +27,7 @@ function archon(args: readonly string[], input?: string): { code: number; value:
   return { code: result.exitCode, value };
 }
 
-function failed(what: string, result: { code: number; value: unknown }): Error {
+export function failed(what: string, result: { code: number; value: unknown }): Error {
   const message = record(result.value)?.error;
   return new Error(
     `archon ${what} failed (exit ${String(result.code)})${typeof message === 'string' ? `: ${message}` : ''}`

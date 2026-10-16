@@ -1,0 +1,17 @@
+# Dry-run fixture: the only open item already carries the escalation label, so facts
+# finds nothing to decide and no agent runs. The skip is facts';
+# .archon/scripts/__tests__/attention-manager.test.ts proves it.
+facts:
+  path: idle
+  item: null
+  policy_defaults: "/stub/policy"
+apply:
+  decision: idle
+  summary: "stub: No open attention item is for the attention manager to decide."
+  record: ""
+  evaluation: null
+fixture:
+  inputs: { autonomy: answer }
+  expect: completed
+  reached: [facts, apply]
+exec-code: true

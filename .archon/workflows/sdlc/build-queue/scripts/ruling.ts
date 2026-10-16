@@ -1,8 +1,8 @@
 /**
- * Act on a person's answer to the build queue's attention item.
+ * Act on the answer to the build queue's attention item.
  *
  * The answer is one of the declared choices, so its effect is read from the choice,
- * never from the answer's text. The choice's ruling and the person's words are written
+ * never from the answer's text. The choice's ruling and the answer's text are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
  * work item, which says what happens next, and the claim is released.
@@ -40,7 +40,7 @@ function main(): void {
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
 
-  const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
+  const ruling = [choice.ruling.trim(), words === '' ? '' : `The answer's text: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
   const heading = ruling === '' ? '' : rulingHeading(at, ABOUT[asked.by]);
@@ -48,7 +48,7 @@ function main(): void {
 
   const brief =
     choice.effect === 'continue'
-      ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
+      ? `${asked.brief}\n\nThe answer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
   updateClaimed(item, runId, doc =>
     withBuild(doc, {
@@ -71,7 +71,7 @@ function main(): void {
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? 'the next run launches from the ruling' : 'the queue stops working it until a re-triage'}.`,
+    summary: `Issue ${String(item.number)}: the answer chose ${choice.id}; ${choice.effect === 'continue' ? 'the next run launches from the ruling' : 'the queue stops working it until a re-triage'}.`,
   });
 }
 

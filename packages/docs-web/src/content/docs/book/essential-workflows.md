@@ -127,6 +127,14 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 
 **What it produces**: Filed issues and evidence comments, and one decision record per discovery (`archon state list --prefix discoveries/decisions/`), so a discovery is decided once and a maintainer's answer is remembered.
 
+#### `archon-attention-manager`
+
+Answers the attention queue's clear items. Each run takes the oldest open select item no person was asked about, and one agent decides it from the project's steering documents, its rulings and the issue's dated scope sections: answer with one of the item's declared choices and a ruling that cites its sources, or escalate. A script escalates any answer that is low confidence, cites nothing or names an undeclared choice, then answers the item or labels it `attention: maintainer` and reads the write back. With the default `autonomy: none` it never answers, only records what it would. With `mode: eval` it decides one given item and writes nothing.
+
+**When to use it**: The build and merge queues raise attention items that the project's documents already answer. Add the schedule binding the SDLC pack README's "Attention manager" section shows; the pack installs none.
+
+**What it produces**: Answered items, items labelled for a person, and one decision record per item (`archon state list --prefix attention-manager/decisions/`) with the choice, sources and confidence, so a person can review and override what it answered.
+
 ---
 
 #### `archon-investigate`
@@ -264,6 +272,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into any PR that is behind it) |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
+| `archon-attention-manager` | Answer clear attention items from the project's documents, escalate the rest | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

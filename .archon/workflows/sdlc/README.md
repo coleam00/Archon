@@ -533,14 +533,14 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   what would change it, the choices and what each does, what happens if nobody
   answers, and the links to the evidence. The answer is one declared choice, so the
   queue never reads the answer's prose for a decision. The `ruling` script writes the
-  choice's ruling and the person's words into the issue body as one dated "Current
+  choice's ruling and the answer's text into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice launches
   the next round from it, and a `park` choice stops working the item until a
   re-triage. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
 - **Record.** The work item's `facts.build` holds the item's status (`next`,
   `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
-  rounds and its last twenty decisions with any maintainer's answer.
+  rounds and its last twenty decisions with any answer to an attention item.
 - **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
   issue named by `number`: with an empty `replay` it makes the route decision, and
   otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
@@ -762,6 +762,84 @@ To seed decisions an operator already made, put one record per key with
 `archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
 JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
 parse refuses every pass, naming the document.
+
+## Attention manager
+
+[`archon-attention-manager`](attention-manager/archon-attention-manager.yaml) answers
+the attention queue's items that the project's own documents already answer, and
+leaves the rest to a person. What it may answer, what counts as risky and which
+documents settle a question is policy: the default is
+[`.shared/policy/attention.md`](.shared/policy/attention.md), which a project replaces
+with its own `.archon/sdlc/policy/attention.md`.
+
+- **Pickup.** A run reads this project's queue with `archon workflow attention --json`
+  and takes the oldest open `select` item that carries no `attention: maintainer`
+  label and has no decision record. A `message` wait has no declared choice to answer
+  with, so it stays for a person, as do gates. A `select` item the manager cannot read
+  is named on stderr and left. The workflow has no wait node, so a manager run is never
+  an item it could answer.
+- **Decide.** One agent reads the item, the paused run's artifacts, the issue it
+  concerns with its dated "Current scope" sections, the policy files `attention.md` and
+  `rulings.md`, and the steering documents the policy names. It answers with one of the
+  item's declared choices and a ruling that cites its sources, or escalates.
+- **Outcomes.** The `apply` script decides from typed fields only. An answer that names
+  a choice the item does not declare, cites no source or is at low confidence is
+  escalated. With `autonomy: answer` a clean answer is answered; with `autonomy: none`,
+  the default, it is only recorded as a recommendation. Escalation labels the item in
+  both modes.
+- **Writes.** The script reads the item again, creates the decision record with a
+  conditional write, makes the one queue write and reads it back: `archon workflow
+  answer` with the declared choice and a text signed by the manager run, or
+  `archon workflow attention label --set attention=maintainer`. A write the queue
+  refuses because the pause moved is recorded and ends the run as `moved`; a write it
+  accepted that does not read back fails the run. An answer recorded this way does not
+  continue the paused run by itself: `archon serve` or `archon workflow wake --watch`
+  continues it. The asking workflow then writes the choice's ruling and the manager's
+  signed text into the issue body, as it does for any answer.
+- **Escalation.** The label is the escalation. The person was notified through the
+  install's notice routing when the item paused, and the item keeps every field. Watch
+  what needs a person with
+  `archon workflow attention --watch --json --label attention=maintainer`.
+- **Record.** Every decision is the state document
+  `attention-manager/decisions/<run-id>/<occurrence>`: the item, the outcome, the
+  agent's choice, ruling, sources, confidence and reason, any reason the script
+  escalated an answer, and the write's result. List them with
+  `archon state list --prefix attention-manager/decisions/`. An item with a record is
+  never decided again; to let the manager retry one whose run stopped before its write
+  (`applied` is null), delete its record with `archon state delete`. A person overrides
+  an answer by superseding the dated scope section it wrote, or by re-triaging the item.
+- **Eval mode.** `mode: eval` decides the item given as `item`, one queue item as
+  `archon workflow attention <run-id> --json` printed it, reads no queue and writes
+  nothing. It returns the agent's decision, the outcome and the write live would make
+  as `evaluation`. The agent is told to read the issue only as the paused run read it,
+  because the item's answer may already be in the current body.
+
+The pack installs no binding. A schedule works the queue one item per run; the
+manager never changes its checkout, so it needs no worktree, and `autonomy` is set on
+the binding so answering is a deliberate choice:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-attention-manager",
+  "binding": {
+    "bindingId": "attention-manager",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "attention:github.com/acme/widgets",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-attention-manager",
+      "inputs": { "autonomy": "answer" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 600, "runAtLoad": false }
+}
+```
 
 ## Composition validation
 

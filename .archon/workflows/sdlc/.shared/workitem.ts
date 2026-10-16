@@ -55,7 +55,8 @@ export type IntakeMode = (typeof INTAKE_MODES)[number];
 export const TRUST_INPUTS = ['auto', 'outside'] as const;
 export type TrustInput = (typeof TRUST_INPUTS)[number];
 
-function oneOf<const Values extends readonly string[]>(
+/** A vocabulary input: empty means the first value; anything outside the list refuses. */
+export function oneOf<const Values extends readonly string[]>(
   name: string,
   values: Values,
   text: string

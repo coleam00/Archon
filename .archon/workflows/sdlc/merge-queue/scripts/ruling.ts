@@ -1,12 +1,12 @@
 /**
- * Act on a person's answer to the merge queue's attention item.
+ * Act on the answer to the merge queue's attention item.
  *
  * The answer is one of the declared choices, so its effect is read from the choice,
  * never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
  * sweep wrote; `park` stops working it until the build queue readies it again. A
- * choice's ruling and the person's words are written into the issue body as one dated
+ * choice's ruling and the answer's text are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
  * them as the contract. On a red default branch the only answer is `hold`: the queue
  * merges nothing while the branch is red, which every sweep reads from the forge, so
@@ -47,7 +47,7 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
   const choice = chosen(asked.attention, id);
   const at = new Date().toISOString();
-  const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
+  const ruling = [choice.ruling.trim(), words === '' ? '' : `The answer's text: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
   const heading = ruling === '' ? '' : rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
@@ -74,13 +74,13 @@ function main(): void {
       release: true,
     });
     if (choice.effect !== 'return') return recorded;
-    const brief = `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
+    const brief = `${asked.brief}\n\nThe answer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
     return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief, release: true });
   });
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${choice.effect}).`,
+    summary: `PR ${String(asked.pr.number)}: the answer chose ${choice.id} (${choice.effect}).`,
   });
 }
 

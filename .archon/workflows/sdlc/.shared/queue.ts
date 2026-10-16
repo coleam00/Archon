@@ -118,5 +118,5 @@ export function renderAttention<Effect extends string>(
 
 /** The heading of the dated section a ruling is written under. */
 export function rulingHeading(at: string, about: string): string {
-  return `Current scope (maintainer ruling on ${about}, ${at.slice(0, 10)})`;
+  return `Current scope (ruling on ${about}, ${at.slice(0, 10)})`;
 }

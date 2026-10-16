@@ -1,0 +1,34 @@
+# Dry-run fixture: an item that changes a persisted contract is escalated to a person.
+# The scripts are stubbed; .archon/scripts/__tests__/attention-manager.test.ts runs them.
+facts:
+  path: decide
+  item:
+    kind: attention
+    runId: "stub-asking-run"
+    workflow: archon-build-queue
+    node: ask
+    occurrence: "stub-occurrence"
+    labels: { build: stop }
+    pausedAt: "2026-10-16T14:15:21.000Z"
+    message: "stub: the decision, its recommendation and the choices"
+    form: select
+    options: [{ id: stub-keep }, { id: stub-change }]
+    context: { artifactsDir: "/stub/artifacts/runs/stub-asking-run" }
+  policy_defaults: "/stub/policy"
+decide:
+  decision: escalate
+  choice: stub-change
+  ruling: "stub: the choice changes a stored document's shape, which the policy counts as risky."
+  sources: []
+  confidence: high
+  reason: "stub: a persisted contract is a maintainer's call"
+apply:
+  decision: escalated
+  summary: "stub: escalated"
+  record: "attention-manager/decisions/stub-asking-run/stub-occurrence"
+  evaluation: null
+fixture:
+  inputs: { autonomy: answer }
+  expect: completed
+  reached: [facts, decide, apply]
+exec-code: true
