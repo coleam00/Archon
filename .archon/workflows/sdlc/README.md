@@ -114,8 +114,11 @@ then one authenticated repository read for
 the repositories the checkout's remotes name, at least one of which must answer
 (`pr.view` by head, which every released GitHub plugin supports; it proves read
 access, not write access); on
-`gh`, `gh auth status --active --hostname` for each host a remote names, one of which must
-pass, after refusing a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
+`gh`, active authentication (`gh auth status --active --hostname <host>`) plus a
+repository read (`gh api --hostname <host> repos/<path>`) for the repositories the
+remotes name. One readable repository is sufficient, including a readable mirror;
+this proves read access, not write access, which is first proven by the first write.
+The gh check first refuses a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
 otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
 has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
 `source` is what the `ci` and `update-pr-body` agents act through.
@@ -446,3 +449,18 @@ the same project gate on two pinned parts and their composed tree. Its `interact
 result remains red; delivery holds it rather than treating it as inherited or
 environmental. The report retains revision, tree and check evidence for an existing
 merger to consume. It does not install a queue or authorize a merge.
+
+## CI agent eval
+
+The fast-rerun eval runs the shipped CI command through the Claude provider with
+in-memory forge responses. A rerun returns a newer attempt that is already green
+on the first read, with a changed check-unit ID. The agent must finish green,
+leave the PR ready, and write its reports within the tool-call budget.
+
+Run it explicitly with native Claude authentication (it makes paid model calls):
+
+```bash
+ARCHON_TEST_CI_AGENT=1 bun run test .archon/scripts/__tests__/ci-rerun-agent.test.ts
+```
+
+Ordinary package tests skip this live eval. It has no real forge access.
