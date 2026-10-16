@@ -461,13 +461,16 @@ export interface WorkflowWithSource {
 /**
  * Error encountered while loading a workflow file
  */
-export interface WorkflowLoadError {
-  readonly filename: string;
-  readonly workflowName?: string;
-  readonly error: string;
-  readonly errorType: 'read_error' | 'parse_error' | 'validation_error';
+export const workflowLoadErrorSchema = z.object({
+  filename: z.string(),
+  workflowName: z.string().optional(),
+  error: z.string(),
+  errorType: z.enum(['read_error', 'parse_error', 'validation_error']),
+});
+
+export type WorkflowLoadError = Readonly<z.infer<typeof workflowLoadErrorSchema>> & {
   readonly cause?: unknown;
-}
+};
 
 /** Errors after parsing retain the authored identity even when the filename differs. */
 export interface ParsedWorkflowLoadError extends WorkflowLoadError {

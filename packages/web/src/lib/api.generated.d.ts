@@ -5342,6 +5342,7 @@ export interface components {
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
       filename: string;
+      workflowName?: string;
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
