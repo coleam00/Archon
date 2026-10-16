@@ -2635,9 +2635,27 @@ export function describeWorkflowStoreConformance(
     test('fan-out recovery retracts only engine cancellations', async () => {
       for (const reason of FAN_OUT_CANCEL_REASONS) {
         const recovered = await running(store);
+        const release = {
+          claimId: executionClaim((await store.getWorkflowRun(recovered.id))?.metadata),
+          nodeId: 'check',
+          error: 'EACCES',
+          retryAt: new Date().toISOString(),
+        };
         await store.cancelFanOutRun(recovered.id, reason);
-        expect((await store.recoverCancelledFanOutRun(recovered.id)).status).toBe('running');
+        const resumed = await store.recoverCancelledFanOutRun(recovered.id);
+        expect(resumed.status).toBe('running');
+        expect(await store.releaseRunForUnreadableSource(recovered.id, release)).toEqual({
+          released: false,
+        });
+        expect((await store.getWorkflowRun(recovered.id))?.status).toBe('running');
         expect(await types(store, recovered.id)).toEqual([]);
+        expect(
+          await store.releaseRunForUnreadableSource(recovered.id, {
+            ...release,
+            claimId: executionClaim(resumed.metadata),
+          })
+        ).toEqual({ released: true });
+        expect(await types(store, recovered.id)).toEqual(['source_released']);
       }
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_orphan');
