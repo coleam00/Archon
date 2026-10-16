@@ -32,8 +32,7 @@ export interface RegisteredWorktree {
 /**
  * Create a task worktree and register its isolation record. Every launch path that
  * makes a worktree outside the isolation resolver goes through here; both register
- * through `registerWorktree`, which removes a worktree this call created when the
- * store lookup finds no active registration for that checkout.
+ * through `registerWorktree`, which owns the failed-insert rollback.
  *
  * A provider failure is rethrown with the classified, actionable message; the git or
  * filesystem error stays on `cause`. The caller configures isolation first.
