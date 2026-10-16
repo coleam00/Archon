@@ -10,6 +10,7 @@ import {
 } from './schemas';
 import { workflowSourceSchema } from './schemas/workflow';
 import { isValidCommandName } from './command-validation';
+import { resolveWorkflowName } from './router';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
@@ -127,9 +128,10 @@ export function qualifyWorkflowResources(
 /**
  * Rewrite an installed pack workflow's references to workflows of the same pack from
  * their authored `name:` to their qualified discovery identity: `include:` targets
- * (a fan-out's too) and `workflow:` targets. A target outside the pack stays as
- * written, so an `include:` of it fails in the pack's own name map and a `workflow:`
- * child resolves through the catalog like any other.
+ * (a fan-out's too) and `workflow:` targets. Public identities take precedence over
+ * authored aliases, including other packs' entrypoints and targets that failed to load.
+ * Cross-pack includes still fail in the pack's own name map; child runs resolve
+ * through the catalog.
  *
  * Reports ambiguous authored references and `workflow:` targets that name support
  * workflows. A child run is dispatch; support workflows compose through `include:` only.
@@ -137,13 +139,17 @@ export function qualifyWorkflowResources(
 export function qualifyPackReferences(
   workflow: WorkflowDefinition,
   qualifiedByName: ReadonlyMap<string, readonly string[]>,
-  entrypoints: ReadonlySet<string>
+  entrypoints: ReadonlySet<string>,
+  publicNames: ReadonlySet<string>
 ): { supportChildren: string[]; ambiguousReferences: string[] } {
   const supportChildren: string[] = [];
   const ambiguousReferences = new Set<string>();
-  const qualifiedNames = new Set([...qualifiedByName.values()].flat());
+  const publicWorkflows = [...publicNames].map(name => ({ name }));
   const resolve = (name: string): string | undefined => {
-    if (qualifiedNames.has(name)) return name;
+    if (name.includes(':')) {
+      const publicTarget = resolveWorkflowName(name, publicWorkflows);
+      if (publicTarget !== undefined) return publicTarget.name;
+    }
     const targets = qualifiedByName.get(name);
     if (targets !== undefined && targets.length > 1) {
       ambiguousReferences.add(name);

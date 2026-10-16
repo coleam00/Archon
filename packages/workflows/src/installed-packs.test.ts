@@ -379,78 +379,177 @@ describe('installed packs in the catalog', () => {
     }
   }
 
-  for (const collision of ['entrypoint', 'support'] as const) {
-    for (const aliases of [1, 2]) {
-      for (const reference of [
-        'include',
-        'workflow',
-        'fan-out include',
-        'fan-out workflow',
-        'loop include',
-      ] as const) {
-        test(`qualified ${reference} selects its public target over ${aliases} colliding ${collision} aliases`, async () => {
-          const target = 'acme/review-kit:first';
-          const field = reference.includes('workflow') ? 'workflow' : 'include';
-          let nodes = `  - id: child\n    ${field}: ${target}\n`;
-          if (reference.startsWith('fan-out')) {
-            nodes += `    fan_out:\n      items: '["a"]'\n      as: item\n`;
-          }
-          if (reference === 'loop include') {
-            nodes = `  - id: group\n    loop_group:\n      until_bash: exit 0\n      max_iterations: 1\n      nodes:\n        - id: child\n          include: ${target}\n`;
-          }
-          await install({
-            id: ID,
-            name: 'review-kit',
-            commit: COMMIT_A,
-            entrypoints: {
-              review: 'review/review.yaml',
-              first: 'first/first.yaml',
-              ...(collision === 'entrypoint' ? { second: 'second/second.yaml' } : {}),
-              ...(collision === 'entrypoint' && aliases === 2 ? { third: 'third/third.yaml' } : {}),
-            },
-            files: {
-              'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n${nodes}`,
-              'first/first.yaml':
-                'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
-              'second/second.yaml': `name: ${target}\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n`,
-              ...(aliases === 2
-                ? {
-                    'third/third.yaml': `name: ${target}\ndescription: Third\nnodes:\n  - id: done\n    bash: echo third\n`,
-                  }
-                : {}),
-            },
-          });
-          const catalog = await discover();
-          expect(catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW)).toEqual(
-            []
-          );
-          const caller = catalog.workflows.find(entry => entry.workflow.name === REVIEW);
-          const node = caller?.workflow.nodes[0];
-          if (reference === 'loop include') {
-            expect(node).toMatchObject({
-              loop_group: { nodes: [{ script: 'echo first' }] },
+  for (const casing of ['exact', 'mixed'] as const) {
+    for (const collision of ['entrypoint', 'support'] as const) {
+      for (const aliases of [1, 2]) {
+        for (const reference of [
+          'include',
+          'workflow',
+          'fan-out include',
+          'fan-out workflow',
+          'loop include',
+        ] as const) {
+          test(`qualified ${reference} selects its public target over ${aliases} colliding ${collision} aliases (${casing} case)`, async () => {
+            const target = 'acme/review-kit:first';
+            const requested = casing === 'mixed' ? 'ACME/Review-Kit:FIRST' : target;
+            const field = reference.includes('workflow') ? 'workflow' : 'include';
+            let nodes = `  - id: child\n    ${field}: ${requested}\n`;
+            if (reference.startsWith('fan-out')) {
+              nodes += `    fan_out:\n      items: '["a"]'\n      as: item\n`;
+            }
+            if (reference === 'loop include') {
+              nodes = `  - id: group\n    loop_group:\n      until_bash: exit 0\n      max_iterations: 1\n      nodes:\n        - id: child\n          include: ${requested}\n`;
+            }
+            await install({
+              id: ID,
+              name: 'review-kit',
+              commit: COMMIT_A,
+              entrypoints: {
+                review: 'review/review.yaml',
+                first: 'first/first.yaml',
+                ...(collision === 'entrypoint' ? { second: 'second/second.yaml' } : {}),
+                ...(collision === 'entrypoint' && aliases === 2
+                  ? { third: 'third/third.yaml' }
+                  : {}),
+              },
+              files: {
+                'review/review.yaml': `name: review\ndescription: Caller\nnodes:\n${nodes}`,
+                'first/first.yaml':
+                  'name: shared\ndescription: First\nnodes:\n  - id: done\n    bash: echo first\n',
+                'second/second.yaml': `name: ${requested}\ndescription: Second\nnodes:\n  - id: done\n    bash: echo second\n`,
+                ...(aliases === 2
+                  ? {
+                      'third/third.yaml': `name: ${requested}\ndescription: Third\nnodes:\n  - id: done\n    bash: echo third\n`,
+                    }
+                  : {}),
+              },
             });
-          } else {
-            expect(node).toMatchObject(
-              field === 'workflow'
-                ? { workflow: target }
-                : reference === 'fan-out include'
-                  ? { include: target }
-                  : { script: 'echo first' }
+            const catalog = await discover();
+            expect(catalog.errors.filter(error => workflowLoadErrorName(error) === REVIEW)).toEqual(
+              []
             );
-          }
-          if (reference.startsWith('fan-out') || field === 'workflow') {
-            await expect(
-              resolveFanOutChildDefinition(
-                { ...deps, providers: providerRegistry },
-                project,
-                target
-              )
-            ).resolves.toMatchObject({ definition: { nodes: [{ script: 'echo first' }] } });
-          }
-        });
+            const caller = catalog.workflows.find(entry => entry.workflow.name === REVIEW);
+            const node = caller?.workflow.nodes[0];
+            if (reference === 'loop include') {
+              expect(node).toMatchObject({
+                loop_group: { nodes: [{ script: 'echo first' }] },
+              });
+            } else {
+              expect(node).toMatchObject(
+                field === 'workflow'
+                  ? { workflow: target }
+                  : reference === 'fan-out include'
+                    ? { include: target }
+                    : { script: 'echo first' }
+              );
+            }
+            if (reference.startsWith('fan-out') || field === 'workflow') {
+              await expect(
+                resolveFanOutChildDefinition(
+                  { ...deps, providers: providerRegistry },
+                  project,
+                  target
+                )
+              ).resolves.toMatchObject({ definition: { nodes: [{ script: 'echo first' }] } });
+            }
+          });
+        }
       }
     }
+  }
+
+  for (const fanOut of [false, true]) {
+    for (const failed of [false, true]) {
+      test(`qualified cross-pack child keeps its public target (${fanOut ? 'fan-out' : 'plain'}, ${failed ? 'failed' : 'loaded'})`, async () => {
+        const target = 'acme/review-kit:review';
+        const pack = reviewKit();
+        if (failed) pack.files['review/code-review.yaml'] = 'nodes: [invalid';
+        await install(pack);
+        await install({
+          id: 'other/borrower',
+          name: 'borrower',
+          commit: COMMIT_A,
+          entrypoints: { caller: 'caller/workflow.yaml', redirect: 'redirect/workflow.yaml' },
+          files: {
+            'caller/workflow.yaml': `name: caller
+description: Caller
+nodes:
+  - id: child
+    workflow: ${target}
+${fanOut ? `    fan_out:\n      items: '["a"]'\n      as: item\n` : ''}`,
+            'redirect/workflow.yaml': `name: ${target}
+description: Alias
+nodes:
+  - id: wrong
+    bash: echo wrong
+`,
+          },
+        });
+        const catalog = await discover();
+        expect(
+          catalog.errors.filter(error => workflowLoadErrorName(error) === 'other/borrower:caller')
+        ).toEqual([]);
+        expect(
+          catalog.workflows.find(entry => entry.workflow.name === 'other/borrower:caller')?.workflow
+            .nodes[0]
+        ).toMatchObject({ workflow: target });
+        const resolution = resolveFanOutChildDefinition(
+          { ...deps, providers: providerRegistry },
+          project,
+          target
+        );
+        if (failed) {
+          expect(catalog.errors.some(error => workflowLoadErrorName(error) === target)).toBe(true);
+          await expect(resolution).resolves.toMatchObject({
+            unresolved: expect.stringContaining('YAML'),
+          });
+        } else {
+          await expect(resolution).resolves.toMatchObject({ definition: { name: target } });
+        }
+      });
+    }
+  }
+
+  for (const field of ['include', 'workflow'] as const) {
+    test(`qualified ${field} keeps a failed manifest entrypoint's identity and diagnostic`, async () => {
+      await install({
+        id: ID,
+        name: 'review-kit',
+        commit: COMMIT_A,
+        entrypoints: {
+          review: 'review/workflow.yaml',
+          broken: 'broken/workflow.yaml',
+          redirect: 'redirect/workflow.yaml',
+        },
+        files: {
+          'review/workflow.yaml': `name: review
+description: Caller
+nodes:
+  - id: child
+    ${field}: acme/review-kit:broken
+`,
+          'broken/workflow.yaml': 'nodes: [invalid',
+          'redirect/workflow.yaml':
+            'name: acme/review-kit:broken\ndescription: Alias\nnodes:\n  - id: wrong\n    bash: echo wrong\n',
+        },
+      });
+      const catalog = await discover();
+      const targetErrors = catalog.errors.filter(
+        error => workflowLoadErrorName(error) === 'acme/review-kit:broken'
+      );
+      expect(targetErrors).toHaveLength(1);
+      expect(targetErrors[0].error).toContain('YAML');
+      if (field === 'include') {
+        expect(names(catalog.workflows)).not.toContain(REVIEW);
+        expect(
+          catalog.errors.find(error => workflowLoadErrorName(error) === REVIEW)?.error
+        ).toContain(targetErrors[0].error);
+      } else {
+        expect(
+          catalog.workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.nodes[0]
+        ).toMatchObject({ workflow: 'acme/review-kit:broken' });
+      }
+    });
   }
 
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

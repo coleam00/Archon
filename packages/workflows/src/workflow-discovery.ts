@@ -1034,6 +1034,11 @@ export async function discoverWorkflows(
         cause,
       });
     }
+    const catalogEntrypoints = new Set(
+      listed.packs.flatMap(pack =>
+        Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
+      )
+    );
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;
       const loaded = await loadPackWorkflows(
@@ -1085,6 +1090,7 @@ export async function discoverWorkflows(
           });
         }
       }
+      const publicNames = new Set([...catalogEntrypoints, ...[...qualifiedByName.values()].flat()]);
       const files = new Map<string, ScopeFile>();
       for (const file of loaded.files) {
         const { workflow } = file.parsed;
@@ -1094,7 +1100,8 @@ export async function discoverWorkflows(
         const { supportChildren, ambiguousReferences } = qualifyPackReferences(
           workflow,
           qualifiedByName,
-          entrypoints
+          catalogEntrypoints,
+          publicNames
         );
         if (ambiguousReferences.length > 0) {
           allErrors.push({
