@@ -31,6 +31,7 @@ export interface BrokenReceipt {
   file: string;
   /** Names `file` and why it is broken. */
   message: string;
+  cause?: unknown;
 }
 
 export interface ReceiptScan {
@@ -45,7 +46,7 @@ export interface ReceiptScan {
  */
 export async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]> {
   const { receipts, broken } = await scanReceipts(pluginsDir);
-  if (broken.length > 0) throw new Error(broken[0].message);
+  if (broken.length > 0) throw new Error(broken[0].message, { cause: broken[0].cause });
   return receipts;
 }
 
@@ -72,8 +73,8 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
     if (basename(entry) !== RECEIPT_FILE) continue;
     const file = join(root, entry);
     const result = await readReceipt(file);
-    if (typeof result === 'string') {
-      broken.push({ id: dirname(entry).split(sep).join('/'), file, message: result });
+    if ('message' in result) {
+      broken.push({ id: dirname(entry).split(sep).join('/'), file, ...result });
     } else {
       receipts.push(result);
     }
@@ -82,20 +83,26 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
 }
 
 /** The receipt, or the message saying why it cannot be used. */
-async function readReceipt(file: string): Promise<PluginReceipt | string> {
+async function readReceipt(
+  file: string
+): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause'>> {
   let contents: string;
   try {
     contents = await readFile(file, 'utf8');
   } catch (error) {
-    return `Cannot read plugin receipt ${file}: ${(error as Error).message}`;
+    return {
+      message: `Cannot read plugin receipt ${file}: ${(error as Error).message}`,
+      cause: error,
+    };
   }
   let raw: unknown;
   try {
     raw = JSON.parse(contents);
   } catch {
-    return `Invalid JSON in plugin receipt ${file}`;
+    return { message: `Invalid JSON in plugin receipt ${file}` };
   }
   const parsed = pluginReceiptSchema.safeParse(raw);
-  if (!parsed.success) return `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}`;
+  if (!parsed.success)
+    return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
   return parsed.data;
 }

@@ -216,6 +216,7 @@ const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
   run_attention_changed: 'running',
   wait_started: 'paused',
   wait_completed: 'running',
+  source_released: 'paused',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',

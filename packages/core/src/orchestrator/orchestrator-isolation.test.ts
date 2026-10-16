@@ -1051,7 +1051,18 @@ describe('dispatchBackgroundWorkflow', () => {
       }),
       makeWorkflow()
     );
-    expect(mockAdoptionMetadata.mock.calls).toEqual([[env.id, { adopted: true }, env]]);
+    expect(mockAdoptionMetadata.mock.calls).toEqual([
+      [
+        env.id,
+        {
+          adopted: true,
+          worktree_registration_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+          ),
+        },
+        env,
+      ],
+    ]);
     expect(
       mockLogger.warn.mock.calls.filter(([, event]) => event === 'worktree_adopted')
     ).toHaveLength(1);

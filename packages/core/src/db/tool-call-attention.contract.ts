@@ -71,7 +71,10 @@ export function toolCallAttentionContract(
     ]);
     expect(await workflows.setToolCallAttention(runId, 'a', [call('a')])).toBe(false);
     await workflows.resumeWorkflowRun(runId);
-    expect((await readRun()).metadata).toEqual({ keep: 'value' });
+    expect((await readRun()).metadata).toEqual({
+      keep: 'value',
+      execution_claim: expect.any(String),
+    });
     await Promise.all([
       workflows.setToolCallAttention(runId, 'a', [call('a')]),
       db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [runId]),
@@ -93,6 +96,9 @@ export function toolCallAttentionContract(
     await workflows.recoverCancelledFanOutRun(runId);
     run = await readRun();
     expect(run.status).toBe('running');
-    expect(run.metadata).toEqual({ keep: 'value' });
+    expect(run.metadata).toEqual({
+      keep: 'value',
+      execution_claim: expect.any(String),
+    });
   });
 }

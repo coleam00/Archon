@@ -18,7 +18,7 @@ Archon is a Bun and TypeScript monorepo. A small set of packages carries the eng
 
 The maintained map, with each package's ownership, the main flows, extension points and the checks that enforce each boundary, is [`.archon/architecture.md`](https://github.com/coleam00/Archon/blob/dev/.archon/architecture.md) in the repository. It is kept beside the code, and CI checks declared package dependencies against the linked layering policy.
 
-Existing worktrees are reused by default. Reuse emits a `worktree_adopted` warning and records adoption provenance; it does not grant cleanup ownership. The [worktree provider](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/providers/worktree.ts) and [isolation resolver](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/resolver.ts) own adoption and registration.
+Existing worktrees are reused by default. Reuse emits a `worktree_adopted` warning and records adoption provenance; it does not grant cleanup ownership. The shared [store recipe](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/store.ts) owns registration and guarded adoption. The [worktree provider](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/providers/worktree.ts) creates checkouts. The [isolation resolver](https://github.com/coleam00/Archon/blob/dev/packages/isolation/src/resolver.ts) selects worktrees. The resolver and [launch helper](https://github.com/coleam00/Archon/blob/dev/packages/core/src/workflows/registered-worktree.ts) call the store recipe.
 
 ## Related
 

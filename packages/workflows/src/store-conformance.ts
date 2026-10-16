@@ -11,6 +11,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   FAN_OUT_CANCEL_REASONS,
+  executionClaim,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   continuablePauseCursor,
@@ -33,6 +34,7 @@ import {
   pendingWorkflowWaitDeadline,
   queuedRunAttention,
   readCapacityWait,
+  readSourceRelease,
   workflowWaitContextSchema,
   isTerminalRunStatus,
   type ApprovalContext,
@@ -1354,6 +1356,80 @@ export function describeWorkflowStoreConformance(
         'quota_resume_triggered',
       ]);
     });
+    test('a quota continuation released for an unreadable source stays due as a source continuation', async () => {
+      const due = async (now: Date): Promise<boolean> =>
+        (await store.listDueWorkflowContinuations(now, 50)).some(due => due.id === run.id);
+      const run = await running(store);
+      await failWithSchedule(store, run.id);
+      const now = new Date();
+      expect(await due(now)).toBe(true);
+      await store.resumeWorkflowRun(run.id, {
+        kind: 'quota',
+        attempt: schedule.attempt,
+        resumeAt: schedule.resumeAt,
+      });
+      expect(await due(now)).toBe(false);
+
+      const retryAt = new Date(now.getTime() + 60_000).toISOString();
+      const afterRetry = new Date(Date.parse(retryAt) + 1000);
+      expect(
+        await store.releaseRunForUnreadableSource(run.id, {
+          claimId: executionClaim((await store.getWorkflowRun(run.id))?.metadata ?? {}),
+          nodeId: 'check',
+          path: '/capture/project/.archon/scripts',
+          error: 'EACCES',
+          retryAt,
+        })
+      ).toEqual({ released: true });
+      const released = await store.getWorkflowRun(run.id);
+      expect(released?.status).toBe('paused');
+      const release = readSourceRelease(released?.metadata);
+      expect(release).toMatchObject({ nodeId: 'check', path: '/capture/project/.archon/scripts' });
+      if (release === undefined) throw new Error('source release not recorded');
+      expect(await due(now)).toBe(false);
+      expect(await due(afterRetry)).toBe(true);
+
+      const cursor = { kind: 'source' as const, ...release };
+      const laterRetry = new Date(afterRetry.getTime() + 3_600_000).toISOString();
+      await store.deferWorkflowContinuation(run.id, laterRetry, {
+        ...cursor,
+        releasedAt: '2000-01-01T00:00:00.000Z',
+      });
+      expect(await due(afterRetry)).toBe(true);
+      await store.deferWorkflowContinuation(run.id, laterRetry, cursor);
+      expect(await due(afterRetry)).toBe(false);
+
+      const resumed = await store.resumeWorkflowRun(run.id, cursor);
+      expect(resumed.status).toBe('running');
+      expect(readSourceRelease(resumed.metadata)).toBeUndefined();
+      expect(await rejection(store.resumeWorkflowRun(run.id, cursor))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(await types(store, run.id)).toContain('source_released');
+    });
+    test('a source release never overrides another transition', async () => {
+      const release = {
+        claimId: null,
+        nodeId: 'check',
+        error: 'EACCES',
+        retryAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+      const cancelled = await running(store);
+      await store.cancelWorkflowRun(cancelled.id);
+      expect(await store.releaseRunForUnreadableSource(cancelled.id, release)).toEqual({
+        released: false,
+      });
+      expect((await store.getWorkflowRun(cancelled.id))?.status).toBe('cancelled');
+      const gated = await running(store);
+      await store.pauseWorkflowRun(gated.id, approval);
+      expect(await store.releaseRunForUnreadableSource(gated.id, release)).toEqual({
+        released: false,
+      });
+      const row = await store.getWorkflowRun(gated.id);
+      expect(row?.status).toBe('paused');
+      expect(readSourceRelease(row?.metadata)).toBeUndefined();
+      expect(await types(store, gated.id)).not.toContain('source_released');
+    });
     test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
       const run = await running(store);
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(
@@ -1377,7 +1453,7 @@ export function describeWorkflowStoreConformance(
       expect(await rejection(store.pauseWorkflowRun(run.id, approval))).toBeInstanceOf(
         WorkflowRunPauseConflictError
       );
-      await store.resumeWorkflowRun(run.id);
+      const resumed = await store.resumeWorkflowRun(run.id);
       const results = await Promise.allSettled(
         Array.from({ length: 8 }, () =>
           store.pauseWorkflowRun(
@@ -1398,6 +1474,7 @@ export function describeWorkflowStoreConformance(
         if (result.status === 'rejected')
           expect(result.reason).toBeInstanceOf(WorkflowRunPauseConflictError);
       expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
+        execution_claim: executionClaim(resumed.metadata),
         keep: true,
         extra: true,
         approval,
@@ -2430,13 +2507,30 @@ export function describeWorkflowStoreConformance(
     test('fan-out recovery retracts only engine cancellations', async () => {
       for (const reason of FAN_OUT_CANCEL_REASONS) {
         const recovered = await running(store);
+        const release = {
+          claimId: executionClaim((await store.getWorkflowRun(recovered.id))?.metadata ?? {}),
+          nodeId: 'check',
+          error: 'EACCES',
+          retryAt: new Date().toISOString(),
+        };
         await store.cancelFanOutRun(recovered.id, reason);
         const results = await Promise.allSettled(
           Array.from({ length: 8 }, () => store.recoverCancelledFanOutRun(recovered.id))
         );
         expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
-        expect((await store.getWorkflowRun(recovered.id))?.status).toBe('running');
+        expect(await store.releaseRunForUnreadableSource(recovered.id, release)).toEqual({
+          released: false,
+        });
+        const resumed = await store.getWorkflowRun(recovered.id);
+        expect(resumed?.status).toBe('running');
         expect(await types(store, recovered.id)).toEqual(['workflow_resumed']);
+        expect(
+          await store.releaseRunForUnreadableSource(recovered.id, {
+            ...release,
+            claimId: executionClaim(resumed?.metadata ?? {}),
+          })
+        ).toEqual({ released: true });
+        expect(await types(store, recovered.id)).toEqual(['workflow_resumed', 'source_released']);
       }
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_orphan');

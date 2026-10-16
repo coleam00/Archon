@@ -10,9 +10,13 @@
  * when it is done. A claim whose run the engine reports terminal is released by the
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
+ *
+ * The build queue claims the same documents through the same claim, so an item has one
+ * owner at a time across both queues; its record is `facts.build` (./build.ts).
  */
 
 import { createHash } from 'node:crypto';
+import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
@@ -115,7 +119,8 @@ export interface TriageFacts {
 
 export interface HistoryEntry {
   readonly at: string;
-  readonly stage: 'intake';
+  /** The queue whose pickup or decision wrote the entry. */
+  readonly stage: 'intake' | 'build';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -144,6 +149,7 @@ export interface WorkItem {
       readonly waiting: readonly string[];
     };
     readonly triage?: TriageFacts;
+    readonly build?: BuildRecord;
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -685,9 +691,15 @@ function read(name: string): Read | undefined {
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
   } catch (error) {
-    note(`intake skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
+}
+
+/** The item's stored document, or null when it has none. Reads only; claims nothing. */
+export function readWorkItem(number: number): WorkItem | null {
+  const stored = stateGet(workItemName(number));
+  return stored.value === null ? null : parseWorkItem(stored.value);
 }
 
 /**
@@ -695,14 +707,14 @@ function read(name: string): Read | undefined {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string): Read {
+function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   if (claim === null) return item;
   const status = runStatus(claim.run_id);
   if (claimDisposition(status) === 'hold') {
     if (status === null) {
       note(
-        `intake leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
+        `${pickup.stage} leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
       );
     }
     return item;
@@ -715,7 +727,7 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
       ...item.doc.history,
       {
         at,
-        stage: 'intake',
+        stage: pickup.stage,
         run_id: runId,
         outcome: 'released',
         summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
@@ -727,7 +739,26 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
     : item;
 }
 
-function claimed(item: Read, at: string, runId: string): WorkItem {
+/** Which items a queue's pickup claims, and what its claim takes from the item. */
+export interface Pickup {
+  readonly stage: HistoryEntry['stage'];
+  /** Whether an unclaimed item waits for this queue. */
+  readonly waits: (doc: WorkItem) => boolean;
+  /**
+   * Intake's claim takes the item's waiting requests. Another queue's takes none, so
+   * requests recorded while it holds the item still wait for intake.
+   */
+  readonly takesRequests: boolean;
+}
+
+export const INTAKE_PICKUP: Pickup = {
+  stage: 'intake',
+  waits: doc => doc.requests.length > 0,
+  takesRequests: true,
+};
+
+function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkItem {
+  if (!pickup.takesRequests) return { ...item.doc, claim: { run_id: runId, at, requests: [] } };
   return {
     ...item.doc,
     claim: { run_id: runId, at, requests: queued(item.doc.requests) },
@@ -735,8 +766,8 @@ function claimed(item: Read, at: string, runId: string): WorkItem {
   };
 }
 
-function claimable(item: Read | undefined): item is Read {
-  return item !== undefined && item.doc.claim === null && item.doc.requests.length > 0;
+function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+  return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 
 /**
@@ -744,24 +775,35 @@ function claimable(item: Read | undefined): item is Read {
  * conditional write. A conflict re-reads the item once and claims it only if it
  * still waits unclaimed; otherwise the next candidate is tried.
  */
-export function claimNext(order: readonly OrderKey[], at: string, runId: string): WorkItem | null {
+export function claimNext(
+  order: readonly OrderKey[],
+  at: string,
+  runId: string,
+  pickup: Pickup = INTAKE_PICKUP
+): WorkItem | null {
   const items = stateList('work/')
     .map(read)
     .filter((item): item is Read => item !== undefined)
-    .map(item => releaseIfTerminal(item, at, runId));
-  for (const candidate of sortCandidates(items.filter(claimable), order)) {
-    const won = claimItem(candidate, at, runId);
+    .map(item => releaseIfTerminal(item, at, runId, pickup));
+  const waiting = items.filter((item): item is Read => claimable(item, pickup));
+  for (const candidate of sortCandidates(waiting, order)) {
+    const won = claimItem(candidate, at, runId, pickup);
     if (won !== null) return won;
   }
   return null;
 }
 
-export function claimItem(candidate: Read, at: string, runId: string): WorkItem | null {
-  const doc = claimed(candidate, at, runId);
+export function claimItem(
+  candidate: Read,
+  at: string,
+  runId: string,
+  pickup: Pickup = INTAKE_PICKUP
+): WorkItem | null {
+  const doc = claimed(candidate, at, runId, pickup);
   if (statePut(candidate.name, doc, candidate.revision) === 'ok') return doc;
   const fresh = read(candidate.name);
-  if (!claimable(fresh)) return null;
-  const retried = claimed(fresh, at, runId);
+  if (!claimable(fresh, pickup)) return null;
+  const retried = claimed(fresh, at, runId, pickup);
   return statePut(fresh.name, retried, fresh.revision) === 'ok' ? retried : null;
 }
 

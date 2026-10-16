@@ -32,10 +32,11 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type {
-  WorkflowWithSource,
-  WorkflowLoadError,
-  ResolvedWorkflow,
+import {
+  findWorkflowLoadError,
+  type WorkflowWithSource,
+  type WorkflowLoadError,
+  type ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -212,14 +213,6 @@ async function formatRepoContext(
 
 export function parseCommand(text: string): { command: string; args: string[] } {
   return parseSlashCommand(text);
-}
-
-function findWorkflowLoadError(
-  loadErrors: readonly WorkflowLoadError[],
-  workflowName: string
-): WorkflowLoadError | undefined {
-  // Stripping the .yaml/.yml extension already covers the exact-filename cases.
-  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
 }
 
 async function createResumeRequest(
@@ -472,7 +465,7 @@ async function handleWorktreeCommand(
         }
 
         // Update database record status
-        await isolationEnvDb.updateStatus(isolationEnvId, 'destroyed');
+        await isolationEnvDb.markWorktreeDestroyed(isolationEnv);
 
         // Clear isolation reference, set cwd to main repo
         await db.updateConversation(conversation.id, {

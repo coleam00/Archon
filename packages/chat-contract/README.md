@@ -73,6 +73,28 @@ support, and
 `workflowCommand.prefix`. Hosts format workflow commands as `prefix + command`;
 the prefix's trailing space is significant.
 
+## Compatibility
+
+Within `CHAT_PLUGIN_PROTOCOL` (`archon-chat/<n>`), changes are additive: every
+message valid for the baseline shape stays valid for the current receiver.
+Plugins parse host messages without rejecting unknown fields, so behavior a plugin
+must honor is introduced behind a descriptor capability, as `resultFooter`,
+`runEvents` and `attentionNotices` are. Removing or narrowing a field, making one
+required, adding an enum value the receiver parses, or changing a field's meaning
+bumps the protocol.
+
+`connectChat` and `inspectChat` read the protocol a plugin advertises before
+parsing its descriptor. A plugin on another protocol fails with
+`PluginProtocolMismatchError` from `@archon/provider-contract/plugin`, whose
+message and `hostProtocol`/`pluginProtocol` fields name both versions; the host
+does not restart it.
+
+`src/fixtures/archon-chat-1-baseline.schema.json` is the baseline the promise
+starts from. `compat.test.ts` sends baseline-shaped host messages to the current
+plugin and current host messages to a plugin pinned to the baseline. A protocol
+bump replaces the snapshot; a test fails while its protocol differs from
+`CHAT_PLUGIN_PROTOCOL`.
+
 ## Conformance and schema
 
 `runChatConformance(connect)` is exported from `@archon/chat-contract/conformance`

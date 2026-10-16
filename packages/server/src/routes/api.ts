@@ -378,6 +378,7 @@ import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
+  workflowLoadErrorSchema,
   validateWorkflowBodySchema,
   validateWorkflowResponseSchema,
   getWorkflowResponseSchema,
@@ -3752,7 +3753,10 @@ export function registerApiRoutes(
             : {}),
         })),
         recommended,
-        errors: result.errors.length > 0 ? result.errors : undefined,
+        errors:
+          result.errors.length > 0
+            ? result.errors.map(error => workflowLoadErrorSchema.parse(error))
+            : undefined,
       });
     } catch (error) {
       // Workflow discovery can fail if cwd is stale or deleted — return empty with warning

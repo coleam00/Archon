@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { Readable, Writable } from 'node:stream';
 import type { IAgentProvider } from '../agent-provider';
@@ -20,6 +21,12 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSessionRequest,
 } from './wire';
+
+const hostProtocolSchema = z.object({
+  clientCapabilities: z.object({
+    _meta: z.object({ archon: z.object({ protocol: z.number().int().positive() }) }),
+  }),
+});
 
 export async function serveProvider(
   options: {
@@ -49,9 +56,15 @@ export async function serveProvider(
   function requireInitialized(): void {
     if (!initialized) throw new Error('initialize must complete before provider requests');
   }
+  // ACP negotiation: a host on another protocol still receives this plugin's descriptor so
+  // it can name both versions, but the plugin stays uninitialized and serves it nothing.
   rpc.handle('initialize', raw => {
-    initializeRequestSchema.parse(raw);
-    initialized = true;
+    if (
+      hostProtocolSchema.parse(raw).clientCapabilities._meta.archon.protocol === descriptor.protocol
+    ) {
+      initializeRequestSchema.parse(raw);
+      initialized = true;
+    }
     return {
       protocolVersion: 1,
       agentCapabilities: { _meta: { archon: descriptor } },

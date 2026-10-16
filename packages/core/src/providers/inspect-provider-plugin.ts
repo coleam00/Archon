@@ -2,7 +2,11 @@ import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { terminateTree, validateCommand } from '@archon/paths/plugin-process';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
-import { connectProvider, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import {
+  connectProvider,
+  PluginProtocolMismatchError,
+  type ProviderPluginDescriptor,
+} from '@archon/provider-contract/plugin';
 
 export async function inspectProviderPlugin(executable: string): Promise<ProviderPluginDescriptor> {
   const invalid = validateCommand(executable);
@@ -38,7 +42,8 @@ export async function inspectProviderPlugin(executable: string): Promise<Provide
       timeout,
     ]);
     return connection.descriptor;
-  } catch {
+  } catch (error) {
+    if (error instanceof PluginProtocolMismatchError) throw error;
     // Plugin-controlled errors can contain credentials or message excerpts.
     throw new Error(`Provider plugin ${executable} failed initialize; no provider was installed`);
   } finally {

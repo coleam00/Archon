@@ -1,11 +1,24 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { Readable, Writable } from 'node:stream';
 import { serveChat, ChatStartError } from '@archon/chat-contract';
+import { PluginRpc } from '@archon/provider-contract/plugin';
 import { descriptor } from './descriptor';
 
 const [mode, file] = process.argv.slice(2);
 if (file) appendFileSync(file, `${String(process.pid)}\n`);
 let notices = 0;
+if (mode === 'protocol') {
+  // serveChat only serves its own protocol, so a plugin from another one is a raw peer.
+  const rpc = new PluginRpc({
+    readable: Readable.toWeb(process.stdin),
+    writable: Writable.toWeb(process.stdout),
+  });
+  rpc.handle('initialize', () => ({ ...descriptor, protocol: 'archon-chat/2' }));
+  await rpc.done.catch(() => undefined);
+  await rpc.close();
+  process.exit(0);
+}
 if (mode === 'slow-bootstrap') await new Promise(resolve => setTimeout(resolve, 600));
 await serveChat({
   descriptor: mode === 'mismatch' ? { ...descriptor, version: '2' } : descriptor,
