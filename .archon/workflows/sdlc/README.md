@@ -774,7 +774,7 @@ with its own `.archon/sdlc/policy/attention.md`.
 
 - **Pickup.** A run reads this project's queue with `archon workflow attention --json`
   and takes the oldest open `select` item that carries no `attention: maintainer`
-  label and has no decision record. A `message` wait has no declared choice to answer
+  label and has no completed decision or live decision owner. A `message` wait has no declared choice to answer
   with, so it stays for a person, as do gates. A `select` item the manager cannot read
   is named on stderr and left. The workflow has no wait node, so a manager run is never
   an item it could answer.
@@ -785,8 +785,8 @@ with its own `.archon/sdlc/policy/attention.md`.
 - **Outcomes.** The `apply` script decides from typed fields only. An answer that names
   a choice the item does not declare, cites no source or is at low confidence is
   escalated. With `autonomy: answer` a clean answer is answered; with `autonomy: none`,
-  the default, it is only recorded as a recommendation. Escalation labels the item in
-  both modes.
+  the default, it records a recommendation and labels the item for a person.
+  Escalation also labels the item in both modes.
 - **Writes.** The script reads the item again, creates the decision record with a
   conditional write, makes the one queue write and reads it back: `archon workflow
   answer` with the declared choice and a text signed by the manager run, or
@@ -801,12 +801,14 @@ with its own `.archon/sdlc/policy/attention.md`.
   what needs a person with
   `archon workflow attention --watch --json --label attention=maintainer`.
 - **Record.** Every decision is the state document
-  `attention-manager/decisions/<run-id>/<occurrence>`: the item, the outcome, the
+  `attention-manager/decisions/<run-id>/<occurrence-key>` (occurrences outside the
+  state-name alphabet, including legacy pauses, use a SHA-256 key with an `encoded-`
+  prefix; that prefix is reserved and encoded too): the item, the outcome, the
   agent's choice, ruling, sources, confidence and reason, any reason the script
   escalated an answer, and the write's result. List them with
-  `archon state list --prefix attention-manager/decisions/`. An item with a record is
-  never decided again; to let the manager retry one whose run stopped before its write
-  (`applied` is null), delete its record with `archon state delete`. A person overrides
+  `archon state list --prefix attention-manager/decisions/`. A successful record prevents another decision. Incomplete writes (`applied` null,
+  refused or unconfirmed) are retried only after the engine reports the manager run
+  completed, failed or cancelled; live or unknown owners keep their claim. A person overrides
   an answer by superseding the dated scope section it wrote, or by re-triaging the item.
 - **Eval mode.** `mode: eval` decides the item given as `item`, one queue item as
   `archon workflow attention <run-id> --json` printed it, reads no queue and writes

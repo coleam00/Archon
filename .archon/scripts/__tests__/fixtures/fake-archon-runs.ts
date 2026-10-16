@@ -37,13 +37,22 @@ function attention(file: string): void {
     process.env.ATTENTION_REFUSE === '1'
       ? undefined
       : items.find(item => item.runId === runId && item.occurrence === flag('--occurrence'));
+  if (process.env.ATTENTION_THROW === '1' && (argv[1] === 'answer' || argv[2] === 'label')) {
+    process.exitCode = 1;
+    return;
+  }
+  if (process.env.ATTENTION_MOVED === '1' && (argv[1] === 'answer' || argv[2] === 'label')) {
+    save([]);
+    reply({ ok: false, error: 'pause moved' });
+    return;
+  }
   if (argv[1] === 'answer') {
     const item = target(argv[2]);
     if (item === undefined) {
       reply({ ok: false, action: 'answer', error: `run ${argv[2]} is not awaiting an answer now` });
       return;
     }
-    save(items.filter(entry => entry !== item));
+    if (process.env.ATTENTION_LOST !== '1') save(items.filter(entry => entry !== item));
     reply({ ok: true, action: 'answer', answer: { decision: flag('--choose'), text: flag('--text') } });
   } else if (argv[2] === 'label') {
     const item = target(argv[3]);
@@ -54,7 +63,7 @@ function attention(file: string): void {
     const [key, value] = (flag('--set') ?? '').split('=');
     item.labels = { ...item.labels, [key as string]: value as string };
     item.revision += 1;
-    save(items);
+    if (process.env.ATTENTION_LOST !== '1') save(items);
     reply({ ok: true, action: 'attention_label', labels: item.labels, revision: item.revision });
   } else if (argv[2] !== undefined && !argv[2].startsWith('--')) {
     reply({ ok: true, action: 'attention', item: items.find(item => item.runId === argv[2]) ?? null });

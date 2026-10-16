@@ -8,7 +8,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 
 - The answer to the last round: `$INPUTS.answer`. Its brief is what another round would start from.
 - The last round: `$INPUTS.ending` with its artifacts in `$ARTIFACTS_DIR`, or in a replay `$INPUTS.recorded` with its own `artifacts` directory.
-- The earlier rounds, oldest first: `$INPUTS.rounds`. Each names its artifacts directory; read each round's `review/report.md`. The decisions the queue made on them, with any maintainer's answer, are under `facts.build` in `$INPUTS.record`.
+- The earlier rounds, oldest first: `$INPUTS.rounds`. Each names its artifacts directory; read each round's `review/report.md`. The decisions the queue made on them, with any answer, are under `facts.build` in `$INPUTS.record`.
 - The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default.
 
 ## Decide

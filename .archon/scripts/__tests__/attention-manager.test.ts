@@ -4,10 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { stateDocumentNameSchema } from '../../../packages/workflows/src/state-document-store';
 import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import {
   type AgentDecision,
-  eligible,
+  isEscalated,
   parseAutonomy,
   parseQueueItem,
   type QueueItem,
@@ -57,10 +58,9 @@ const CLEAR: AgentDecision = {
 describe('the attention manager rules', () => {
   const item = parseQueueItem(queueItem('run-a'));
 
-  test('only an open select item no person was asked about and no run decided is eligible', () => {
-    expect(eligible(item, new Set())).toBe(true);
-    expect(eligible(parseQueueItem(queueItem('run-a', { labels: { build: 'stop', attention: 'maintainer' } })), new Set())).toBe(false);
-    expect(eligible(item, new Set([recordName('run-a', 'occ-run-a')]))).toBe(false);
+  test('only select attention items are readable and the maintainer label identifies escalation', () => {
+    expect(isEscalated(item.labels)).toBe(false);
+    expect(isEscalated(parseQueueItem(queueItem('run-a', { labels: { build: 'stop', attention: 'maintainer' } })).labels)).toBe(true);
     expect(() => parseQueueItem(queueItem('run-a', { form: 'message', options: [] }))).toThrow('not select');
     expect(() => parseQueueItem(queueItem('run-a', { kind: 'awaiting_response' }))).toThrow('not an attention item');
     expect(() => parseQueueItem(queueItem('run-a', { options: [] }))).toThrow('declares no options');
@@ -73,6 +73,25 @@ describe('the attention manager rules', () => {
     expect(resolveOutcome(item, { ...CLEAR, confidence: 'low' }, 'answer')).toMatchObject({ outcome: 'escalated', override: expect.stringContaining('low confidence') });
     expect(resolveOutcome(item, CLEAR, 'answer')).toEqual({ outcome: 'answered', override: '' });
     expect(resolveOutcome(item, CLEAR, 'none')).toEqual({ outcome: 'recommended', override: '' });
+  });
+
+  test('record keys conform to the engine state-name contract, including legacy pauses', () => {
+    for (const occurrence of ['pause-1', 'legacy:ask', 'legacy:Step_1', 'encoded-abc', 'a/b', 'a'.repeat(500), '💬']) {
+      const name = recordName('run-a', occurrence);
+      expect(stateDocumentNameSchema.safeParse(name).success).toBe(true);
+      expect(recordName('run-a', occurrence)).toBe(name);
+    }
+    const runIds = ['a'.repeat(165), 'a'.repeat(166), 'a'.repeat(167), ...Array.from({ length: 128 }, (_, code) => `run${String.fromCharCode(code)}id`)];
+    for (const runId of runIds) {
+      const raw = `attention-manager/decisions/${runId}/pause-1`;
+      if (stateDocumentNameSchema.safeParse(raw).success) expect(recordName(runId, 'pause-1')).toBe(raw);
+      else expect(() => recordName(runId, 'pause-1')).toThrow('state document name');
+    }
+    expect(recordName('run-a', 'legacy:ask')).not.toBe(recordName('run-a', 'legacy/ask'));
+    expect(recordName('run-a', 'encoded-abc')).not.toBe(recordName('run-a', 'abc'));
+    for (const runId of ['Bad', 'run:1', '', 'a'.repeat(201)]) {
+      expect(() => recordName(runId, 'pause-1')).toThrow('state document name');
+    }
   });
 
   test('autonomy defaults to none and refuses anything outside its vocabulary', () => {
@@ -199,19 +218,62 @@ describe('the attention manager scripts', () => {
     expect(ok(script(at, 'facts', {}), 'facts')).toEqual({ path: 'idle', item: null, policy_defaults: expect.any(String) });
   }, 60_000);
 
-  test('autonomy none records the recommendation, writes nothing to the queue, and is not decided again', () => {
+  test('autonomy none records the recommendation and labels it for a person', () => {
     const at = install([queueItem('run-a')]);
     expect(pass(at, CLEAR, { INPUTS_AUTONOMY: 'none' }).apply.decision).toBe('recommended');
-    expect(writes(at)).toEqual([]);
+    expect(writes(at)).toEqual([['workflow', 'attention', 'label', 'run-a', '--occurrence', 'occ-run-a', '--set', 'attention=maintainer', '--json']]);
+    expect(queue(at)[0]?.labels.attention).toBe('maintainer');
     expect(stored(at, 'run-a')).toMatchObject({ outcome: 'recommended', autonomy: 'none', applied: { result: 'ok' } });
     expect(ok(script(at, 'facts', { INPUTS_AUTONOMY: 'none' }), 'facts')).toMatchObject({ path: 'idle' });
   }, 60_000);
 
   test('a write the queue refuses is recorded and ends the run as moved', () => {
     const at = install([queueItem('run-a')]);
-    const { apply } = pass(at, CLEAR, { ATTENTION_REFUSE: '1' });
+    const { apply } = pass(at, CLEAR, { ATTENTION_MOVED: '1' });
     expect(apply.decision).toBe('moved');
-    expect(stored(at, 'run-a')).toMatchObject({ outcome: 'answered', applied: { result: 'refused', detail: expect.stringContaining('not awaiting') } });
+    expect(stored(at, 'run-a')).toMatchObject({ outcome: 'answered', applied: { result: 'refused', detail: 'pause moved' } });
+  }, 60_000);
+
+  for (const agent of [CLEAR, { ...CLEAR, decision: 'escalate' } satisfies AgentDecision]) {
+    for (const change of ['label', 'occurrence', 'closed'] as const) {
+      test(`${agent.decision}: apply leaves a pause ${change} changed after pickup alone`, () => {
+        const at = install([queueItem('run-a')]);
+        const facts = ok(script(at, 'facts', {}), 'facts');
+        const changed = change === 'closed' ? [] : [queueItem('run-a', change === 'label'
+          ? { labels: { attention: 'maintainer' } } : { occurrence: 'new-pause' })];
+        writeFileSync(at.queue, JSON.stringify(changed));
+        const apply = ok(script(at, 'apply', { INPUTS_PATH: 'decide', INPUTS_ITEM: JSON.stringify(facts.item), INPUTS_DECISION: JSON.stringify(agent) }), 'apply');
+        expect(apply.decision).toBe('moved');
+        expect(writes(at)).toEqual([]);
+        expect(stored(at, 'run-a')).toBeNull();
+      }, 60_000);
+    }
+    for (const [mode, result] of [['ATTENTION_REFUSE', 'refused'], ['ATTENTION_LOST', 'unconfirmed'], ['ATTENTION_THROW', null]] as const) {
+      test(`${agent.decision}: ${mode} fails visibly and retries only after its owner ends`, () => {
+        const at = install([queueItem('run-a')]);
+        const facts = ok(script(at, 'facts', {}), 'facts');
+        const applied = script(at, 'apply', { [mode]: '1', INPUTS_PATH: 'decide', INPUTS_ITEM: JSON.stringify(facts.item), INPUTS_DECISION: JSON.stringify(agent) });
+        expect(applied.code).toBe(1);
+        expect(applied.stderr).toContain(mode === 'ATTENTION_REFUSE' ? 'still-open pause' : mode === 'ATTENTION_LOST' ? 'accepted the write' : 'failed');
+        expect(stored(at, 'run-a')).toMatchObject({ applied: result === null ? null : { result } });
+        for (const status of [undefined, 'running', 'paused']) {
+          const statuses = status === undefined ? {} : { [MANAGER]: status };
+          const inputs = { INTAKE_RUN_STATUSES: JSON.stringify(statuses) };
+          expect(ok(script(at, 'facts', inputs), 'facts').path).toBe('idle');
+          expect(ok(script(at, 'apply', { ...inputs, INPUTS_PATH: 'decide', INPUTS_ITEM: JSON.stringify(facts.item), INPUTS_DECISION: JSON.stringify(agent) }), 'apply').decision).toBe('moved');
+        }
+        expect(writes(at)).toHaveLength(1);
+        expect(pass(at, agent, { INTAKE_RUN_STATUSES: JSON.stringify({ [MANAGER]: 'failed' }), WORKFLOW_ID: 'retry-manager' }).apply.decision).toBe(agent.decision === 'answer' ? 'answered' : 'escalated');
+        expect(stored(at, 'run-a')).toMatchObject({ run_id: 'retry-manager', applied: { result: 'ok' } });
+      }, 60_000);
+    }
+  }
+
+  test('a legacy occurrence is picked and labelled instead of silently skipped', () => {
+    const at = install([queueItem('run-a', { occurrence: 'legacy:ask' })]);
+    expect(pass(at, { ...CLEAR, decision: 'escalate' }).apply.decision).toBe('escalated');
+    expect(writes(at)[0]).toContain('legacy:ask');
+    expect(cli(at, ['state', 'get', recordName('run-a', 'legacy:ask')]).value.value).toMatchObject({ item: { occurrence: 'legacy:ask' }, applied: { result: 'ok' } });
   }, 60_000);
 
   test('an item another run already recorded is left alone, with no queue write', () => {
@@ -254,6 +316,20 @@ describe('the attention manager scripts', () => {
 });
 
 describe('the attention manager workflow', () => {
+  test('the deciding node certifies the TypeScript decision shape and vocabulary', () => {
+    const workflow = Bun.YAML.parse(readFileSync(WORKFLOW, 'utf8')) as { nodes: { id: string; output_format: Record<string, unknown> }[] };
+    const schema = workflow.nodes.find(node => node.id === 'decide')?.output_format;
+    const properties = {
+      decision: { type: 'string', enum: Object.keys({ answer: true, escalate: true } satisfies Record<AgentDecision['decision'], true>) },
+      choice: { type: 'string' },
+      ruling: { type: 'string', pattern: '\\S' },
+      sources: { type: 'array', items: { type: 'string', pattern: '\\S' } },
+      confidence: { type: 'string', enum: Object.keys({ low: true, medium: true, high: true } satisfies Record<AgentDecision['confidence'], true>) },
+      reason: { type: 'string', pattern: '\\S' },
+    } satisfies Record<keyof AgentDecision, unknown>;
+    expect(schema).toEqual({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+  });
+
   test('no node waits for an answer, so a manager run can never be an item it answers', () => {
     const workflow = Bun.YAML.parse(readFileSync(WORKFLOW, 'utf8')) as { nodes: Record<string, unknown>[] };
     expect(workflow.nodes.filter(node => 'wait' in node || 'approval' in node)).toEqual([]);

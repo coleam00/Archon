@@ -1,22 +1,13 @@
 /**
- * The attention manager's model of the queue it answers, and its reads and writes.
- *
- * The manager answers only `select` attention items, the one form whose answer is a
- * declared choice. It decides one item per run and records the decision as the state
- * document `attention-manager/decisions/<run-id>/<occurrence>`, created with a
- * conditional write before the one queue write, so the record is also the claim: a
- * second run that loses the create writes nothing, and an item with a record is never
- * decided again. The outcome comes from typed fields only: an answer the agent cannot
- * back with a declared choice, a source and more than low confidence is escalated.
- *
- * Every queue read and write goes through the host's `archon workflow attention` and
- * `archon workflow answer` commands, as they exist.
+ * A conditional decision-record write claims one pause before its queue write.
+ * Incomplete records remain owned until the engine reports the manager terminal.
  */
 
+import { createHash } from 'node:crypto';
 import { record } from './forge.ts';
 import { ATTENTION_ESCALATED } from './labels.ts';
 import { CONFIDENCES } from './queue.ts';
-import { archon, failed } from './state.ts';
+import { archon, claimDisposition, failed, runStatus } from './state.ts';
 import { oneOf } from './workitem.ts';
 
 export const AUTONOMIES = ['none', 'answer'] as const;
@@ -47,7 +38,11 @@ const STATE_NAME_MAX = 200;
 
 /** The decision record's state document for one pause occurrence. */
 export function recordName(runId: string, occurrence: string): string {
-  const name = `${DECISIONS_PREFIX}${runId}/${occurrence}`;
+  const raw = `${DECISIONS_PREFIX}${runId}/${occurrence}`;
+  const key = STATE_NAME.test(occurrence) && !occurrence.startsWith('encoded-') && raw.length <= STATE_NAME_MAX
+    ? occurrence
+    : `encoded-${createHash('sha256').update(occurrence).digest('hex')}`;
+  const name = `${DECISIONS_PREFIX}${runId}/${key}`;
   if (!STATE_NAME.test(name) || name.length > STATE_NAME_MAX) {
     throw new Error(`run ${runId} occurrence ${occurrence} does not make a state document name`);
   }
@@ -101,9 +96,12 @@ export function isEscalated(labels: Readonly<Record<string, unknown>>): boolean 
   return labels[ATTENTION_ESCALATED.key] === ATTENTION_ESCALATED.value;
 }
 
-/** Whether the manager may decide the item: no person was asked yet, and no run decided it. */
-export function eligible(item: QueueItem, decided: ReadonlySet<string>): boolean {
-  return !isEscalated(item.labels) && !decided.has(recordName(item.runId, item.occurrence));
+/** A pending write belongs to its live owner; only terminal owners permit recovery. */
+export function blocksDecision(value: unknown): boolean {
+  if (value === null) return false;
+  const stored = record(value);
+  if (record(stored?.applied)?.result === 'ok') return true;
+  return typeof stored?.run_id !== 'string' || claimDisposition(runStatus(stored.run_id)) === 'hold';
 }
 
 /** The deciding agent's output, as its node's schema certified it. */
@@ -150,18 +148,16 @@ export function answerText(managerRunId: string, agent: AgentDecision): string {
 
 export type Write =
   | { readonly answer: { readonly choice: string; readonly text: string } }
-  | { readonly label: Readonly<Record<string, string>> }
-  | null;
+  | { readonly label: Readonly<Record<string, string>> };
 
 /** The one queue write an outcome makes. */
 export function writeFor(outcome: Outcome, managerRunId: string, agent: AgentDecision): Write {
   switch (outcome) {
     case 'answered':
       return { answer: { choice: agent.choice, text: answerText(managerRunId, agent) } };
+    case 'recommended':
     case 'escalated':
       return { label: { [ATTENTION_ESCALATED.key]: ATTENTION_ESCALATED.value } };
-    case 'recommended':
-      return null;
   }
 }
 
@@ -217,7 +213,7 @@ export function readItem(runId: string): Record<string, unknown> | null {
 
 export type WriteResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
 
-/** A queue write's outcome; a refusal (the pause moved) is a result, anything unreadable throws. */
+/** A structured refusal is returned for the caller to verify against the current pause. */
 function queueWrite(what: string, args: readonly string[]): WriteResult {
   const result = archon(args);
   const value = record(result.value);

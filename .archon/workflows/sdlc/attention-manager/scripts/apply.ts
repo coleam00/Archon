@@ -6,10 +6,10 @@
  * pause or escalated since facts read it is left alone. The decision record is created
  * with a conditional write before the queue write, so a run that loses the create
  * writes nothing. An answer goes through `workflow answer` with the declared choice; an
- * escalation sets the escalation label; a recommendation writes nothing to the queue.
+ * escalation or recommendation sets the escalation label.
  * The result is then patched onto the record. A write the queue refuses because the
  * pause moved is recorded and ends the run as `moved`; a write it accepted that does
- * not read back fails the run.
+ * not read back fails the run. Incomplete writes retry only after their owner is terminal.
  *
  * Eval writes nothing and returns the outcome and the write live would make.
  *
@@ -20,6 +20,7 @@
 import {
   type AgentDecision,
   answerItem,
+  blocksDecision,
   type DecisionRecord,
   isEscalated,
   labelEscalated,
@@ -30,7 +31,6 @@ import {
   recordName,
   resolveOutcome,
   type Write,
-  type WriteResult,
   writeFor,
 } from '../../.shared/attention.ts';
 import { record } from '../../.shared/forge.ts';
@@ -51,7 +51,6 @@ function stillOpen(item: QueueItem, now: Record<string, unknown> | null): boolea
 
 /** What the queue reads after the write, when the write landed; a description of it otherwise. */
 function readBack(item: QueueItem, write: Write): string | null {
-  if (write === null) return null;
   const now = readItem(item.runId);
   if ('answer' in write) {
     return now === null || now.occurrence !== item.occurrence ? null : 'the item is still open at the same pause';
@@ -116,19 +115,19 @@ function main(): void {
     override,
     applied: null,
   };
-  if (stored.value !== null || statePut(name, decided, stored.revision) === 'conflict') {
+  if (blocksDecision(stored.value) || statePut(name, decided, stored.revision) === 'conflict') {
     finish('moved', `${subject}: another run decided it; nothing written.`, name);
     return;
   }
 
-  let result: WriteResult = { ok: true };
-  if (write !== null) {
-    result = 'answer' in write ? answerItem(item, write.answer.choice, write.answer.text) : labelEscalated(item);
-  }
+  const result = 'answer' in write ? answerItem(item, write.answer.choice, write.answer.text) : labelEscalated(item);
   const recordApplied = (applied: DecisionRecord['applied']): void =>
     statePatch(name, [{ op: 'set', path: '/applied', value: applied }]);
   if (!result.ok) {
     recordApplied({ at: new Date().toISOString(), result: 'refused', detail: result.error });
+    if (stillOpen(item, readItem(item.runId))) {
+      throw new Error(`${subject}: the queue refused the write at the still-open pause (${result.error})`);
+    }
     finish('moved', `${subject}: the queue refused the write (${result.error}); recorded.`, name);
     return;
   }
@@ -137,7 +136,7 @@ function main(): void {
     recordApplied({ at: new Date().toISOString(), result: 'unconfirmed', detail: disagrees });
     throw new Error(`${subject}: the queue accepted the write but ${disagrees}`);
   }
-  recordApplied({ at: new Date().toISOString(), result: 'ok', detail: write === null ? 'nothing to write' : '' });
+  recordApplied({ at: new Date().toISOString(), result: 'ok', detail: '' });
   finish(outcome, `${subject}: ${said}.`, name);
 }
 

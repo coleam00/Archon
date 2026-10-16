@@ -6,7 +6,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 
 ## Read first
 
-- The item's work item: `$INPUTS.record`. It holds triage's verdict and five fields under `facts.triage`, and under `facts.build` every round the queue ran on it and every decision it made, with any maintainer's answer. Null means no queue has recorded it.
+- The item's work item: `$INPUTS.record`. It holds triage's verdict and five fields under `facts.triage`, and under `facts.build` every round the queue ran on it and every decision it made, with any answer. Null means no queue has recorded it.
 - The brief the last decision left for this launch: `$INPUTS.brief`. Empty means the item has not been launched yet, or a re-triage started it over.
 - The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default.
 - The project's direction document, where it has one, only when whether the item is in scope depends on it.

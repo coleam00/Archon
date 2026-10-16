@@ -2,13 +2,13 @@ name: archon-attention-manager
 description: |
   The attention manager: answers the attention queue's clear items from the project's
   own documents and leaves the rest to a person. Each run takes the oldest open select
-  item no person was asked about and no earlier run decided. One agent decides it from
+  item with no escalation, completed decision or live decision owner. One agent decides it from
   the item, the paused run's artifacts, the issue it concerns, the project's steering
   documents and its earlier rulings: answer with one of the item's declared choices and
   a ruling that cites its sources, or escalate. A script turns that into the outcome,
   escalating any answer that is low confidence, cites nothing or names a choice the
   item does not declare. It records the decision as a state document, then answers the
-  item, labels it for a person, or with autonomy none only records the recommendation,
+  item, labels it for a person, or with autonomy none records a recommendation and labels it for a person,
   and reads the write back. With mode eval the run decides the item it is given and
   writes nothing.
 
@@ -21,7 +21,7 @@ inputs:
     default: "none"
     description: >-
       none or answer. With none the manager never answers: it records what it would
-      answer and still labels the items a person must decide. Any other value refuses
+      answer and labels the item for a person. Any other value refuses
       the run at facts.
   mode:
     default: "live"

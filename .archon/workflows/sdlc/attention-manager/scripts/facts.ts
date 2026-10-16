@@ -2,30 +2,30 @@
  * Pick the one attention item this run decides, and write nothing.
  *
  * Live: the oldest open `select` item in this project's queue that carries no
- * escalation label and has no decision record. A `select` item that cannot be read is
- * left for a person and named on stderr. Eval: the item in the `item` input, decided
+ * escalation label and has no completed decision or live owner. An unreadable select
+ * item is left for a person and named on stderr. Eval: the item in the `item` input, decided
  * whatever its state, so a replay can decide an item that was answered since.
  *
  * Bound inputs: the workflow's INPUTS_MODE, INPUTS_AUTONOMY and INPUTS_ITEM.
  */
 
 import {
-  DECISIONS_PREFIX,
-  eligible,
+  blocksDecision,
+  isEscalated,
   listQueue,
   parseAutonomy,
   parseQueueItem,
   type QueueItem,
+  recordName,
 } from '../../.shared/attention.ts';
 import { record } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
-import { stateList } from '../../.shared/state.ts';
+import { stateGet } from '../../.shared/state.ts';
 import { parseMode } from '../../.shared/workitem.ts';
 
 /** The item as the queue printed it, so the agent reads every field the queue gives. */
 function oldestEligible(): Record<string, unknown> | null {
-  const decided = new Set(stateList(DECISIONS_PREFIX));
   for (const entry of listQueue()) {
     const raw = record(entry);
     if (raw?.kind !== 'attention' || raw.form !== 'select') continue;
@@ -36,13 +36,12 @@ function oldestEligible(): Record<string, unknown> | null {
       note(`run ${String(raw.runId)} is left for a person: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
-    if (eligible(item, decided)) return raw;
+    if (!isEscalated(item.labels) && !blocksDecision(stateGet(recordName(item.runId, item.occurrence)).value)) return raw;
   }
   return null;
 }
 
 function main(): void {
-  // Every input is validated before anything is read.
   const mode = parseMode(trimmed(process.env.INPUTS_MODE));
   parseAutonomy(trimmed(process.env.INPUTS_AUTONOMY));
   const given = nullableJson(process.env.INPUTS_ITEM);

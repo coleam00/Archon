@@ -9,7 +9,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 - This round's ending, as `archon-ship`'s report declared it: `$INPUTS.ending`. Its artifacts are in `$ARTIFACTS_DIR`: `triage.md`, then `plan.md` or `investigation.md` when they exist, `implementation.md`, and `review/report.md`.
 - In a replay the ending above is null, and the round is `$INPUTS.recorded`: its report fields and its own `artifacts` directory. Judge it as the round that just ended, from what was true when it ended.
 - The earlier rounds, oldest first, each with its own `artifacts` directory: `$INPUTS.rounds`.
-- The item's work item: `$INPUTS.record`. Under `facts.build` is every decision the queue made on it, with any maintainer's answer. Null means no queue has recorded it.
+- The item's work item: `$INPUTS.record`. Under `facts.build` is every decision the queue made on it, with any answer. Null means no queue has recorded it.
 
 Read the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. Read the project's steering documents, direction, `engineering.md` or `architecture.md`, only when a stop's question turns on what they rule.
 
