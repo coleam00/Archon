@@ -868,6 +868,13 @@ describe('git utilities', () => {
       }
     });
 
+    test('findRepoRoot refuses a path that does not exist instead of reporting no repository', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-root-')));
+      await expect(git.findRepoRoot(join(root, 'missing'))).rejects.toThrow(
+        'Failed to find repo root'
+      );
+    });
+
     test('invalid global config stays unclassified across repository absence consumers', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-config-')));
       const config = join(root, 'global-config');
@@ -4143,7 +4150,7 @@ branch refs/heads/feature/auth
 
     test('returns null for a structured non-repository failure', async () => {
       execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
-      expect(await git.findRepoRoot('/tmp/not-a-repo')).toBeNull();
+      expect(await git.findRepoRoot(tmpdir())).toBeNull();
     });
 
     for (const stderr of [

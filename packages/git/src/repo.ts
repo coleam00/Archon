@@ -70,7 +70,10 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
     return toRepoPath(stdout.trim());
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    if (error instanceof GitFailure && error.kind === 'not_repository') return null;
+    // A missing start path also reads as no repository; callers rely on this
+    // function to refuse it rather than treat it as a folder.
+    if (error instanceof GitFailure && error.kind === 'not_repository' && existsSync(startPath))
+      return null;
 
     // Unexpected error - surface it
     getLog().error({ startPath, err, stderr: err.stderr }, 'find_repo_root_failed');
