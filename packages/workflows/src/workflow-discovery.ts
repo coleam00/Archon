@@ -93,6 +93,18 @@ export function workflowLoadErrorName(error: WorkflowLoadError): string {
   return error.workflowName ?? error.filename.replace(/\.ya?ml$/, '');
 }
 
+export function findWorkflowLoadError(
+  errors: readonly WorkflowLoadError[],
+  name: string
+): WorkflowLoadError | undefined {
+  return (
+    errors.find(error => error.workflowName === name) ??
+    errors.find(error => error.workflowName?.toLowerCase() === name.toLowerCase()) ??
+    errors.find(error => workflowLoadErrorName(error) === name) ??
+    errors.find(error => workflowLoadErrorName(error).toLowerCase() === name.toLowerCase())
+  );
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -1027,19 +1039,21 @@ export async function discoverWorkflows(
     const workflows: WorkflowWithSource[] = [];
     const support: WorkflowWithSource[] = [];
     const listed = await listInstalledPacks(roots.installed);
-    for (const { path, message, cause } of listed.errors) {
+    for (const { path, message, cause, workflowName } of listed.errors) {
       allErrors.push({
         filename: path,
+        ...(workflowName !== undefined ? { workflowName } : {}),
         error: message,
         errorType: 'read_error',
         cause,
       });
     }
-    const catalogEntrypoints = new Set(
-      listed.packs.flatMap(pack =>
+    const catalogEntrypoints = new Set([
+      ...listed.packs.flatMap(pack =>
         Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
-      )
-    );
+      ),
+      ...listed.errors.flatMap(error => (error.workflowName ? [error.workflowName] : [])),
+    ]);
     const reservedNames = new Set([...catalogEntrypoints].map(name => name.toLowerCase()));
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;

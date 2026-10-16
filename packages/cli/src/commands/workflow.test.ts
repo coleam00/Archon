@@ -3157,15 +3157,15 @@ describe('workflowRunCommand', () => {
       errors: [
         {
           filename: 'release-file.yaml',
-          workflowName: 'deploy',
+          workflowName: 'acme/kit:deploy',
           error: 'Missing include: checks',
           errorType: 'validation_error' as const,
         },
       ],
     });
     await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'deploy', 'hello')
-    ).rejects.toThrow("Workflow 'deploy' failed to load: Missing include: checks");
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'ACME/KIT:DEPLOY', 'hello')
+    ).rejects.toThrow("Workflow 'ACME/KIT:DEPLOY' failed to load: Missing include: checks");
   });
 
   it('should throw error when workflow not found', async () => {

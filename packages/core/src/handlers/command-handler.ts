@@ -32,7 +32,7 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
 import {
   discoverWorkflowsWithConfig,
-  workflowLoadErrorName,
+  findWorkflowLoadError,
 } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type {
@@ -215,13 +215,6 @@ async function formatRepoContext(
 
 export function parseCommand(text: string): { command: string; args: string[] } {
   return parseSlashCommand(text);
-}
-
-function findWorkflowLoadError(
-  loadErrors: readonly WorkflowLoadError[],
-  workflowName: string
-): WorkflowLoadError | undefined {
-  return loadErrors.find(error => workflowLoadErrorName(error) === workflowName);
 }
 
 async function createResumeRequest(

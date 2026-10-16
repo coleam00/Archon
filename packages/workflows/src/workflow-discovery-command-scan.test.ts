@@ -5,7 +5,12 @@ import { dirname, join } from 'path';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { discoverWorkflows, liveSourceRoots, workflowLoadErrorName } from './workflow-discovery';
+import {
+  discoverWorkflows,
+  liveSourceRoots,
+  workflowLoadErrorName,
+  findWorkflowLoadError,
+} from './workflow-discovery';
 import * as sourceIntegrity from './workflow-source';
 import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
@@ -31,6 +36,28 @@ test('load-error lookup preserves installed paths and prefers parsed workflow na
       })
     ).toBe(expected);
   }
+});
+
+test('named load errors win over case-variant shadow diagnostics without aliasing bare paths', () => {
+  const installed = {
+    filename: '/pack/archon-plugin.json',
+    workflowName: 'acme/kit:deploy',
+    error: 'Manifest unreadable',
+    errorType: 'read_error' as const,
+  };
+  const shadow = {
+    filename: 'ACME/KIT:DEPLOY',
+    error: 'Shadow rejected',
+    errorType: 'validation_error' as const,
+  };
+  const path = {
+    filename: 'acme/kit/folder/release.yaml',
+    error: 'Invalid YAML',
+    errorType: 'parse_error' as const,
+  };
+  expect(findWorkflowLoadError([shadow, installed, path], 'ACME/KIT:DEPLOY')).toBe(installed);
+  expect(findWorkflowLoadError([path], 'release')).toBeUndefined();
+  expect(findWorkflowLoadError([path], 'ACME/KIT/FOLDER/RELEASE')).toBe(path);
 });
 
 test('discovery reports an inaccessible global workflow scope but tolerates a missing one', async () => {

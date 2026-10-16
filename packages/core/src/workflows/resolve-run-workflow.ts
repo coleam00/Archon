@@ -4,7 +4,7 @@ import {
   resolveContinuationWorkflow,
 } from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type { ResolvedWorkflow, WorkflowLoadError } from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   spellWorkflowCommand,
   type WorkflowDeps,
@@ -13,18 +13,11 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   discoverWorkflowsWithConfig,
-  workflowLoadErrorName,
+  findWorkflowLoadError,
 } from '@archon/workflows/workflow-discovery';
 import { toError } from '../utils/error';
 
 const log = createLogger('resolve-run-workflow');
-
-function findWorkflowLoadError(
-  loadErrors: readonly WorkflowLoadError[],
-  workflowName: string
-): WorkflowLoadError | undefined {
-  return loadErrors.find(error => workflowLoadErrorName(error) === workflowName);
-}
 
 export async function resolveRunWorkflow(
   deps: WorkflowDeps,

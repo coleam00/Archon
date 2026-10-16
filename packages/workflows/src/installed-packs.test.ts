@@ -151,6 +151,107 @@ afterEach(() => {
 });
 
 describe('installed packs in the catalog', () => {
+  test('fresh capture refuses to erase an installed receipt whose manifest is broken', async () => {
+    await install(reviewKit());
+    await writeFile(
+      join(packTreePath(join(home, 'plugins'), ID, COMMIT_A), 'archon-plugin.json'),
+      '{bad json'
+    );
+    await expect(
+      captureWorkflowSource({ sourceRoot: project, captureRoot: join(home, 'runs/broken-capture') })
+    ).rejects.toThrow();
+  });
+
+  for (const fault of [
+    'missing manifest',
+    'malformed manifest',
+    'invalid manifest',
+    'manifest directory',
+    'unreadable manifest',
+    'missing tree',
+    'unreadable tree',
+  ] as const) {
+    for (const source of ['project', 'global'] as const) {
+      for (const shadowName of [REVIEW, 'ACME/Review-Kit:REVIEW']) {
+        test.skipIf(
+          fault.startsWith('unreadable') &&
+            (process.platform === 'win32' || process.getuid?.() === 0)
+        )(`receipt identity survives ${fault} with a ${source} shadow ${shadowName}`, async () => {
+          await install(reviewKit());
+          const tree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+          const manifest = join(tree, 'archon-plugin.json');
+          const locked = fault === 'unreadable tree' ? tree : manifest;
+          if (fault === 'missing tree') await rm(tree, { recursive: true });
+          else if (fault === 'missing manifest') await rm(manifest);
+          else if (fault === 'malformed manifest') await writeFile(manifest, '{bad json');
+          else if (fault === 'invalid manifest') await writeFile(manifest, '{}');
+          else if (fault === 'manifest directory') {
+            await rm(manifest);
+            await mkdir(manifest);
+          } else await chmod(locked, 0o000);
+          try {
+            const folder =
+              source === 'project' ? join(project, '.archon/workflows') : join(home, 'workflows');
+            await mkdir(folder, { recursive: true });
+            await writeFile(
+              join(folder, 'shadow.yaml'),
+              `name: ${shadowName}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
+            );
+            for (const [name, nodes] of [
+              ['ordinary', `  - id: child\n    include: ${shadowName}\n`],
+              [
+                'fan',
+                `  - id: child\n    include: ${shadowName}\n    fan_out:\n      items: '["a"]'\n      as: item\n`,
+              ],
+              [
+                'loop',
+                `  - id: group\n    loop_group:\n      until_bash: exit 0\n      max_iterations: 1\n      nodes:\n        - id: child\n          include: ${shadowName}\n`,
+              ],
+            ]) {
+              await writeFile(
+                join(folder, `${name}.yaml`),
+                `name: outer-${name}\ndescription: Outer\nnodes:\n${nodes}`
+              );
+            }
+            const catalog = await discover();
+            expect(
+              resolveWorkflowName(
+                shadowName,
+                catalog.workflows.map(entry => entry.workflow)
+              )
+            ).toBeUndefined();
+            for (const name of ['ordinary', 'fan', 'loop'])
+              expect(names(catalog.workflows)).not.toContain(`outer-${name}`);
+            const failure = catalog.errors.find(error => error.workflowName === REVIEW);
+            expect(failure).toMatchObject({ errorType: 'read_error', cause: expect.any(Error) });
+            if (!failure) throw new Error('Missing receipt identity diagnostic');
+            const selected = resolveFanOutChildDefinition(
+              { ...deps, providers: providerRegistry },
+              project,
+              shadowName
+            );
+            if (
+              [
+                'missing manifest',
+                'missing tree',
+                'unreadable manifest',
+                'unreadable tree',
+              ].includes(fault)
+            )
+              await expect(selected).rejects.toMatchObject({ message: failure.error });
+            else await expect(selected).resolves.toEqual({ unresolved: failure.error });
+            await expect(
+              captureWorkflowSource({ sourceRoot: project, captureRoot: join(home, 'runs/broken') })
+            ).rejects.toThrow();
+          } finally {
+            if (fault.startsWith('unreadable'))
+              await chmod(locked, fault === 'unreadable tree' ? 0o755 : 0o644);
+          }
+        });
+      }
+    }
+  }
+
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a failed installed workflow does not reserve impossible manifest entrypoint names',
     async () => {

@@ -56,7 +56,7 @@ import { discoverScriptsForCwd } from './script-discovery';
 import {
   discoverWorkflowsWithConfig,
   resolveWorkflowCommandContents,
-  workflowLoadErrorName,
+  findWorkflowLoadError,
 } from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
@@ -8181,9 +8181,7 @@ export async function resolveFanOutChildDefinition(
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
       const relevantError =
-        errors.find(
-          error => workflowLoadErrorName(error).toLowerCase() === targetName.toLowerCase()
-        ) ??
+        findWorkflowLoadError(errors, targetName) ??
         errors.find(
           error =>
             error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)

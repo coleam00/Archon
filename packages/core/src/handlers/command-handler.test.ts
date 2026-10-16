@@ -2169,7 +2169,7 @@ describe('CommandHandler', () => {
           errors: [
             {
               filename: 'release-file.yaml',
-              workflowName: 'deploy',
+              workflowName: 'acme/kit:deploy',
               error: 'Missing include: checks',
               errorType: 'validation_error' as const,
             },
@@ -2177,7 +2177,7 @@ describe('CommandHandler', () => {
         });
         const result = await handleCommand(
           conversationWithCodebase,
-          '/workflow run deploy',
+          '/workflow run ACME/KIT:DEPLOY',
           operator
         );
         expect(result.success).toBe(false);

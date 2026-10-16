@@ -354,7 +354,7 @@ describe('server resource-start host', () => {
     await rename(join(workflows, 'hosted.yaml'), join(workflows, 'different.yaml'));
     await writeFile(
       join(workflows, 'different.yaml'),
-      'name: hosted\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
+      'name: HOSTED\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
     );
     expect((await deliver('load-error', 'queue')).status).toBe(200);
     try {

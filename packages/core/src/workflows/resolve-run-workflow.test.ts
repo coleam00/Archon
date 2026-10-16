@@ -127,12 +127,17 @@ describe('resolveRunWorkflow', () => {
     await mkdir(join(root, '.archon/workflows'), { recursive: true });
     await writeFile(
       join(root, '.archon/workflows/different.yaml'),
-      'name: continued\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
+      'name: acme/kit:continued\ndescription: broken include\nnodes:\n  - id: inc\n    include: absent\n'
     );
-    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {});
+    const result = await resolveRunWorkflow(
+      createWorkflowDeps(),
+      { ...makeRun(), workflow_name: 'ACME/KIT:CONTINUED' },
+      root,
+      {}
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.message).toContain('Workflow `continued` failed to load:');
+      expect(result.message).toContain('Workflow `ACME/KIT:CONTINUED` failed to load:');
       expect(result.message).toContain('absent');
     }
   });

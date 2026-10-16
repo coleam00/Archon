@@ -52,7 +52,7 @@ import {
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import {
   discoverWorkflowsWithConfig,
-  workflowLoadErrorName,
+  findWorkflowLoadError,
 } from '@archon/workflows/workflow-discovery';
 import {
   resolveDeclaredInputs,
@@ -121,9 +121,7 @@ async function prepareBinding(
       discovered.workflows.map(entry => entry.workflow)
     );
     if (!workflow) {
-      const loadError = discovered.errors.find(
-        error => workflowLoadErrorName(error) === intent.launch.workflowName
-      );
+      const loadError = findWorkflowLoadError(discovered.errors, intent.launch.workflowName);
       throw new Error(
         loadError
           ? `Workflow '${intent.launch.workflowName}' failed to load: ${loadError.error}`

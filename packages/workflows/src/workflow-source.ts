@@ -315,7 +315,7 @@ async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
  */
 export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
   packs: InstalledPack[];
-  errors: { path: string; message: string; cause?: unknown }[];
+  errors: { path: string; message: string; cause?: unknown; workflowName?: string }[];
 }> {
   const packs: InstalledPack[] = [];
   const errors: Awaited<ReturnType<typeof listInstalledPacks>>['errors'] = [];
@@ -355,7 +355,14 @@ export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
           },
         });
       } catch (error) {
-        errors.push({ path: dir, message: (error as Error).message, cause: error });
+        for (const entry of Object.keys(receipt.manifest.entrypoints)) {
+          errors.push({
+            path: dir,
+            workflowName: installedWorkflowName({ owner, name: receipt.manifest.name }, entry),
+            message: (error as Error).message,
+            cause: error,
+          });
+        }
       }
     }
     return { packs, errors };
@@ -1044,6 +1051,7 @@ export async function captureWorkflowSource(opts: {
 
   const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
   const { packs, errors } = await listInstalledPacks(installedFrom);
+  if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
   for (const pack of packs) {
     jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
   }
@@ -1051,7 +1059,6 @@ export async function captureWorkflowSource(opts: {
   if (installedFrom.kind === 'receipts') {
     installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
   } else {
-    if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
     const parent = await readManifest(installedFrom.captureRoot);
     const keys = new Set(packs.map(pack => pack.key));
     installedRecords = parent.version === 2 ? parent.installed_plugins : [];
