@@ -41,8 +41,9 @@ mock.module('../db/connection', () => ({
 import * as git from '@archon/git';
 import { cloneRepository, registerRepository as registerInStore } from './clone';
 
-const { registerFolder, registerRepository, ProjectRegistrationError } =
-  await import('./sql-registration');
+const { registerFolder, registerRepository, ProjectRegistrationError } = await import(
+  './sql-registration'
+);
 const codebases = await import('../db/codebases');
 const { createCodebase, createManagedCodebase, findCodebaseByRepoUrl, getCodebase, listCodebases } =
   codebases;

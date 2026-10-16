@@ -83,7 +83,7 @@ const mockGetOrCreateConversation = mock(
   }
 );
 const mockUpdateConversation = mock<
-  (typeof import('@archon/core/db/conversations'))['updateConversation']
+  typeof import('@archon/core/db/conversations')['updateConversation']
 >(async () => {
   throw new Error('DB not mocked in tests');
 });
@@ -133,7 +133,7 @@ mock.module('@archon/core', () => ({
 const registrationRemote = await import('@archon/core/services/registration-remote');
 spyOn(registrationRemote, 'assertSavedCheckoutRemote').mockResolvedValue(undefined);
 
-const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));

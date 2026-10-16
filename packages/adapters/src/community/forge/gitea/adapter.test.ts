@@ -61,7 +61,7 @@ const mockGetOrCreateConversation = mock(
   }
 );
 const mockUpdateConversation = mock<
-  (typeof import('@archon/core/db/conversations'))['updateConversation']
+  typeof import('@archon/core/db/conversations')['updateConversation']
 >(async () => {
   throw new Error('DB not mocked in tests');
 });
