@@ -80,7 +80,7 @@
 #   '@mini': { provider: pi, model: minimax/MiniMax-M3 }
 #
 # ---------------------------------------------------------------------------
-# Example: fail on a provider usage limit instead of waiting for its reset
+# Example: fail on a provider usage or rate limit instead of waiting
 # ---------------------------------------------------------------------------
 # workflows:
 #   autoResumeOnQuotaReset: false
