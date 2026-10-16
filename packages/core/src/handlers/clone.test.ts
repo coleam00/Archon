@@ -516,12 +516,12 @@ describe('cloneRepository', () => {
       'refreshes the helper on an existing registration stored as %s and preserves it on setup failure',
       async storedUrl => {
         spyFsAccess.mockResolvedValue(undefined);
-        const existing = makeCodebase({ default_cwd: '/existing/checkout' });
-        mockFindCodebaseByRepoUrl.mockImplementation(async (url: string) =>
-          url === storedUrl ? existing : null
-        );
+        const existing = makeCodebase({
+          default_cwd: '/existing/checkout',
+          repository_url: storedUrl,
+        });
+        mockListCodebases.mockResolvedValue([existing]);
         expect((await cloneRepository('github.com/owner/repo', options)).alreadyExisted).toBe(true);
-        expect(mockFindCodebaseByRepoUrl).toHaveBeenCalledWith(storedUrl);
         expect(helper).toHaveBeenCalledWith('/existing/checkout');
         helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
         await expect(cloneRepository('github.com/owner/repo', options)).rejects.toThrow(
@@ -1181,7 +1181,7 @@ describe('cloneRepository', () => {
         repository_url: 'https://github.com/owner/repo',
         default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
       });
-      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existingCodebase);
+      mockListCodebases.mockResolvedValueOnce([existingCodebase]);
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
@@ -1190,11 +1190,13 @@ describe('cloneRepository', () => {
       expect(spyCloneGitRepository).not.toHaveBeenCalled();
     });
 
-    test('finds existing codebase by URL with .git suffix fallback', async () => {
-      // First lookup (no .git) returns null, second (.git) returns codebase
-      mockFindCodebaseByRepoUrl
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(makeCodebase({ id: 'found-via-git-suffix' }));
+    test('finds an existing codebase stored with a .git suffix', async () => {
+      mockListCodebases.mockResolvedValueOnce([
+        makeCodebase({
+          id: 'found-via-git-suffix',
+          repository_url: 'https://github.com/owner/repo.git',
+        }),
+      ]);
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
@@ -1203,8 +1205,6 @@ describe('cloneRepository', () => {
     });
 
     test('throws when directory exists but no matching codebase is found', async () => {
-      mockFindCodebaseByRepoUrl.mockResolvedValue(null);
-
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'Directory already exists'
       );
@@ -1305,7 +1305,7 @@ describe('cloneRepository', () => {
       'propagates command-directory access failure %s for a saved checkout',
       async code => {
         const existing = makeCodebase();
-        mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+        mockListCodebases.mockResolvedValueOnce([existing]);
         const error = Object.assign(new Error('commands unavailable'), { code });
         spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
           if (!String(path).endsWith('.git')) throw error;
@@ -1402,7 +1402,7 @@ describe('registerRepository', () => {
         await fsPromises.writeFile(join(commandRoot, 'group', 'sub', 'hidden.md'), 'hidden');
         await fsPromises.writeFile(join(commandRoot, 'build.md'), 'build');
         const codebase = makeCodebase({ default_cwd: cwd });
-        mockFindCodebaseByRepoUrl.mockResolvedValue(alreadyExists ? codebase : null);
+        mockListCodebases.mockResolvedValue(alreadyExists ? [codebase] : []);
         mockCreateCodebase.mockResolvedValue(codebase);
         mockFindCommandFiles.mockImplementation(discoverCommandFiles);
         // Reusing a registered remote reloads its commands without creating another checkout.
@@ -2050,7 +2050,7 @@ describe('RegisterResult shape', () => {
 
   test('pre-existing codebase result has alreadyExisted: true and commandCount: 0', async () => {
     spyFsAccess.mockResolvedValue(undefined); // .git exists
-    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(makeCodebase({ id: 'existing-999' }));
+    mockListCodebases.mockResolvedValueOnce([makeCodebase({ id: 'existing-999' })]);
 
     const result = await cloneRepository('https://github.com/owner/repo');
 
