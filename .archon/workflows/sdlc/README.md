@@ -60,6 +60,17 @@ CI runs again. A flake or infrastructure failure outside the change gets one re-
 of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
 the run not ready, and a defect outside the change becomes a discovery.
 
+Unresolved review threads on the pull request are work too, whoever opened them: a
+person, a review bot, or no one in a project without outside reviewers. After CI,
+each round's `threads` node lists the unresolved threads in `threads.md`, quoted as
+untrusted review data, and puts a ready pull request back to draft while any is
+open, so the round ends `threads_open` instead of ready. The next round's
+implementer judges each thread like a blocking finding, fixing it or declining it
+with evidence; `settle-threads` checks each disposition at the pushed head and
+writes the reply, and `threads` posts the replies, resolves those threads, and reads
+the pull request back. A thread no agent can settle ends the run `needs_human`. The
+pack's own review verdict is unchanged: threads gate delivery, not the review.
+
 A pull request counts as ready only at the commit its review comment stamps. The
 comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
@@ -98,6 +109,10 @@ Keep `gh` as the default until a compatible release passes a real-PR check.
 
 The merge queue reads through `gh` alone and refuses `forge`: its gate needs a pull
 request's unresolved review threads, which the forge contract does not report.
+Delivery reads, answers and resolves review threads through `gh` alone for the same
+reason. On the `forge` source it never calls `gh` for them: its `threads` node does
+not run, and the report records `threads_checked: false` and says the threads were
+not checked.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -133,7 +148,9 @@ has an empty `GH_TOKEN=` line to remove. The operations still refuse on their ow
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, and `publish-review` upserts the one marked review comment. Every pack
+request, `publish-review` upserts the one marked review comment, and deliver's
+`threads` posts the thread replies `settle-threads` declared and resolves those
+threads. Every pack
 label is declared in `.shared/labels.ts`, and every stage writes labels through its
 `writeLabels`, which adds and removes them as a delta so labels another writer adds
 survive. On the `forge` source it still writes the whole label set back, because
