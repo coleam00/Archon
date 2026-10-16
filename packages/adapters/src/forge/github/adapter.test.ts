@@ -156,7 +156,7 @@ const mockIsWorktreePath = mock(async () => false);
 const mockExecFileAsync = mock(async () => ({ stdout: '', stderr: '' }));
 
 const registrationRemote = await import('@archon/core/services/registration-remote');
-spyOn(registrationRemote, 'assertCheckoutRemote').mockResolvedValue(undefined);
+spyOn(registrationRemote, 'assertSavedCheckoutRemote').mockResolvedValue(undefined);
 
 mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
@@ -72,6 +74,21 @@ export async function assertCheckoutRemote(path: string, remoteUrl: string): Pro
       { cause: error }
     );
   }
+}
+
+/**
+ * Verify a project's saved checkout with {@link assertCheckoutRemote}. A missing
+ * path has nothing to verify, nor has the empty managed source/ that project
+ * setup creates before the first clone (or a failed clone leaves behind).
+ */
+export async function assertSavedCheckoutRemote(
+  path: string,
+  remoteUrl: string,
+  managedSource: string | null
+): Promise<void> {
+  if (!existsSync(path)) return;
+  if (path === managedSource && (await readdir(path)).length === 0) return;
+  await assertCheckoutRemote(path, remoteUrl);
 }
 
 async function readableRemoteIdentity(project: ProjectIdentity): Promise<string | null> {

@@ -5,7 +5,7 @@
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
 import { existsSync } from 'node:fs';
-import { assertCheckoutRemote } from '@archon/core/services/registration-remote';
+import { assertSavedCheckoutRemote } from '@archon/core/services/registration-remote';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -559,36 +559,28 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     const canonicalPath = getProjectSourcePath(gitlabOwner, gitlabRepo);
 
     if (existing) {
+      const identity = parseOwnerRepo(existing.name);
+      const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
       const looksLikeWorktreePath = /[\\/]worktrees[\\/]/.test(existing.default_cwd);
       if (
         (await isWorktreePath(existing.default_cwd)) ||
         (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
       ) {
-        const identity = parseOwnerRepo(existing.name);
-        if (!identity) {
+        if (!managedSource) {
           throw new Error(
             `Cannot safely repair checkout for project "${existing.name}" at ${existing.default_cwd} without changing its storage location. ` +
               'Restore its original checkout to preserve storage. Before using /update-project to move it, identify and migrate its existing storage root; see the legacy nested GitLab recovery guidance in Troubleshooting.'
           );
         }
-        const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        if (existsSync(canonicalPath) && (await readdir(canonicalPath)).length > 0) {
-          await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
-        }
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
+        await assertSavedCheckoutRemote(managedSource, repoUrlNoGit, managedSource);
+        await codebaseDb.updateCodebase(existing, { default_cwd: managedSource });
+        existing.default_cwd = managedSource;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath },
+          { codebaseName: existing.name, canonicalPath: managedSource },
           'gitlab.stale_worktree_path_fixed'
         );
-      } else if (existsSync(existing.default_cwd)) {
-        const identity = parseOwnerRepo(existing.name);
-        const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
-        if (
-          existing.default_cwd !== managedSource ||
-          (await readdir(existing.default_cwd)).length > 0
-        )
-          await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
+      } else {
+        await assertSavedCheckoutRemote(existing.default_cwd, repoUrlNoGit, managedSource);
       }
 
       getLog().info(
