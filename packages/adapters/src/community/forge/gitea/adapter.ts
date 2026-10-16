@@ -5,6 +5,7 @@
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
 import { existsSync } from 'node:fs';
+import { assertCheckoutRemote } from '@archon/core/services/registration-remote';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
@@ -660,6 +661,8 @@ export class GiteaAdapter implements IPlatformAdapter {
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
+      } else if (looksLikeWorktreePath) {
+        await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
       getLog().info(

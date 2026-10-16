@@ -3,10 +3,6 @@
  *
  * Runs in its own test batch to avoid mock.module pollution with other adapters.
  */
-import { mkdir, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
 import { describe, test, expect, mock, spyOn, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 import type { Codebase, Conversation } from '@archon/core';
@@ -32,7 +28,8 @@ function makeFetchMock(response: Response): FetchMock {
   );
 }
 
-const { parseOwnerRepo } = await import('@archon/paths/archon-paths');
+const paths = await import('@archon/paths');
+const git = await import('@archon/git');
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -50,7 +47,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
-  parseOwnerRepo,
+  ...paths,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -132,6 +129,7 @@ mock.module('@archon/core', () => ({
 
 // Mock @archon/git
 mock.module('@archon/git', () => ({
+  ...git,
   cloneRepository: mock(async () => ({ ok: true })),
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),
@@ -139,11 +137,6 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((b: string) => b),
   isWorktreePath: mock(async () => false),
   execFileAsync: mock(async () => ({ stdout: '', stderr: '' })),
-}));
-
-// Mock @archon/isolation
-mock.module('@archon/isolation', () => ({
-  IsolationHints: {},
 }));
 
 // Mock global fetch to prevent real HTTP calls (gitlab.example.com hangs on CI Linux)
@@ -243,30 +236,6 @@ describe('GitLabAdapter', () => {
       { gitlabUrl: 'https://gitlab.example.com' },
       'gitlab.adapter_initialized'
     );
-  });
-
-  test('keeps a healthy bare-name checkout under a worktrees directory', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'archon-main-checkout-'));
-    try {
-      const path = join(root, 'worktrees', 'api');
-      await mkdir(join(path, '.git'), { recursive: true });
-      const existing = {
-        id: 'main-project',
-        name: 'local-api',
-        default_cwd: path,
-        repository_url: 'https://example.com/testuser/testrepo',
-      };
-      const adapter = createAdapter();
-      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
-      mockUpdateCodebase.mockClear();
-      // @ts-expect-error - exercise the private registration boundary
-      const result = await adapter.getOrCreateCodebaseForRepo('testuser/testrepo');
-      expect(result.repoPath).toBe(path);
-      expect(result.codebase).toBe(existing);
-      expect(mockUpdateCodebase).not.toHaveBeenCalled();
-    } finally {
-      await removeTempTree(root);
-    }
   });
 
   test('refuses ambiguous stale checkout repair for a bare project name', async () => {

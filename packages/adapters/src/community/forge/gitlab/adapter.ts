@@ -5,6 +5,7 @@
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
 import { existsSync } from 'node:fs';
+import { assertCheckoutRemote } from '@archon/core/services/registration-remote';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -578,6 +579,8 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         );
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
+      } else if (looksLikeWorktreePath) {
+        await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
       getLog().info(

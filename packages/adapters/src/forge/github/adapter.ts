@@ -3,6 +3,7 @@
  * Handles issue and PR comments with @mention detection
  */
 import { existsSync } from 'node:fs';
+import { assertCheckoutRemote } from '@archon/core/services/registration-remote';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -944,6 +945,8 @@ export class GitHubAdapter implements IPlatformAdapter {
         );
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
+      } else if (looksLikeWorktreePath) {
+        await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
       getLog().info(

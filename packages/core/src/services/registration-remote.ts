@@ -56,6 +56,24 @@ export async function effectiveRegistrationUrl(
   return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
+export async function assertCheckoutRemote(path: string, remoteUrl: string): Promise<void> {
+  try {
+    const checkoutUrl = await effectiveRegistrationUrl(path);
+    if (
+      !checkoutUrl ||
+      (await remoteIdentity(checkoutUrl, path)) !== (await remoteIdentity(remoteUrl))
+    ) {
+      throw new Error('Checkout remote does not match the registered repository.');
+    }
+  } catch (error) {
+    throw new ProjectRegistrationError(
+      `Cannot verify checkout ownership at ${path}. ` +
+        'Restore its original checkout or use /update-project to set its path explicitly.',
+      { cause: error }
+    );
+  }
+}
+
 export async function findRegisteredRemote(
   registered: readonly Codebase[],
   remoteUrl: string,
