@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { nativeToolInputParser } from '../native-tools';
 import {
   providerDiagnosticsSchema,
@@ -26,6 +27,7 @@ import {
   promptResponseSchema,
   providerSessionRequestSchema,
   resolveCredentialModelResponseSchema,
+  providerPluginDescriptorSchema,
   type ProviderPluginDescriptor,
 } from './wire';
 
@@ -69,6 +71,18 @@ function omitUndefinedFields(value: unknown): unknown {
   return value;
 }
 
+// Reads only what a plugin on any protocol advertises, so a mismatch names both versions
+// instead of failing the full descriptor parse.
+const advertisedProtocolSchema = z.object({
+  agentCapabilities: z.object({
+    _meta: z.object({
+      archon: providerPluginDescriptorSchema
+        .pick({ id: true })
+        .extend({ protocol: z.number().int().positive() }),
+    }),
+  }),
+});
+
 export async function connectProvider(
   io: PluginIO,
   options: { onLog?: (record: ProviderLog) => void } = {}
@@ -106,17 +120,23 @@ export async function connectProvider(
   });
   let descriptor: ProviderPluginDescriptor;
   try {
-    const response = rpc.parse(
-      initializeResponseSchema,
-      await rpc.request('initialize', {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-          _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } },
-        },
-      })
-    );
+    const raw = await rpc.request('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false,
+        _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } },
+      },
+    });
+    const advertised = advertisedProtocolSchema.safeParse(raw);
+    if (advertised.success) {
+      const { id, protocol } = advertised.data.agentCapabilities._meta.archon;
+      if (protocol !== PROVIDER_PLUGIN_PROTOCOL) {
+        rpc.plugin = id;
+        throw rpc.mismatch(PROVIDER_PLUGIN_PROTOCOL, protocol);
+      }
+    }
+    const response = rpc.parse(initializeResponseSchema, raw);
     descriptor = response.agentCapabilities._meta.archon;
     rpc.plugin = descriptor.id;
   } catch (error) {

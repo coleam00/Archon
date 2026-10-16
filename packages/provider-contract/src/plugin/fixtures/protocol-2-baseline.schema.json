@@ -1,0 +1,2001 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "AUTO-GENERATED from packages/provider-contract/src by packages/provider-contract/src/scripts/generate-schema.ts. Do not edit.",
+  "$defs": {
+    "ProviderFailure": {
+      "type": "object",
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "auth",
+            "quota_exhausted",
+            "budget_exceeded",
+            "misconfigured",
+            "rate_limited",
+            "overloaded",
+            "transient",
+            "unknown"
+          ]
+        },
+        "retryAfterMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resetAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["class", "evidence"]
+    },
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        },
+        "cacheRead": {
+          "type": "number"
+        },
+        "cacheWrite": {
+          "type": "number"
+        },
+        "cachePartial": {
+          "type": "boolean",
+          "const": true
+        },
+        "total": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        }
+      },
+      "required": ["input", "output"]
+    },
+    "ResolvedModel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": ["id"]
+    },
+    "ProviderResult": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        "tokensUnknown": {
+          "type": "boolean",
+          "const": true
+        },
+        "structuredOutput": {},
+        "failure": {
+          "$ref": "#/$defs/ProviderFailure"
+        },
+        "isError": {
+          "type": "boolean"
+        },
+        "errorSubtype": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cost": {
+          "type": "number"
+        },
+        "stopReason": {
+          "$ref": "#/$defs/ProviderStopReason"
+        },
+        "numTurns": {
+          "type": "number"
+        },
+        "resolvedModel": {
+          "$ref": "#/$defs/ResolvedModel"
+        },
+        "resumed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ProviderSettled": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "settled"
+        }
+      },
+      "required": ["type"]
+    },
+    "ProviderCapabilities": {
+      "type": "object",
+      "properties": {
+        "backgroundWork": {
+          "type": "string",
+          "enum": ["reported", "none", "unobserved"]
+        },
+        "sessionResume": {
+          "type": "boolean"
+        },
+        "sessionFork": {
+          "type": "boolean"
+        },
+        "mcp": {
+          "type": "boolean"
+        },
+        "hooks": {
+          "type": "boolean"
+        },
+        "skills": {
+          "type": "boolean"
+        },
+        "plugins": {
+          "type": "boolean"
+        },
+        "agents": {
+          "type": "boolean"
+        },
+        "toolRestrictions": {
+          "type": "boolean"
+        },
+        "knownToolNames": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "renamedTools": {
+          "readOnly": true,
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "structuredOutput": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "enforced"
+            },
+            {
+              "type": "string",
+              "const": "best-effort"
+            },
+            {
+              "type": "boolean",
+              "const": false
+            }
+          ]
+        },
+        "requiresAllPropertiesRequired": {
+          "type": "boolean"
+        },
+        "envInjection": {
+          "type": "boolean"
+        },
+        "costControl": {
+          "type": "boolean"
+        },
+        "costReporting": {
+          "type": "boolean"
+        },
+        "tokenReporting": {
+          "type": "boolean"
+        },
+        "stopReasonReporting": {
+          "type": "boolean"
+        },
+        "turnCountReporting": {
+          "type": "boolean"
+        },
+        "resolvedModelReporting": {
+          "type": "boolean"
+        },
+        "effortControl": {
+          "type": "boolean"
+        },
+        "fallbackModel": {
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "boolean"
+        },
+        "settingSources": {
+          "type": "boolean"
+        },
+        "nativeTools": {
+          "type": "boolean"
+        },
+        "containerExec": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "backgroundWork",
+        "sessionResume",
+        "mcp",
+        "hooks",
+        "skills",
+        "plugins",
+        "agents",
+        "toolRestrictions",
+        "structuredOutput",
+        "requiresAllPropertiesRequired",
+        "envInjection",
+        "costControl",
+        "costReporting",
+        "effortControl",
+        "fallbackModel",
+        "sandbox",
+        "settingSources",
+        "nativeTools",
+        "containerExec"
+      ]
+    },
+    "ProviderStopReason": {
+      "type": "string",
+      "enum": ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]
+    },
+    "ProviderEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "agent_message_chunk"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["type", "text"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "agent_thought_chunk"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["type", "text"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "rawInput": {
+              "type": ["string", "number", "boolean", "object", "array", "null"],
+              "additionalProperties": true,
+              "$ref": "#/$defs/schema0"
+            }
+          },
+          "required": ["type", "toolCallId", "name"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call_update"
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": ["completed", "failed", "cancelled"]
+            },
+            "output": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "outputTruncated": {
+              "type": "boolean",
+              "const": true
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["type", "toolCallId", "status"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "warning"
+            }
+          },
+          "required": ["code", "message", "type"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "mcp_server_status"
+            },
+            "server": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": ["connected", "failed", "needs_auth", "pending", "disabled"]
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "server", "status"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "compaction"
+            },
+            "phase": {
+              "type": "string",
+              "enum": ["started", "completed"]
+            },
+            "trigger": {
+              "type": "string",
+              "enum": ["manual", "auto"]
+            },
+            "tokensBefore": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tokensAfter": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["type", "phase"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "subtask"
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": ["started", "running", "completed", "failed", "stopped"]
+            },
+            "description": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "taskType": {
+              "type": "string"
+            },
+            "parentToolCallId": {
+              "type": "string"
+            },
+            "lastToolName": {
+              "type": "string"
+            },
+            "outputFile": {
+              "type": "string"
+            },
+            "usage": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": ["type", "taskId", "status"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hook"
+            },
+            "hookId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "hookName": {
+              "type": "string"
+            },
+            "hookEvent": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["started", "succeeded", "failed", "cancelled"]
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["type", "hookId", "hookName", "hookEvent", "status"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "state_update"
+            },
+            "state": {
+              "type": "string",
+              "enum": ["running", "requires_action"]
+            }
+          },
+          "required": ["type", "state"]
+        }
+      ]
+    },
+    "ProviderChunk": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ProviderEvent"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "tokens": {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            "tokensUnknown": {
+              "type": "boolean",
+              "const": true
+            },
+            "structuredOutput": {},
+            "failure": {
+              "$ref": "#/$defs/ProviderFailure"
+            },
+            "isError": {
+              "type": "boolean"
+            },
+            "errorSubtype": {
+              "type": "string"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cost": {
+              "type": "number"
+            },
+            "stopReason": {
+              "$ref": "#/$defs/ProviderStopReason"
+            },
+            "numTurns": {
+              "type": "number"
+            },
+            "resolvedModel": {
+              "$ref": "#/$defs/ResolvedModel"
+            },
+            "resumed": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "result"
+            }
+          },
+          "required": ["type"]
+        },
+        {
+          "$ref": "#/$defs/ProviderSettled"
+        }
+      ]
+    },
+    "CredentialStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "usable"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_connected"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unusable"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["state", "source", "evidence"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "check_failed"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["state", "source", "evidence"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_checked"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        }
+      ]
+    },
+    "CredentialSpec": {
+      "type": "object",
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kinds": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "enum": ["api_key", "subscription", "ambient"]
+            }
+          ],
+          "items": {
+            "type": "string",
+            "enum": ["api_key", "subscription", "ambient"]
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["vendor", "displayName", "kinds"]
+    },
+    "ProviderRpcMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema1"
+            }
+          },
+          "required": ["jsonrpc", "id", "method"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema2"
+            }
+          },
+          "required": ["jsonrpc", "method"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/schema3"
+            }
+          },
+          "required": ["jsonrpc", "id", "result"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                },
+                "data": {
+                  "$ref": "#/$defs/schema4"
+                }
+              },
+              "required": ["code", "message"]
+            }
+          },
+          "required": ["jsonrpc", "id", "error"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ProviderPluginDescriptor": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "number",
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "$ref": "#/$defs/ProviderCapabilities"
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "static"
+            },
+            "specs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CredentialSpec"
+              }
+            }
+          },
+          "required": ["kind", "specs"]
+        },
+        "configSchema": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema5"
+          }
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "install": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/schema6"
+              }
+            },
+            "run": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/schema7"
+              }
+            },
+            "snapshot": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/schema8"
+              }
+            },
+            "stripUnknownKeys": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": ["install", "run", "snapshot"]
+        },
+        "ownsUnprefixedModelRefs": {
+          "type": "boolean",
+          "const": true
+        },
+        "skillDiscovery": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "user": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "userDirectory": {
+              "type": "object",
+              "properties": {
+                "env": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "home": {
+                  "type": "string"
+                }
+              },
+              "required": ["env", "home"]
+            }
+          },
+          "required": ["project", "user"]
+        }
+      },
+      "required": [
+        "protocol",
+        "id",
+        "displayName",
+        "version",
+        "capabilities",
+        "credentials",
+        "configSchema"
+      ]
+    },
+    "ProviderSessionRequest": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumeSessionId": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "appendSystemPrompt": {
+          "type": "string"
+        },
+        "outputFormat": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            },
+            "schema": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/schema9"
+              }
+            }
+          },
+          "required": ["type", "schema"]
+        },
+        "protectedEnvKeys": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxBudgetUsd": {
+          "type": "number"
+        },
+        "fallbackModel": {
+          "type": "string"
+        },
+        "forkSession": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": "string",
+          "const": "title-generation"
+        },
+        "nodeConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        },
+        "execContext": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "host"
+                }
+              },
+              "required": ["kind"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "container"
+                },
+                "containerId": {
+                  "type": "string"
+                },
+                "execUser": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "containerId"]
+            }
+          ]
+        },
+        "nativeTools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "enum"
+                            },
+                            "values": {
+                              "readOnly": true,
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "string"
+                                }
+                              ],
+                              "items": {
+                                "type": "string"
+                              },
+                              "minItems": 1
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "values"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "boolean"
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": {
+                    "readOnly": true,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["properties", "required"]
+              }
+            },
+            "required": ["name", "description", "inputSchema"]
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["prompt", "cwd"],
+      "additionalProperties": false
+    },
+    "ProviderInitializeRequest": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "clientCapabilities": {
+          "type": "object",
+          "properties": {
+            "fs": {
+              "type": "object",
+              "properties": {
+                "readTextFile": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "writeTextFile": {
+                  "type": "boolean",
+                  "const": false
+                }
+              },
+              "required": ["readTextFile", "writeTextFile"]
+            },
+            "terminal": {
+              "type": "boolean",
+              "const": false
+            },
+            "_meta": {
+              "type": "object",
+              "properties": {
+                "archon": {
+                  "type": "object",
+                  "properties": {
+                    "protocol": {
+                      "type": "number",
+                      "const": 2
+                    }
+                  },
+                  "required": ["protocol"]
+                }
+              },
+              "required": ["archon"]
+            }
+          },
+          "required": ["fs", "terminal", "_meta"]
+        }
+      },
+      "required": ["protocolVersion", "clientCapabilities"]
+    },
+    "ProviderInitializeResponse": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "agentCapabilities": {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": "object",
+              "properties": {
+                "archon": {
+                  "$ref": "#/$defs/ProviderPluginDescriptor"
+                }
+              },
+              "required": ["archon"]
+            }
+          },
+          "required": ["_meta"]
+        },
+        "authMethods": {
+          "type": "array",
+          "items": {
+            "not": {}
+          }
+        }
+      },
+      "required": ["protocolVersion", "agentCapabilities", "authMethods"]
+    },
+    "ProviderNewSessionRequest": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "not": {}
+          }
+        },
+        "_meta": {
+          "type": "object",
+          "properties": {
+            "archon": {
+              "type": "object",
+              "properties": {
+                "request": {
+                  "$ref": "#/$defs/ProviderSessionRequest"
+                }
+              },
+              "required": ["request"]
+            }
+          },
+          "required": ["archon"]
+        }
+      },
+      "required": ["cwd", "mcpServers", "_meta"]
+    },
+    "ProviderNewSessionResponse": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["sessionId"]
+    },
+    "ProviderPromptRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "text"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": ["type", "text"]
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1
+        }
+      },
+      "required": ["sessionId", "prompt"]
+    },
+    "ProviderPromptResponse": {
+      "type": "object",
+      "properties": {
+        "stopReason": {
+          "$ref": "#/$defs/ProviderStopReason"
+        }
+      },
+      "required": ["stopReason"]
+    },
+    "ProviderCancelNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["sessionId"]
+    },
+    "ProviderChunkNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk": {
+          "$ref": "#/$defs/ProviderChunk"
+        }
+      },
+      "required": ["sessionId", "chunk"]
+    },
+    "ProviderToolCallRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema10"
+          }
+        }
+      },
+      "required": ["sessionId", "name", "input"]
+    },
+    "ProviderToolCallResponse": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": ["text"]
+    },
+    "ProviderLogNotification": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["fatal", "error", "warn", "info", "debug", "trace"]
+        },
+        "msg": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema11"
+          }
+        }
+      },
+      "required": ["level", "msg", "bindings"]
+    },
+    "ProviderCheckCredentialRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        }
+      }
+    },
+    "ProviderCheckCredentialResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "usable"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_connected"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unusable"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["state", "source", "evidence"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "check_failed"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["state", "source", "evidence"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_checked"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["archon", "native"]
+            }
+          },
+          "required": ["state", "source"]
+        }
+      ]
+    },
+    "ProviderResolveCredentialModelRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["cwd"]
+    },
+    "ProviderResolveCredentialModelResponse": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "ProviderDiagnoseRequest": {
+      "type": "object",
+      "properties": {
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        }
+      }
+    },
+    "ProviderDiagnoseResponse": {
+      "type": "object",
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ok", "warn", "fail", "skip"]
+              },
+              "message": {
+                "type": "string"
+              },
+              "remedy": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "label", "status", "message"]
+          }
+        }
+      },
+      "required": ["checks"]
+    },
+    "ProviderListModelsRequest": {
+      "type": "object",
+      "properties": {}
+    },
+    "ProviderListModelsResponse": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "reasoning": {
+                    "type": "boolean"
+                  },
+                  "cost": {
+                    "type": "object",
+                    "properties": {
+                      "input": {
+                        "type": "number"
+                      },
+                      "output": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["input", "output"]
+                  },
+                  "contextWindow": {
+                    "type": "number"
+                  }
+                },
+                "required": ["provider", "modelId", "reasoning", "cost", "contextWindow"]
+              }
+            },
+            "required": ["id"]
+          }
+        }
+      },
+      "required": ["models"]
+    },
+    "schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema0"
+          }
+        }
+      ]
+    },
+    "schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema1"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema1"
+          }
+        }
+      ]
+    },
+    "schema2": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema2"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema2"
+          }
+        }
+      ]
+    },
+    "schema3": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema3"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema3"
+          }
+        }
+      ]
+    },
+    "schema4": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema4"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema4"
+          }
+        }
+      ]
+    },
+    "schema5": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema5"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema5"
+          }
+        }
+      ]
+    },
+    "schema6": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
+          }
+        }
+      ]
+    },
+    "schema7": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema7"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema7"
+          }
+        }
+      ]
+    },
+    "schema8": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema8"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema8"
+          }
+        }
+      ]
+    },
+    "schema9": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema9"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema9"
+          }
+        }
+      ]
+    },
+    "schema10": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema10"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema10"
+          }
+        }
+      ]
+    },
+    "schema11": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema11"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema11"
+          }
+        }
+      ]
+    }
+  }
+}

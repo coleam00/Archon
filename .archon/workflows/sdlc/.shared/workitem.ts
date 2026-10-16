@@ -10,11 +10,15 @@
  * when it is done. A claim whose run the engine reports terminal is released by the
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
+ *
+ * The build queue claims the same documents through the same claim, so an item has one
+ * owner at a time across both queues; its record is `facts.build` (./build.ts).
  */
 
 import { createHash } from 'node:crypto';
+import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
-import { archonCommand, record, type QualifiedPr } from './forge.ts';
+import { record, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 import { note } from './io.ts';
 import {
@@ -26,7 +30,15 @@ import {
   type WorkType,
   wantedLabels,
 } from './labels.ts';
-import { remoteFor } from './remote.ts';
+import { fetchDefaultBranch } from './remote.ts';
+import {
+  claimDisposition,
+  runStatus,
+  stateAppend,
+  stateGet,
+  stateList,
+  statePut,
+} from './state.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
 /** The trust and path vocabularies; a test proves archon-intake.yaml's enums agree. */
@@ -107,7 +119,8 @@ export interface TriageFacts {
 
 export interface HistoryEntry {
   readonly at: string;
-  readonly stage: 'intake';
+  /** The queue whose pickup or decision wrote the entry. */
+  readonly stage: 'intake' | 'build';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -136,6 +149,7 @@ export interface WorkItem {
       readonly waiting: readonly string[];
     };
     readonly triage?: TriageFacts;
+    readonly build?: BuildRecord;
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -340,13 +354,6 @@ export function sortCandidates<T extends { readonly doc: WorkItem }>(
     }
     return left.doc.subject.number - right.doc.subject.number;
   });
-}
-
-/** Whether a pickup may release a claim, from the claiming run's status. */
-export function claimDisposition(status: string | null): 'hold' | 'release' {
-  return status === 'completed' || status === 'failed' || status === 'cancelled'
-    ? 'release'
-    : 'hold';
 }
 
 // --- labels -------------------------------------------------------------------
@@ -644,91 +651,9 @@ export function parseMaintainers(text: string): Set<string> {
  * file means nobody: every author is outside.
  */
 export function readMaintainers(repo: QualifiedPr['repo']): Set<string> {
-  const remote = remoteFor(repo);
-  const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
-  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
-  if (branch === undefined) throw new Error(`${remote} reports no default branch`);
-  const ref = `refs/remotes/${remote}/${branch}`;
-  gitOrThrow('fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${ref}`);
+  const { ref } = fetchDefaultBranch(repo);
   if (git('cat-file', '-e', `${ref}:${MAINTAINERS_PATH}`).code !== 0) return new Set();
   return parseMaintainers(gitOrThrow('show', `${ref}:${MAINTAINERS_PATH}`));
-}
-
-// --- the state store ------------------------------------------------------------
-
-const STATE_CONFLICT = 3;
-
-function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
-  const result = Bun.spawnSync([...archonCommand(), ...args], {
-    // Bun spawns with the environment as the process started unless given the live one.
-    env: process.env,
-    stdin: input === undefined ? 'ignore' : Buffer.from(input),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  let value: unknown;
-  try {
-    value = JSON.parse(result.stdout.toString());
-  } catch {
-    value = undefined;
-  }
-  return { code: result.exitCode, value };
-}
-
-function failed(what: string, result: { code: number; value: unknown }): Error {
-  const message = record(result.value)?.error;
-  return new Error(
-    `archon ${what} failed (exit ${String(result.code)})${typeof message === 'string' ? `: ${message}` : ''}`
-  );
-}
-
-export interface Stored {
-  readonly revision: number;
-  readonly value: unknown;
-}
-
-export function stateGet(name: string): Stored {
-  const result = archon(['state', 'get', name]);
-  const value = record(result.value);
-  if (result.code !== 0 || typeof value?.revision !== 'number')
-    throw failed(`state get ${name}`, result);
-  return { revision: value.revision, value: value.value ?? null };
-}
-
-/** A conditional replace: `conflict` when the document moved past `ifRevision`. */
-export function statePut(name: string, value: unknown, ifRevision: number): 'ok' | 'conflict' {
-  const result = archon(
-    ['state', 'put', name, '--if-revision', String(ifRevision)],
-    JSON.stringify(value)
-  );
-  if (result.code === STATE_CONFLICT) return 'conflict';
-  if (result.code !== 0) throw failed(`state put ${name}`, result);
-  return 'ok';
-}
-
-/** Append to an array in the latest revision; appends never conflict. */
-export function stateAppend(name: string, path: string, value: unknown): void {
-  const result = archon(
-    ['state', 'patch', name],
-    JSON.stringify({ ops: [{ op: 'append', path, value }] })
-  );
-  if (result.code !== 0) throw failed(`state patch ${name}`, result);
-}
-
-export function stateList(prefix: string): string[] {
-  const result = archon(['state', 'list', '--prefix', prefix]);
-  const documents = record(result.value)?.documents;
-  if (result.code !== 0 || !Array.isArray(documents)) throw failed('state list', result);
-  return documents
-    .map(record)
-    .filter(row => row?.deleted === false && typeof row.name === 'string')
-    .map(row => row?.name as string);
-}
-
-/** The run's status as the engine reports it, or null when it gives no status. */
-export function runStatus(runId: string): string | null {
-  const status = record(archon(['workflow', 'get', runId, '--json']).value)?.status;
-  return typeof status === 'string' ? status : null;
 }
 
 // --- pickup ---------------------------------------------------------------------
@@ -766,9 +691,15 @@ function read(name: string): Read | undefined {
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
   } catch (error) {
-    note(`intake skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
+}
+
+/** The item's stored document, or null when it has none. Reads only; claims nothing. */
+export function readWorkItem(number: number): WorkItem | null {
+  const stored = stateGet(workItemName(number));
+  return stored.value === null ? null : parseWorkItem(stored.value);
 }
 
 /**
@@ -776,14 +707,14 @@ function read(name: string): Read | undefined {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string): Read {
+function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   if (claim === null) return item;
   const status = runStatus(claim.run_id);
   if (claimDisposition(status) === 'hold') {
     if (status === null) {
       note(
-        `intake leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
+        `${pickup.stage} leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
       );
     }
     return item;
@@ -796,7 +727,7 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
       ...item.doc.history,
       {
         at,
-        stage: 'intake',
+        stage: pickup.stage,
         run_id: runId,
         outcome: 'released',
         summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
@@ -808,7 +739,26 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
     : item;
 }
 
-function claimed(item: Read, at: string, runId: string): WorkItem {
+/** Which items a queue's pickup claims, and what its claim takes from the item. */
+export interface Pickup {
+  readonly stage: HistoryEntry['stage'];
+  /** Whether an unclaimed item waits for this queue. */
+  readonly waits: (doc: WorkItem) => boolean;
+  /**
+   * Intake's claim takes the item's waiting requests. Another queue's takes none, so
+   * requests recorded while it holds the item still wait for intake.
+   */
+  readonly takesRequests: boolean;
+}
+
+export const INTAKE_PICKUP: Pickup = {
+  stage: 'intake',
+  waits: doc => doc.requests.length > 0,
+  takesRequests: true,
+};
+
+function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkItem {
+  if (!pickup.takesRequests) return { ...item.doc, claim: { run_id: runId, at, requests: [] } };
   return {
     ...item.doc,
     claim: { run_id: runId, at, requests: queued(item.doc.requests) },
@@ -816,8 +766,8 @@ function claimed(item: Read, at: string, runId: string): WorkItem {
   };
 }
 
-function claimable(item: Read | undefined): item is Read {
-  return item !== undefined && item.doc.claim === null && item.doc.requests.length > 0;
+function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+  return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 
 /**
@@ -825,24 +775,35 @@ function claimable(item: Read | undefined): item is Read {
  * conditional write. A conflict re-reads the item once and claims it only if it
  * still waits unclaimed; otherwise the next candidate is tried.
  */
-export function claimNext(order: readonly OrderKey[], at: string, runId: string): WorkItem | null {
+export function claimNext(
+  order: readonly OrderKey[],
+  at: string,
+  runId: string,
+  pickup: Pickup = INTAKE_PICKUP
+): WorkItem | null {
   const items = stateList('work/')
     .map(read)
     .filter((item): item is Read => item !== undefined)
-    .map(item => releaseIfTerminal(item, at, runId));
-  for (const candidate of sortCandidates(items.filter(claimable), order)) {
-    const won = claimItem(candidate, at, runId);
+    .map(item => releaseIfTerminal(item, at, runId, pickup));
+  const waiting = items.filter((item): item is Read => claimable(item, pickup));
+  for (const candidate of sortCandidates(waiting, order)) {
+    const won = claimItem(candidate, at, runId, pickup);
     if (won !== null) return won;
   }
   return null;
 }
 
-export function claimItem(candidate: Read, at: string, runId: string): WorkItem | null {
-  const doc = claimed(candidate, at, runId);
+export function claimItem(
+  candidate: Read,
+  at: string,
+  runId: string,
+  pickup: Pickup = INTAKE_PICKUP
+): WorkItem | null {
+  const doc = claimed(candidate, at, runId, pickup);
   if (statePut(candidate.name, doc, candidate.revision) === 'ok') return doc;
   const fresh = read(candidate.name);
-  if (!claimable(fresh)) return null;
-  const retried = claimed(fresh, at, runId);
+  if (!claimable(fresh, pickup)) return null;
+  const retried = claimed(fresh, at, runId, pickup);
   return statePut(fresh.name, retried, fresh.revision) === 'ok' ? retried : null;
 }
 

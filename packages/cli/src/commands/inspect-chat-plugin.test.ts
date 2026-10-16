@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChatPluginDescriptor } from '@archon/chat-contract/descriptor';
 import { validateCommand } from '@archon/paths/plugin-process';
+import { PluginProtocolMismatchError } from '@archon/provider-contract/plugin';
 
 const descriptor: ChatPluginDescriptor = {
   protocol: 'archon-chat/1',
@@ -58,7 +59,14 @@ mock.module('node:child_process', () => ({
       const reply =
         mode === 'remote-error'
           ? { error: { code: -32000, message: sentinel, data: sentinel } }
-          : { result: mode === 'invalid' ? { ...descriptor, protocol: sentinel } : descriptor };
+          : {
+              result:
+                mode === 'invalid'
+                  ? { ...descriptor, protocol: sentinel }
+                  : mode === 'protocol'
+                    ? { ...descriptor, protocol: 'archon-chat/2' }
+                    : descriptor,
+            };
       child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, ...reply }) + '\n');
     });
     if (mode === 'close-timeout') {
@@ -98,6 +106,16 @@ test('inspection returns a validated descriptor only after child cleanup', async
   expect(stopped).toBe(true);
   expect(child.stdin.destroyed).toBe(true);
   expect(child.stdout.destroyed).toBe(true);
+});
+
+test('inspection names both protocols when the plugin speaks another one', async () => {
+  mode = 'protocol';
+  const error: unknown = await inspectChatPlugin(command).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(PluginProtocolMismatchError);
+  expect(String(error)).toContain(
+    'plugin speaks protocol archon-chat/2; this Archon speaks protocol archon-chat/1'
+  );
+  expect(stopped).toBe(true);
 });
 
 for (const failure of [
