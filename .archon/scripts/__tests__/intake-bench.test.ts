@@ -345,7 +345,7 @@ describe('bench run', () => {
       if (!config.issues.some(issue => issue.number === number)) config.issues.push({ number, labels: [], comments: 0 });
     }
     writeFileSync(join(cli, 'config.json'), JSON.stringify(config));
-    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch };
+    return { ...runWith(['--live', join(out, 'live.yaml'), '--base', packSha], 'base'), argv, scratch, remote, packSha };
   }
 
   it('refuses a missing default branch or one away from the base before launching', () => {
@@ -356,6 +356,11 @@ describe('bench run', () => {
       expect(result.stderr).toContain('git push');
       expect(result.lines).toEqual([]);
       expect(() => result.argv(1)).toThrow();
+      const target = `bench-${result.packSha.slice(0, 12)}`;
+      expect(result.stderr).toContain(`git push origin ${result.packSha}:refs/heads/${target}`);
+      ok(result.scratch, 'push', 'origin', `${result.packSha}:refs/heads/${target}`);
+      ok(result.remote, 'symbolic-ref', 'HEAD', `refs/heads/${target}`);
+      expect(() => checkScratch('base', { repo: { host: 'github.com', path: 'me/scratch-base' }, checkout: result.scratch }, result.packSha)).not.toThrow();
     }
   });
 

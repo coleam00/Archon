@@ -266,7 +266,7 @@ export function checkScratch(label: string, scratch: Scratch, base: string): voi
   const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(advertised)?.[1];
   const commit = /^([a-f0-9]+)\tHEAD$/m.exec(advertised)?.[1];
   if (branch === undefined || commit !== base) {
-    const target = branch ?? 'bench-base';
+    const target = `bench-${base.slice(0, 12)}`;
     throw new Error(
       `${label}: ${remote} ${branch === undefined ? 'reports no default branch' : `default branch ${branch} is at ${String(commit)}, not the batch base ${base}`}. ` +
       `In ${scratch.checkout}, publish the base with: git push ${remote} ${base}:refs/heads/${target}; ` +
