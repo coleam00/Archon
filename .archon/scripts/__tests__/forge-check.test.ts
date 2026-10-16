@@ -93,13 +93,12 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     });
   });
 
-  it.each(['gh', 'forge'])('%s metadata requests conform to the CLI host input', source => {
+  it('forge metadata requests conform to the CLI host input', () => {
     const run = check({
-      source,
-      gh: { authFail: 'logged out' },
+      source: 'forge',
       forge: { kind: 'fake', response: ANSWERED },
     });
-    expect(run.code).toBe(source === 'forge' ? 0 : 1);
+    expect(run.code).toBe(0);
     expect(run.forge[0]).toContain('forge metadata');
     const request = cliForgeMetadataRequestSchema.parse({
       ...JSON.parse(run.forgeRequests[0] ?? ''),
@@ -107,7 +106,6 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       operationId: 'cli-operation',
     });
     expect(request.host).toBe(PR.repo.host);
-    if (source === 'gh') expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge');
   });
 
   it('accepts a capable installed plugin through host discovery and authenticated dispatch', () => {
@@ -267,7 +265,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.stderr).toContain('source: GH_TOKEN');
   });
 
-  it('checks gh repository access and inspects plugin metadata only for a refusal remedy', () => {
+  it('checks gh repository access without discovering forge plugins on success or refusal', () => {
     const passed = check({ source: 'gh' });
     expect({ code: passed.code, stderr: passed.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(passed.stdout)).toEqual({ source: 'gh' });
@@ -280,26 +278,10 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     });
     expect(refused.code).not.toBe(0);
     expect(refused.stderr).toContain('You are not logged into any GitHub hosts.');
-    expect(refused.forge).toEqual([expect.stringContaining('forge metadata')]);
+    expect(refused.forge).toEqual([]);
     expect(refused.stderr).toContain('GH_TOKEN');
     expect(refused.stderr).not.toContain('ARCHON_SDLC_FORGE=forge');
   });
-
-  it.each([true, false])(
-    'offers the forge alternative only with complete installed capabilities (%s)',
-    compatible => {
-      const run = check({
-        source: 'gh',
-        gh: { authFail: 'logged out' },
-        forge: { kind: 'fake', response: ANSWERED },
-        capabilities: compatible ? REQUIRED_FORGE_OPERATIONS : ['pr.view'],
-      });
-      expect(run.code).toBe(1);
-      expect(run.stderr).toContain('GH_TOKEN');
-      expect(run.stderr.includes('ARCHON_SDLC_FORGE=forge')).toBe(compatible);
-      expect(run.forge).toEqual([expect.stringContaining('forge metadata')]);
-    }
-  );
 
   it('passes gh when one remote host is authenticated and another is not', () => {
     const run = check({
@@ -370,7 +352,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       expect(run.stderr).toContain('`GH_ENTERPRISE_TOKEN=` line');
       expect(run.stderr).toContain('archon auth github');
       expect(run.gh).toEqual([]);
-      expect(run.forge).toEqual([expect.stringContaining('forge metadata')]);
+      expect(run.forge).toEqual([]);
     }
   );
 

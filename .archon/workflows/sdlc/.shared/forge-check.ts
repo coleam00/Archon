@@ -74,24 +74,11 @@ export async function checkForgeAccess(
   probe: ForgeProbe = probeForge
 ): Promise<{ readonly source: ForgeSource; readonly detail: string }> {
   const source = forgeSource(env);
-  const detail = source === 'gh' ? await checkGh(env, probe) : await checkForge(probe);
+  const detail = source === 'gh' ? await checkGh(env) : await checkForge(probe);
   return { source, detail };
 }
 
-async function ghRemedy(probe: ForgeProbe): Promise<string> {
-  const login = 'run `gh auth login --hostname <host>`, or set GH_TOKEN or GITHUB_TOKEN';
-  for (const repo of remoteRepos()) {
-    try {
-      requirePackOperations((await probe('metadata', { host: repo.host })).value);
-      return (
-        login + ', or set ARCHON_SDLC_FORGE=forge to use the installed compatible forge plugin'
-      );
-    } catch {
-      // An optional alternative must not hide the selected gh source's refusal.
-    }
-  }
-  return login;
-}
+const GH_REMEDY = 'run `gh auth login --hostname <host>`, or set GH_TOKEN or GITHUB_TOKEN';
 
 function requirePackOperations(metadata: Record<string, unknown> | null): void {
   const capabilities = metadata?.capabilities;
@@ -105,7 +92,7 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
     );
 }
 
-async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<string> {
+async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
   const repos = remoteRepos();
   if (repos.length === 0) {
     throw new Error('this checkout has no git remote that names a forge repository');
@@ -147,7 +134,7 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
     } catch (error) {
       throw new Error(
         `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
-          `install gh; ${await ghRemedy(probe)}`
+          `install gh; ${GH_REMEDY}`
       );
     }
     if (result.exitCode === 0) {
@@ -160,7 +147,7 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
   if (answered.length === 0) {
     throw new Error(
       `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated with read access to any repository a remote names:\n${failures.join('\n')}\n` +
-        (await ghRemedy(probe))
+        GH_REMEDY
     );
   }
   return (
