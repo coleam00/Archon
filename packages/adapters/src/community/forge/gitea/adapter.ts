@@ -649,7 +649,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
+      const looksLikeWorktreePath = /[\\/]worktrees[\\/]/.test(existing.default_cwd);
       if (
         (await isWorktreePath(existing.default_cwd)) ||
         (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
@@ -662,14 +662,20 @@ export class GiteaAdapter implements IPlatformAdapter {
           );
         }
         const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
-        if (existsSync(canonicalPath)) {
+        if (existsSync(canonicalPath) && (await readdir(canonicalPath)).length > 0) {
           await assertCheckoutRemote(canonicalPath, repoUrlNoGit);
         }
         await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
       } else if (existsSync(existing.default_cwd)) {
-        await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
+        const identity = parseOwnerRepo(existing.name);
+        const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
+        if (
+          existing.default_cwd !== managedSource ||
+          (await readdir(existing.default_cwd)).length > 0
+        )
+          await assertCheckoutRemote(existing.default_cwd, repoUrlNoGit);
       }
 
       getLog().info(

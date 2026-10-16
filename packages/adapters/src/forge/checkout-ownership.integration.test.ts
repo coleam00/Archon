@@ -132,61 +132,60 @@ for (const forge of forges) {
 }
 
 for (const forge of forges) {
-  test.each(
-    forge.name === 'GitHub'
-      ? ['matching', 'foreign', 'nonrepository', 'empty', 'missing']
-      : ['matching', 'foreign', 'nonrepository', 'missing']
-  )(`${forge.name} verifies canonical repair targets: %s`, async state => {
-    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-repair-owner-')));
-    const previousHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = root;
-    try {
-      const path = getProjectSourcePath('acme', 'api');
-      if (state !== 'missing') {
-        await mkdir(path, { recursive: true });
-        if (state === 'nonrepository') await writeFile(join(path, 'foreign.txt'), 'occupied');
-        if (state !== 'nonrepository' && state !== 'empty') {
-          execFileSync('git', ['-C', path, 'init', '-q']);
-          execFileSync('git', [
-            '-C',
-            path,
-            'remote',
-            'add',
-            'origin',
-            `https://${forge.host}/${state === 'foreign' ? 'other/repo' : 'acme/api'}`,
-          ]);
+  test.each(['matching', 'foreign', 'nonrepository', 'empty', 'missing'])(
+    `${forge.name} verifies canonical repair targets: %s`,
+    async state => {
+      const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-repair-owner-')));
+      const previousHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = root;
+      try {
+        const path = getProjectSourcePath('acme', 'api');
+        if (state !== 'missing') {
+          await mkdir(path, { recursive: true });
+          if (state === 'nonrepository') await writeFile(join(path, 'foreign.txt'), 'occupied');
+          if (state !== 'nonrepository' && state !== 'empty') {
+            execFileSync('git', ['-C', path, 'init', '-q']);
+            execFileSync('git', [
+              '-C',
+              path,
+              'remote',
+              'add',
+              'origin',
+              `https://${forge.host}/${state === 'foreign' ? 'other/repo' : 'acme/api'}`,
+            ]);
+          }
         }
+        const stale = join(root, 'workspaces', 'acme', 'api', 'worktrees', 'old');
+        const existing = codebaseRowSchema.parse({
+          id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
+          name: 'acme/api',
+          default_cwd: stale,
+          repository_url: `https://${forge.host}/acme/api`,
+          commands: {},
+          kind: 'repo',
+          default_branch: null,
+          ai_assistant_type: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        findCodebase.mockResolvedValue(existing);
+        if (state === 'foreign' || state === 'nonrepository') {
+          await expect(forge.route()).rejects.toThrow('/update-project');
+          expect(existing.default_cwd).toBe(stale);
+          expect(updateCodebase).not.toHaveBeenCalled();
+        } else {
+          const result = await forge.route();
+          expect(result.repoPath).toBe(path);
+          expect(updateCodebase).toHaveBeenCalledWith(existing, { default_cwd: path });
+        }
+      } finally {
+        if (previousHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = previousHome;
       }
-      const stale = join(root, 'workspaces', 'acme', 'api', 'worktrees', 'old');
-      const existing = codebaseRowSchema.parse({
-        id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
-        name: 'acme/api',
-        default_cwd: stale,
-        repository_url: `https://${forge.host}/acme/api`,
-        commands: {},
-        kind: 'repo',
-        default_branch: null,
-        ai_assistant_type: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-      });
-      findCodebase.mockResolvedValue(existing);
-      if (state === 'foreign' || state === 'nonrepository') {
-        await expect(forge.route()).rejects.toThrow('/update-project');
-        expect(existing.default_cwd).toBe(stale);
-        expect(updateCodebase).not.toHaveBeenCalled();
-      } else {
-        const result = await forge.route();
-        expect(result.repoPath).toBe(path);
-        expect(updateCodebase).toHaveBeenCalledWith(existing, { default_cwd: path });
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = previousHome;
     }
-  });
+  );
 
-  test.each(forge.name === 'GitHub' ? ['absent', 'empty'] : ['absent'])(
+  test.each(['absent', 'empty'])(
     `${forge.name} reuses a %s saved canonical checkout for clone preparation`,
     async state => {
       const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-missing-source-')));

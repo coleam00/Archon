@@ -938,7 +938,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
+      const looksLikeWorktreePath = /[\\/]worktrees[\\/]/.test(existing.default_cwd);
       if (
         (await isWorktreePath(existing.default_cwd)) ||
         (looksLikeWorktreePath && !existsSync(join(existing.default_cwd, '.git')))
