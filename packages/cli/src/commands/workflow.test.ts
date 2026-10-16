@@ -3372,7 +3372,7 @@ describe('workflowRunCommand', () => {
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello')
-    ).rejects.toThrow('Cannot run workflow: database lookup failed');
+    ).rejects.toThrow('Cannot run workflow: project lookup failed');
   });
 
   it('refuses a failed project lookup with --no-worktree before execution', async () => {
@@ -3391,7 +3391,7 @@ describe('workflowRunCommand', () => {
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
         noWorktree: true,
       })
-    ).rejects.toThrow('database lookup failed');
+    ).rejects.toThrow('project lookup failed');
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
@@ -9112,7 +9112,7 @@ describe('workflowRunCommand — detach', () => {
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
           detach: true,
         })
-      ).rejects.toThrow(/Cannot run workflow: database lookup failed/);
+      ).rejects.toThrow(/Cannot run workflow: project lookup failed/);
       expect(spawnSpy).not.toHaveBeenCalled();
     } finally {
       spawnSpy.mockRestore();
@@ -15337,7 +15337,11 @@ describe('run codebase resolution', () => {
           noWorktree: true,
           codebaseId: 'stored-project',
         })
-      ).rejects.toThrow(mode === 'error' ? 'stored project lookup failed' : 'stored-project');
+      ).rejects.toThrow(
+        mode === 'error'
+          ? 'Cannot run workflow: project lookup failed.\nError: stored project lookup failed'
+          : /^Project "stored-project" no longer exists\.$/
+      );
       expect(core.registerRepository).not.toHaveBeenCalled();
       expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
       expect(executor.executeWorkflow).not.toHaveBeenCalled();

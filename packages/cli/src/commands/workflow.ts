@@ -1618,7 +1618,7 @@ async function resolveRunCodebase(
         'cli.db_connection_hint'
       );
     }
-    throw new Error(`Cannot run workflow: database lookup failed.\nError: ${err.message}`, {
+    throw new Error(`Cannot run workflow: project lookup failed.\nError: ${err.message}`, {
       cause: err,
     });
   }
