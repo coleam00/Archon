@@ -29,7 +29,7 @@ Every pull request gets exactly one decision. `head` is always the head your dec
 
 ## The default branch after a batch
 
-When you merged anything, wait until every check on the default branch's head after your last merge has concluded (`gh run list --branch <default> --commit <sha>`, then `gh run watch` or `gh pr checks`-style polling with a pause between reads; there is no time limit). Green: `dev.state` is `green`. Red: find what each failing job points at. Red in code none of this batch's pull requests touches gets one rerun of the failed jobs; wait again and judge again, and record the rerun's result in `dev.rerun`. Red after that, or red in code the batch touched, is `red`, and `dev.attention` says so. When you merged nothing, `dev.state` is `unchecked` and `dev.rerun` `none`.
+When you merged anything, wait until every check on the default branch's head after your last merge has concluded (`gh run list --branch <default> --commit <sha>`, then `gh run watch` or `gh pr checks`-style polling with a pause between reads; there is no time limit). Green: `dev.state` is `green`. Red: find what each failing job points at. Red in code none of this batch's pull requests touches gets one rerun of the failed jobs; wait again and judge again, and record the rerun's result in `dev.rerun`. Red after that, or red in code the batch touched, is `red`, and `dev.attention` says so. When you merged nothing, `dev.state` is `unchecked`, `dev.rerun` `none` and `dev.attention` null: a branch that was already red when the sweep started holds every merge, which each pull request's `reason` says, and you raise nothing for it.
 
 ## The attention items
 
@@ -44,6 +44,6 @@ A maintainer reads each without opening the run, so each field stands alone:
 
 ## Eval
 
-In eval, `$INPUTS.gate` is empty, `base` is null, and each item has `recorded`: when the decision was made and the facts recorded then, in place of `facts`. Write nothing anywhere: no push, no rerun, no merge, no review. Decide each pull request as of `recorded.at` from `recorded.facts`, reading its diff for what it changes, and declare what a live sweep would have done: `merged` means it would merge now. `review_url` and `review_prior` are empty, and `dev.state` is `unchecked`.
+In eval, `$INPUTS.gate` is empty, `base` is null, and each item has `recorded`: when the decision was made and the facts recorded then, in place of `facts`. Write nothing anywhere: no push, no rerun, no merge, no review. Decide each pull request as of `recorded.at` from `recorded.facts`, reading its diff for what it changes, and declare what a live sweep would have done: `merged` means it would merge now. `review_url` and `review_prior` are empty, `dev.state` is `unchecked` and `dev.attention` is null.
 
 Declare `summary`: what this sweep merged, synced, sent back and asked, in a few lines.
