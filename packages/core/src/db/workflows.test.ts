@@ -1902,6 +1902,7 @@ describe('workflows database', () => {
       );
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
       );
@@ -1920,7 +1921,10 @@ describe('workflows database', () => {
           triggeredAt: expect.any(String),
         },
       });
-      const [eventQuery, eventParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [, resumedParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      expect(resumedParams[2]).toBe('workflow_resumed');
+      expect(resumedParams[5]).toBe('{}');
+      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams[2]).toBe('quota_resume_triggered');
       expect(eventParams[5]).toBe(

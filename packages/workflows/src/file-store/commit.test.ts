@@ -100,7 +100,9 @@ test('retraction hides only cancelled fan-out events without rewriting the log',
   await store.cancelFanOutRun(run.id, 'fan_out_orphan');
   const before = await readFile(join(dir, 'log.jsonl'), 'utf8');
   await store.recoverCancelledFanOutRun(run.id);
-  expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+  expect((await store.listWorkflowEvents(run.id)).map(event => event.event_type)).toEqual([
+    'workflow_resumed',
+  ]);
   const after = await readFile(join(dir, 'log.jsonl'), 'utf8');
   expect(after.startsWith(before)).toBe(true);
   expect(JSON.parse(after.trim().split('\n').at(-1)!).retract).toHaveLength(1);
