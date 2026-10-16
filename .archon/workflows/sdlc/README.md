@@ -602,7 +602,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   published before verdicts were stamped: one such pull request gets a delta review in
   the same run, through an included `archon-review` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
-  gets one rerun of its failed jobs. What the build queue can fix (a verdict that is
+  gets one rerun of its failed jobs; the record stores the head it re-ran at and
+  refuses a second rerun there. What the build queue can fix (a verdict that is
   not Ready, an unresolved thread, red the change caused) goes back to it with a
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
@@ -614,11 +615,15 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
   batch it waits for CI on the default branch, rerunning a red in code the batch did
   not touch once; red after that is raised to a maintainer.
-- **Record.** The `record` script refuses a sweep that left a claimed pull request
-  undecided, decided one twice, or offered an attention item a person could not
-  answer. It reads every pull request back: the forge, not the sweep, says what
-  merged, and a merge without the gate's receipt is recorded as made outside the run.
-  It writes one decision per item under `facts.merge` (status `waiting`, `asking`,
+- **Record.** The `record` script refuses, before it writes anything, a sweep that
+  left a claimed pull request undecided, decided one twice, offered an attention item
+  a person could not answer, says it merged a pull request without the gate's receipt
+  at that head, merged without checking the default branch afterwards, or raised the
+  default branch without merging. It reads every pull request back: the forge, not
+  the sweep, says what merged, and a merge the sweep did not claim is recorded as made
+  outside the run. A pull request that cannot be read waits for the next sweep, and a
+  work item that cannot be written is reported, so one bad item never loses the rest
+  of the batch's record. It runs even when the delta review failed. It writes one decision per item under `facts.merge` (status `waiting`, `asking`,
   `merged`, `returned` or `parked`, any approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.

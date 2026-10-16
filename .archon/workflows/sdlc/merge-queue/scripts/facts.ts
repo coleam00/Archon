@@ -7,7 +7,8 @@
  * trusted review report is written under `merge/<number>/review/` with the commit it
  * reviewed beside it, so a delta review can continue from it. An item whose pull
  * request is already merged or closed, or that names none, is settled without the
- * sweep. Live writes only the claims.
+ * sweep, and one whose pull request cannot be read waits for the next sweep with the
+ * reason, so it never stops the rest of the batch. Live writes only the claims.
  *
  * Eval claims and reads nothing but each named pull request's URL: the sweep decides
  * from the facts the replay recorded, as of the time it recorded them.
@@ -24,6 +25,7 @@ import {
   type MergeMethod,
   type MergeRecord,
   type PrFacts,
+  type PrRead,
   readBase,
   readPr,
   requireGh,
@@ -48,7 +50,7 @@ interface Item {
 interface Settled {
   readonly item: QualifiedPr;
   readonly pr: QualifiedPr | null;
-  readonly status: 'merged' | 'parked';
+  readonly status: 'merged' | 'parked' | 'waiting';
   readonly reason: string;
 }
 
@@ -141,12 +143,21 @@ function main(): void {
   const items: Item[] = [];
   const settled: Settled[] = [];
   for (const doc of claimAll(limit, order, runId)) {
-    const pr = itemPr(doc);
-    if (pr === null) {
-      settled.push({ item: doc.subject, pr: null, status: 'parked', reason: 'the build record names no pull request' });
+    let pr: QualifiedPr | null = null;
+    let read: PrRead;
+    try {
+      pr = itemPr(doc);
+      if (pr === null) {
+        settled.push({ item: doc.subject, pr: null, status: 'parked', reason: 'the build record names no pull request' });
+        continue;
+      }
+      read = readPr(pr, maintainers);
+    } catch (error) {
+      const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
+      settled.push({ item: doc.subject, pr, status: 'waiting', reason });
       continue;
     }
-    const { facts, report } = readPr(pr, maintainers);
+    const { facts, report } = read;
     if (facts.state !== 'open') {
       settled.push({
         item: doc.subject,

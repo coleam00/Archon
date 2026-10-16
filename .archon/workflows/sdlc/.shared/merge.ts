@@ -29,12 +29,27 @@ export type DevAttention = Attention<(typeof DEV_EFFECTS)[number]>;
 export const SWEEP_ACTIONS = ['merged', 'review', 'return', 'ask', 'wait'] as const;
 export type SweepAction = (typeof SWEEP_ACTIONS)[number];
 export const POLICY_CLASSES = ['clear', 'unclear'] as const;
+export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const DEV_STATES = ['unchecked', 'green', 'red'] as const;
+export type DevState = (typeof DEV_STATES)[number];
 export const RERUNS = ['none', 'green', 'red'] as const;
+export type Rerun = (typeof RERUNS)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
+export type MergePath = (typeof MERGE_PATHS)[number];
 /** Which attention item a run raised: its class label, which the YAML also declares. */
 export const MERGE_ASKED_BY = ['pr', 'dev'] as const;
 export type MergeAskedBy = (typeof MERGE_ASKED_BY)[number];
+/** What the record node asked, which the ruling node needs to act on the answer. */
+export type MergeAsked =
+  | {
+      readonly by: Extract<MergeAskedBy, 'pr'>;
+      readonly item: QualifiedPr;
+      readonly pr: QualifiedPr;
+      readonly head: string;
+      readonly brief: string;
+      readonly attention: MergeAttention;
+    }
+  | { readonly by: Extract<MergeAskedBy, 'dev'>; readonly attention: DevAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
@@ -46,12 +61,22 @@ export type MergeMethod = (typeof MERGE_METHODS)[number];
  */
 export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked';
 
+/**
+ * One merge decision. `head` is the commit it was about, null when the queue settled
+ * the item without reading one; `reran` says the queue re-ran its failed checks at that
+ * head, which it does at most once per head.
+ */
+export interface MergeDecisionEntry extends DecisionEntry {
+  readonly head: string | null;
+  readonly reran: boolean;
+}
+
 export interface MergeRecord {
   readonly status: MergeStatus;
   readonly pr: QualifiedPr | null;
   /** A maintainer's approval to merge, pinned to the head they approved. */
   readonly approval: { readonly head: string; readonly at: string } | null;
-  readonly decisions: readonly DecisionEntry[];
+  readonly decisions: readonly MergeDecisionEntry[];
   /** When the queue last decided the item. */
   readonly at: string;
 }
@@ -99,7 +124,7 @@ export function prFromUrl(url: string): QualifiedPr {
 export interface MergeChange {
   readonly at: string;
   readonly run_id: string;
-  readonly entry: DecisionEntry;
+  readonly entry: MergeDecisionEntry;
   readonly status: MergeStatus;
   readonly pr: QualifiedPr | null;
   /** Undefined keeps the approval already recorded. */

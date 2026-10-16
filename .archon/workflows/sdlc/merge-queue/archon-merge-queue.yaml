@@ -182,11 +182,13 @@ nodes:
 
   # Checks the decisions, reads back every pull request and records one decision per
   # item; raises at most one attention item. Eval writes nothing and returns them.
+  # all_done: a failed delta review must not lose the record of what the sweep already
+  # merged; a failed facts or sweep still fails this node through its bindings.
   - id: record
     script: record
     runtime: bun
     depends_on: [facts, sweep, review]
-    trigger_rule: none_failed_min_one_success
+    trigger_rule: all_done
     with:
       path: "$facts.output.path"
       items: { from: "$facts.output.items" }

@@ -17,23 +17,11 @@
  */
 
 import { withBuild } from '../../.shared/build.ts';
-import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type DevAttention, type MergeAttention, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { chosen, type DecisionEntry, rulingHeading } from '../../.shared/queue.ts';
+import { type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
+import { chosen, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
-
-type Asked =
-  | {
-      readonly by: 'pr';
-      readonly item: QualifiedPr;
-      readonly pr: QualifiedPr;
-      readonly head: string;
-      readonly brief: string;
-      readonly attention: MergeAttention;
-    }
-  | { readonly by: 'dev'; readonly attention: DevAttention };
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
   MergeAttention['choices'][number]['effect'],
@@ -41,7 +29,7 @@ const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const
 >;
 
 function main(): void {
-  const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
+  const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
   const id = trimmed(process.env.INPUTS_CHOICE);
   const words = trimmed(process.env.INPUTS_TEXT);
@@ -65,13 +53,15 @@ function main(): void {
   const heading = ruling === '' ? '' : rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
   if (ruling !== '') appendSection(asked.item, heading, ruling);
 
-  const entry: DecisionEntry = {
+  const entry: MergeDecisionEntry = {
     at,
     run_id: runId,
     decision: `answered: ${choice.effect}`,
     reason: choice.label,
     links: asked.attention.links,
     answer: { choice: choice.id, text: words, at },
+    head: asked.head,
+    reran: false,
   };
   updateClaimed(asked.item, runId, doc => {
     const recorded = withMerge(doc, {
