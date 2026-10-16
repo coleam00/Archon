@@ -465,7 +465,7 @@ export async function cloneRepository(
   const appSource = appRepository(repoUrl, options);
   const derived = deriveRepoCloneTarget(repoUrl);
   const { workingUrl } = derived;
-  const existing = await findRegisteredRemote(codebases, workingUrl);
+  const existing = await findRemoteOwner(await codebases.listCodebases(), workingUrl);
   if (existing) {
     rejectExistingChoice(options);
     let missing = false;

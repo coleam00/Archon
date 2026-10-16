@@ -571,56 +571,85 @@ describe('project storage collisions', () => {
   );
 
   test.each([
-    ['missing', 'persisted'],
-    ['corrupt', 'persisted'],
-    ['missing', 'legacy'],
-    ['corrupt', 'legacy'],
-  ])('remote lookup survives an unrelated %s checkout with a %s owner', async (state, owner) => {
-    const root = await makeHome();
-    const legacyPath = join(root, 'legacy');
-    if (state === 'corrupt') {
-      await gitCheckout(legacyPath);
-      await mkdir(join(legacyPath, '.archon'));
-      await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
-    }
-    await createCodebase({ name: 'Legacy', default_cwd: legacyPath });
-    const known = await createCodebase({
-      name: 'acme/api',
-      default_cwd: await gitCheckout(join(root, 'known'), 'https://github.com/acme/api.git'),
-      repository_url: owner === 'persisted' ? 'https://github.com/acme/api' : undefined,
-    });
-    const warnings: unknown[] = [];
-    setLogLevel('warn');
-    setLogSink(line => warnings.push(JSON.parse(line)));
-    expect((await findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
-    expect(warnings).toEqual([
-      expect.objectContaining({
-        level: 40,
-        module: 'registration.remote',
-        msg: 'registration.lookup_legacy_unavailable',
-        err: expect.objectContaining({
-          type: 'ProjectRegistrationError',
-          message: expect.stringContaining(legacyPath),
+    ['missing', 'persisted', 'sql'],
+    ['missing', 'persisted', 'file'],
+    ['corrupt', 'persisted', 'sql'],
+    ['corrupt', 'persisted', 'file'],
+    ['missing', 'legacy', 'sql'],
+    ['missing', 'legacy', 'file'],
+    ['corrupt', 'legacy', 'sql'],
+    ['corrupt', 'legacy', 'file'],
+  ])(
+    'remote reuse survives an unrelated %s checkout with a %s owner (%s)',
+    async (state, owner, backend) => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const legacyPath = join(root, 'legacy');
+      if (state === 'corrupt') {
+        await gitCheckout(legacyPath);
+        await mkdir(join(legacyPath, '.archon'));
+        await writeFile(join(legacyPath, '.archon/config.yaml'), 'worktree: [');
+      }
+      await store.createCodebase({ name: 'Legacy', default_cwd: legacyPath });
+      const known = await store.createCodebase({
+        name: 'acme/api',
+        default_cwd: await gitCheckout(join(root, 'known'), 'https://github.com/acme/api.git'),
+        repository_url: owner === 'persisted' ? 'https://github.com/acme/api' : undefined,
+      });
+      const warnings: unknown[] = [];
+      setLogLevel('warn');
+      setLogSink(line => warnings.push(JSON.parse(line)));
+      expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          level: 40,
+          module: 'registration.remote',
+          msg: 'registration.lookup_legacy_unavailable',
+          err: expect.objectContaining({
+            type: 'ProjectRegistrationError',
+            message: expect.stringContaining(legacyPath),
+          }),
         }),
-      }),
-    ]);
-    expect(warnings[0]).toMatchObject({
-      err: {
-        message: expect.stringContaining(
-          state === 'corrupt'
-            ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
-            : 'Remote error: Command failed: git'
-        ),
-      },
-    });
-    await expect(
-      createManagedCodebase({
-        name: 'acme/new',
-        default_cwd: join(root, 'new'),
-        repository_url: 'https://github.com/acme/new',
-      })
-    ).rejects.toThrow(legacyPath);
-  });
+      ]);
+      expect(warnings[0]).toMatchObject({
+        err: {
+          message: expect.stringContaining(
+            state === 'corrupt'
+              ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
+              : 'Remote error: Command failed: git'
+          ),
+        },
+      });
+      const clone = spyOn(git, 'cloneRepository');
+      try {
+        const reopened = await cloneRepository(store, 'https://github.com/acme/api.git');
+        expect(reopened).toMatchObject({
+          codebaseId: known.id,
+          name: known.name,
+          defaultCwd: known.default_cwd,
+          alreadyExisted: true,
+        });
+        await expect(cloneRepository(store, 'https://github.com/acme/new')).rejects.toThrow(
+          legacyPath
+        );
+        expect(clone).not.toHaveBeenCalled();
+        expect(await store.listCodebases()).toHaveLength(2);
+      } finally {
+        clone.mockRestore();
+      }
+      if (backend === 'sql')
+        await expect(
+          createManagedCodebase({
+            name: 'acme/new',
+            default_cwd: join(root, 'new'),
+            repository_url: 'https://github.com/acme/new',
+          })
+        ).rejects.toThrow(legacyPath);
+    }
+  );
 
   test.each(['remote', 'name'] as const)(
     'removes a new managed checkout when a concurrent %s claim rejects insertion, then retries',
