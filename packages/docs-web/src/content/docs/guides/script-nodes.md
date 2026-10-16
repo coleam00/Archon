@@ -473,9 +473,12 @@ Then reference it by name from any repo's workflow:
 - **Interactive prompts** — the script runs headlessly; any `stdin` read will
   see EOF immediately.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
-- **Cancelling mid-execution** — script subprocesses are killed on workflow
-  cancel, but there's no cooperative cancellation signal. Design scripts to
-  complete quickly or fail fast.
+- **Cancelling mid-execution** — there is no cooperative cancellation signal.
+  When cancel stops the run's owner process, a script subprocess in the owner's
+  process group stops with it. When the owner still answers, as under
+  `archon serve`, the run stops at its next status check and a running script
+  keeps running until it exits or reaches its `timeout`. Declare a `timeout` on
+  a script that can hang.
 
 ## See Also
 

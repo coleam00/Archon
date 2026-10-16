@@ -43630,10 +43630,10 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
   });
 });
 
-// Every `until_bash` execution path passes the node's own timeout, and only that. Nodes are
-// built through the real schema, so each test proves the whole chain (schema -> transform ->
+// Every subprocess call site passes the node's own timeout, and only that. Nodes are built
+// through the real schema, so each test proves the whole chain (schema -> transform ->
 // executor).
-describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
+describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => {
   let testDir: string;
 
   beforeEach(async () => {
@@ -43754,6 +43754,53 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
       );
 
       expect(untilBashTimeout(execSpy)).toBe(600_000);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  // A node that declares no timeout reaches the exec boundary with no deadline at every
+  // call site that used to fall back to an engine default.
+  it.each([
+    ['bash node', { id: 'b', bash: 'echo UNDECLARED' }],
+    ['script node', { id: 's', script: 'console.log("UNDECLARED")', runtime: 'bun' }],
+    [
+      'loop_group until_bash',
+      {
+        id: 'g',
+        loop_group: {
+          until: 'NEVER_EMITTED',
+          until_bash: 'echo UNDECLARED',
+          max_iterations: 1,
+          nodes: [{ id: 'work', prompt: 'Do a task.', depends_on: [] }],
+        },
+      },
+    ],
+  ])('passes no deadline for an undeclared %s', async (_site, raw) => {
+    const node = dagNodeSchema.parse(raw);
+
+    const execSpy = spyOnExec();
+    try {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'working on it' };
+        yield { type: 'result', sessionId: 'undeclared-timeout-session' };
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-undeclared-timeout', nodes: [node] },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+
+      const call = execSpy.mock.calls.find(c =>
+        (c[1] as string[]).some(arg => arg.includes('UNDECLARED'))
+      ) as [string, string[], { timeout?: number }] | undefined;
+      expect(call).toBeDefined();
+      expect(call?.[2]?.timeout).toBeUndefined();
     } finally {
       execSpy.mockRestore();
     }

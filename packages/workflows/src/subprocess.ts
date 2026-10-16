@@ -214,7 +214,7 @@ export async function runSubprocess(
   args: string[],
   options: {
     cwd: string;
-    /** Absent means no deadline: the subprocess runs until it exits or is cancelled. */
+    /** Absent means no deadline: the subprocess runs until it exits. */
     timeout?: number;
     /** Host setup only: end the group on deadline, command exit, or owner death. */
     ownProcessGroup?: true;

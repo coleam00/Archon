@@ -257,7 +257,7 @@ the node:
 
 ```yaml
 - id: fix-tests
-  timeout: 900000             # The suite takes ~4 min; a hung check fails after 15.
+  timeout: 900000             # The suite takes ~4 min; a hung check fails after 15 min.
   loop:
     prompt: "Fix the failing tests"
     max_iterations: 5
