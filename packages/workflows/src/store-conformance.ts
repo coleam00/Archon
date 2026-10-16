@@ -2483,6 +2483,29 @@ export function describeWorkflowStoreConformance(
         await pending;
       }
     });
+    test.each([...TERMINAL_WORKFLOW_STATUSES])(
+      'failure acknowledges an already %s run without another terminal write',
+      async status => {
+        const run = await running(store);
+        if (status === 'completed') await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        else if (status === 'failed') await store.failWorkflowRun(run.id, 'first failure');
+        else await store.cancelWorkflowRun(run.id);
+        const before = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        const reports = [...harness.terminalReports()];
+
+        await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' });
+
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+        expect(harness.terminalReports()).toEqual(reports);
+      }
+    );
+    test('failure rejects a missing run', async () => {
+      expect(await rejection(store.failWorkflowRun('missing-run', 'failure'))).toBeInstanceOf(
+        Error
+      );
+    });
     test('terminal writer start-state predicates preserve losers', async () => {
       const pending = await create(store);
       expect(

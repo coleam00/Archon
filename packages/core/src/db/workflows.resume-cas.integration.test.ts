@@ -749,7 +749,7 @@ describe('terminal workflow transitions — real SQLite', () => {
       failWorkflowRun('terminal-race', 'lost race'),
     ]);
 
-    expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.some(outcome => outcome.status === 'fulfilled')).toBe(true);
     const run = await getWorkflowRun('terminal-race');
     expect(
       (await countEvents('terminal-race', 'workflow_completed')) +
