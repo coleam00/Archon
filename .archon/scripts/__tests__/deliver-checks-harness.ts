@@ -62,6 +62,8 @@ export interface GhFake {
   readonly issue?: GhApiIssue;
   /** stderr for a failed `gh auth status --active --hostname`, for every host or per host; omit for an authenticated gh. */
   readonly authFail?: string | Readonly<Record<string, string>>;
+  /** stderr for a refused repository read, keyed by host/path. */
+  readonly repoReadFail?: Readonly<Record<string, string>>;
 }
 
 /** The issue facts `gh api .../issues/<n>` reports. */
@@ -179,6 +181,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('auth status --active --hostname ')) {
     const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
     return failure === undefined ? result(0) : result(1, '', failure);
+  }
+  if (argv.length === 5 && argv[1] === 'api' && argv[2] === '--hostname' && argv[4].split('/').length === 3 && argv[4].startsWith('repos/')) {
+    const failure = fake.repoReadFail?.[argv[3] + '/' + argv[4].slice('repos/'.length)];
+    return failure === undefined ? result(0, '{}') : result(1, '', failure);
   }
   if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
   if (text.startsWith('label create')) { if (fake.writeFail) return result(1, '', fake.writeFail); labels.add(argv[3]); return result(0); }

@@ -263,15 +263,15 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       inputs: { GH_TOKEN: 'connected-user', GH_ENTERPRISE_TOKEN: '', GITHUB_ENTERPRISE_TOKEN: '' },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(run.gh).toEqual([`auth status --active --hostname ${host}`]);
+    expect(run.gh).toEqual([`auth status --active --hostname ${host}`, `api --hostname ${host} repos/owner/repo`]);
     expect(run.stderr).toContain('source: GH_TOKEN');
   });
 
-  it('checks gh authentication and inspects plugin metadata only for a refusal remedy', () => {
+  it('checks gh repository access and inspects plugin metadata only for a refusal remedy', () => {
     const passed = check({ source: 'gh' });
     expect({ code: passed.code, stderr: passed.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(passed.stdout)).toEqual({ source: 'gh' });
-    expect(passed.gh).toEqual(['auth status --active --hostname ghe.example.com']);
+    expect(passed.gh).toEqual(['auth status --active --hostname ghe.example.com', 'api --hostname ghe.example.com repos/example/repo']);
     expect(passed.forge).toEqual([]);
 
     const refused = check({
@@ -308,12 +308,50 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       gh: { authFail: { 'ghe.example.com': 'token expired' } },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(run.stderr).toContain('ghe.example.com: token expired');
-    expect(run.stderr).toContain('gh authenticated for mirror.example.com');
+    expect(run.stderr).toContain('ghe.example.com/example/repo: token expired');
+    expect(run.stderr).toContain('gh source answered for mirror.example.com/example/repo');
     expect(run.gh).toEqual([
       'auth status --active --hostname ghe.example.com',
       'auth status --active --hostname mirror.example.com',
+      'api --hostname mirror.example.com repos/example/repo',
     ]);
+  });
+
+  it.each(['deliver', 'pr', 'ship', 'upkeep'])(
+    'refuses %s when host authentication succeeds but repository access fails',
+    entry => {
+      const run = check({
+        entry,
+        source: 'gh',
+        gh: { repoReadFail: { 'ghe.example.com/example/repo': 'repository denied' } },
+      });
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain('ghe.example.com/example/repo: repository denied');
+    }
+  );
+
+  it('checks every gh repository and reports a later mirror failure', () => {
+    const run = check({
+      source: 'gh',
+      mirror: true,
+      gh: { repoReadFail: { 'mirror.example.com/example/repo': 'mirror denied' } },
+    });
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain('gh source answered for ghe.example.com/example/repo');
+    expect(run.stderr).toContain('mirror.example.com/example/repo: mirror denied');
+  });
+
+  it('accepts a second readable gh repository on the same host', () => {
+    const cwd = gitCheckout({}, trackTempRoot);
+    expect(spawnSync('git', ['remote', 'add', 'second', 'https://ghe.example.com/other/repo.git'], { cwd }).status).toBe(0);
+    const run = check({
+      cwd,
+      source: 'gh',
+      gh: { repoReadFail: { 'ghe.example.com/example/repo': 'first denied' } },
+    });
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain('gh source answered for ghe.example.com/other/repo');
+    expect(run.stderr).toContain('ghe.example.com/example/repo: first denied');
   });
 
   it.each(['', 'gh'])(
@@ -342,7 +380,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       inputs: { GH_TOKEN: '', GITHUB_TOKEN: '', GH_ENTERPRISE_TOKEN: 'ghp_example' },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com']);
+    expect(run.gh).toEqual(['auth status --active --hostname ghe.example.com', 'api --hostname ghe.example.com repos/example/repo']);
   });
 
   it('refuses an unknown source, naming both values', () => {

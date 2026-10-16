@@ -106,15 +106,14 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
 }
 
 async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<string> {
-  // A bare `gh auth status` fails when any account on any host is stale, so only the active
-  // account of each host a remote names is checked, and one working host is enough, as on the
-  // forge path.
-  const hosts = [...new Set(remoteRepos().map(repo => repo.host))];
-  if (hosts.length === 0) {
+  const repos = remoteRepos();
+  if (repos.length === 0) {
     throw new Error('this checkout has no git remote that names a forge repository');
   }
   const failures: string[] = [];
-  for (const host of hosts) {
+  const answered: string[] = [];
+  for (const { host, path } of repos) {
+    const name = `${host}/${path}`;
     const tokenNames =
       host === 'github.com' || host.endsWith('.ghe.com')
         ? ['GH_TOKEN', 'GITHUB_TOKEN']
@@ -123,7 +122,7 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
     // treats them as unset and falls back to the host's stored login.
     if (tokenNames.some(name => env[name] === '') && !tokenNames.some(name => env[name])) {
       failures.push(
-        `${host}: ${tokenNames.join(' or ')} is set and empty, so gh would act as ` +
+        `${name}: ${tokenNames.join(' or ')} is set and empty, so gh would act as ` +
           `the host's stored login. Remove an empty \`${tokenNames[0]}=\` line from an env file to use ` +
           '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github`, ' +
           '`/archon connect github` in Slack, or the Web UI Settings page'
@@ -132,11 +131,19 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
     }
     let result: ReturnType<typeof Bun.spawnSync>;
     try {
+      // Limit auth status to the active account: stale unrelated accounts must not refuse a run.
       result = Bun.spawnSync(['gh', 'auth', 'status', '--active', '--hostname', host], {
         env,
         stdout: 'pipe',
         stderr: 'pipe',
       });
+      if (result.exitCode === 0) {
+        result = Bun.spawnSync(['gh', 'api', '--hostname', host, `repos/${path}`], {
+          env,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+      }
     } catch (error) {
       throw new Error(
         `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which could not start (${error instanceof Error ? error.message : String(error)}); ` +
@@ -145,16 +152,21 @@ async function checkGh(env: NodeJS.ProcessEnv, probe: ForgeProbe): Promise<strin
     }
     if (result.exitCode === 0) {
       const credentialSource = tokenNames.find(name => env[name]) ?? 'gh auth login';
-      return (
-        `gh authenticated for ${host} (source: ${credentialSource})` +
-        (failures.length === 0 ? '' : `; did not authenticate for ${failures.join('; ')}`)
-      );
+      answered.push(`${name} (source: ${credentialSource})`);
+    } else {
+      failures.push(`${name}: ${result.stderr?.toString().trim()}`);
     }
-    failures.push(`${host}: ${result.stderr?.toString().trim()}`);
   }
-  throw new Error(
-    `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated for any host a remote names:\n${failures.join('\n')}\n` +
-      (await ghRemedy(probe))
+  if (answered.length === 0) {
+    throw new Error(
+      `ARCHON_SDLC_FORGE=gh selects the GitHub CLI, which is not authenticated with read access to any repository a remote names:\n${failures.join('\n')}\n` +
+        (await ghRemedy(probe))
+    );
+  }
+  return (
+    `gh source answered for ${answered.join(', ')}` +
+    (failures.length === 0 ? '' : `; did not answer for ${failures.join('; ')}`) +
+    '. Read access is verified; write access is not, until the first write.'
   );
 }
 
