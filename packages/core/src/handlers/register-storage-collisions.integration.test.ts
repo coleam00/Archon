@@ -1146,25 +1146,48 @@ describe('project storage collisions', () => {
     }
   );
 
-  test('a linked worktree of the registered clone still resolves to its project', async () => {
-    const root = await makeHome();
-    const primary = await gitCheckout(join(root, 'app'), 'https://github.com/acme/linked.git');
-    execFileSync('git', ['-C', primary, 'commit', '-q', '--allow-empty', '-m', 'init'], {
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: 't',
-        GIT_AUTHOR_EMAIL: 't@t',
-        GIT_COMMITTER_NAME: 't',
-        GIT_COMMITTER_EMAIL: 't@t',
-      },
-    });
-    const linked = join(root, 'app-feature');
-    execFileSync('git', ['-C', primary, 'worktree', 'add', '-q', '-b', 'feature', linked]);
-    const registered = await registerRepository(primary);
+  test.each([false, true])(
+    'a linked worktree still resolves to its project (configured upstream: %s)',
+    async configured => {
+      const root = await makeHome();
+      const primary = await gitCheckout(join(root, 'app'), 'https://github.com/acme/linked.git');
+      execFileSync('git', ['-C', primary, 'commit', '-q', '--allow-empty', '-m', 'init'], {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 't',
+          GIT_AUTHOR_EMAIL: 't@t',
+          GIT_COMMITTER_NAME: 't',
+          GIT_COMMITTER_EMAIL: 't@t',
+        },
+      });
+      const linked = join(root, 'app-feature');
+      execFileSync('git', ['-C', primary, 'worktree', 'add', '-q', '-b', 'feature', linked]);
+      if (configured) {
+        execFileSync('git', [
+          '-C',
+          primary,
+          'remote',
+          'add',
+          'upstream',
+          'https://github.com/acme/linked.git',
+        ]);
+        execFileSync('git', [
+          '-C',
+          primary,
+          'remote',
+          'set-url',
+          'origin',
+          'https://github.com/foreign/linked.git',
+        ]);
+        await mkdir(join(primary, '.archon'));
+        await writeFile(join(primary, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
+      }
+      const registered = await registerRepository(primary);
 
-    const again = await registerRepository(linked);
+      const again = await registerRepository(linked);
 
-    expect(again.alreadyExisted).toBe(true);
-    expect(again.codebaseId).toBe(registered.codebaseId);
-  });
+      expect(again.alreadyExisted).toBe(true);
+      expect(again.codebaseId).toBe(registered.codebaseId);
+    }
+  );
 });

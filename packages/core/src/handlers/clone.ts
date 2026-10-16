@@ -592,7 +592,7 @@ export async function registerRepository(
     rejectExistingChoice(options);
     if (existing.repository_url)
       await assertCheckoutRemote(
-        localPath,
+        existing.default_cwd,
         resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
       );
     return {
