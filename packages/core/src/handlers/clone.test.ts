@@ -11,7 +11,7 @@
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { join, resolve } from 'path';
 import { tmpdir } from 'node:os';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import * as registrationRemote from '../services/registration-remote';
@@ -858,24 +858,21 @@ describe('cloneRepository', () => {
       process.env.GITHUB_TOKEN = 'ghp_other_identity';
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
-      await cloneRepository('https://github.com/owner/private-repo');
+      const logOutput = captureStubLogOutput(mockLogger);
+      try {
+        await cloneRepository('https://github.com/owner/private-repo');
+      } finally {
+        logOutput.restore();
+      }
 
       const cloneCall = getGitCloneCall();
       expect(cloneCall?.[0]).toBe('https://github.com/owner/private-repo');
       expect(cloneCall?.[2]).toEqual({
         credentials: { username: 'x-access-token', password: 'ghp_testtoken123' },
       });
-      for (const log of [
-        mockLogger.info,
-        mockLogger.debug,
-        mockLogger.warn,
-        mockLogger.error,
-        mockLogger.trace,
-        mockLogger.fatal,
-      ]) {
-        expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_testtoken123');
-        expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_other_identity');
-      }
+      expect(logOutput.output()).not.toBe('');
+      expect(logOutput.output()).not.toContain('ghp_testtoken123');
+      expect(logOutput.output()).not.toContain('ghp_other_identity');
     });
 
     test('falls back to GITHUB_TOKEN when GH_TOKEN is empty', async () => {

@@ -36,7 +36,7 @@ import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { mkdir, mkdtemp, access, writeFile, readFile } from 'node:fs/promises';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -1915,6 +1915,7 @@ describe('GitHubAdapter', () => {
         GH_TOKEN: process.env.GH_TOKEN,
         GITHUB_TOKEN: process.env.GITHUB_TOKEN,
       };
+      const logOutput = captureStubLogOutput(mockLogger);
       try {
         for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
           if (env[key] === undefined) delete process.env[key];
@@ -1936,18 +1937,11 @@ describe('GitHubAdapter', () => {
             ? { credentials: { username: 'x-access-token', password: env.expected } }
             : undefined
         );
-        for (const log of [
-          mockLogger.info,
-          mockLogger.debug,
-          mockLogger.warn,
-          mockLogger.error,
-          mockLogger.trace,
-          mockLogger.fatal,
-        ]) {
-          expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_gh_clone_token');
-          expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_github_clone_token');
-        }
+        expect(logOutput.output()).not.toBe('');
+        expect(logOutput.output()).not.toContain('ghp_gh_clone_token');
+        expect(logOutput.output()).not.toContain('ghp_github_clone_token');
       } finally {
+        logOutput.restore();
         for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
           if (savedTokens[key] === undefined) delete process.env[key];
           else process.env[key] = savedTokens[key];

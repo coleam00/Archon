@@ -4,10 +4,10 @@
  * This module is test-only. Nothing in `src/` imports it; it lives here because
  * `@archon/paths` is the one package every consumer of these helpers already depends on.
  */
-import { afterEach } from 'bun:test';
+import { afterEach, spyOn } from 'bun:test';
 import { rm } from 'node:fs/promises';
 import pino from 'pino';
-import { rootLogger } from './logger';
+import { rootLogger, setLogSink } from './logger';
 
 /**
  * The default per-test budget on every platform: `bun test` runs there with `--timeout` set to this
@@ -154,6 +154,34 @@ export function captureLogLines(): { lines: Record<string, unknown>[]; restore()
     lines,
     restore: (): void => {
       stream.write = write;
+    },
+  };
+}
+
+const STUB_LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
+
+/**
+ * Route a stub logger's calls through a real Pino logger at `trace` and record each
+ * emitted line. A secret check must read these lines rather than the stub's call
+ * arguments: `JSON.stringify` drops an `Error`'s message and stack, while the
+ * production `err` serializer emits both.
+ */
+export function captureStubLogOutput(
+  logger: Record<(typeof STUB_LOG_LEVELS)[number], (...args: never[]) => unknown>
+): { output(): string; restore(): void } {
+  const lines: string[] = [];
+  setLogSink(line => lines.push(line));
+  const realLog = rootLogger.child({}, { level: 'trace' });
+  const spies = STUB_LOG_LEVELS.map(level =>
+    spyOn(logger, level).mockImplementation(((...args: unknown[]) => {
+      (realLog[level] as (...logArgs: unknown[]) => void)(...args);
+    }) as never)
+  );
+  return {
+    output: (): string => lines.join(''),
+    restore: (): void => {
+      for (const spy of spies) spy.mockRestore();
+      setLogSink(undefined);
     },
   };
 }
