@@ -13,7 +13,6 @@ import {
   chatPluginDescriptorSchema,
   chatRunEventSchema,
   chatRunActionSchema,
-  type ChatPluginDescriptor,
   type ChatContext,
   type ChatRunActionResponse,
   type ChatRunEvent,
@@ -21,25 +20,7 @@ import {
   type ChatRunAction,
 } from './index';
 import { runChatConformance, type ChatConformanceFixture } from './conformance';
-
-const descriptor = {
-  protocol: 'archon-chat/1',
-  id: 'test-chat',
-  displayName: 'Test chat',
-  version: '1',
-  capabilities: {
-    attentionNotices: true,
-    defaultWorkflowDispatch: 'background',
-    resultFooter: true,
-    runEvents: true,
-  },
-  workflowCommand: { prefix: '/archon-workflow ' },
-  policy: {
-    workspaceRetention: 'age-based',
-    streaming: { defaultMode: 'batch', envVar: 'CHAT_STREAMING' },
-  },
-  allowlist: { envVar: 'CHAT_ALLOWED' },
-} satisfies ChatPluginDescriptor;
+import { descriptor } from './fixtures/descriptor';
 
 async function fixture(startError?: Error): Promise<
   ChatConformanceFixture & {

@@ -88,9 +88,19 @@ test.each(['crash', 'retry'])(
 test(
   'non-retryable starts and changed descriptors remain failed',
   async () => {
-    for (const mode of ['nonretry', 'mismatch']) {
+    for (const mode of ['nonretry', 'mismatch', 'protocol']) {
       const { supervisor, pids } = await fixture(mode);
       await until(() => records.some(record => record.includes('chat.plugin.closed')));
+      if (mode === 'protocol')
+        expect(records.map(record => JSON.parse(record))).toContainEqual({
+          event: 'chat.plugin.failed',
+          data: {
+            plugin: descriptor.id,
+            retryable: false,
+            hostProtocol: 'archon-chat/1',
+            pluginProtocol: 'archon-chat/2',
+          },
+        });
       await new Promise(resolve => setTimeout(resolve, 150));
       expect(await pids()).toHaveLength(1);
       await expect(
