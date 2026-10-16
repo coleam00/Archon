@@ -278,9 +278,9 @@ Archon does not confirm that the tree is gone, so some work outlives a reported 
 - On every OS, background work still running when the node's own process had already exited
   before the deadline. Archon does not signal a tree whose root has exited.
 
-If the tree cannot be ended, Archon ends the node's own process and the node fails with the
-termination error instead of timing out. It does not take `on_timeout: skip`, and dependents follow their `trigger_rule` as for any
-failed node.
+If the tree cannot be ended, Archon kills the node's own process (`SIGKILL` on macOS and
+Linux) and the node fails with the termination error instead of timing out. It does not take
+`on_timeout: skip`, and dependents follow their `trigger_rule` as for any failed node.
 
 ### Addressable session ancestry
 
