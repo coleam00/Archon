@@ -63,8 +63,9 @@ export const RATE_LIMIT_PAUSE_DELAY_MS = 10 * 60_000;
 /**
  * When a run paused by a rate limit that outlasted its retries tries again, in epoch ms:
  * the provider's reported reset while it is still ahead, otherwise a jittered backoff so
- * runs limited together do not wake in lockstep. `retryAfterMs` belongs to the retry loop,
- * not to this wait.
+ * runs limited together do not wake in lockstep. A seconds-scale `retryAfterMs` hint is
+ * deliberately not a deadline here: it would wake the run straight into another full retry
+ * cycle.
  */
 export function rateLimitResumeAt(failure: ProviderFailure, now: number): number {
   const reportedReset = failure.resetAt === undefined ? Number.NaN : Date.parse(failure.resetAt);
