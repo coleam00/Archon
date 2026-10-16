@@ -18,11 +18,11 @@
  * - INPUTS_EXISTING: the pull request this run continues, or `null`.
  * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
  * - INPUTS_TITLE: the title.
- * - INPUTS_BODY: the certified body file.
+ * - INPUTS_BODY: the certified body file; prepare writes none for a pull request it continues.
  * - INPUTS_DRAFT: `true` opens a draft.
  */
 
-import { unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
@@ -66,7 +66,7 @@ function publish(): PrRecord {
 
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
 
-  // The run continues a named pull request: its draft state belongs to its author.
+  // The run continues a named pull request: its draft state and description belong to its author.
   if (existing !== null) return viewPr({ repo, number: existing }, source).pr;
 
   const open = findOpenPrByHead(repo, headRepo, head, source);
@@ -76,6 +76,11 @@ function publish(): PrRecord {
   }
 
   const bodyPath = text(process.env.INPUTS_BODY);
+  // Prepare writes no body for a pull request it continues. Refuse before the claim:
+  // a create that cannot read its body sent nothing, and a kept claim blocks the retry.
+  if (!existsSync(bodyPath)) {
+    throw new Error(`no open pull request has ${headRepo.path}:${head}, and prepare wrote no body to open one with`);
+  }
 
   // Killing the script cannot cancel a submitted forge write. Keep this claim even
   // after success: a retry may only reconcile it.
