@@ -697,6 +697,8 @@ describe('completed run worktree release', () => {
       join(root, 'remote.git'),
       `HEAD:refs/heads/${env.branch_name}`
     );
+    // Git on Windows matches the path to the upstream URL and writes the tracking ref anyway.
+    await git(repo, 'update-ref', '-d', `refs/remotes/upstream/${env.branch_name}`);
     expect(await git(repo, 'branch', '-r', '--list', `upstream/${env.branch_name}`)).toBe('');
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
