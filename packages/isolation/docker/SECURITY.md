@@ -93,8 +93,10 @@ reports a failed FUSE mount through its dedicated exit status (78):
 | `native` (fallback) | `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` | **Open** — see above                                     | Everywhere (standard rootful daemon)                                                                    |
 
 On a **standard rootful daemon** (e.g. default Docker Desktop, default Docker
-Engine), unprivileged FUSE mounts are denied, so the `fuse` attempt fails fast and
-the backend falls back to `native` — meaning the remount escape is present. To get
+Engine), unprivileged FUSE mounts are denied. If the runner starts and reports
+that mount failure with exit status 78, the backend falls back to `native` —
+meaning the remount escape is present. Startup failures such as a missing
+`/dev/fuse` stop preparation instead. To get
 the hardened boundary (no CAP_SYS_ADMIN), run the daemon **rootless** or with
 **userns-remap**, where the `fuse` mode succeeds and the container never holds
 CAP_SYS_ADMIN.
@@ -107,7 +109,8 @@ Docker startup failures (including a missing `/dev/fuse`) and readiness timeouts
 reject preparation without trying native. Failed Docker inspect or log checks
 never authorize native fallback.
 Older runner images that report a generic exit status also fail without fallback;
-rebuild the runner image to use the dedicated FUSE mount status.
+rebuild existing and custom runner images after upgrading Archon to use the
+current entrypoint and its dedicated FUSE mount status.
 
 ## Write-back apply hardening
 
