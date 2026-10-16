@@ -2,10 +2,10 @@
  * The attention queue as a stream (#3050): every change to the items in scope, across
  * every run, including runs started after the stream did.
  *
- * The row is the truth, the event is the wake. Each committed event re-reads its run,
- * projects it through the queue's own item constructor, and emits a line only when what
- * the queue reports for that run changed. Out-of-process runs are covered because the
- * feed is the persisted store, not an in-process emitter. The watch reads only.
+ * Queue items reflect the current row; lifecycle lines follow committed events so
+ * transitions survive even when the row has already moved on. Out-of-process runs are
+ * covered because the feed is the persisted store, not an in-process emitter.
+ * The watch reads only.
  */
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -107,6 +107,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     status: terminalWorkflowRunStatusSchema,
     outcome: workflowRunOutcomeSchema.nullable(),
   }),
+  z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
@@ -474,6 +475,8 @@ export async function watchAttentionQueue(
         outcome: terminalOutcome(event, status),
       });
     }
+    if (event.event_type === 'workflow_resumed' && inScope)
+      emit({ type: 'resumed', cursor, project: view?.project ?? null, runId, status: 'running' });
     lost.delete(runId);
     if (view?.run.status === 'running' && inScope) arm(runId, view.project);
     else disarm(runId);

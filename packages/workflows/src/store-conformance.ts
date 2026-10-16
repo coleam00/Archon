@@ -1116,7 +1116,7 @@ export function describeWorkflowStoreConformance(
         await store.cancelFanOutRun(run.id, reason);
         const committed = await store.listWorkflowEvents(run.id);
         await store.recoverCancelledFanOutRun(run.id);
-        expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+        expect(await types(store, run.id)).toEqual(['workflow_resumed']);
         expect(
           (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
         ).toEqual(committed);
@@ -1147,7 +1147,7 @@ export function describeWorkflowStoreConformance(
         (await store.readWorkflowEventsAfter(head, { limit: 10 })).events.map(
           ({ event }) => event.event_type
         )
-      ).toEqual(['workflow_started']);
+      ).toEqual(['workflow_resumed', 'workflow_started']);
     });
     test('feed never reuses a position after run cleanup deletes the newest event', async () => {
       const run = await running(store);
@@ -1243,13 +1243,23 @@ export function describeWorkflowStoreConformance(
     test('pending claim has exactly one winner and stamps the checkout', async () => {
       await assertWorkflowClaimRace(store);
     });
-    test.each(['failed', 'paused'] as const)(
-      'resume from %s has one winner and preserves cleared failure evidence',
-      async status => {
+    test.each([
+      { status: 'failed', error: 'original error' },
+      { status: 'failed', error: '' },
+      { status: 'failed', error: null },
+      { status: 'failed', error: undefined },
+      { status: 'failed', error: 42 },
+      { status: 'paused', error: undefined },
+    ] as const)(
+      'resume from %j has one winner and preserves cleared failure evidence',
+      async ({ status, error }) => {
         const run = await running(store, { metadata: { keep: true } });
         if (status === 'failed')
-          await store.failWorkflowRun(run.id, 'original error', { exitReason: 'node_error' });
+          await store.failWorkflowRun(run.id, typeof error === 'string' ? error : '', {
+            exitReason: 'node_error',
+          });
         else await store.pauseWorkflowRun(run.id, approval);
+        await store.updateWorkflowRun(run.id, { metadata: { error } });
         const before = await types(store, run.id);
         const results = await Promise.allSettled(
           Array.from({ length: 8 }, () => store.resumeWorkflowRun(run.id))
@@ -1275,7 +1285,7 @@ export function describeWorkflowStoreConformance(
           const resumed = (await store.listWorkflowEvents(run.id)).find(
             event => event.event_type === 'workflow_resumed'
           );
-          expect(resumed?.data).toEqual({ error: 'original error' });
+          expect(resumed?.data).toEqual(typeof error === 'string' && error !== '' ? { error } : {});
         }
       }
     );
@@ -2504,27 +2514,30 @@ export function describeWorkflowStoreConformance(
           retryAt: new Date().toISOString(),
         };
         await store.cancelFanOutRun(recovered.id, reason);
-        const resumed = await store.recoverCancelledFanOutRun(recovered.id);
-        expect(resumed.status).toBe('running');
+        const results = await Promise.allSettled(
+          Array.from({ length: 8 }, () => store.recoverCancelledFanOutRun(recovered.id))
+        );
+        expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
         expect(await store.releaseRunForUnreadableSource(recovered.id, release)).toEqual({
           released: false,
         });
-        expect((await store.getWorkflowRun(recovered.id))?.status).toBe('running');
-        expect(await types(store, recovered.id)).toEqual([]);
+        const resumed = await store.getWorkflowRun(recovered.id);
+        expect(resumed?.status).toBe('running');
+        expect(await types(store, recovered.id)).toEqual(['workflow_resumed']);
         expect(
           await store.releaseRunForUnreadableSource(recovered.id, {
             ...release,
-            claimId: executionClaim(resumed.metadata),
+            claimId: executionClaim(resumed?.metadata ?? {}),
           })
         ).toEqual({ released: true });
-        expect(await types(store, recovered.id)).toEqual(['source_released']);
+        expect(await types(store, recovered.id)).toEqual(['workflow_resumed', 'source_released']);
       }
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_orphan');
       expect((await store.recoverCancelledFanOutRun(run.id)).status).toBe('running');
       await store.cancelWorkflowRun(run.id);
       expect(await rejection(store.recoverCancelledFanOutRun(run.id))).toBeInstanceOf(Error);
-      expect(await types(store, run.id)).toEqual(['workflow_cancelled']);
+      expect(await types(store, run.id)).toEqual(['workflow_resumed', 'workflow_cancelled']);
     });
     test('running-only event writes explicitly allow paused runs and refuse terminal runs', async () => {
       const run = await create(store);

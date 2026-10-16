@@ -23,6 +23,19 @@ function raw(over: Partial<Raw> & { event_type: string }): Raw {
 }
 
 describe('toRunEvent — base mapping', () => {
+  test.each([undefined, 'old failure'])(
+    'workflow_resumed labels optional error evidence (%s)',
+    error => {
+      expect(
+        toRunEvent(raw({ event_type: 'workflow_resumed', data: error ? { error } : {} }))
+      ).toMatchObject({
+        kind: 'system',
+        label: error ? 'Workflow resumed (prior error cleared)' : 'Workflow resumed',
+        detail: error ?? '',
+      });
+    }
+  );
+
   test('maps id, runId, timestamp, nodeId from the row', () => {
     const e = toRunEvent(raw({ event_type: 'node_started', step_name: 'plan' }));
     expect(e.id).toBe('e1');
