@@ -155,6 +155,46 @@ posixOnly('a recorded node deadline still reports the documented SIGTERM', async
   }
 });
 
+posixOnly('a recorded node timeout without endTreeOnTimeout ends its root only', async () => {
+  const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
+  const trees = recordNodeProcessTrees();
+  let job: number | undefined;
+  try {
+    const error = await runHostBash(
+      `/bin/sleep 30 >/dev/null 2>&1 & echo $! > '${pidFile}'; exec /bin/sleep 5`,
+      200
+    ).then(
+      () => undefined,
+      (e: unknown) => e as RawSubprocessRejection
+    );
+    expect(error && isSubprocessTimeout(error)).toBe(true);
+    job = Number(readFileSync(pidFile, 'utf8'));
+    expect(processExists(job)).toBe(true);
+  } finally {
+    trees.release();
+    if (job !== undefined && processExists(job)) process.kill(job, 'SIGKILL');
+  }
+});
+
+posixOnly('an unrecorded POSIX node stays in its owner process group', async () => {
+  const ownerGroup = Bun.spawnSync(['/bin/ps', '-o', 'pgid=', '-p', String(process.pid)])
+    .stdout.toString()
+    .trim();
+  const { stdout } = await runSubprocess(
+    { kind: 'host' },
+    '/bin/bash',
+    ['-c', '/bin/ps -o pgid= -p $$'],
+    {
+      cwd: import.meta.dir,
+      timeout: 5000,
+      env: {},
+      endTreeOnTimeout: true,
+      retention: { standalone: true },
+    }
+  );
+  expect(stdout.trim()).toBe(ownerGroup);
+});
+
 // A wrapper runtime (`bun run`, `uv run`) starts the real work as a grandchild. The node's
 // timeout must end that grandchild too, before the timeout is reported.
 async function expectTimeoutEndsGrandchild(): Promise<void> {
