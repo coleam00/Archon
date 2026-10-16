@@ -64,8 +64,10 @@ export async function effectiveRegistrationUrl(
 
 /**
  * A saved checkout belongs to a repository when any of its remotes points there.
- * worktree.remote only selects the remote for new worktrees; a project saved
- * under another remote's URL still owns its checkout.
+ * Registration stores the URL of the remote worktree.remote selects at that
+ * time. A project registered earlier, or under another selection, still owns a
+ * checkout whose config now selects a different remote, so any remote with the
+ * routed identity proves ownership.
  */
 export async function assertCheckoutRemote(path: string, remoteUrl: string): Promise<void> {
   try {
