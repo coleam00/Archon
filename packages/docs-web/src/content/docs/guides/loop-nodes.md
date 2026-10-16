@@ -93,7 +93,7 @@ Declaring more than one is fine and means "whichever fires first ends it".
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Prose completion signal.
-    max_iterations: 10      # Required. Hard limit — node fails if exceeded.
+    max_iterations: 10      # Required. Bounds autonomous iterations — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
     until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
     until_field: done       # Property in this node's `output_format` whose validated
@@ -200,9 +200,14 @@ rejected at load.
 
 ### `max_iterations`
 
-Hard safety limit. If the loop reaches this count without meeting any declared
-completion channel, the node **fails** (not succeeds). This prevents runaway loops
-from burning tokens indefinitely.
+Bounds autonomous iterations. If the loop reaches this count without meeting any
+declared completion channel, the node **fails** (not succeeds). This prevents runaway
+loops from burning tokens indefinitely.
+
+Only an explicit answer runs an iteration past the bound: a comment on a legacy
+[interactive gate](#interactive-and-gate_message), or an answer to a `loop_group`'s
+[terminal attention wait](#pausing-to-ask-inside-the-body). Each answer permits one more
+iteration, and each further iteration needs another answer.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -893,7 +898,9 @@ iteration`, followed by an excerpt of the output and the `gate_message`.
 - On a completed iteration, approving with no comment finalizes the node from the
   output already computed, with no re-run. Approving with a comment runs another
   iteration with the comment as `$LOOP_USER_INPUT`.
-- On an iteration that did not complete, both forms run another iteration.
+- On an iteration that did not complete, both forms run another iteration. On the final
+  iteration (`max_iterations`), only a comment runs one more; approving with no comment
+  fails the node with `max_iterations`.
 
 The rule is the same on every surface: chat `/workflow approve <id> [comment]`,
 `archon workflow approve <id> [comment]`, the HTTP endpoint (omit `comment` to

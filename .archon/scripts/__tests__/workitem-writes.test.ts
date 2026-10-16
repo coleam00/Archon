@@ -64,7 +64,7 @@ test('unpublished and non-tracker triage never invoke either transport', () => {
 test('a ready item is labelled with the route the run takes on it', () => {
   for (const [decision, label] of [
     [{ contract: 'READY', route: 'plan' }, 'archon-plan'],
-    [{ contract: 'READY', route: 'investigate' }, 'archon-issue'],
+    [{ contract: 'READY', route: 'investigate' }, 'archon-investigate'],
     [{ contract: 'READY', route: 'continue', pull_request: 3 }, 'archon-ready'],
   ] as const) {
     const run = runPackScript('triage/scripts/verdict', {

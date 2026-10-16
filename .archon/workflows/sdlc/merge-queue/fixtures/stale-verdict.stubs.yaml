@@ -1,0 +1,55 @@
+# Dry-run fixture, a stale verdict: a fixer pushed after the review, so the verdict is
+# about an older commit than the head. Nothing conflicts, so nothing is synced; the
+# delta review runs from the trusted review report before the pull request can merge.
+# The queue's scripts are stubbed here and proved by
+# .archon/scripts/__tests__/merge-queue.test.ts.
+facts:
+  path: sweep
+  base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  items:
+    - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+      pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+      url: "https://github.com/example/repo/pull/42"
+      facts: { state: open, head_revision: "3333333", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
+      record: null
+      prior_report: "/stub/merge/42/review/report.md"
+      recorded: null
+  settled: []
+  gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--receipts' '/stub/receipts'"
+  policy_defaults: "/stub/policy"
+sweep:
+  decisions:
+    - { number: 42, action: review, class: clear, head: "3333333", synced: false, reran: false, reason: "stub: the verdict is for 1111111, the head is 3333333", brief: "", attention: null }
+  review_url: "https://github.com/example/repo/pull/42"
+  review_prior: "/stub/merge/42/review/report.md"
+  dev: { state: unchecked, rerun: none, summary: "stub: nothing merged", attention: null }
+  summary: "stub: sent PR 42 to a delta review"
+review__mode: '{"continuation":true,"light":false,"head":"3333333","cursor":"1111111","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
+review__route: { seams: false, code: false, tests: false, errors: false, docs: false, reason: "stub: the delta is the base merge and its resolution" }
+review__scope:
+  head_matches: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+review__code: "0 findings in the delta"
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize: &verdict
+  ready: true
+  action: none
+  findings_summary: "stub: the delta is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+review__publish: *verdict
+record:
+  merged: []
+  summary: "stub: PR 42 waits for the next sweep"
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, sweep, review__code, review__publish, record]
+exec-code: true

@@ -60,7 +60,10 @@ CI runs again. A flake or infrastructure failure outside the change gets one re-
 of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
 the run not ready, and a defect outside the change becomes a discovery.
 
-A pull request counts as ready only at the commit its review comment stamps. CI never
+A pull request counts as ready only at the commit its review comment stamps. The
+comment's first lines are stamped by `publish-review` from the round's certified
+output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
+and the verdict, which the merge queue's gate reads. CI never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
 that pull request, whose first round reviews the whole change before CI marks it
@@ -92,6 +95,9 @@ same shapes from either source:
 
 The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
 Keep `gh` as the default until a compatible release passes a real-PR check.
+
+The merge queue reads through `gh` alone and refuses `forge`: its gate needs a pull
+request's unresolved review threads, which the forge contract does not report.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -246,12 +252,13 @@ ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
 falling back to the pack's defaults"; triage names `triage.md`, and plan and review
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
 read before either stops for a person. The build queue's agents name `build.md`, what
-the queue may decide on its own, and its route and answer agents `rulings.md` too.
+the queue may decide on its own, and its route and answer agents `rulings.md` too. The
+merge queue's sweep names `merge.md`, which pull requests merge on their own.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
 A node reaches the defaults through a script node of its workflow: its `policy` node,
-or the build queue's `facts`. A run
+or the build or merge queue's `facts`. A run
 captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
@@ -391,9 +398,9 @@ it; both share one resource so runs queue rather than overlap:
 
 The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
-"in": ["archon-triage", "archon-ready", "archon-plan", "archon-issue"]}]}`, and two
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
-The predicate only saves runs; intake ignores any other label.
+The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
 ### The backlog bench
 
@@ -567,7 +574,110 @@ changes its checkout, so every run needs its own worktree:
 
 To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
-(`archon-ready`, `archon-plan`, `archon-issue`) and the same launch.
+(`archon-ready`, `archon-plan`, `archon-investigate`) and the same launch.
+
+## Merge queue
+
+[`archon-merge-queue`](merge-queue/archon-merge-queue.yaml) merges the pull requests
+the build queue finished, and stops only for decisions that belong to a person. It
+merges on its own when a case is clear and asks when it is not; the default policy for
+which is which is [`.shared/policy/merge.md`](.shared/policy/merge.md), which a project
+replaces with its own `.archon/sdlc/policy/merge.md`.
+
+- **Pickup.** A run claims every waiting item, up to `limit` (default 10), with
+  intake's claim and order. An item waits for the merge queue when its build record is
+  `ready` and the merge queue has not settled it: it never decided it, or left it
+  waiting or asking. When the build queue readies an item again after the merge queue
+  returned or parked it, it waits again. The pull request is the one the build
+  queue's last round delivered. One already merged or closed is recorded without the
+  agent.
+- **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
+  head, how many commits of the default branch it lacks, whether it merges cleanly, its size, CI and unresolved review threads at the
+  head, and the review verdict. Only a review comment a listed maintainer wrote
+  (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
+  else can post a verdict. The trusted report is written under the run's
+  `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
+  review.
+- **Sweep.** One agent decides every pull request and orders them, least risk first.
+  It merges the default branch into any whose head lacks commits of it, resolving each
+  conflict and regenerating generated files with their owning script, and pushes
+  without force. Each merge moves the default branch, so the pull requests after it
+  sync and wait for their delta review and CI: a sweep merges at most one pull request. A
+  push, by the sweep or anyone else, makes the verdict stale, and so does a comment
+  published before verdicts were stamped: one such pull request gets a delta review in
+  the same run, through an included `archon-review` continuing from its last report,
+  and the rest wait for the next sweep. Red CI in code a pull request does not touch
+  gets one rerun of its failed jobs; the record stores the head it re-ran at and
+  refuses a second rerun there. What the build queue can fix (a verdict that is
+  not Ready, an unresolved thread, red the change caused) goes back to it with a
+  brief. A clear pull request whose gate passes is merged.
+- **Gate.** The sweep merges only through
+  [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
+  refuses unless the verdict says Ready at the head, CI is green there and no review
+  thread is unresolved, and the pull request is open, not a draft, into the default
+  branch, at the head the sweep named, and that head contains the default branch's
+  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
+  writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
+  request that reads back unmerged, as when the forge queues merges, loses its receipt
+  and fails the gate.
+- **The default branch.** While its CI is red, the sweep merges nothing. After a
+  batch it waits for CI on the default branch, rerunning a red in code the batch did
+  not touch once; red after that is raised to a maintainer.
+- **Record.** The `record` script refuses, before it writes anything, a sweep that
+  left a claimed pull request undecided, decided one twice, offered an attention item
+  a person could not answer, says it merged a pull request without the gate's receipt
+  at that head, declared anything else for one the gate merged, merged a pull request
+  it did not claim, merged without checking the default branch afterwards, or raised
+  the default branch without merging. It reads every pull request back: the forge, not
+  the sweep, says what merged, and a merge with no receipt is recorded as made outside
+  the run. A pull request that cannot be read waits for the next sweep, and is parked
+  when it could not be read the sweep before either; a work item that cannot be
+  written is reported, so one bad item never loses the rest of the batch's record.
+  It runs even when the delta review failed. It writes one decision per item under
+  `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
+  approval pinned to the head it approved, and
+  the last twenty decisions), and a return sets the build record to `next` with the
+  brief, so the build queue picks it up.
+- **Attention.** A run raises at most one attention item: a red default branch, whose
+  one choice holds merges until it is green, or else the first pull request the sweep
+  asked about, labelled `merge: dev` or `merge: pr`. It carries the build queue's
+  fields: what it is, why it matters, the recommendation with its evidence, confidence
+  and what would change it, the declared choices, what happens if nobody answers, and
+  links. On a pull request, `merge` approves it at the head that was asked about, and
+  a later sweep merges it once the gate passes there; `return` writes the choice's
+  ruling into the issue body as a dated "Current scope" section and hands the item
+  back to the build queue; `park` stops working it until the build queue readies it
+  again. Any other ask waits for a later sweep, which decides it again.
+- **Eval mode.** `mode: eval` claims, pushes, reruns and merges nothing. It decides
+  the pull requests named in `replay`, each from the facts recorded with it, and
+  returns the decisions as the record's `evaluation`.
+
+The pack installs no binding. A schedule sweeps the queue; each run changes its
+checkout when it syncs a pull request, so it needs its own worktree, and one sweep at a
+time keeps two runs from syncing the same branch:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-merge-queue",
+  "binding": {
+    "bindingId": "merge-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:merge",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-merge-queue",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "worktree" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
 
 ## Discoveries
 

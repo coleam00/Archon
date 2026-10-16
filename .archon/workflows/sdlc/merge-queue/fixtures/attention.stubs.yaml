@@ -1,0 +1,59 @@
+# Dry-run fixture, an unclear pull request: it changes the SDLC pack, so the sweep asks
+# instead of merging. The run pauses as one attention item whose answer is a declared
+# choice, and the ruling node records the approval. The queue's scripts are stubbed
+# here and proved by .archon/scripts/__tests__/merge-queue.test.ts.
+facts:
+  path: sweep
+  base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  items:
+    - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+      pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+      url: "https://github.com/example/repo/pull/42"
+      facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
+      record: null
+      prior_report: "/stub/merge/42/review/report.md"
+      recorded: null
+  settled: []
+  gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--receipts' '/stub/receipts'"
+  policy_defaults: "/stub/policy"
+sweep:
+  decisions:
+    - number: 42
+      action: ask
+      class: unclear
+      head: "1111111"
+      synced: false
+      reran: false
+      reason: "stub: a pack change; the gate passes"
+      brief: "stub: rework PR 42 under the ruling"
+      attention:
+        what: "stub: PR 42 changes the SDLC pack; merge it?"
+        why: "stub: what either answer changes"
+        recommendation: { choice: merge, why: "stub: why", evidence: "stub: evidence", confidence: medium, would_change: "stub: what would change it" }
+        choices:
+          - { id: merge, label: "stub: merge it", does: "stub: merges once the gate passes", effect: merge, ruling: "" }
+          - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
+        if_unanswered: "stub: it waits"
+        links: ["https://github.com/example/repo/pull/42"]
+  review_url: ""
+  review_prior: ""
+  dev: { state: unchecked, rerun: none, summary: "stub: nothing merged", attention: null }
+  summary: "stub: asked about PR 42"
+record:
+  merged: []
+  summary: "stub: asked about PR 42"
+  attention: "stub: the attention message"
+  options: [{ id: merge, label: "stub: merge it" }, { id: park, label: "stub: park it" }]
+  class: pr
+  asked: { by: pr, attention: {} }
+  evaluation: null
+ask: { decision: merge, text: "" }
+ruling:
+  decision: merge
+  section: ""
+  summary: "stub: PR 42: the maintainer chose merge"
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, sweep, record, ask, ruling]
+exec-code: true
