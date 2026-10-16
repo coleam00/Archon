@@ -774,8 +774,8 @@ with its own `.archon/sdlc/policy/attention.md`.
 
 - **Pickup.** A run reads this project's queue with `archon workflow attention --json`
   and takes the oldest open `select` item that carries no `attention: maintainer`
-  label and has no completed decision or live decision owner. A `message` wait has no declared choice to answer
-  with, so it stays for a person, as do gates. A `select` item the manager cannot read
+  label and has no completed decision or live decision owner. A `message` wait has no
+  declared choice to answer with, so it stays for a person, as do gates. A `select` item the manager cannot read
   is named on stderr and left. The workflow has no wait node, so a manager run is never
   an item it could answer.
 - **Decide.** One agent reads the item, the paused run's artifacts, the issue it
@@ -801,15 +801,15 @@ with its own `.archon/sdlc/policy/attention.md`.
   what needs a person with
   `archon workflow attention --watch --json --label attention=maintainer`.
 - **Record.** Every decision is the state document
-  `attention-manager/decisions/<run-id>/<occurrence-key>` (occurrences outside the
-  state-name alphabet, including legacy pauses, use a SHA-256 key with an `encoded-`
-  prefix; that prefix is reserved and encoded too): the item, the outcome, the
+  `attention-manager/decisions/<item-key>`, keyed by a SHA-256 hash of the run id and
+  occurrence (including legacy pauses). The record keeps both original identifiers: the item, the outcome, the
   agent's choice, ruling, sources, confidence and reason, any reason the script
   escalated an answer, and the write's result. List them with
-  `archon state list --prefix attention-manager/decisions/`. A successful record prevents another decision. Incomplete writes (`applied` null,
+  `archon state list --prefix attention-manager/decisions/`. A successful record
+  prevents another decision. Incomplete writes (`applied` null,
   refused or unconfirmed) are retried only after the engine reports the manager run
-  completed, failed or cancelled; live or unknown owners keep their claim. A person overrides
-  an answer by superseding the dated scope section it wrote, or by re-triaging the item.
+  completed, failed or cancelled; live or unknown owners keep their claim. A person
+  overrides an answer by superseding the dated scope section it wrote, or by re-triaging the item.
 - **Eval mode.** `mode: eval` decides the item given as `item`, one queue item as
   `archon workflow attention <run-id> --json` printed it, reads no queue and writes
   nothing. It returns the agent's decision, the outcome and the write live would make

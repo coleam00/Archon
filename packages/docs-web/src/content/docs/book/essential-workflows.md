@@ -129,7 +129,7 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 
 #### `archon-attention-manager`
 
-Answers the attention queue's clear items. Each run takes the oldest open select item no person was asked about, and one agent decides it from the project's steering documents, its rulings and the issue's dated scope sections: answer with one of the item's declared choices and a ruling that cites its sources, or escalate. A script escalates any answer that is low confidence, cites nothing or names an undeclared choice, then answers the item or labels it `attention: maintainer` and reads the write back. With the default `autonomy: none` it never answers, only records what it would. With `mode: eval` it decides one given item and writes nothing.
+Answers the attention queue's clear items. Each run takes the oldest open select item no person was asked about, and one agent decides it from the project's steering documents, its rulings and the issue's dated scope sections: answer with one of the item's declared choices and a ruling that cites its sources, or escalate. A script escalates any answer that is low confidence, cites nothing or names an undeclared choice, then answers the item or labels it `attention: maintainer` and reads the write back. With the default `autonomy: none` it records a recommendation and labels the item for a person. With `mode: eval` it decides one given item and writes nothing.
 
 **When to use it**: The build and merge queues raise attention items that the project's documents already answer. Add the schedule binding the SDLC pack README's "Attention manager" section shows; the pack installs none.
 

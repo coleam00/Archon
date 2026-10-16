@@ -83,15 +83,12 @@ describe('the attention manager rules', () => {
     }
     const runIds = ['a'.repeat(165), 'a'.repeat(166), 'a'.repeat(167), ...Array.from({ length: 128 }, (_, code) => `run${String.fromCharCode(code)}id`)];
     for (const runId of runIds) {
-      const raw = `attention-manager/decisions/${runId}/pause-1`;
-      if (stateDocumentNameSchema.safeParse(raw).success) expect(recordName(runId, 'pause-1')).toBe(raw);
-      else expect(() => recordName(runId, 'pause-1')).toThrow('state document name');
+      expect(stateDocumentNameSchema.safeParse(recordName(runId, 'pause-1')).success).toBe(true);
     }
     expect(recordName('run-a', 'legacy:ask')).not.toBe(recordName('run-a', 'legacy/ask'));
     expect(recordName('run-a', 'encoded-abc')).not.toBe(recordName('run-a', 'abc'));
-    for (const runId of ['Bad', 'run:1', '', 'a'.repeat(201)]) {
-      expect(() => recordName(runId, 'pause-1')).toThrow('state document name');
-    }
+    expect(recordName('a/b', 'c')).not.toBe(recordName('a', 'b/c'));
+
   });
 
   test('autonomy defaults to none and refuses anything outside its vocabulary', () => {

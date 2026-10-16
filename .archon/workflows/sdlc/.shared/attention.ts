@@ -33,20 +33,9 @@ export interface QueueItem {
 
 export const DECISIONS_PREFIX = 'attention-manager/decisions/';
 
-const STATE_NAME = /^[a-z0-9._-]+(?:\/[a-z0-9._-]+)*$/;
-const STATE_NAME_MAX = 200;
-
-/** The decision record's state document for one pause occurrence. */
+/** The original identifiers stay in the record; hashing keeps legacy pause keys valid. */
 export function recordName(runId: string, occurrence: string): string {
-  const raw = `${DECISIONS_PREFIX}${runId}/${occurrence}`;
-  const key = STATE_NAME.test(occurrence) && !occurrence.startsWith('encoded-') && raw.length <= STATE_NAME_MAX
-    ? occurrence
-    : `encoded-${createHash('sha256').update(occurrence).digest('hex')}`;
-  const name = `${DECISIONS_PREFIX}${runId}/${key}`;
-  if (!STATE_NAME.test(name) || name.length > STATE_NAME_MAX) {
-    throw new Error(`run ${runId} occurrence ${occurrence} does not make a state document name`);
-  }
-  return name;
+  return `${DECISIONS_PREFIX}${createHash('sha256').update(JSON.stringify([runId, occurrence])).digest('hex')}`;
 }
 
 function field(value: Record<string, unknown>, name: string): string {
