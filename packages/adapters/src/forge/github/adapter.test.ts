@@ -1896,22 +1896,56 @@ describe('GitHubAdapter', () => {
       }
     });
 
-    test('PAT clone uses the env token as the password', async () => {
-      const savedToken = process.env.GITHUB_TOKEN;
+    test.each([
+      {
+        GH_TOKEN: 'ghp_gh_clone_token',
+        GITHUB_TOKEN: 'ghp_github_clone_token',
+        expected: 'ghp_gh_clone_token',
+      },
+      { GH_TOKEN: 'ghp_gh_clone_token', GITHUB_TOKEN: undefined, expected: 'ghp_gh_clone_token' },
+      {
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: 'ghp_github_clone_token',
+        expected: 'ghp_github_clone_token',
+      },
+      { GH_TOKEN: '', GITHUB_TOKEN: 'ghp_github_clone_token', expected: 'ghp_github_clone_token' },
+      { GH_TOKEN: '', GITHUB_TOKEN: '', expected: undefined },
+    ])('PAT clone selects GH_TOKEN before GITHUB_TOKEN: %j', async env => {
+      const savedTokens = {
+        GH_TOKEN: process.env.GH_TOKEN,
+        GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      };
       try {
-        process.env.GITHUB_TOKEN = 'ghp_pat_clone_token';
+        for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+          if (env[key] === undefined) delete process.env[key];
+          else process.env[key] = env[key];
+        }
         const repoPath = unclonedPath();
         await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
 
         expect(mockCloneRepository).toHaveBeenCalledWith(
           'https://github.com/owner/repo.git',
           repoPath,
-          { credentials: { username: 'x-access-token', password: 'ghp_pat_clone_token' } }
+          env.expected
+            ? { credentials: { username: 'x-access-token', password: env.expected } }
+            : undefined
         );
-        expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('ghp_pat_clone_token');
+        for (const log of [
+          mockLogger.info,
+          mockLogger.debug,
+          mockLogger.warn,
+          mockLogger.error,
+          mockLogger.trace,
+          mockLogger.fatal,
+        ]) {
+          expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_gh_clone_token');
+          expect(JSON.stringify(log.mock.calls)).not.toContain('ghp_github_clone_token');
+        }
       } finally {
-        if (savedToken === undefined) delete process.env.GITHUB_TOKEN;
-        else process.env.GITHUB_TOKEN = savedToken;
+        for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+          if (savedTokens[key] === undefined) delete process.env[key];
+          else process.env[key] = savedTokens[key];
+        }
       }
     });
 
