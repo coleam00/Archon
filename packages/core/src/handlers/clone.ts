@@ -270,7 +270,7 @@ async function findRegisteredRemote(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,
   remoteUrl: string
 ): Promise<Codebase | null> {
-  return findRemoteOwner(await codebases.listCodebases(), remoteUrl, 'registration');
+  return findRemoteOwner(await codebases.listCodebases(), remoteUrl);
 }
 
 async function validateRegistrationChoice(
@@ -559,6 +559,12 @@ export async function cloneRepository(
       getLog().error(
         { path: targetPath, err: cleanupError },
         'registration.checkout_cleanup_failed'
+      );
+      throw new AggregateError(
+        [error, cleanupError],
+        `${error instanceof Error ? error.message : String(error)} ` +
+          `Checkout cleanup failed at ${targetPath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error }
       );
     }
     throw error;

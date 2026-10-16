@@ -1274,15 +1274,25 @@ describe('cloneRepository', () => {
 
   // ── Error handling ─────────────────────────────────────────────────────
   describe('error handling', () => {
-    test('retains the registration error and logs a failed checkout cleanup', async () => {
+    test('reports both registration and cleanup failures with the retained checkout path', async () => {
       const registrationError = new Error('Project owner at /existing/checkout; use worktrees');
       const cleanupError = new Error('permission denied');
       mockCreateCodebase.mockRejectedValueOnce(registrationError);
       spyFsRm.mockRejectedValueOnce(cleanupError);
 
-      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toBe(
-        registrationError
+      const error = await cloneRepository('https://github.com/owner/repo').catch(
+        (error: unknown) => error
       );
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error instanceof AggregateError && error.errors).toEqual([
+        registrationError,
+        cleanupError,
+      ]);
+      expect(error instanceof Error && error.cause).toBe(registrationError);
+      expect(error instanceof Error && error.message).toContain(
+        '/home/test/.archon/workspaces/owner/repo/source'
+      );
+      expect(error instanceof Error && error.message).toContain(cleanupError.message);
       expect(mockLogger.error).toHaveBeenCalledWith(
         { path: '/home/test/.archon/workspaces/owner/repo/source', err: cleanupError },
         'registration.checkout_cleanup_failed'
