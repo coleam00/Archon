@@ -225,39 +225,6 @@ export function getUserModelsStorePath(): string {
   return join(dirname(getUserModelsPath()), 'models-store.json');
 }
 
-function parseModelsJson(raw: string): unknown {
-  let json = '';
-  let quoted = false;
-  let escaped = false;
-  for (let i = raw.charCodeAt(0) === 0xfeff ? 1 : 0; i < raw.length; i++) {
-    const char = raw[i];
-    if (quoted) {
-      json += char;
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') quoted = false;
-    } else if (char === '"') {
-      quoted = true;
-      json += char;
-    } else if (char === '/' && raw[i + 1] === '/') {
-      while (i + 1 < raw.length && raw[i + 1] !== '\n') i++;
-      json += ' ';
-    } else if (char === '/' && raw[i + 1] === '*') {
-      const end = raw.indexOf('*/', i + 2);
-      if (end === -1) throw new Error('Unterminated models.json comment');
-      i = end + 1;
-      json += ' ';
-    } else json += char;
-  }
-  // Pi permits trailing commas while leaving quoted commas untouched.
-  return JSON.parse(
-    json.replace(
-      /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g,
-      (match, tail: string | undefined) => tail ?? match
-    )
-  );
-}
-
 /**
  * Substitute custom-provider env references, or remove competing native auth for a
  * delivered credential. The returned private file must live until runtime release.
@@ -278,7 +245,15 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   }
   let parsed: { providers?: Record<string, Record<string, unknown>> };
   try {
-    parsed = parseModelsJson(raw) as { providers?: Record<string, Record<string, unknown>> };
+    // Pi's private stripJsonComments utility is not exported. Mirror its syntax;
+    // the real-SDK credential-authority test checks native/rewrite conformance.
+    const json = (raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw)
+      .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, match => (match[0] === '"' ? match : ''))
+      .replace(
+        /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g,
+        (match, tail: string | undefined) => tail ?? (match[0] === '"' ? match : '')
+      );
+    parsed = JSON.parse(json) as { providers?: Record<string, Record<string, unknown>> };
   } catch (err) {
     if (scope.authoritativeCredential) throw err;
     return undefined;

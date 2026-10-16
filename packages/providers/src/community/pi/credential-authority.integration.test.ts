@@ -30,7 +30,7 @@ for (const authoritative of [false, true]) {
     await writeFile(authPath, JSON.stringify({ anthropic: { type: 'api_key', key: 'user-key' } }));
     await writeFile(
       join(root, 'models.json'),
-      `// native JSONC configuration\n${JSON.stringify(
+      `\uFEFF// native JSONC configuration\n${JSON.stringify(
         {
           providers: {
             anthropic: {
@@ -39,7 +39,7 @@ for (const authoritative of [false, true]) {
                 Authorization: 'Bearer host',
                 'x-api-key': 'host',
                 'X-Project': 'kept',
-                'X-Syntax': 'quoted,} and ,]',
+                'X-Syntax': 'quoted,} and ,] with "quotes" // and /* text */',
               },
               models: [
                 {
@@ -86,7 +86,7 @@ for (const authoritative of [false, true]) {
         expect(result?.auth.apiKey).toBe('user-key');
         const headers = result?.auth.headers ?? {};
         expect(headers['X-Project']).toBe('kept');
-        expect(headers['X-Syntax']).toBe('quoted,} and ,]');
+        expect(headers['X-Syntax']).toBe('quoted,} and ,] with "quotes" // and /* text */');
         expect(headers['X-Model']).toBe('kept');
         const authHeaders = Object.keys(headers).filter(name =>
           ['authorization', 'x-api-key'].includes(name.toLowerCase())
@@ -99,3 +99,25 @@ for (const authoritative of [false, true]) {
     }
   });
 }
+
+test('delivered credentials do not make native-invalid block comments valid', async () => {
+  await writeFile(
+    join(root, 'models.json'),
+    '/* unsupported comment */ {"providers":{"anthropic":{"apiKey":"host-key"}}}'
+  );
+  const native = await ModelRuntime.create({ refreshOnCreate: false });
+  expect(native.getError()).toContain('Failed to parse models.json');
+
+  await expect(
+    createRequestModelRuntime(
+      options => ModelRuntime.create({ ...options, refreshOnCreate: false }),
+      undefined,
+      {
+        provider: 'anthropic',
+        env: {},
+        protectedEnvKeys: [],
+        authoritativeCredential: true,
+      }
+    ).then(request => request.release())
+  ).rejects.toThrow(SyntaxError);
+});
