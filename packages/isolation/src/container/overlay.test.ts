@@ -88,7 +88,7 @@ describe('summarizeOverlayChanges', () => {
 
   test('a docker failure is surfaced, not swallowed', async () => {
     const docker = fakeDocker(() => {
-      throw new Error('Cannot connect to the Docker daemon');
+      throw new IsolationFailure('unclassified', 'Cannot connect to the Docker daemon');
     });
     await expect(summarizeOverlayChanges(docker, TARGET)).rejects.toThrow(
       /inspect the overlay diff/
@@ -110,22 +110,24 @@ describe('applyOverlayChanges', () => {
     expect(joined).not.toContain('/tmp/ops:/dest:ro');
   });
 
-  test.each(['raw', 'wrapped'] as const)(
-    'a %s partial apply failure reports how many paths landed',
-    async shape => {
-      const err = Object.assign(new Error('cp: No space left on device'), {
-        stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
-      });
-      const docker = fakeDocker(() => {
-        throw shape === 'wrapped'
-          ? new IsolationFailure('unclassified', 'docker run failed', err)
-          : err;
-      });
-      await expect(applyOverlayChanges(docker, TARGET)).rejects.toThrow(
-        /2 path\(s\) already applied/
-      );
-    }
-  );
+  test('a partial apply failure preserves the process evidence and paths landed', async () => {
+    const cause = Object.assign(new Error('cp: No space left on device'), {
+      stdout: records(['W', 'a.txt'], ['W', 'b.txt']),
+      stderr: 'cp: No space left on device',
+      code: 23,
+    });
+    const failure = new IsolationFailure('unclassified', 'docker run failed', cause);
+    const docker = fakeDocker(() => {
+      throw failure;
+    });
+    const error = await applyOverlayChanges(docker, TARGET).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error('expected partial apply failure');
+    expect(error.message).toContain('2 path(s) already applied');
+    expect(error.cause).toBe(failure);
+    expect(failure.cause).toBe(cause);
+    expect(failure.cause).toMatchObject({ code: 23, stdout: cause.stdout, stderr: cause.stderr });
+  });
 
   test('surfaces helper stderr as warnings', async () => {
     const docker = fakeDocker({
@@ -136,3 +138,14 @@ describe('applyOverlayChanges', () => {
     expect(summary.warnings).toEqual(['skipped opaque dir foo/']);
   });
 });
+
+test.each([summarizeOverlayChanges, applyOverlayChanges])(
+  '%s propagates unexpected runner failures unchanged',
+  async operation => {
+    const failure = new ReferenceError('broken runner');
+    const docker = fakeDocker(() => {
+      throw failure;
+    });
+    await expect(operation(docker, TARGET)).rejects.toBe(failure);
+  }
+);

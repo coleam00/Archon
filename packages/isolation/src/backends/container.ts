@@ -687,7 +687,7 @@ export class ContainerBackend implements IIsolationBackend {
     codebaseId: string,
     mounts: HostMounts
   ): Promise<{ containerId: string; mode: OverlayMode }> {
-    const failures: { mode: OverlayMode; error: unknown }[] = [];
+    const failures: { mode: OverlayMode; error: IsolationFailure }[] = [];
     for (const mode of OVERLAY_MODES) {
       let containerId: string;
       try {
@@ -700,7 +700,7 @@ export class ContainerBackend implements IIsolationBackend {
           mounts
         );
       } catch (runErr) {
-        if (runErr instanceof TypeError || runErr instanceof RangeError) throw runErr;
+        if (!(runErr instanceof IsolationFailure)) throw runErr;
         // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
         // fuse device) — record and try the next mode. Nothing to remove.
         failures.push({ mode, error: runErr });
@@ -713,16 +713,16 @@ export class ContainerBackend implements IIsolationBackend {
         }
         return { containerId, mode };
       } catch (readyErr) {
-        if (readyErr instanceof TypeError || readyErr instanceof RangeError) throw readyErr;
-        // Container started but the mount failed (entrypoint exits fast) — remove
-        // it so the name is free for the next mode, then continue.
-        failures.push({ mode, error: readyErr });
+        // Readiness can crash before a tracking row exists. Remove the started
+        // container before propagating the error or trying another mode.
         await this.docker(['rm', '-f', containerName]).catch(rmErr => {
           log.warn(
             { containerName, mode, detail: extractDockerError(rmErr) },
             'isolation.container_fallback_cleanup_failed'
           );
         });
+        if (!(readyErr instanceof IsolationFailure)) throw readyErr;
+        failures.push({ mode, error: readyErr });
       }
     }
     throw new IsolationFailure(
@@ -814,53 +814,43 @@ export class ContainerBackend implements IIsolationBackend {
    */
   private async waitForReady(containerId: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
+    const failures = new Map<'exec' | 'inspect' | 'logs', IsolationFailure>();
     while (Date.now() < deadline) {
       try {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
         return;
       } catch (error) {
-        if (error instanceof TypeError || error instanceof RangeError) throw error;
-        // Not ready yet. ONLY fast-fail when the container has DEFINITELY exited
-        // (`Running=false`) — a transient inspect error/timeout must NOT be read
-        // as "stopped", or an infra blip would silently trigger the native +
-        // CAP_SYS_ADMIN fallback (privilege broadening). On 'unknown' keep polling
-        // until the deadline (a real exit still surfaces via the timeout).
-        if ((await this.containerState(containerId)) === 'stopped') break;
-        await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
+        if (!(error instanceof IsolationFailure)) throw error;
+        failures.set('exec', error);
       }
+      // An inspect failure is not evidence of exit: keep polling rather than
+      // broadening privileges to native overlay on a transient daemon failure.
+      try {
+        const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
+          timeout: 5_000,
+        });
+        if (stdout.trim() === 'false') break;
+      } catch (error) {
+        if (!(error instanceof IsolationFailure)) throw error;
+        failures.set('inspect', error);
+      }
+      await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
     }
     let logs = '';
     try {
       const { stdout, stderr } = await this.docker(['logs', '--tail', '20', containerId]);
       logs = `${stdout}\n${stderr}`.trim();
     } catch (error) {
-      if (error instanceof TypeError || error instanceof RangeError) throw error;
-      // Best-effort — the timeout / exit is the real error.
+      if (!(error instanceof IsolationFailure)) throw error;
+      failures.set('logs', error);
     }
-    throw new Error(
-      `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}`
+    const errors = [...failures.values()];
+    throw new IsolationFailure(
+      'unclassified',
+      `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}` +
+        (errors.length ? ` Docker failures:\n${errors.map(extractDockerError).join('\n')}` : ''),
+      new AggregateError(errors, 'Docker readiness checks failed')
     );
-  }
-
-  /**
-   * Container running state as three distinct outcomes. Crucially, an inspect
-   * ERROR (daemon timeout, transient failure) is `unknown`, NOT `stopped` — the
-   * caller must not treat "couldn't tell" as "exited" (see waitForReady: only an
-   * explicit `stopped` may fast-fail into the privileged native fallback).
-   */
-  private async containerState(containerId: string): Promise<'running' | 'stopped' | 'unknown'> {
-    try {
-      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
-        timeout: 5_000,
-      });
-      const value = stdout.trim();
-      if (value === 'true') return 'running';
-      if (value === 'false') return 'stopped';
-      return 'unknown';
-    } catch (error) {
-      if (error instanceof TypeError || error instanceof RangeError) throw error;
-      return 'unknown';
-    }
   }
 
   /**

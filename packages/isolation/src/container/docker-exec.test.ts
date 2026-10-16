@@ -53,7 +53,7 @@ describe('dockerPreflight', () => {
     const runner: DockerRunner = async () => {
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock';
-      throw err;
+      throw new IsolationFailure('unclassified', extractDockerError(err), err);
     };
     await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
       /docker version failed/
@@ -67,7 +67,7 @@ describe('dockerPreflight', () => {
       const runner: DockerRunner = async () => {
         const err = new Error('Command failed') as Error & { stderr?: string };
         err.stderr = 'Cannot connect to the Docker daemon';
-        throw err;
+        throw new IsolationFailure('unclassified', extractDockerError(err), err);
       };
       await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
         /running inside Docker.*--container backend is unavailable/s
@@ -83,7 +83,7 @@ describe('dockerPreflight', () => {
       if (args[0] === 'version') return { stdout: '28.2.2', stderr: '' };
       const err = new Error('Command failed') as Error & { stderr?: string };
       err.stderr = 'Error: No such image: archon-runner:test';
-      throw err;
+      throw new IsolationFailure('unclassified', extractDockerError(err), err);
     };
     const p = dockerPreflight('archon-runner:test', runner);
     await expect(p).rejects.toThrow(/Cannot inspect image 'archon-runner:test'/);
@@ -109,13 +109,15 @@ describe('Docker failure classification', () => {
     const cause = Object.assign(new Error('image inspect failed'), { code: 1, stderr });
     const runner: DockerRunner = async args => {
       if (args[0] === 'version') return { stdout: '28', stderr: '' };
-      throw cause;
+      throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
     };
     const error = await dockerPreflight('fix/timeout-retry', runner).catch(
       (error: unknown) => error
     );
     if (!(error instanceof Error)) throw new Error('expected Docker failure');
-    expect(error.cause).toBe(cause);
+    expect(error.cause).toBeInstanceOf(IsolationFailure);
+    if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
+    expect(error.cause.cause).toBe(cause);
     expect(isKnownIsolationError(error)).toBe(true);
     expect(classifyIsolationError(error)).toContain(stderr);
     expect(classifyIsolationError(error)).toContain('exit code 1');
@@ -140,12 +142,14 @@ test('version preflight quotes unclassified exit evidence without guessing daemo
     stderr: 'timeout: Cannot connect to the Docker daemon\noriginal stderr',
   });
   const error = await dockerPreflight('image', async () => {
-    throw cause;
+    throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
   }).catch((error: unknown) => error);
   expect(error).toBeInstanceOf(IsolationFailure);
   if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
   expect(error.kind).toBe('unclassified');
-  expect(error.cause).toBe(cause);
+  expect(error.cause).toBeInstanceOf(IsolationFailure);
+  if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
+  expect(error.cause.cause).toBe(cause);
   expect(classifyIsolationError(error)).toContain('docker version');
   expect(classifyIsolationError(error)).toContain('exit code 1');
   expect(classifyIsolationError(error)).toContain(cause.stderr);
@@ -155,10 +159,12 @@ test('version preflight quotes unclassified exit evidence without guessing daemo
 test('version preflight preserves structured permission guidance', async () => {
   const cause = Object.assign(new Error('version spawn denied'), { code: 'EACCES' });
   const error = await dockerPreflight('image', async () => {
-    throw cause;
+    throw new IsolationFailure('unclassified', extractDockerError(cause), cause);
   }).catch((error: unknown) => error);
   if (!(error instanceof Error)) throw new Error('expected error');
-  expect(error.cause).toBe(cause);
+  expect(error.cause).toBeInstanceOf(IsolationFailure);
+  if (!(error.cause instanceof IsolationFailure)) throw new Error('expected Docker failure');
+  expect(error.cause.cause).toBe(cause);
   expect(classifyIsolationError(error)).toContain('Permission denied');
 });
 
@@ -175,4 +181,11 @@ test('image preflight preserves typed timeout without build advice', async () =>
   expect(error.message).toBe('image inspection timed out');
   expect(classifyIsolationError(error)).toContain('Timed out');
   expect(classifyIsolationError(error)).not.toContain('docker build');
+});
+
+test('dockerCli propagates invalid process options as programming errors', async () => {
+  const error = await dockerCli(['version'], { timeout: -1 }).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(RangeError);
+  if (!(error instanceof Error)) throw new Error('expected programming error');
+  expect(isKnownIsolationError(error)).toBe(false);
 });

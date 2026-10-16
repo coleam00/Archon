@@ -51,9 +51,8 @@ const DOCKER_DEFAULT_TIMEOUT = 60_000;
 const DOCKER_DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
- * Run `docker` with the given args. Rejects (like `execFile`) on non-zero exit,
- * with `stdout`/`stderr` attached to the error for the isolation error
- * classifier (`classifyIsolationError`) to map into an actionable message.
+ * Run `docker` with the given args. Process failures become IsolationFailure
+ * with the original execFile error (stdout, stderr, and exit code) as cause.
  */
 export async function dockerCli(
   args: string[],
@@ -64,13 +63,13 @@ export async function dockerCli(
     maxBuffer: options?.maxBuffer ?? DOCKER_DEFAULT_MAX_BUFFER,
     ...(options?.env ? { env: options.env } : {}),
   }).catch((cause: unknown) => {
-    if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
-    const timedOut =
-      cause instanceof Error &&
-      'killed' in cause &&
-      cause.killed === true &&
-      'code' in cause &&
-      cause.code === null;
+    if (
+      !(cause instanceof Error) ||
+      !('code' in cause) ||
+      !(typeof cause.code === 'number' || typeof cause.code === 'string' || cause.code === null)
+    )
+      throw cause;
+    const timedOut = 'killed' in cause && cause.killed === true && cause.code === null;
     throw new IsolationFailure(
       timedOut ? 'timeout' : 'unclassified',
       `docker ${args[0] ?? ''} ${args[1] ?? ''} failed: ${extractDockerError(cause)}`,
@@ -97,8 +96,7 @@ export async function dockerPreflight(
   try {
     await runner(['version', '--format', '{{.Server.Version}}'], { timeout: 10_000 });
   } catch (err) {
-    if (err instanceof TypeError || err instanceof RangeError) throw err;
-    if (err instanceof IsolationFailure && err.kind !== 'unclassified') throw err;
+    if (!(err instanceof IsolationFailure) || err.kind !== 'unclassified') throw err;
     const detail = extractDockerError(err);
     // When Archon itself runs in Docker (the compose stack), the app image ships
     // no `docker` CLI and the daemon socket is deliberately NOT mounted — so
@@ -122,8 +120,7 @@ export async function dockerPreflight(
   try {
     await runner(['image', 'inspect', image], { timeout: 15_000 });
   } catch (err) {
-    if (err instanceof TypeError || err instanceof RangeError) throw err;
-    if (err instanceof IsolationFailure && err.kind !== 'unclassified') throw err;
+    if (!(err instanceof IsolationFailure) || err.kind !== 'unclassified') throw err;
     const detail = extractDockerError(err);
     throw new IsolationFailure(
       'unclassified',

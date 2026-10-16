@@ -126,7 +126,10 @@ export async function summarizeOverlayChanges(
       target.hostRoot,
     ]));
   } catch (err) {
-    throw new Error(`Failed to inspect the overlay diff: ${extractDockerError(err)}`);
+    if (!(err instanceof IsolationFailure)) throw err;
+    throw new Error(`Failed to inspect the overlay diff: ${extractDockerError(err)}`, {
+      cause: err,
+    });
   }
 
   const added: string[] = [];
@@ -203,8 +206,9 @@ export async function applyOverlayChanges(
       target.hostRoot,
     ]));
   } catch (err) {
+    if (!(err instanceof IsolationFailure)) throw err;
     const detail = extractDockerError(err);
-    const processError = err instanceof IsolationFailure ? err.cause : err;
+    const processError = err.cause;
     const partial =
       processError instanceof Error &&
       'stdout' in processError &&

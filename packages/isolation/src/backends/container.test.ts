@@ -123,38 +123,102 @@ describe('ContainerBackend.prepare', () => {
       if (!(error.cause instanceof AggregateError)) throw new Error('expected attempt failures');
       if (phase === 'run') expect(error.cause.errors).toEqual(failures);
       else {
+        expect(error.message).toContain('docker exec failed');
+        expect(error.message).toContain('permission denied: fix/timeout-retry');
+        expect(error.message).toContain('exit code 125');
         expect(error.cause.errors).toHaveLength(2);
-        expect(error.cause.errors).toEqual([
-          expect.objectContaining({
-            message: expect.stringContaining('Container overlay did not become ready'),
-          }),
-          expect.objectContaining({
-            message: expect.stringContaining('Container overlay did not become ready'),
-          }),
-        ]);
+        for (const [index, attempt] of error.cause.errors.entries()) {
+          expect(attempt.cause.errors).toContain(failures[index]);
+          expect(failures[index]?.cause).toMatchObject({ code: 125 });
+        }
       }
       expect(store.created).toBeUndefined();
     }
   );
 
-  test.each(['run', 'exec', 'inspect', 'logs'])(
+  test.each(
+    [TypeError, ReferenceError].flatMap(ErrorType =>
+      ['run', 'exec', 'inspect', 'logs', 'version', 'image'].map(
+        phase => [phase, ErrorType] as const
+      )
+    )
+  )(
     'propagates a programming failure in %s without trying another overlay mode',
-    async phase => {
-      const failure = new TypeError('invalid Docker options');
+    async (phase, ErrorType) => {
+      const failure = new ErrorType('invalid Docker options');
+      const store = fakeStore();
       const docker = fakeDocker(args => {
         if (args[0] === phase) throw failure;
         if (args[0] === 'run') return { stdout: 'cid', stderr: '' };
-        if (args[0] === 'exec') throw new Error('not ready');
+        if (args[0] === 'exec') throw new IsolationFailure('unclassified', 'not ready');
         if (args[0] === 'inspect') return { stdout: 'false', stderr: '' };
         return { stdout: '', stderr: '' };
       });
       const backend = new ContainerBackend({
-        store: fakeStore(),
+        store,
         config: CONFIG,
         dockerRunner: docker,
       });
       await expect(backend.prepare({ codebase: FOLDER })).rejects.toBe(failure);
-      expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
+      const started = ['exec', 'inspect', 'logs'].includes(phase);
+      expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(
+        ['version', 'image'].includes(phase) ? 0 : 1
+      );
+      expect(docker.calls.filter(args => args[0] === 'rm')).toHaveLength(started ? 1 : 0);
+      expect(docker.calls.filter(args => args[0] === 'volume' && args[1] === 'rm')).toHaveLength(
+        ['version', 'image'].includes(phase) ? 0 : 1
+      );
+      expect(store.rows.size).toBe(0);
+      expect(store.created).toBeUndefined();
+    }
+  );
+
+  test.each(['inspect', 'logs'])(
+    'retains a failed %s check alongside the exec evidence on readiness failure',
+    async phase => {
+      const execFailure = new IsolationFailure('unclassified', 'docker exec failed: exit code 1');
+      const cause = Object.assign(new Error('process failed'), {
+        code: 23,
+        stderr: 'original evidence',
+      });
+      const failure = new IsolationFailure(
+        'unclassified',
+        `docker ${phase} failed: original evidence (exit code 23)`,
+        cause
+      );
+      let now = 0;
+      const clock = spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const docker = fakeDocker(args => {
+          if (args[0] === 'run') return { stdout: 'cid', stderr: '' };
+          if (args[0] === 'exec') throw execFailure;
+          if (args[0] === phase) {
+            now += 30_000;
+            throw failure;
+          }
+          if (args[0] === 'inspect') return { stdout: 'false', stderr: '' };
+          return { stdout: '', stderr: '' };
+        });
+        const backend = new ContainerBackend({
+          store: fakeStore(),
+          config: CONFIG,
+          dockerRunner: docker,
+        });
+        const error = await backend.prepare({ codebase: FOLDER }).catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(IsolationFailure);
+        if (!(error instanceof IsolationFailure) || !(error.cause instanceof AggregateError)) {
+          throw new Error('expected attempt failures');
+        }
+        expect(error.message).toContain(`docker ${phase} failed`);
+        expect(error.message).toContain('original evidence (exit code 23)');
+        expect(error.cause.errors).toHaveLength(2);
+        for (const attempt of error.cause.errors) {
+          expect(attempt.cause.errors).toEqual([execFailure, failure]);
+        }
+        expect(failure.cause).toBe(cause);
+      } finally {
+        clock.mockRestore();
+      }
     }
   );
 
@@ -212,7 +276,7 @@ describe('ContainerBackend.prepare', () => {
       // Fuse container: ready check fails AND inspect says not running → fast fail.
       // Native container (2nd run): ready check passes.
       if (args[0] === 'exec' && args.includes('test')) {
-        if (runCount === 1) throw new Error('not ready');
+        if (runCount === 1) throw new IsolationFailure('unclassified', 'not ready');
         return { stdout: '', stderr: '' };
       }
       if (args[0] === 'inspect') return { stdout: 'false\n', stderr: '' }; // fuse exited
@@ -261,7 +325,7 @@ describe('ContainerBackend.prepare', () => {
       if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
       if (args[0] === 'exec' && args.includes('test')) {
         readyChecks += 1;
-        if (readyChecks < 2) throw new Error('sentinel not present yet');
+        if (readyChecks < 2) throw new IsolationFailure('unclassified', 'sentinel not present yet');
         return { stdout: '', stderr: '' };
       }
       // Container is still running while we poll → waitForReady keeps polling
@@ -278,7 +342,7 @@ describe('ContainerBackend.prepare', () => {
   test('removes the volume if docker run fails (no leak)', async () => {
     const store = fakeStore();
     const docker = fakeDocker(args => {
-      if (args[0] === 'run') throw new Error('docker: some run failure');
+      if (args[0] === 'run') throw new IsolationFailure('unclassified', 'docker: some run failure');
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
@@ -316,12 +380,13 @@ describe('ContainerBackend.prepare', () => {
       if (args[0] === 'exec' && args.includes('test')) {
         readyChecks += 1;
         // Not ready on the first poll, ready on the second.
-        if (readyChecks < 2) throw new Error('sentinel not present yet');
+        if (readyChecks < 2) throw new IsolationFailure('unclassified', 'sentinel not present yet');
         return { stdout: '', stderr: '' };
       }
       // Inspect ERRORS (transient) → must be treated as 'unknown', NOT 'stopped',
       // so the poll continues on the SAME (fuse) container instead of falling back.
-      if (args[0] === 'inspect') throw new Error('Cannot connect to the Docker daemon');
+      if (args[0] === 'inspect')
+        throw new IsolationFailure('unclassified', 'Cannot connect to the Docker daemon');
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
@@ -343,7 +408,7 @@ describe('ContainerBackend.prepare', () => {
           const err = new Error('run failed') as Error & { stderr?: string };
           err.stderr =
             'error gathering device information while adding custom device "/dev/fuse": no such file or directory';
-          throw err;
+          throw new IsolationFailure('unclassified', err.stderr ?? err.message, err);
         }
         return { stdout: 'cid-nofuse\n', stderr: '' };
       }
