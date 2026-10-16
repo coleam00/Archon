@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -21,6 +22,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -28,7 +30,6 @@ import {
   addSafeDirectory,
   toRepoPath,
   toBranchName,
-  isWorktreePath,
   cloneRepository,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
@@ -426,13 +427,15 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   private async ensureRepoReady(
     projectPath: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    let directoryExists = false;
+    const { name: projectName, default_cwd: repoPath } = codebase;
+    // An empty source/ is what a failed clone leaves; any other content is a
+    // checkout, or a registered subdirectory of one, and is never cloned over.
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -444,7 +447,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       }
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'gitlab.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -466,12 +469,9 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    // For nested namespaces (group/subgroup/repo), the namespace becomes the
-    // owner and the leaf segment becomes the repo.
-    const cloneSegments = projectPath.split('/');
-    const cloneRepo = cloneSegments[cloneSegments.length - 1];
-    const cloneOwner = cloneSegments.slice(0, -1).join('/');
-    await ensureProjectStructure(cloneOwner, cloneRepo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     const urlObj = new URL(this.gitlabUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
@@ -557,14 +557,18 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     const canonicalPath = getProjectSourcePath(gitlabOwner, gitlabRepo);
 
     if (existing) {
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      const checkout = await resolveSavedCheckout(
+        existing,
+        repoUrlNoGit,
+        'Restoring its original checkout preserves its storage. Before using /update-project to move it, identify and migrate its existing storage root; see the legacy nested GitLab recovery guidance in Troubleshooting.'
+      );
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath },
+          { codebaseName: existing.name, canonicalPath: checkout },
           'gitlab.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
       }
 
       getLog().info(
@@ -574,14 +578,17 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'gitlab.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   private async cleanupWorktree(
@@ -701,7 +708,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       const defaultBranch = event.project.default_branch;
 
       // 10. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
+      await this.ensureRepoReady(projectPath, defaultBranch, codebase, isNewCodebase);
 
       const existingConv = await db.getOrCreateConversation(
         gitlabPolicy.id,

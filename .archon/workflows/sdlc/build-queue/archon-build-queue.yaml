@@ -79,8 +79,8 @@ nodes:
             number: { type: integer }
           required: [repo, number]
         url: { type: string }
-        # The item's work item, as the queue read it at pickup: null for an item no
-        # pickup recorded.
+        # The item's work item, as the queue read it at pickup, its history reports
+        # as plain run id and path references: null for an item no pickup recorded.
         record: { type: [object, 'null'] }
         # What the next launch starts from: the answer to the last stop, or empty.
         brief: { type: string }

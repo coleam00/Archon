@@ -189,7 +189,7 @@ export const roadmapItems: RoadmapItem[] = [
     title: 'Multi-Repo Workspace Support',
     status: 'planned',
     tier: 'secondary',
-    description: 'Multiple clones of the same remote as distinct projects, branch-aware sync, and unambiguous webhook routing.',
+    description: 'Branch-aware sync and unambiguous webhook routing. One remote stays one project; parallel checkouts use worktrees.',
     bullets: [],
     tags: ['isolation', 'git'],
     issues: [1192, 1319, 1347, 1281],

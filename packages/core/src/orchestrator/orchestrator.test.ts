@@ -141,6 +141,25 @@ mock.module('../db/codebases', () => ({
   repairCodebaseRegistration: mockRepairCodebaseRegistration,
 }));
 
+// Registration itself is covered in ../handlers; these tests cover how chat routes to it.
+const registered = (path: string, name = 'my-app') => ({
+  codebaseId: 'new-id',
+  name,
+  repositoryUrl: null,
+  defaultCwd: path,
+  defaultBranch: null,
+  commandCount: 0,
+  alreadyExisted: false,
+});
+const mockRegisterFolder = mock(async (path: string, name?: string) => registered(path, name));
+const mockRegisterRepository = mock(async (path: string, options: { name?: string } = {}) =>
+  registered(path, options.name)
+);
+mock.module('../handlers/sql-registration', () => ({
+  registerFolder: mockRegisterFolder,
+  registerRepository: mockRegisterRepository,
+}));
+
 const mockGetActiveSession = mock<typeof SessionDb.getActiveSession>(() => Promise.resolve(null));
 const mockCreateSession = mock<typeof SessionDb.createSession>(() =>
   Promise.resolve({
@@ -627,6 +646,8 @@ function clearAllMocks(): void {
   mockGetCodebase.mockClear();
   mockListCodebases.mockClear();
   mockCreateCodebase.mockClear();
+  mockRegisterFolder.mockClear();
+  mockRegisterRepository.mockClear();
   mockGetActiveSession.mockClear();
   mockCreateSession.mockClear();
   mockUpdateSession.mockClear();
@@ -1298,12 +1319,6 @@ describe('orchestrator-agent handleMessage', () => {
     test('suppresses /register-project chunk in stream mode', async () => {
       mockExistsSync.mockReturnValue(true);
       mockListCodebases.mockResolvedValue([]);
-      mockCreateCodebase.mockResolvedValue({
-        ...mockCodebase,
-        id: 'new-id',
-        name: 'my-app',
-        default_cwd: '/home/user/my-app',
-      });
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
@@ -2007,23 +2022,12 @@ describe('orchestrator-agent handleMessage', () => {
         try {
           mockExistsSync.mockReturnValue(true);
           mockListCodebases.mockResolvedValue([]);
-          mockCreateCodebase.mockResolvedValue({
-            ...mockCodebase,
-            id: 'new-id',
-            name: 'my-app',
-            default_cwd: canonicalPath,
-          });
 
           await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
             actor: operator,
           });
 
-          expect(mockCreateCodebase).toHaveBeenCalledWith({
-            name: 'my-app',
-            default_cwd: canonicalPath,
-            default_branch: null,
-            kind: 'folder',
-          });
+          expect(mockRegisterFolder).toHaveBeenCalledWith(canonicalPath, 'my-app');
           expect(platform.sendMessage).toHaveBeenCalledWith(
             'chat-456',
             expect.stringContaining('registered successfully')
@@ -2052,12 +2056,10 @@ describe('orchestrator-agent handleMessage', () => {
             await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
               actor: operator,
             });
-            expect(mockCreateCodebase).toHaveBeenCalledWith({
-              name: 'my-app',
-              default_cwd: await mockCanonicalizeProjectPath(projectPath),
-              default_branch: null,
-              kind: 'folder',
-            });
+            expect(mockRegisterFolder).toHaveBeenCalledWith(
+              await mockCanonicalizeProjectPath(projectPath),
+              'my-app'
+            );
             expect(platform.sendMessage).toHaveBeenCalledWith(
               'chat-456',
               expect.stringContaining('registered successfully')
@@ -2080,23 +2082,12 @@ describe('orchestrator-agent handleMessage', () => {
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: projectPath,
-        });
 
         await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
           actor: operator,
         });
 
-        expect(mockCreateCodebase).toHaveBeenCalledWith({
-          name: 'my-app',
-          default_cwd: canonicalPath,
-          default_branch: null,
-          kind: 'repo',
-        });
+        expect(mockRegisterRepository).toHaveBeenCalledWith(canonicalPath, { name: 'my-app' });
       } finally {
         repoSpy.mockRestore();
         await removeTempTree(projectPath);
@@ -2113,21 +2104,6 @@ describe('orchestrator-agent handleMessage', () => {
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
         expect.stringContaining('Path does not exist')
-      );
-      expect(mockCreateCodebase).not.toHaveBeenCalled();
-    });
-
-    test('/register-project detects duplicate project name', async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-
-      await handleMessage(platform, 'chat-456', '/register-project test-project /some/path', {
-        actor: operator,
-      });
-
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        expect.stringContaining('already registered')
       );
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     });
@@ -2155,20 +2131,12 @@ describe('orchestrator-agent handleMessage', () => {
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: canonicalPath,
-        });
 
         await handleMessage(platform, 'chat-456', `/register-project my-app ${suppliedPath}`, {
           actor: operator,
         });
 
-        expect(mockCreateCodebase).toHaveBeenCalledWith(
-          expect.objectContaining({ default_cwd: canonicalPath })
-        );
+        expect(mockRegisterFolder).toHaveBeenCalledWith(canonicalPath, 'my-app');
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);
@@ -2186,20 +2154,12 @@ describe('orchestrator-agent handleMessage', () => {
       mockExistsSync.mockImplementation(p => p.toString() === realPath);
       try {
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: realPath,
-        });
 
         await handleMessage(platform, 'chat-456', '/register-project my-app ~/some-project', {
           actor: operator,
         });
 
-        expect(mockCreateCodebase).toHaveBeenCalledWith(
-          expect.objectContaining({ default_cwd: realPath })
-        );
+        expect(mockRegisterFolder).toHaveBeenCalledWith(realPath, 'my-app');
       } finally {
         mockExistsSync.mockReturnValue(true);
         await removeTempTree(realPath);

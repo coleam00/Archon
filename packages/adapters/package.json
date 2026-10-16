@@ -39,6 +39,9 @@
   },
   "testGroups": [
     [
+      "src/forge/checkout-ownership.integration.test.ts"
+    ],
+    [
       "src/forge/github/project-assistant.integration.test.ts"
     ],
     [

@@ -127,6 +127,7 @@ export interface HistoryEntry {
   readonly outcome: string;
   readonly summary: string;
   readonly verdict?: string;
+  /** Stored as the writing run's artifact pointer; another run's output carries it through `withPlainReports`. */
   readonly report?: { readonly run_id: string; readonly path: string };
 }
 
@@ -697,6 +698,20 @@ function read(name: string): Read | undefined {
     note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
+}
+
+/**
+ * The work item as another run's output carries it. A history report is the writing
+ * run's artifact pointer, and the engine refuses an output that points at another
+ * run's artifacts, so each report travels as a plain reference: its run id and path.
+ */
+export function withPlainReports(doc: WorkItem): WorkItem {
+  return {
+    ...doc,
+    history: doc.history.map(({ report, ...entry }) =>
+      report === undefined ? entry : { ...entry, report: { run_id: report.run_id, path: report.path } }
+    ),
+  };
 }
 
 /** The item's stored document, or null when it has none. Reads only; claims nothing. */

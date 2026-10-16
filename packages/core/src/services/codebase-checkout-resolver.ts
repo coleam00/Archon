@@ -49,7 +49,8 @@ export async function findCodebaseForCheckoutPath(
   const checkoutIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(cwd);
   const matches: Codebase[] = [];
   for (const codebase of await deps.listCodebases()) {
-    if (codebase.kind === 'folder') continue;
+    // A relative stored path would resolve against this process's directory.
+    if (codebase.kind === 'folder' || !isAbsolute(codebase.default_cwd)) continue;
     try {
       const registeredIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(
         codebase.default_cwd

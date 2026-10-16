@@ -269,7 +269,16 @@ const mockRegisterFolder = mock(async (path: string, name?: string) => ({
   defaultCwd: path,
   alreadyExisted: false,
 }));
-mock.module('../handlers/sql-registration', () => ({ registerFolder: mockRegisterFolder }));
+const mockRegisterRepository = mock(async (path: string, options: { name?: string } = {}) => ({
+  codebaseId: 'repo-id',
+  name: options.name ?? 'repo',
+  defaultCwd: path,
+  alreadyExisted: false,
+}));
+mock.module('../handlers/sql-registration', () => ({
+  registerFolder: mockRegisterFolder,
+  registerRepository: mockRegisterRepository,
+}));
 
 const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
@@ -5840,6 +5849,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
     mockParseCommand.mockReset();
     mockCreateCodebase.mockClear();
+    mockRegisterRepository.mockClear();
   });
 
   test('stream mode — register-project split across 3 chunks', async () => {
@@ -5862,13 +5872,8 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
 
     const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
-    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
-    expect(mockCreateCodebase).toHaveBeenCalledWith({
-      name: 'ExampleProject',
-      default_cwd: expectedCwd,
-      default_branch: null,
-      kind: 'repo',
-    });
+    expect(mockRegisterRepository).toHaveBeenCalledTimes(1);
+    expect(mockRegisterRepository).toHaveBeenCalledWith(expectedCwd, { name: 'ExampleProject' });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
       string,
       string,
@@ -5897,13 +5902,8 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
 
     const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
-    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
-    expect(mockCreateCodebase).toHaveBeenCalledWith({
-      name: 'ExampleProject',
-      default_cwd: expectedCwd,
-      default_branch: null,
-      kind: 'repo',
-    });
+    expect(mockRegisterRepository).toHaveBeenCalledTimes(1);
+    expect(mockRegisterRepository).toHaveBeenCalledWith(expectedCwd, { name: 'ExampleProject' });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
       string,
       string,
@@ -6041,12 +6041,55 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
     await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
 
-    expect(mockCreateCodebase).toHaveBeenCalledWith({
-      name: 'MyApp',
-      default_cwd: await canonicalizeProjectPath('/path/to/app'),
-      default_branch: null,
-      kind: 'repo',
+    expect(mockRegisterRepository).toHaveBeenCalledWith(
+      await canonicalizeProjectPath('/path/to/app'),
+      { name: 'MyApp' }
+    );
+  });
+
+  test('registers under the claimed name when the requested storage is taken', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['app', '/path/app'],
     });
+    mockRegisterRepository.mockResolvedValueOnce({
+      codebaseId: 'repo-id',
+      name: '_local/app-2',
+      defaultCwd: await canonicalizeProjectPath('/path/app'),
+      alreadyExisted: false,
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '/register-project app /path/app' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
+
+    const defaultCwd = await canonicalizeProjectPath('/path/app');
+    expect(mockRegisterRepository).toHaveBeenCalledWith(defaultCwd, { name: 'app' });
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      call => call[1] as string
+    );
+    expect(sent.some(msg => msg.includes('Project "_local/app-2" registered'))).toBe(true);
+  });
+
+  test('a repository registration refusal is reported without confirming a new project', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['app', '/path/app'],
+    });
+    mockRegisterRepository.mockRejectedValueOnce(
+      new Error('Project "acme/app" is already registered at /prod/app; use worktrees')
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/register-project app /path/app', { actor: operator });
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(messages).toContain('already registered at /prod/app; use worktrees');
+    expect(messages).not.toContain('registered successfully');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
   });
 
   test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {
@@ -6080,10 +6123,9 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(sentTexts).not.toContain('/register-project Foo /path\n');
     // Post-command chunk was NOT streamed (suppressed because commandFullyParsed=true)
     expect(sentTexts).not.toContain(' extra trailing');
-    // createCodebase was called with the clean parsed path
-    expect(mockCreateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Foo', default_cwd: await canonicalizeProjectPath('/path') })
-    );
+    expect(mockRegisterRepository).toHaveBeenCalledWith(await canonicalizeProjectPath('/path'), {
+      name: 'Foo',
+    });
   });
 });
 
@@ -8188,6 +8230,7 @@ describe('handleMessage — legacy registration recovery', () => {
     mockUpdateCodebase.mockReset();
     mockUpdateCodebase.mockImplementation(() => Promise.resolve());
     mockCreateCodebase.mockClear();
+    mockRegisterRepository.mockClear();
     mockListCodebases.mockReset();
     mockParseCommand.mockReset();
     mockParseCommand.mockReturnValue({ command: 'register-project', args: ['My-App', '/'] });
@@ -8253,15 +8296,15 @@ describe('handleMessage — legacy registration recovery', () => {
     expect(mockDeleteCodebase).toHaveBeenCalledWith('id-my-app');
   });
 
-  test('an absolute duplicate remains unchanged', async () => {
+  test('a name already used at another path reaches the shared registration checks', async () => {
     mockListCodebases.mockResolvedValue([makeNamedCodebase('my-app')]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
-    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
-      'already registered'
-    );
+    expect(mockRegisterRepository).toHaveBeenCalledWith(await canonicalizeProjectPath('/'), {
+      name: 'My-App',
+    });
   });
 });
 
@@ -8302,6 +8345,9 @@ test('direct explicit folder command uses the folder primitive and refuses an ex
   });
   expect(mockRegisterFolder).toHaveBeenCalledWith(await canonicalizeProjectPath('/'), 'Platform');
   mockRegisterFolder.mockClear();
+  mockRegisterFolder.mockRejectedValueOnce(
+    new Error('Project "Platform" is already registered as a repo')
+  );
   mockListCodebases.mockResolvedValueOnce([
     { ...makeCodebase(), name: 'Platform', kind: 'repo', default_cwd: '/' },
   ]);
@@ -8312,7 +8358,7 @@ test('direct explicit folder command uses the folder primitive and refuses an ex
   await handleMessage(platform, 'conv-1', '/register-project --folder Platform /', {
     actor: operator,
   });
-  expect(mockRegisterFolder).not.toHaveBeenCalled();
+  expect(mockRegisterFolder).toHaveBeenCalledWith(await canonicalizeProjectPath('/'), 'Platform');
   const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
     .map(call => String(call[1]))
     .join('\n');
@@ -8323,6 +8369,7 @@ for (const mode of ['stream', 'batch'] as const) {
   test(`${mode}: another registration command name cannot register a folder`, async () => {
     mockRegisterFolder.mockClear();
     mockCreateCodebase.mockClear();
+    mockRegisterRepository.mockClear();
     mockSendQuery.mockImplementationOnce(async function* () {
       yield { type: 'agent_message_chunk', text: '/register-project-backup --folder Platform /\n' };
       yield { type: 'result', sessionId: 'other-command' };
@@ -8337,6 +8384,7 @@ for (const mode of ['stream', 'batch'] as const) {
   test(`${mode}: registration arguments cannot cross a line break`, async () => {
     mockRegisterFolder.mockClear();
     mockCreateCodebase.mockClear();
+    mockRegisterRepository.mockClear();
     mockListCodebases.mockResolvedValueOnce([]);
     mockSendQuery.mockImplementationOnce(async function* () {
       yield {

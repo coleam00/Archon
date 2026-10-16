@@ -6,7 +6,9 @@
  */
 import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 // Mock @archon/paths to suppress noisy logger output during tests
@@ -24,6 +26,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
@@ -32,6 +35,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
   logArchonPaths: mock(() => undefined),
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
@@ -56,7 +60,9 @@ const mockGetOrCreateConversation = mock(
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  typeof import('@archon/core/db/conversations')['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -69,15 +75,17 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   updateCodebase: mockUpdateCodebase,
@@ -252,11 +260,17 @@ describe('GiteaAdapter', () => {
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/forgejo-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/forgejo-repo' },
+        false
+      );
 
       const [url, , options] = mockCloneRepository.mock.calls.at(-1)!;
       expect(url).toBe('https://forgejo.example.test:8443/owner/repo.git');
@@ -276,11 +290,17 @@ describe('GiteaAdapter', () => {
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/gitea-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/gitea-repo' },
+        false
+      );
     }
 
     test('preserves the clone destination when disk space is exhausted', async () => {
@@ -415,6 +435,119 @@ describe('GiteaAdapter', () => {
     afterEach(() => {
       if (originalAllowedUsers !== undefined) {
         process.env.GITEA_ALLOWED_USERS = originalAllowedUsers;
+      }
+    });
+
+    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+      const adapter = createSelfFilterAdapter();
+      const existing = {
+        id: 'bare-project',
+        name: 'local-api',
+        default_cwd: '/repos/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      };
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+      mockUpdateCodebase.mockClear();
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe('/repos/worktrees/old');
+      expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+      const adapter = createSelfFilterAdapter();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      });
+      // @ts-expect-error - exercise the private registration boundary
+      const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
+      expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+      expect(result.codebase.default_cwd).toBe(result.repoPath);
+      expect(mockUpdateCodebase).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'allocated' }),
+        { default_cwd: result.repoPath }
+      );
+    });
+
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: 'saved-project',
+        cwd: path,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#1',
+      });
+      mockHandleMessage.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      await adapter.handleWebhook(
+        utf8(createCommentPayload('@archon help', 'user123')),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://gitea.example.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: null,
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-allocated',
+        codebase_id: null,
+        cwd: null,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      });
+      mockUpdateConversation.mockResolvedValueOnce(undefined);
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      try {
+        await adapter.handleWebhook(
+          utf8(createCommentPayload('@archon help', 'user123')),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
       }
     });
 

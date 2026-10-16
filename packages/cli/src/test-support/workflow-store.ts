@@ -37,6 +37,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
     codebases: {
       getCodebase: async id => codebases.get(id) ?? null,
       listCodebases: async () => [...codebases.values()],
+      listCodebaseClaims: async () => [...codebases.values()],
       findCodebaseByDefaultCwd: async cwd =>
         [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
       findCodebaseByPathPrefix: async cwd =>
@@ -47,6 +48,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
         [...codebases.values()].find(row => row.name === name) ?? null,
       findCodebaseByRepoUrl: async url =>
         [...codebases.values()].find(row => row.repository_url === url) ?? null,
+      removeUnregisteredCheckout: unsupported,
       createCodebase: async (
         input
       ): ReturnType<IWorkflowHostStore['codebases']['createCodebase']> => {

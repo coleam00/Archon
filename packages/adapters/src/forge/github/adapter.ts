@@ -2,6 +2,7 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -27,9 +28,9 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
 } from '@archon/paths';
 import {
-  isWorktreePath,
   cloneRepository,
   githubTokenCredentials,
   syncRepository,
@@ -710,11 +711,19 @@ export class GitHubAdapter implements IPlatformAdapter {
     owner: string,
     repo: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    const key = resolve(repoPath);
-    const prepare = () => this.prepareRepository(owner, repo, defaultBranch, repoPath, shouldSync);
+    const key = resolve(codebase.default_cwd);
+    const prepare = () =>
+      this.prepareRepository(
+        owner,
+        repo,
+        defaultBranch,
+        codebase.default_cwd,
+        codebase.name,
+        shouldSync
+      );
     const previous = repositoryReadiness.get(key) ?? Promise.resolve();
     const pending = previous.then(prepare, prepare).finally(() => {
       if (repositoryReadiness.get(key) === pending) repositoryReadiness.delete(key);
@@ -728,6 +737,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     repo: string,
     defaultBranch: string,
     repoPath: string,
+    projectName: string,
     shouldSync: boolean
   ): Promise<void> {
     let repositoryExists = false;
@@ -771,7 +781,9 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Resolve the right auth token per mode. App mode talks to the auth
     // provider (installation token, ~1h validity); PAT mode reads env directly.
@@ -923,16 +935,14 @@ export class GitHubAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      // Either it's an actual worktree, or it looks like one (contains /worktrees/ in path)
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath },
+          { codebaseName: existing.name, canonicalPath: checkout },
           'github.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
       }
 
       getLog().info(
@@ -942,16 +952,17 @@ export class GitHubAdapter implements IPlatformAdapter {
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    // Include owner in name to distinguish repos with same name from different owners
-    // resolve() converts relative paths to absolute (cross-platform)
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'github.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   /**
@@ -1269,7 +1280,7 @@ ${userComment}`;
     }
 
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
 
     const existingConv = await db.getOrCreateConversation(
       githubPolicy.id,

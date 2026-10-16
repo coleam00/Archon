@@ -174,7 +174,8 @@ for (const replacement of [
     const { create, getById, markWorktreeDestroyed } = await import('./isolation-environments');
     const project = await createCodebase({
       name: `replacement-${replacement}`,
-      default_cwd: '/repos/replacement',
+      // Each project needs its own checkout path, and so its own storage root.
+      default_cwd: `/repos/replacement-${replacement.replaceAll(' ', '-')}`,
     });
     const original = await create({
       codebase_id: project.id,
@@ -266,8 +267,8 @@ for (const legacy of [false, true]) {
       './isolation-environments'
     );
     const project = await createCodebase({
-      name: 'idempotent-retire',
-      default_cwd: '/repos/retire',
+      name: `idempotent-retire-${legacy}`,
+      default_cwd: `/repos/retire-${legacy}`,
     });
     const input = {
       codebase_id: project.id,

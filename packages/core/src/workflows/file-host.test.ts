@@ -1,10 +1,11 @@
 import { afterEach, expect, expectTypeOf, spyOn, test } from 'bun:test';
 import type { z } from 'zod';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
 import { registerWorktree } from '@archon/isolation';
 import { toRepoPath, toWorktreePath } from '@archon/git';
-import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -141,6 +142,81 @@ test('file host records persist across hosts and released worktrees fence pendin
   });
 });
 
+test('two file hosts cannot register owners of the same project storage', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-host-storage-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const results = await Promise.allSettled([
+    first.records.codebases.createCodebase({
+      name: 'My App',
+      kind: 'folder',
+      default_cwd: '/first',
+    }),
+    second.records.codebases.createCodebase({
+      name: 'my-app',
+      kind: 'folder',
+      default_cwd: '/second',
+    }),
+  ]);
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+  expect(await first.records.codebases.listCodebases()).toHaveLength(1);
+});
+
+test('file host remote lookup reuses SSH and legacy checkout identities', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-remote-')));
+  process.env.ARCHON_HOME = home;
+  execFileSync('git', ['-C', home, 'init', '-q']);
+  execFileSync('git', [
+    '-C',
+    home,
+    'remote',
+    'add',
+    'origin',
+    'git@gitlab.example:org/team/app.git',
+  ]);
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const project = await host.records.codebases.createCodebase({
+    name: 'My App',
+    default_cwd: home,
+    repository_url: 'git@gitlab.example:org/team/app.git',
+  });
+  expect(
+    (await host.records.codebases.findCodebaseByRepoUrl('https://gitlab.example/org/team/app'))?.id
+  ).toBe(project.id);
+  await host.records.codebases.updateCodebase(project, { repository_url: null });
+  expect(
+    (await host.records.codebases.findCodebaseByRepoUrl('https://gitlab.example/org/team/app.git'))
+      ?.id
+  ).toBe(project.id);
+});
+
+test.each(['persisted', 'legacy'])(
+  'file lookup routes a %s owner past an unavailable legacy checkout',
+  async owner => {
+    const home = roots(await mkdtemp(join(tmpdir(), 'file-known-remote-')));
+    process.env.ARCHON_HOME = home;
+    const host = await createFileWorkflowHost(join(home, 'store'));
+    await host.records.codebases.createCodebase({
+      name: 'Legacy',
+      default_cwd: join(home, 'missing'),
+    });
+    execFileSync('git', ['-C', home, 'init', '-q']);
+    execFileSync('git', ['-C', home, 'remote', 'add', 'origin', 'https://github.com/acme/api']);
+    const known = await host.records.codebases.createCodebase({
+      name: 'acme/api',
+      default_cwd: home,
+      repository_url: owner === 'persisted' ? 'https://github.com/acme/api' : undefined,
+    });
+    expect(
+      (await host.records.codebases.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id
+    ).toBe(known.id);
+  }
+);
+
 test('file adoption metadata refuses a replaced registration, including the same path', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'file-adoption-')));
   process.env.ARCHON_HOME = home;
@@ -230,6 +306,85 @@ test('file host refuses legacy tokenless replacements within its atomic adoption
     expect(await store.getById(created.id)).toEqual(replacement);
     await store.updateMetadata(replacement.id, { adopted: true }, replacement);
   }
+});
+
+test('file checkout cleanup preserves registered paths and aliases, and removes an unowned sibling', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const checkout = join(home, 'checkout');
+  const unowned = join(home, 'checkout-other');
+  await mkdir(join(checkout, 'subdirectory'), { recursive: true });
+  await mkdir(unowned);
+  await writeFile(join(checkout, 'operator-work.txt'), 'keep my work');
+  const alias = join(home, 'alias');
+  await symlink(checkout, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await first.records.codebases.createCodebase({
+    name: 'owner',
+    kind: 'folder',
+    default_cwd: alias,
+  });
+
+  for (const path of [checkout, alias, home, join(checkout, 'subdirectory')]) {
+    await second.records.codebases.removeUnregisteredCheckout(path, () =>
+      rm(path, { recursive: true })
+    );
+    expect(await readFile(join(checkout, 'operator-work.txt'), 'utf8')).toBe('keep my work');
+  }
+  await second.records.codebases.removeUnregisteredCheckout(unowned, () =>
+    rm(unowned, { recursive: true })
+  );
+  await expect(access(unowned)).rejects.toThrow();
+});
+
+test('file checkout removal holds the registration lock until removal finishes', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-lock-')));
+  process.env.ARCHON_HOME = home;
+  const root = join(home, 'store');
+  const first = await createFileWorkflowHost(root);
+  const second = await createFileWorkflowHost(root);
+  const checkout = join(home, 'checkout');
+  await mkdir(checkout);
+  const entered = Promise.withResolvers<boolean>();
+  const release = Promise.withResolvers<void>();
+  const cleanup = first.records.codebases.removeUnregisteredCheckout(checkout, async () => {
+    entered.resolve(
+      await access(join(root, 'lock')).then(
+        () => true,
+        () => false
+      )
+    );
+    await release.promise;
+    await rm(checkout, { recursive: true });
+  });
+  const lockHeldDuringRemoval = await entered.promise;
+  let registered = false;
+  const registration = second.records.codebases
+    .createCodebase({
+      name: 'owner',
+      kind: 'folder',
+      default_cwd: checkout,
+    })
+    .then(row => {
+      registered = true;
+      return row;
+    });
+  try {
+    expect(lockHeldDuringRemoval).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(registered).toBe(false);
+  } finally {
+    release.resolve();
+    await cleanup;
+    await registration;
+  }
+  expect(registered).toBe(true);
+  await expect(access(checkout)).rejects.toThrow();
+  expect(await first.records.codebases.listCodebases()).toHaveLength(1);
 });
 
 test('file host retirement is idempotent for a legacy registration and fences replacements', async () => {

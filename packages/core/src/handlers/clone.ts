@@ -7,9 +7,8 @@ import {
   type CodebaseSource,
   type ProjectBaseBranchInspection,
 } from '../schemas/codebase';
-import { loadRepoConfig } from '../config/config-loader';
 import { access, rm, stat } from 'fs/promises';
-import { join, basename, resolve } from 'path';
+import { join, basename, isAbsolute, resolve } from 'path';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 import type { Codebase } from '../types';
 import {
@@ -20,14 +19,28 @@ import {
   validateCloneUrl,
   type CloneCredentials,
   githubTokenCredentials,
-  getDefaultRemote,
   findRepoRoot,
   inspectRemoteBranches,
   validateBranchName,
   ConfiguredBaseBranchNotFoundError,
   InvalidBaseBranchError,
 } from '@archon/git';
+import {
+  ProjectRegistrationError,
+  assertCheckoutRemote,
+  findRemoteOwner,
+  effectiveRegistrationUrl,
+  registrationRemotes,
+} from '../services/registration-remote';
+export { ProjectRegistrationError } from '../services/registration-remote';
+
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import { assertAbsoluteDefaultCwd } from '../utils/codebase-path';
+import {
+  allocateProjectName,
+  resolveRegistrationUrl,
+  type ProjectIdentity,
+} from '../services/project-registration-identity';
 import { quoteCommandArg } from '../utils/command-args';
 import {
   expandTilde,
@@ -38,8 +51,9 @@ import {
   getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
-  isInsideArchonWorkspaces,
+  ProjectSourceOccupiedError,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   slugifyFolderName,
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
@@ -190,6 +204,7 @@ export interface RegisterResult {
 }
 
 export interface RegistrationOptions {
+  name?: string;
   baseBranch?: string;
 }
 
@@ -237,11 +252,10 @@ async function setupAppRepository(path: string): Promise<void> {
   }
 }
 
-export class ProjectRegistrationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ProjectRegistrationError';
-  }
+/** A clone source that names a local directory, which registers in place instead of cloning. */
+function localCloneSource(url: string): string | null {
+  if (url.startsWith('~')) return expandTilde(url);
+  return isAbsolute(url) || url.startsWith('.') ? resolve(url) : null;
 }
 
 function rejectExistingChoice(options: RegistrationOptions): void {
@@ -251,9 +265,29 @@ function rejectExistingChoice(options: RegistrationOptions): void {
     );
 }
 
-async function registrationRemote(path: string): Promise<string | null> {
-  const config = await loadRepoConfig(path);
-  return config.worktree?.remote?.trim() || (await getDefaultRemote(toRepoPath(path)));
+function refuseOccupiedSource(error: unknown): never {
+  if (!(error instanceof ProjectSourceOccupiedError)) throw error;
+  throw new ProjectRegistrationError(
+    `${error.message}. Inspect ${error.sourcePath} and repair the registration. ` +
+      'Preserve the workspace state, artifacts and logs.',
+    { cause: error }
+  );
+}
+
+async function claimProjectName(
+  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims'>,
+  project: ProjectIdentity
+): Promise<string> {
+  return allocateProjectName(project, await codebases.listCodebaseClaims());
+}
+
+async function findRegisteredRemote(
+  codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims'>,
+  remoteUrl: string
+): Promise<Codebase | null> {
+  const owner = await findRemoteOwner(await codebases.listCodebaseClaims(), remoteUrl);
+  if (owner) assertAbsoluteDefaultCwd(owner.default_cwd, owner.name);
+  return owner;
 }
 
 async function validateRegistrationChoice(
@@ -267,7 +301,7 @@ async function validateRegistrationChoice(
     if (error instanceof InvalidBaseBranchError) throw new ProjectRegistrationError(error.message);
     throw error;
   }
-  const remote = await registrationRemote(path);
+  const { selected: remote } = await registrationRemotes(path);
   if (!remote) {
     getLog().warn({ path }, 'registration.base_branch_no_remote');
     return;
@@ -294,12 +328,8 @@ export async function inspectProjectBaseBranch(
   if (source.url !== undefined) {
     const validated = validateCloneUrl(source.url);
     if (!validated.ok) throw new ProjectRegistrationError(validated.error);
-    if (
-      validated.url.startsWith('/') ||
-      validated.url.startsWith('~') ||
-      validated.url.startsWith('.')
-    )
-      return inspectProjectBaseBranch({ path: validated.url });
+    const localPath = localCloneSource(validated.url);
+    if (localPath) return inspectProjectBaseBranch({ path: localPath });
     result = await inspectRemoteBranches({
       kind: 'url',
       url: validated.url,
@@ -309,13 +339,12 @@ export async function inspectProjectBaseBranch(
     const path = await canonicalizeProjectPath(source.path);
     const repoRoot = await findRepoRoot(path);
     if (!repoRoot) return { kind: 'folder' };
-    const remote = await registrationRemote(path);
+    const { selected: remote, names } = await registrationRemotes(path);
     if (!remote) {
-      const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
       return {
         kind: 'repo',
         defaultBranch: null,
-        reason: stdout.trim() ? 'ambiguous_remote' : 'no_remote',
+        reason: names.length ? 'ambiguous_remote' : 'no_remote',
       };
     }
     result = await inspectRemoteBranches({ kind: 'local', repoPath: toRepoPath(path), remote });
@@ -331,85 +360,26 @@ export async function inspectProjectBaseBranch(
   };
 }
 
-/**
- * Register a repo at a given path and load its commands.
- * `existing` is the caller's lookup of a codebase with this name (dedup by
- * project identity), made before the caller touched the filesystem.
- */
-async function registerRepoAtPath(
+async function loadRepositoryCommands(
   codebases: IWorkflowHostStore['codebases'],
+  codebase: Codebase,
   targetPath: string,
-  name: string,
   repositoryUrl: string | null,
-  existing: Codebase | null,
-  options: RegistrationOptions
+  alreadyExisted: boolean
 ): Promise<RegisterResult> {
-  if (existing) {
-    rejectExistingChoice(options);
-    const updates: {
-      repository_url?: string | null;
-    } = {};
-    // Fill in repository_url if the existing record doesn't have one
-    if (!existing.repository_url && repositoryUrl) {
-      updates.repository_url = repositoryUrl;
-    }
-    if (Object.keys(updates).length > 0) {
-      await codebases.updateCodebase(existing, updates);
-    }
-
-    // Still reload commands for the existing codebase
-    let commandsLoaded = 0;
-    for (const folder of getCommandFolderSearchPaths()) {
-      const commandPath = join(existing.default_cwd, folder);
-      try {
-        await access(commandPath);
-      } catch {
-        continue;
-      }
-      const markdownFiles = await findCommandFiles(commandPath);
-      if (markdownFiles.length > 0) {
-        const commands = { ...(await codebases.getCodebaseCommands(existing.id)) };
-        markdownFiles.forEach(({ commandName, relativePath }) => {
-          commands[commandName] = {
-            path: join(folder, relativePath),
-            description: `From ${folder}`,
-          };
-        });
-        await codebases.updateCodebaseCommands(existing.id, commands);
-        commandsLoaded = markdownFiles.length;
-        break;
-      }
-    }
-
-    return {
-      codebaseId: existing.id,
-      name: existing.name,
-      repositoryUrl: existing.repository_url,
-      defaultCwd: existing.default_cwd,
-      defaultBranch: existing.default_branch ?? null,
-      commandCount: commandsLoaded,
-      alreadyExisted: true,
-    };
-  }
-
-  // No existing codebase — create new
-  const codebase = await codebases.createCodebase({
-    name,
-    repository_url: repositoryUrl ?? undefined,
-    default_cwd: targetPath,
-    default_branch: options.baseBranch ?? null,
-  });
-
   // Auto-load commands if found
   let commandsLoaded = 0;
   for (const folder of getCommandFolderSearchPaths()) {
     const commandPath = join(targetPath, folder);
     try {
       await access(commandPath);
-    } catch {
-      continue; // Folder doesn't exist, try next
+    } catch (error) {
+      // The project is already registered; an unreadable command folder only skips its commands.
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        getLog().warn({ err: error, path: commandPath }, 'registration.command_folder_unavailable');
+      }
+      continue;
     }
-    // Command loading errors should NOT be swallowed
     const markdownFiles = await findCommandFiles(commandPath);
     if (markdownFiles.length > 0) {
       const commands = { ...(await codebases.getCodebaseCommands(codebase.id)) };
@@ -428,11 +398,11 @@ async function registerRepoAtPath(
   return {
     codebaseId: codebase.id,
     name: codebase.name,
-    repositoryUrl: repositoryUrl,
+    repositoryUrl,
     defaultCwd: targetPath,
     defaultBranch: codebase.default_branch ?? null,
     commandCount: commandsLoaded,
-    alreadyExisted: false,
+    alreadyExisted,
   };
 }
 
@@ -454,86 +424,11 @@ function deriveRepoCloneTarget(validatedUrl: string): {
   return { workingUrl, ownerName, repoName, targetPath };
 }
 
-/**
- * Clone a repository from a URL and register it in the supplied store.
- * Local paths (starting with /, ~, or .) are delegated to registerRepository
- * to avoid wrong owner/repo naming. See #383 for broader rethink.
- */
-export async function cloneRepository(
-  codebases: IWorkflowHostStore['codebases'],
-  repoUrl: string,
-  options: CloneOptions = {}
-): Promise<RegisterResult> {
-  const validatedUrl = validateCloneUrl(repoUrl);
-  if (!validatedUrl.ok) {
-    throw new Error(`Failed to clone repository: ${validatedUrl.error}`);
-  }
-  repoUrl = validatedUrl.url;
-
-  // Local paths should be registered (symlink), not cloned (copied)
-  if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
-    const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(codebases, resolvedPath, options);
-  }
-
-  const appSource = appRepository(repoUrl, options);
-  const { workingUrl, ownerName, repoName, targetPath } = deriveRepoCloneTarget(repoUrl);
-
-  // Check if source directory already has a git repo
-  let directoryExists = false;
-  try {
-    await access(join(targetPath, '.git'));
-    directoryExists = true;
-  } catch {
-    // Directory doesn't exist or isn't a git repo, proceed with clone
-  }
-
-  if (directoryExists) {
-    // Directory exists - try to find existing codebase by repo URL
-    const urlNoGit = workingUrl.replace(/\.git$/, '');
-    const urlWithGit = urlNoGit + '.git';
-
-    const existingCodebase =
-      (await codebases.findCodebaseByRepoUrl(urlNoGit)) ??
-      (await codebases.findCodebaseByRepoUrl(urlWithGit));
-
-    if (existingCodebase) {
-      rejectExistingChoice(options);
-      if (appSource) await setupAppRepository(existingCodebase.default_cwd);
-      return {
-        codebaseId: existingCodebase.id,
-        name: existingCodebase.name,
-        repositoryUrl: existingCodebase.repository_url,
-        defaultCwd: existingCodebase.default_cwd,
-        defaultBranch: existingCodebase.default_branch ?? null,
-        commandCount: 0,
-        alreadyExisted: true,
-      };
-    }
-
-    // Directory exists but no codebase found
-    throw new Error(
-      `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
-    );
-  }
-
-  const name = `${ownerName}/${repoName}`;
-  if (options.baseBranch !== undefined) {
-    if (await codebases.findCodebaseByName(name)) rejectExistingChoice(options);
-    try {
-      await validateBranchName(options.baseBranch);
-    } catch (error) {
-      if (error instanceof InvalidBaseBranchError)
-        throw new ProjectRegistrationError(error.message);
-      throw error;
-    }
-  }
-
-  const credentials = await repositoryCredentials(workingUrl, options);
-
-  // Create project structure (source/, worktrees/, artifacts/, logs/)
-  await ensureProjectStructure(ownerName, repoName);
-
+async function cloneCheckout(
+  workingUrl: string,
+  targetPath: string,
+  credentials: CloneCredentials | undefined
+): Promise<void> {
   await addSafeDirectory(toRepoPath(targetPath));
   const cloneResult = await cloneGitRepository(
     workingUrl,
@@ -561,25 +456,135 @@ export async function cloneRepository(
     }
     throw new Error(`Failed to clone repository: ${detail}`);
   }
+}
 
+/**
+ * Clone a repository from a URL and register it in the supplied store.
+ * Local paths (absolute, or starting with ~ or .) are delegated to registerRepository
+ * to avoid wrong owner/repo naming. See #383 for broader rethink.
+ */
+export async function cloneRepository(
+  codebases: IWorkflowHostStore['codebases'],
+  repoUrl: string,
+  options: CloneOptions = {}
+): Promise<RegisterResult> {
+  const validatedUrl = validateCloneUrl(repoUrl);
+  if (!validatedUrl.ok) {
+    throw new Error(`Failed to clone repository: ${validatedUrl.error}`);
+  }
+  repoUrl = validatedUrl.url;
+
+  // Local paths should be registered (symlink), not cloned (copied)
+  const localPath = localCloneSource(repoUrl);
+  if (localPath) return registerRepository(codebases, localPath, options);
+
+  const appSource = appRepository(repoUrl, options);
+  const derived = deriveRepoCloneTarget(repoUrl);
+  const { workingUrl } = derived;
+  const existing = await findRegisteredRemote(codebases, workingUrl);
+  if (existing) {
+    rejectExistingChoice(options);
+    let missing = false;
+    try {
+      await access(join(existing.default_cwd, '.git'));
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      missing = true;
+    }
+    if (missing) {
+      const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
+      if (!identity || existing.default_cwd !== getProjectSourcePath(identity.owner, identity.repo))
+        throw new ProjectRegistrationError(
+          `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
+        );
+      const credentials = await repositoryCredentials(workingUrl, options);
+      await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
+      await cloneCheckout(workingUrl, existing.default_cwd, credentials);
+    } else if (existing.repository_url) {
+      await assertCheckoutRemote(
+        existing.default_cwd,
+        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
+      );
+    }
+    if (appSource) await setupAppRepository(existing.default_cwd);
+    return loadRepositoryCommands(
+      codebases,
+      existing,
+      existing.default_cwd,
+      existing.repository_url,
+      true
+    );
+  }
+
+  const name = await claimProjectName(codebases, {
+    kind: 'repo',
+    name: `${derived.ownerName}/${derived.repoName}`,
+    default_cwd: derived.targetPath,
+  });
+  const { owner: ownerName, repo: repoName } = parseOwnerRepo(name) ?? {
+    owner: derived.ownerName,
+    repo: derived.repoName,
+  };
+  const targetPath = getProjectSourcePath(ownerName, repoName);
+  let directoryExists = false;
+  try {
+    await access(join(targetPath, '.git'));
+    directoryExists = true;
+  } catch {
+    // A missing checkout can be cloned; git reports other destination failures.
+  }
+  if (directoryExists) {
+    throw new ProjectRegistrationError(
+      `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
+    );
+  }
+
+  if (options.baseBranch !== undefined) {
+    try {
+      await validateBranchName(options.baseBranch);
+    } catch (error) {
+      if (error instanceof InvalidBaseBranchError)
+        throw new ProjectRegistrationError(error.message);
+      throw error;
+    }
+  }
+
+  const credentials = await repositoryCredentials(workingUrl, options);
+  await ensureProjectStructure(ownerName, repoName).catch(refuseOccupiedSource);
+  await cloneCheckout(workingUrl, targetPath, credentials);
+
+  let codebase: Codebase;
   try {
     getLog().debug({ path: targetPath }, 'safe_directory_added');
     if (appSource) await setupAppRepository(targetPath);
     await validateRegistrationChoice(targetPath, options);
+    codebase = await codebases.createCodebase({
+      name,
+      repository_url: workingUrl,
+      default_cwd: targetPath,
+      default_branch: options.baseBranch ?? null,
+    });
   } catch (error) {
-    // Any failure here leaves a clone with no registration, which would block a retry.
-    await rm(targetPath, { recursive: true });
+    try {
+      await codebases.removeUnregisteredCheckout(targetPath, () =>
+        rm(targetPath, { recursive: true })
+      );
+    } catch (cleanupError) {
+      getLog().error(
+        { path: targetPath, err: cleanupError },
+        'registration.checkout_cleanup_failed'
+      );
+      throw new AggregateError(
+        [error, cleanupError],
+        `${error instanceof Error ? error.message : String(error)} ` +
+          `Checkout cleanup failed at ${targetPath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error }
+      );
+    }
     throw error;
   }
 
-  const result = await registerRepoAtPath(
-    codebases,
-    targetPath,
-    name,
-    workingUrl,
-    await codebases.findCodebaseByName(name),
-    options
-  );
+  const result = await loadRepositoryCommands(codebases, codebase, targetPath, workingUrl, false);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
@@ -602,9 +607,17 @@ export async function registerRepository(
 
   // Git's physical common directory proves linked-checkout ownership without
   // conflating separate clones, remotes, names, or branches (#1192).
-  const existing = await findCodebaseForCheckoutPath(localPath, codebases);
+  const existing = await findCodebaseForCheckoutPath(localPath, {
+    findCodebaseByDefaultCwd: codebases.findCodebaseByDefaultCwd,
+    listCodebases: codebases.listCodebaseClaims,
+  });
   if (existing) {
     rejectExistingChoice(options);
+    if (existing.repository_url)
+      await assertCheckoutRemote(
+        existing.default_cwd,
+        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
+      );
     return {
       codebaseId: existing.id,
       name: existing.name,
@@ -616,26 +629,30 @@ export async function registerRepository(
     };
   }
 
-  // Get remote URL (optional — local-only repos may not have one)
-  let remoteUrl: string | null = null;
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', localPath, 'remote', 'get-url', 'origin']);
-    remoteUrl = stdout.trim() || null;
-  } catch (error) {
-    const msg = (error as Error).message ?? '';
-    if (!msg.includes('No such remote')) {
-      getLog().warn({ path: localPath, err: error }, 'remote_url_fetch_unexpected_error');
+  const { selected, names } = await registrationRemotes(localPath);
+  // With several remotes and none selected, the checkout registers without a
+  // URL, as before remote selection existed. It is refused when another project
+  // already owns one of its remotes, but it owns none of them itself, so a
+  // later clone of one still registers separately.
+  for (const remote of selected ? [] : names) {
+    const url = await effectiveRegistrationUrl(localPath, remote);
+    const owner = url && (await findRegisteredRemote(codebases, url));
+    if (owner) {
+      throw new ProjectRegistrationError(
+        `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +
+          'Two clones of one remote cannot be separate projects; use worktrees for parallel checkouts.'
+      );
     }
   }
+  const remoteUrl = selected ? await effectiveRegistrationUrl(localPath, selected) : null;
 
   // Extract repo name from directory name
   const repoName = basename(localPath);
 
   // Try to build owner/repo name from remote URL
   let name = repoName;
-  let ownerName = '_local';
   if (remoteUrl) {
-    const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
+    const cleaned = remoteUrl.replace(/\/+$/, '').replace(/\.git$/, '');
     let workingRemote = cleaned;
     const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
     if (sshRemoteMatch) {
@@ -646,50 +663,48 @@ export async function registerRepository(
     const o = parts.pop();
     if (o && r) {
       name = `${o}/${r}`;
-      ownerName = o;
     }
   }
 
-  // The name-conflict refusal runs before the project structure and `source` link
-  // are created, so a refused registration leaves the filesystem as it found it:
-  // a link left at the managed path would make it look populated to later checks.
-  //
-  // findCodebaseForCheckoutPath found no Git identity match above, so a localPath
-  // outside the workspaces root is a separate clone, not this row's checkout.
-  // Nothing on this host can prove it owns a managed row either: every Docker host
-  // resolves the Archon home to the literal /.archon, so another host sharing the
-  // database can hold its own checkout at the byte-identical path. Repointing
-  // would silently break that other host, so the operator moves it explicitly.
-  const sameName = await codebases.findCodebaseByName(name);
-  if (
-    sameName &&
-    !isInsideArchonWorkspaces(localPath) &&
-    isInsideArchonWorkspaces(sameName.default_cwd)
-  ) {
-    throw new Error(
-      `Project "${sameName.name}" is already registered at ${sameName.default_cwd}, ` +
-        `a different checkout than ${localPath}. Refusing to repoint it: another host ` +
-        'sharing this database may use that path. To make this checkout the project, run ' +
-        `/update-project ${quoteCommandArg(sameName.name)} ${quoteCommandArg(localPath)}`
+  const registeredRemote = remoteUrl ? await findRegisteredRemote(codebases, remoteUrl) : null;
+  if (registeredRemote) {
+    throw new ProjectRegistrationError(
+      `Project "${registeredRemote.name}" is already registered at ${registeredRemote.default_cwd}, ` +
+        `a different clone of the same remote than ${localPath}. Two clones of one remote ` +
+        'cannot be separate projects: use worktrees for parallel checkouts (`git worktree add` ' +
+        `from ${registeredRemote.default_cwd}, or run workflows with --branch). If this checkout ` +
+        `replaces the registered one, run /update-project ${quoteCommandArg(registeredRemote.name)} ` +
+        quoteCommandArg(localPath)
     );
   }
 
-  if (sameName) rejectExistingChoice(options);
-  else await validateRegistrationChoice(localPath, options);
+  await validateRegistrationChoice(localPath, options);
+  name = await claimProjectName(codebases, {
+    kind: 'repo',
+    name: options.name?.trim() || name,
+    default_cwd: localPath,
+  });
 
   // Create project structure and source symlink
-  const parsed = parseOwnerRepo(name);
-  const projOwner = parsed?.owner ?? ownerName;
-  const projRepo = parsed?.repo ?? repoName;
-  await ensureProjectStructure(projOwner, projRepo);
-  await createProjectSourceSymlink(projOwner, projRepo, localPath);
+  const identity = resolveRepoProjectIdentity(name, localPath);
+  if (!identity)
+    throw new ProjectRegistrationError(`Cannot derive project storage for ${localPath}`);
+  const { owner: projOwner, repo: projRepo } = identity;
+  await ensureProjectStructure(projOwner, projRepo).catch(refuseOccupiedSource);
+  await createProjectSourceSymlink(projOwner, projRepo, localPath).catch(refuseOccupiedSource);
   getLog().info(
     { owner: projOwner, repo: projRepo, path: getProjectSourcePath(projOwner, projRepo) },
     'project_structure_created'
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(codebases, localPath, name, remoteUrl, sameName, options);
+  const codebase = await codebases.createCodebase({
+    name,
+    repository_url: remoteUrl ?? undefined,
+    default_cwd: localPath,
+    default_branch: options.baseBranch ?? null,
+  });
+  return loadRepositoryCommands(codebases, codebase, localPath, remoteUrl, false);
 }
 
 /**
@@ -768,7 +783,11 @@ export async function registerFolder(
     };
   }
 
-  const projectName = name?.trim() || basename(resolvedPath);
+  const projectName = await claimProjectName(codebases, {
+    kind: 'folder',
+    name: name?.trim() || basename(resolvedPath),
+    default_cwd: resolvedPath,
+  });
   const slug = slugifyFolderName(projectName);
 
   // Create the _folder/<slug>/{artifacts,logs} storage structure (no source/,

@@ -4,6 +4,8 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { validateArtifactPointers } from '../../../packages/workflows/src/artifact-pointer';
+import type { WorkflowRun } from '../../../packages/workflows/src/schemas';
 import {
   ANSWER_DECISIONS,
   APPLY_DECISIONS,
@@ -21,6 +23,8 @@ import {
 import { CONFIDENCES, checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
+  applyDecision,
+  decideIntake,
   newWorkItem,
   parseWorkItem,
   type TriageFacts,
@@ -293,6 +297,22 @@ describe('the build queue scripts', () => {
     expect(readFileSync(join(picked.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
     // The item is now claimed, so the next pickup finds nothing.
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
+  }, 60_000);
+
+  test("facts starts on an item intake wrote, carrying intake's triage report as a plain reference", async () => {
+    const at = install();
+    const fresh = newWorkItem(SUBJECT, AT);
+    const source = { author: 'maintainer', labels: [], state: 'open' as const, digest: 'sha256:x' };
+    const decision = decideIntake(fresh, source, new Set(['maintainer']), AT, 'intake-run');
+    // Triage emits its report as the engine's artifact pointer to intake's own run.
+    const pointer = { type: 'archon_artifact', run_id: 'intake-run', path: 'triage.md' };
+    const { at: _at, run_id: _runId, ...verdict } = TRIAGE;
+    seed(at, applyDecision(fresh, decision, { ...verdict, closure: null, labels: [], summary: 's', report: pointer }, false, AT, 'intake-run'));
+    const output = ok(run(at, 'facts', {}));
+    // The validator reads the current run's id only, unless a pointer names that run.
+    expect(await validateArtifactPointers(output, { id: 'run-1' } as WorkflowRun)).toBeNull();
+    expect((output.record as WorkItem).history.at(-1)?.report).toEqual({ run_id: 'intake-run', path: 'triage.md' });
+    expect(stored(at).value?.history.at(-1)?.report).toEqual(pointer);
   }, 60_000);
 
   test('the round about to run reaches the cap when the rounds since the last scope change fill the limit', () => {

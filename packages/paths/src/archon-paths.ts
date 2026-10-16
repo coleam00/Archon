@@ -616,7 +616,14 @@ export function getWebDistDir(version: string): string {
 // =============================================================================
 
 /** Valid characters for owner/repo segments (GitHub-compatible, no path traversal) */
-const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+const SAFE_NAME_CHARS = 'a-zA-Z0-9._-';
+const SAFE_NAME = new RegExp(`^[${SAFE_NAME_CHARS}]+$`);
+const UNSAFE_NAME_CHAR = new RegExp(`[^${SAFE_NAME_CHARS}]`, 'g');
+
+/** Replace each character {@link parseOwnerRepo} rejects in a segment with `-`. */
+export function toSafeNameSegment(value: string): string {
+  return value.replace(UNSAFE_NAME_CHAR, '-');
+}
 
 /**
  * Parse "owner/repo" from a codebase name string.
@@ -843,14 +850,12 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * COLLISIONS: distinct working directories sharing a basename share a project
- * root. For `artifacts/` and `logs/` that is benign — both are keyed by run id,
- * so the two projects' runs never touch the same file. `stateRoot` is NOT:
- * `$STATE_DIR` is per project by design and has no run-id segment, so two local
- * repos both called `api` share one `state/` and every file in it.
- * Register a colliding project with a distinct name, or
- * namespace inside `$STATE_DIR` (`$STATE_DIR/<something-unique>/`), if that
- * matters. Same caveat applies to `_folder` slug collisions.
+ * COLLISIONS: registration gives every registered project its own root (a new
+ * project whose root is taken registers under a suffixed name). The `'cwd'` key is
+ * not registered, so unregistered working directories sharing a basename share
+ * `_cwd/<basename>`. For `artifacts/` and `logs/` that is benign — both are keyed
+ * by run id. `stateRoot` is NOT: `$STATE_DIR` is per project by design and has no
+ * run-id segment, so those runs share one `state/` and every file in it.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -1025,11 +1030,8 @@ export function getRunWorkflowSourceDirForRoot(root: string, workflowRunId: stri
  * {@link SAFE_NAME}. Falls back to `'folder'` when the name slugifies to empty
  * (e.g. a name that is entirely separators or unicode).
  *
- * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
- * "my-app"). Run artifacts and logs stay separated by run-id subdirectories, so
- * a collision only co-mingles listing-level artifacts — but `state/` has no
- * run-id segment, so colliding projects genuinely SHARE their `$STATE_DIR`
- * files. Accepted for now — see plan Questionables.
+ * Distinct display names can slugify alike (e.g. "My App" and "my-app" both →
+ * "my-app"); registration suffixes a new project's name until its slug is free.
  */
 export function slugifyFolderName(name: string): string {
   const slug = name
@@ -1081,19 +1083,41 @@ export async function ensureFolderProjectStructure(slug: string): Promise<void> 
   await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 }
 
+/** A project's `source` path already holds something other than the requested checkout. */
+export class ProjectSourceOccupiedError extends Error {
+  constructor(
+    readonly sourcePath: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectSourceOccupiedError';
+  }
+}
+
 /**
  * Create the project directory structure (source/, worktrees/, artifacts/, logs/).
  * Safe to call multiple times - uses recursive mkdir.
  */
 export async function ensureProjectStructure(owner: string, repo: string): Promise<void> {
+  const source = getProjectSourcePath(owner, repo);
   const dirs = [
-    getProjectSourcePath(owner, repo),
     getProjectWorktreesPath(owner, repo),
     getProjectArtifactsPath(owner, repo),
     getProjectLogsPath(owner, repo),
   ];
 
-  await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
+  await Promise.all([
+    mkdir(source, { recursive: true }).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        throw new ProjectSourceOccupiedError(
+          source,
+          `Source path at ${source} is occupied by a file or broken link`
+        );
+      }
+      throw error;
+    }),
+    ...dirs.map(dir => mkdir(dir, { recursive: true })),
+  ]);
 }
 
 /**
@@ -1108,33 +1132,33 @@ export async function createProjectSourceSymlink(
 ): Promise<void> {
   const linkPath = getProjectSourcePath(owner, repo);
 
-  try {
-    const stats = await lstat(linkPath);
-    if (stats.isSymbolicLink()) {
-      // Symlink already exists - check if it points to the right place
-      const existing = await readlink(linkPath);
-      if (normalize(existing) === normalize(targetPath)) {
-        return; // Already correct
-      }
-      throw new Error(
-        `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
+  const stats = await lstat(linkPath).catch((error: unknown) => {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    return null;
+  });
+  if (stats?.isSymbolicLink()) {
+    const existing = await readlink(linkPath);
+    if (normalize(existing) === normalize(targetPath)) return;
+    throw new ProjectSourceOccupiedError(
+      linkPath,
+      `Source symlink at ${linkPath} already points to ${existing}, expected ${targetPath}`
+    );
+  }
+  if (stats) {
+    if (!stats.isDirectory()) {
+      throw new ProjectSourceOccupiedError(
+        linkPath,
+        `Source path at ${linkPath} already contains a file; expected ${targetPath}`
       );
     }
-    if (stats.isDirectory()) {
-      // Check if it's a real clone (has contents) vs empty dir from ensureProjectStructure
-      const entries = await readdir(linkPath);
-      if (entries.length > 0) {
-        // Real directory with contents (e.g., from /clone) - don't overwrite
-        return;
-      }
-      // Empty directory from ensureProjectStructure - will be replaced with symlink below
+    const entries = await readdir(linkPath);
+    if (entries.length > 0) {
+      if ((await realpath(linkPath)) === (await realpath(targetPath))) return;
+      throw new ProjectSourceOccupiedError(
+        linkPath,
+        `Source directory at ${linkPath} already contains another checkout; expected ${targetPath}`
+      );
     }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw error;
-    }
-    // ENOENT is expected - symlink doesn't exist yet
   }
 
   // Remove the empty directory created by ensureProjectStructure (force handles ENOENT)

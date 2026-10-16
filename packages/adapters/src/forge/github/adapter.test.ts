@@ -31,6 +31,7 @@ import {
   afterEach,
 } from 'bun:test';
 import type { Mock } from 'bun:test';
+import type { Codebase } from '@archon/core';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -57,6 +58,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -64,6 +66,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
 }));
 
 // Only mock what's needed for the adapter's direct functionality
@@ -99,7 +102,10 @@ mock.module('@archon/core/db/conversations', () => ({
   updateConversation: mockUpdateConversation,
 }));
 
-const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockUpdateCodebase = mock(async () => {});
+const mockFindCodebaseByRepoUrl = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
+);
 const mockCreateCodebase = mock(async () => ({
   id: 'codebase-test',
   name: 'testuser/testrepo',
@@ -108,8 +114,8 @@ const mockCreateCodebase = mock(async () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
-  updateCodebase: mock(async () => {}),
+  createManagedCodebase: mockCreateCodebase,
+  updateCodebase: mockUpdateCodebase,
   getCodebaseCommands: mock(async () => ({})),
   updateCodebaseCommands: mock(async () => {}),
 }));
@@ -849,6 +855,107 @@ describe('GitHubAdapter', () => {
     afterEach(() => {
       if (originalAllowedUsers !== undefined) {
         process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+      }
+    });
+
+    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+      const adapter = createSelfFilterAdapter();
+      const existing = {
+        id: 'bare-project',
+        name: 'local-api',
+        default_cwd: '/repos/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      };
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+      mockUpdateCodebase.mockClear();
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe('/repos/worktrees/old');
+      expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+      const adapter = createSelfFilterAdapter();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      });
+      // @ts-expect-error - exercise the private registration boundary
+      const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
+      expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+      expect(result.codebase.default_cwd).toBe(result.repoPath);
+      expect(mockUpdateCodebase).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'allocated' }),
+        { default_cwd: result.repoPath }
+      );
+    });
+
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = unclonedPath();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://github.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: null,
+        cwd: null,
+        isolation_env_id: null,
+      });
+      handleMessageSpy.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+
+      await adapter.handleWebhook(
+        createCommentPayload('@archon help', 'user123'),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://github.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+      });
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      try {
+        await adapter.handleWebhook(
+          createCommentPayload('@archon help', 'user123'),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-test', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
       }
     });
 
@@ -1722,7 +1829,13 @@ describe('GitHubAdapter', () => {
       shouldSync: boolean
     ): Promise<void> {
       // @ts-expect-error - accessing private method for testing
-      return testAdapter.ensureRepoReady(owner, repo, defaultBranch, repoPath, shouldSync);
+      return testAdapter.ensureRepoReady(
+        owner,
+        repo,
+        defaultBranch,
+        { name: `${owner}/${repo}`, default_cwd: repoPath },
+        shouldSync
+      );
     }
 
     test('clones repository when directory does not exist', async () => {
@@ -2249,7 +2362,13 @@ describe('GitHubAdapter', () => {
         process.env.GITHUB_TOKEN = 'ghp_unused_env_token';
         const { adapter, provider } = createAppModeAdapter();
         // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
+        await adapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: '/tmp/nonexistent-test' },
+          false
+        );
         expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
         expect(mockCloneRepository).toHaveBeenCalledTimes(1);
         expect(mockCloneRepository).toHaveBeenCalledWith(
@@ -2309,7 +2428,13 @@ describe('GitHubAdapter', () => {
           });
           const ready = (adapter: GitHubAdapter) => {
             // @ts-expect-error - calling private method
-            return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+            return adapter.ensureRepoReady(
+              'owner',
+              'repo',
+              'main',
+              { name: 'owner/repo', default_cwd: repoPath },
+              false
+            );
           };
           const first = ready(firstAdapter);
           await entered.promise;
@@ -2345,7 +2470,13 @@ describe('GitHubAdapter', () => {
         throw new AppNotInstalledError(owner, repo, 'archon-test');
       });
       // @ts-expect-error - calling private method
-      const promise = adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/missing', false);
+      const promise = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/tmp/missing' },
+        false
+      );
       await expect(promise).rejects.toBeInstanceOf(AppNotInstalledError);
     });
 
@@ -2353,7 +2484,13 @@ describe('GitHubAdapter', () => {
       const { adapter } = createAppModeAdapter();
       const clonePath = unclonedPath();
       // @ts-expect-error - calling private method
-      await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
+      await adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: clonePath },
+        false
+      );
       expect(mockCloneRepository).toHaveBeenCalledTimes(1);
       expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
@@ -2379,7 +2516,13 @@ describe('GitHubAdapter', () => {
         }
         const ensureReady = () => {
           // @ts-expect-error - calling private method
-          return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+          return adapter.ensureRepoReady(
+            'owner',
+            'repo',
+            'main',
+            { name: 'owner/repo', default_cwd: repoPath },
+            false
+          );
         };
         try {
           await expect(ensureReady()).rejects.toThrow(`${failure} setup failed`);
@@ -2406,7 +2549,13 @@ describe('GitHubAdapter', () => {
       const { adapter } = createAppModeAdapter();
 
       // @ts-expect-error - calling private method
-      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+      const setup = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: unclonedPath() },
+        false
+      );
 
       await expect(setup).rejects.toThrow('bundled credential helper unavailable');
       expect(mockCloneRepository).toHaveBeenCalled();
@@ -2421,7 +2570,13 @@ describe('GitHubAdapter', () => {
       );
       try {
         // @ts-expect-error - calling private method
-        await patAdapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+        await patAdapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: unclonedPath() },
+          false
+        );
       } catch {
         // Same bogus-path tolerance as the App-mode case above.
       }

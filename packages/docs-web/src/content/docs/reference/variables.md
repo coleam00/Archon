@@ -79,10 +79,11 @@ the read-modify-write hazard. Use [durable state documents](/guides/authoring-wo
 
 **Name collisions.** The project segment is derived from the project's identity, and distinct
 projects can derive the same one — two no-remote local repos both called `api`, or two folder
-projects whose display names slugify identically. Artifacts and logs are keyed by run id, so a
-collision is harmless there. `$STATE_DIR` has no run-id segment, so colliding projects
-genuinely **share** their state files. If that matters, register one of them under a distinct
-name, or namespace inside `$STATE_DIR`.
+projects whose display names slugify identically. Registration keeps them apart: a new project
+whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
+`my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
+parallel checkouts. Unregistered working directories (`_cwd/<basename>`) are not registered, so
+two of them with the same folder name still share `$STATE_DIR`.
 
 ## Positional Arguments (not supported)
 
