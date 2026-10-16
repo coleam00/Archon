@@ -22062,6 +22062,121 @@ describe('executeDagWorkflow -- script nodes', () => {
           expect(failing.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
         });
       }
+      for (const runtime of ['bun', 'uv'] as const) {
+        it(`a late captured helper read fault stays resumable (${runtime})`, async () => {
+          const scripts = join(testDir, '.archon/scripts');
+          await mkdir(scripts, { recursive: true });
+          const extension = runtime === 'bun' ? 'ts' : 'py';
+          await writeFile(
+            join(scripts, `helper.${extension}`),
+            runtime === 'bun' ? 'export const value = "ok";' : 'value = "ok"'
+          );
+          await writeFile(
+            join(scripts, `entry.${extension}`),
+            runtime === 'bun'
+              ? "import { value } from './helper.ts'; console.log(value);"
+              : 'from helper import value\nprint(value)'
+          );
+          const capture = await scriptCapture(join(testDir, 'unused'));
+          const helper = join(capture.captureRoot, `project/.archon/scripts/helper.${extension}`);
+          const options = dagOptions({
+            deps: createMockDeps(),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('captured-helper'),
+            workflowSourceRoots: capture.roots,
+            workflow: {
+              name: 'captured-helper',
+              nodes: [dagNodeSchema.parse({ id: 'entry', script: 'entry', runtime })],
+            },
+          });
+          await executeDagWorkflow(options);
+          expect(options.deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(options.deps.store.failWorkflowRun).not.toHaveBeenCalled();
+          const deps = createMockDeps();
+          const persist = deps.store.persistWorkflowEvent.getMockImplementation()!;
+          deps.store.persistWorkflowEvent.mockImplementation(async event => {
+            await persist(event);
+            if (event.event_type === 'node_started' && event.step_name === 'entry')
+              await chmod(helper, 0o000);
+          });
+          try {
+            await executeDagWorkflow({ ...options, deps });
+          } finally {
+            await chmod(helper, 0o644);
+          }
+          expectReleased(deps.store, 'entry');
+          deps.store.persistWorkflowEvent.mockImplementation(persist);
+          deps.store.getWorkflowRunStatus.mockImplementation(async () => 'running');
+          await executeDagWorkflow({ ...options, deps });
+          expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+          await writeFile(
+            join(scripts, `entry.${extension}`),
+            runtime === 'bun'
+              ? 'throw new Error("ordinary failure")'
+              : 'raise RuntimeError("ordinary failure")'
+          );
+          const failingCapture = await captureWorkflowSource({
+            sourceRoot: testDir,
+            captureRoot: join(testDir, 'failing-capture'),
+          });
+          const failing = createMockDeps();
+          await executeDagWorkflow({
+            ...options,
+            deps: failing,
+            workflowSourceRoots: capturedSourceRoots(failingCapture.anchor),
+          });
+          expect(failing.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+          expect(failing.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        });
+      }
+
+      it('a named-script timeout keeps its skip policy when the source becomes unreadable', async () => {
+        const scripts = join(testDir, '.archon/scripts');
+        await mkdir(scripts, { recursive: true });
+        await writeFile(
+          join(scripts, 'slow.ts'),
+          "import { chmodSync } from 'node:fs'; chmodSync(import.meta.path, 0); await Bun.sleep(30_000);"
+        );
+        const capture = await scriptCapture(join(testDir, 'unused'));
+        const path = join(capture.captureRoot, 'project/.archon/scripts/slow.ts');
+        const deps = createMockDeps();
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('timeout-source'),
+              workflowSourceRoots: capture.roots,
+              workflow: {
+                name: 'timeout-source',
+                nodes: [
+                  dagNodeSchema.parse({ id: 'ready', bash: 'echo ready' }),
+                  dagNodeSchema.parse({
+                    id: 'slow',
+                    script: 'slow',
+                    runtime: 'bun',
+                    timeout: 1000,
+                    on_timeout: 'skip',
+                  }),
+                ],
+              },
+            })
+          );
+          await expect(readFile(path)).rejects.toMatchObject({ code: 'EACCES' });
+        } finally {
+          await chmod(path, 0o644);
+        }
+        expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        expect(deps.store.failWorkflowRun.mock.calls).toEqual([]);
+        expect(deps.store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(
+          persistedEvents(deps.store).find(
+            event => event.event_type === 'node_skipped' && event.step_name === 'slow'
+          )?.data
+        ).toMatchObject({ reason: 'timeout', cause: { kind: 'timeout' } });
+      });
+
       it('an unreadable captured scripts directory after admission leaves the run resumable, not failed', async () => {
         const mockDeps = createMockDeps();
         const marker = join(testDir, 'ran');

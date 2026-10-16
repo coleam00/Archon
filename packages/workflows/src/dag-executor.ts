@@ -4057,13 +4057,26 @@ async function executeScriptNode(
         label: '<script>',
       },
     }).catch(async (error: unknown) => {
-      // Runtimes reopen named scripts. Diagnose source availability from a fresh typed
-      // filesystem operation, never from Bun/uv's stderr or ordinary exit codes.
+      if (isSubprocessTimeout(error as RawSubprocessRejection)) throw error;
+      // Runtimes reopen the entry and its imports. Verify the frozen capture again;
+      // stderr cannot distinguish unreadable source from an ordinary script failure.
       const selected = namedScripts instanceof Map ? namedScripts.get(finalScript) : undefined;
       if (selected) {
         try {
+          await assertCapturedFilesPresent(verifiedScriptFiles);
+          await assertWorkflowSourceIntegrity(workflowSourceRoots);
           await readFile(selected.path);
         } catch (sourceError) {
+          getLog().warn(
+            {
+              ...formatSubprocessFailure(
+                error as RawSubprocessRejection,
+                `Script node '${node.id}'`
+              ).logFields,
+              nodeId: node.id,
+            },
+            'script_subprocess_rejection_before_source_failure'
+          );
           if (isSourceReadFailure(sourceError, verifiedScriptFiles))
             throw new RunSourceUnreadableError(stepName, sourceError);
           throw sourceError;
