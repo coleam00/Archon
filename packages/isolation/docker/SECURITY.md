@@ -84,7 +84,8 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
 
 ## Overlay modes and how to get the stronger boundary
 
-The backend picks the **least-privileged mode that mounts**, preferring `fuse`:
+The backend starts with `fuse` and permits native fallback only after the runner
+reports a failed FUSE mount through its dedicated exit status (78):
 
 | Mode                | Flags                                                    | Remount escape?                                          | Where it mounts                                                                                         |
 | ------------------- | -------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -100,7 +101,13 @@ CAP_SYS_ADMIN.
 
 The mode that actually mounted is recorded on the `isolation_environments` row
 (`metadata.overlayMode`) and logged (`isolation.container_overlay_fallback` warns
-when native was used).
+when native is attempted, including the original FUSE failure).
+
+Docker startup failures (including a missing `/dev/fuse`) and readiness timeouts
+reject preparation without trying native. Failed Docker inspect or log checks
+never authorize native fallback.
+Older runner images that report a generic exit status also fail without fallback;
+rebuild the runner image to use the dedicated FUSE mount status.
 
 ## Write-back apply hardening
 

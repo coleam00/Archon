@@ -99,6 +99,31 @@ function makeDirs(): { root: string; upper: string; dest: string; ws: string } {
   return { root, upper, dest, ws: dest };
 }
 
+test.each([
+  ['fuse', false, 78],
+  ['native', false, 1],
+  ['fuse', true, 73],
+] as const)(
+  'runner %s mount failure (startup failure: %s) exits %s',
+  (mode, startupFailure, expected) => {
+    const entrypoint = readFileSync(new URL('../../docker/entrypoint.sh', import.meta.url), 'utf8');
+    const script = `
+    rm() { :; }
+    mkdir() { return ${startupFailure ? 73 : 0}; }
+    fuse-overlayfs() { return 1; }
+    mount() { return 1; }
+    export ARCHON_WORKSPACE_PATH=/workspace ARCHON_OVERLAY_MODE=${mode}
+    ${entrypoint.replaceAll('/tmp/overlay-fuse.err', '/dev/null').replaceAll('/tmp/overlay-native.err', '/dev/null')}
+  `;
+    const result = runScript(script, '', '', '');
+    expect(result.code).toBe(expected);
+    if (!startupFailure)
+      expect(result.stderr).toContain(
+        `${mode === 'fuse' ? 'fuse-overlayfs' : 'native overlay'} mount failed`
+      );
+  }
+);
+
 describe('apply script — C1 whiteout-name traversal', () => {
   test('`.wh.` (empty decoded name) does NOT wipe the parent dir', () => {
     const { upper, dest, ws } = makeDirs();

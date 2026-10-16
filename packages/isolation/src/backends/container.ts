@@ -65,10 +65,14 @@ const READY_POLL_INTERVAL_MS = 250;
  * with only `--device /dev/fuse` (no CAP_SYS_ADMIN — closes the remount escape,
  * but only mounts on rootless/userns daemons); `native` grants CAP_SYS_ADMIN
  * (works everywhere, grants the escape — see SECURITY.md). The backend tries them
- * in this order and keeps the first that mounts.
+ * in this order, falling back only after the runner confirms a failed FUSE mount.
  */
-const OVERLAY_MODES = ['fuse', 'native'] as const;
-type OverlayMode = (typeof OVERLAY_MODES)[number];
+type OverlayMode = 'fuse' | 'native';
+
+// The runner reserves this exit status for a failed fuse-overlayfs mount.
+// Older runner images have no such signal and fail without escalating privileges.
+const FUSE_MOUNT_FAILED_EXIT_CODE = 78;
+class FuseMountFailure extends IsolationFailure {}
 
 export interface ContainerBackendDeps {
   store: IIsolationStore;
@@ -687,54 +691,48 @@ export class ContainerBackend implements IIsolationBackend {
     codebaseId: string,
     mounts: HostMounts
   ): Promise<{ containerId: string; mode: OverlayMode }> {
-    const failures: { mode: OverlayMode; error: IsolationFailure }[] = [];
-    for (const mode of OVERLAY_MODES) {
-      let containerId: string;
-      try {
-        containerId = await this.runContainerInMode(
-          containerName,
-          volume,
-          hostRoot,
-          codebaseId,
-          mode,
-          mounts
-        );
-      } catch (runErr) {
-        if (!(runErr instanceof IsolationFailure)) throw runErr;
-        // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
-        // fuse device) — record and try the next mode. Nothing to remove.
-        failures.push({ mode, error: runErr });
-        continue;
-      }
+    const start = async (
+      mode: OverlayMode
+    ): Promise<{ containerId: string; mode: OverlayMode }> => {
+      const containerId = await this.runContainerInMode(
+        containerName,
+        volume,
+        hostRoot,
+        codebaseId,
+        mode,
+        mounts
+      );
       try {
         await this.waitForReady(containerId);
-        if (mode !== OVERLAY_MODES[0]) {
-          log.warn({ containerName, mode }, 'isolation.container_overlay_fallback');
-        }
         return { containerId, mode };
-      } catch (readyErr) {
-        // Readiness can crash before a tracking row exists. Remove the started
-        // container before propagating the error or trying another mode.
+      } catch (error) {
         await this.docker(['rm', '-f', containerName]).catch(rmErr => {
           log.warn(
             { containerName, mode, detail: extractDockerError(rmErr) },
             'isolation.container_fallback_cleanup_failed'
           );
+          if (error instanceof FuseMountFailure) {
+            if (!(rmErr instanceof IsolationFailure)) throw rmErr;
+            throw new IsolationFailure(
+              'unclassified',
+              `Could not remove failed FUSE container: ${extractDockerError(rmErr)}`,
+              new AggregateError([error, rmErr], 'FUSE cleanup failed')
+            );
+          }
         });
-        if (!(readyErr instanceof IsolationFailure)) throw readyErr;
-        failures.push({ mode, error: readyErr });
+        throw error;
       }
+    };
+    try {
+      return await start('fuse');
+    } catch (error) {
+      if (!(error instanceof FuseMountFailure)) throw error;
+      log.warn(
+        { containerName, mode: 'native', detail: extractDockerError(error) },
+        'isolation.container_overlay_fallback'
+      );
+      return start('native');
     }
-    throw new IsolationFailure(
-      'unclassified',
-      'Could not mount the overlay in any mode. Native overlay needs CAP_SYS_ADMIN; ' +
-        'fuse-overlayfs needs /dev/fuse AND an unprivileged-mount daemon ' +
-        `(rootless / userns-remap). Attempts:\n${failures.map(({ mode, error }) => `${mode}: ${extractDockerError(error)}`).join('\n')}`,
-      new AggregateError(
-        failures.map(({ error }) => error),
-        'Docker overlay attempts failed'
-      )
-    );
   }
 
   /**
@@ -807,14 +805,14 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Poll for the entrypoint's ready sentinel. Fails FAST if the container has
-   * exited (the entrypoint exits 1 on a mount failure) rather than waiting out the
-   * full timeout, so the mode fallback is quick. Throws with the container's tail
-   * logs so a mount failure surfaces the entrypoint's own error.
+   * Poll for the entrypoint's ready sentinel, stopping early if the container exits.
+   * Only the runner's dedicated FUSE mount exit status permits native fallback.
+   * Failures retain the container's tail logs and Docker diagnostics.
    */
   private async waitForReady(containerId: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     const failures = new Map<'exec' | 'inspect' | 'logs', IsolationFailure>();
+    let fuseMountFailed = false;
     while (Date.now() < deadline) {
       try {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
@@ -829,7 +827,14 @@ export class ContainerBackend implements IIsolationBackend {
         const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
           timeout: 5_000,
         });
-        if (stdout.trim() === 'false') break;
+        if (stdout.trim() === 'false') {
+          const { stdout: exitCode } = await this.docker(
+            ['inspect', '-f', '{{.State.ExitCode}}', containerId],
+            { timeout: 5_000 }
+          );
+          fuseMountFailed = exitCode.trim() === String(FUSE_MOUNT_FAILED_EXIT_CODE);
+          break;
+        }
       } catch (error) {
         if (!(error instanceof IsolationFailure)) throw error;
         failures.set('inspect', error);
@@ -845,7 +850,11 @@ export class ContainerBackend implements IIsolationBackend {
       failures.set('logs', error);
     }
     const errors = [...failures.values()];
-    throw new IsolationFailure(
+    const Failure =
+      fuseMountFailed && !failures.has('inspect') && !failures.has('logs')
+        ? FuseMountFailure
+        : IsolationFailure;
+    throw new Failure(
       'unclassified',
       `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}` +
         (errors.length ? ` Docker failures:\n${errors.map(extractDockerError).join('\n')}` : ''),

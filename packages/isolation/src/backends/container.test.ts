@@ -90,8 +90,54 @@ function fakeDocker(
 }
 
 describe('ContainerBackend.prepare', () => {
+  test.each(['run', 'exec', 'inspect', 'logs', 'rm'] as const)(
+    'a Docker %s outage cannot trigger privileged fallback even if the next run would succeed',
+    async phase => {
+      const store = fakeStore();
+      const failure = new IsolationFailure('unclassified', 'Docker daemon unavailable');
+      let now = 0;
+      const clock = spyOn(Date, 'now').mockImplementation(() => now);
+      let runs = 0;
+      const docker = fakeDocker(args => {
+        if (args[0] === 'run') {
+          runs++;
+          if (runs === 1 && phase === 'run') throw failure;
+          return { stdout: 'cid', stderr: '' };
+        }
+        if (runs > 1) return { stdout: '', stderr: '' };
+        if (args[0] === phase) {
+          now += 30_000;
+          throw failure;
+        }
+        if (args[0] === 'exec') throw new IsolationFailure('unclassified', 'not ready');
+        if (args[0] === 'inspect') {
+          if (phase === 'exec') throw failure;
+          return {
+            stdout:
+              args.includes('{{.State.ExitCode}}') && ['logs', 'rm'].includes(phase)
+                ? '78'
+                : 'false',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+      try {
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        await expect(backend.prepare({ codebase: FOLDER })).rejects.toBeInstanceOf(
+          IsolationFailure
+        );
+        expect(runs).toBe(1);
+        expect(docker.calls.some(args => args.includes('SYS_ADMIN'))).toBe(false);
+        expect(store.created).toBeUndefined();
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  );
+
   test.each(['run', 'ready'] as const)(
-    'preserves typed %s failures after both overlay modes fail',
+    'preserves typed %s failures without trying a more privileged mode',
     async phase => {
       const store = fakeStore();
       const failures: IsolationFailure[] = [];
@@ -119,18 +165,16 @@ describe('ContainerBackend.prepare', () => {
       if (!(error instanceof IsolationFailure)) throw new Error('expected isolation failure');
       expect(error.kind).toBe('unclassified');
       expect(isKnownIsolationError(error)).toBe(true);
-      expect(error.cause).toBeInstanceOf(AggregateError);
-      if (!(error.cause instanceof AggregateError)) throw new Error('expected attempt failures');
-      if (phase === 'run') expect(error.cause.errors).toEqual(failures);
+      if (phase === 'run') expect(error).toBe(failures[0]);
       else {
         expect(error.message).toContain('docker exec failed');
         expect(error.message).toContain('permission denied: fix/timeout-retry');
         expect(error.message).toContain('exit code 125');
-        expect(error.cause.errors).toHaveLength(2);
-        for (const [index, attempt] of error.cause.errors.entries()) {
-          expect(attempt.cause.errors).toContain(failures[index]);
-          expect(failures[index]?.cause).toMatchObject({ code: 125 });
-        }
+        expect(error.cause).toBeInstanceOf(AggregateError);
+        if (!(error.cause instanceof AggregateError))
+          throw new Error('expected readiness failures');
+        expect(error.cause.errors).toEqual(failures);
+        expect(failures[0]?.cause).toMatchObject({ code: 125 });
       }
       expect(store.created).toBeUndefined();
     }
@@ -211,10 +255,7 @@ describe('ContainerBackend.prepare', () => {
         }
         expect(error.message).toContain(`docker ${phase} failed`);
         expect(error.message).toContain('original evidence (exit code 23)');
-        expect(error.cause.errors).toHaveLength(2);
-        for (const attempt of error.cause.errors) {
-          expect(attempt.cause.errors).toEqual([execFailure, failure]);
-        }
+        expect(error.cause.errors).toEqual([execFailure, failure]);
         expect(failure.cause).toBe(cause);
       } finally {
         clock.mockRestore();
@@ -265,7 +306,28 @@ describe('ContainerBackend.prepare', () => {
     expect(volumeCreate?.join(' ')).toContain('--label diy.archon.managed=true');
   });
 
-  test('falls back to native mode (CAP_SYS_ADMIN) when fuse never becomes ready', async () => {
+  test.each(['0', '1', '137', 'unknown'])(
+    'does not escalate for an exited container with status %s',
+    async exitCode => {
+      const store = fakeStore();
+      const docker = fakeDocker(args => {
+        if (args[0] === 'run') return { stdout: 'cid', stderr: '' };
+        if (args[0] === 'exec') throw new IsolationFailure('unclassified', 'not ready');
+        if (args[0] === 'inspect')
+          return {
+            stdout: args.includes('{{.State.ExitCode}}') ? exitCode : 'false',
+            stderr: '',
+          };
+        return { stdout: '', stderr: '' };
+      });
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      await expect(backend.prepare({ codebase: FOLDER })).rejects.toBeInstanceOf(IsolationFailure);
+      expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(1);
+      expect(store.created).toBeUndefined();
+    }
+  );
+
+  test('falls back to native mode only on the runner FUSE mount failure exit status', async () => {
     const store = fakeStore();
     let runCount = 0;
     const docker = fakeDocker(args => {
@@ -279,7 +341,11 @@ describe('ContainerBackend.prepare', () => {
         if (runCount === 1) throw new IsolationFailure('unclassified', 'not ready');
         return { stdout: '', stderr: '' };
       }
-      if (args[0] === 'inspect') return { stdout: 'false\n', stderr: '' }; // fuse exited
+      if (args[0] === 'inspect')
+        return {
+          stdout: args.includes('{{.State.ExitCode}}') ? '78\n' : 'false\n',
+          stderr: '',
+        };
       if (args[0] === 'rm') return { stdout: '', stderr: '' };
       return { stdout: '', stderr: '' };
     });
@@ -397,7 +463,7 @@ describe('ContainerBackend.prepare', () => {
     expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('fuse');
   });
 
-  test('falls back to native when the fuse run itself fails (host has no /dev/fuse)', async () => {
+  test('rejects an unclassified fuse run failure even when its text names a missing device', async () => {
     const store = fakeStore();
     let runAttempts = 0;
     const docker = fakeDocker(args => {
@@ -415,10 +481,9 @@ describe('ContainerBackend.prepare', () => {
       return { stdout: '', stderr: '' };
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER });
-    expect(runAttempts).toBe(2);
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-nofuse' });
-    expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
+    await expect(backend.prepare({ codebase: FOLDER })).rejects.toBeInstanceOf(IsolationFailure);
+    expect(runAttempts).toBe(1);
+    expect(store.created).toBeUndefined();
   });
 });
 
