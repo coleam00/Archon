@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { providerRegistry } from '@archon/providers';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { WorkflowConfig } from '@archon/workflows/deps';
 import { executeTestDagWorkflow, makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 
@@ -34,9 +35,14 @@ const config: WorkflowConfig = {
   defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
 };
 
-test.each([false, true])(
-  'cancellation during failure notification preserves its terminal outcome (successful sibling: %s)',
-  async successfulSibling => {
+test.each([
+  { successfulSibling: false, cancel: false },
+  { successfulSibling: true, cancel: false },
+  { successfulSibling: false, cancel: true },
+  { successfulSibling: true, cancel: true },
+])(
+  'failure notification preserves the committed outcome (%j)',
+  async ({ successfulSibling, cancel }) => {
     const cwd = roots(await mkdtemp(join(tmpdir(), 'archon-cancel-failure-')));
     const store = createWorkflowStore();
     const run = await store.createWorkflowRun({
@@ -53,42 +59,59 @@ test.each([false, true])(
       ],
     });
     let cancelledDuringNotification = false;
-    await executeTestDagWorkflow({
-      deps: {
-        store,
-        providers: providerRegistry,
-        loadConfig: async () => config,
-        getAgentProvider: () => {
-          throw new Error('Unexpected AI provider');
-        },
-      },
-      workflow,
-      workflowRun: { ...run, status: 'running' },
-      cwd,
-      platform: {
-        sendMessage: async (_id, message) => {
-          if (!message.startsWith('❌ DAG workflow')) return;
-          expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
-          expect(await store.cancelWorkflowRun(run.id)).toEqual({ cancelled: true });
-          cancelledDuringNotification = true;
-        },
-        getStreamingMode: () => 'batch',
-        getPlatformType: () => 'test',
-      },
-      conversationId: 'cancel-failure-conv',
-      workflowProvider: 'claude',
-      workflowModel: undefined,
-      artifactsDir: join(cwd, 'artifacts'),
-      stateDir: join(cwd, 'state'),
-      logDir: join(cwd, 'logs'),
-      baseBranch: 'dev',
-      docsDir: 'docs',
-      config,
+    const liveFailureStatuses: ReturnType<typeof store.getWorkflowRunStatus>[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.runId === run.id && event.type === 'workflow_failed') {
+        liveFailureStatuses.push(store.getWorkflowRunStatus(run.id));
+      }
     });
-    expect(cancelledDuringNotification).toBe(true);
-    expect(await store.getWorkflowRunStatus(run.id)).toBe('cancelled');
+    try {
+      await executeTestDagWorkflow({
+        deps: {
+          store,
+          providers: providerRegistry,
+          loadConfig: async () => config,
+          getAgentProvider: () => {
+            throw new Error('Unexpected AI provider');
+          },
+        },
+        workflow,
+        workflowRun: { ...run, status: 'running' },
+        cwd,
+        platform: {
+          sendMessage: async (_id, message) => {
+            if (!message.startsWith('❌ DAG workflow')) return;
+            expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+            if (cancel) {
+              expect(await store.cancelWorkflowRun(run.id)).toEqual({ cancelled: true });
+              cancelledDuringNotification = true;
+            }
+          },
+          getStreamingMode: () => 'batch',
+          getPlatformType: () => 'test',
+        },
+        conversationId: 'cancel-failure-conv',
+        workflowProvider: 'claude',
+        workflowModel: undefined,
+        artifactsDir: join(cwd, 'artifacts'),
+        stateDir: join(cwd, 'state'),
+        logDir: join(cwd, 'logs'),
+        baseBranch: 'dev',
+        docsDir: 'docs',
+        config,
+      });
+    } finally {
+      unsubscribe();
+    }
+    expect(await Promise.all(liveFailureStatuses)).toEqual(cancel ? [] : ['failed']);
+    expect(cancelledDuringNotification).toBe(cancel);
+    expect(await store.getWorkflowRunStatus(run.id)).toBe(cancel ? 'cancelled' : 'failed');
     const events = await store.listWorkflowEvents(run.id);
-    expect(events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(1);
-    expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(0);
+    expect(events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(
+      cancel ? 1 : 0
+    );
+    expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(
+      cancel ? 0 : 1
+    );
   }
 );

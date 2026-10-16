@@ -2392,9 +2392,11 @@ export function describeWorkflowStoreConformance(
                 ? store.cancelWorkflowRun(run.id)
                 : store.cancelFanOutRun(run.id, 'fan_out_sibling');
         const results = await Promise.allSettled(Array.from({ length: 8 }, write));
-        if (mode === 'complete' || mode === 'fail') {
+        if (mode === 'complete') {
           expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
           expect(results.filter(result => result.status === 'rejected')).toHaveLength(7);
+        } else if (mode === 'fail') {
+          for (const result of results) expect(result.status).toBe('fulfilled');
         } else {
           for (const result of results) expect(result.status).toBe('fulfilled');
           expect(

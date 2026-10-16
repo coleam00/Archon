@@ -12473,6 +12473,21 @@ export async function executeDagWorkflow(
     'dag_workflow_finished'
   );
 
+  async function emitCommittedFailure(error: string): Promise<void> {
+    // Failure writes can acknowledge a concurrent terminal outcome without changing it.
+    const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    const emitter = getWorkflowEventEmitter();
+    if (status === 'failed') {
+      emitter.emit({
+        type: 'workflow_failed',
+        runId: workflowRun.id,
+        workflowName: workflow.name,
+        error,
+      });
+    }
+    if (status !== 'paused') emitter.unregisterRun(workflowRun.id);
+  }
+
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
     if (anyFailed && (await pauseForUsageLimit())) return;
@@ -12497,21 +12512,9 @@ export async function executeDagWorkflow(
         );
       }
     );
-    const emitterForFail = getWorkflowEventEmitter();
-    emitterForFail.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    // Terminal write LAST: nothing above depends on it and all of it used to run
-    // unconditionally, so a rejection must not silence the log file, the live event,
-    // or the user's notification. Terminal telemetry is reported by the run store
-    // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         // A first-node failure completes nothing, but it is still a node failure.
@@ -12519,9 +12522,7 @@ export async function executeDagWorkflow(
       }),
       { workflowRunId: workflowRun.id, site: 'dag.no_nodes_completed_fail' }
     );
-    // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-    // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-    // catch recognizes the marker and rethrows without re-emitting.
+    await emitCommittedFailure(failMsg);
     return;
   }
 
@@ -12541,28 +12542,14 @@ export async function executeDagWorkflow(
         );
       }
     );
-    const emitterForFail = getWorkflowEventEmitter();
-    emitterForFail.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    // Terminal write LAST: nothing above depends on it and all of it used to run
-    // unconditionally, so a rejection must not silence the log file, the live event,
-    // or the user's notification. Terminal telemetry is reported by the run store
-    // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
       { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
     );
-    // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-    // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-    // catch recognizes the marker and rethrows without re-emitting.
+    await emitCommittedFailure(failMsg);
     return;
   }
 
