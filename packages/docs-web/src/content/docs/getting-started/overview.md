@@ -143,7 +143,7 @@ That's it. Everything else has sensible defaults:
 - **Port:** 3090 for the API server, 5173 for the Web UI dev server
 - **AI assistant:** Set `DEFAULT_AI_ASSISTANT` to your selected provider. The copied `.env.example` uses `claude`; change it for Codex or Pi. The CLI does not read this repository `.env`; it reads Archon-owned files such as `~/.archon/.env` and `~/.archon/config.yaml`. Without a configured default, Archon selects only a sole registered provider; with multiple providers, run `archon setup` or configure the default explicitly.
 
-> **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value. SDLC workflows such as `archon-ship` use `gh` by default. Set `ARCHON_SDLC_FORGE=forge` to opt into the [forge plugin](/reference/forge/), whose host resolves credentials in this order: `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth login`. Without the GitHub adapter, a `gh` login alone is enough.
+> **Why two GitHub token variables?** `GH_TOKEN` and `GITHUB_TOKEN` are both supported. The GitHub CLI (`gh`), Archon's adapter API calls and clones in PAT mode, repository clones and forge credential resolution prefer `GH_TOKEN` when both are set. Activating the GitHub adapter in PAT mode still requires `GITHUB_TOKEN` and `WEBHOOK_SECRET`; `GH_TOKEN` alone does not activate it. SDLC workflows such as `archon-ship` use `gh` by default. Set `ARCHON_SDLC_FORGE=forge` to opt into the [forge plugin](/reference/forge/), whose host resolves credentials in this order: `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth login`. Without the GitHub adapter, a `gh` login alone is enough.
 
 ---
 

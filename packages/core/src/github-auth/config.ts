@@ -30,7 +30,7 @@ export interface DeviceFlowConfig {
 export function resolveGitHubTokenFromEnv(
   env: NodeJS.ProcessEnv = process.env
 ): string | undefined {
-  return GITHUB_PAT_KEYS.map(key => env[key]).find(value => value !== undefined);
+  return GITHUB_PAT_KEYS.map(key => env[key]).find(value => Boolean(value));
 }
 
 export function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): GitHubAppConfig | null {
