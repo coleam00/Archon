@@ -1292,17 +1292,43 @@ describe('WorktreeProvider against real git', () => {
       expect(env.metadata).toHaveProperty('branchCreated', true);
     });
 
-    test('a local branch behind its remote counterpart is fast-forwarded to it', async () => {
-      await commitOn(PR_BRANCH, 'one');
-      const tip = await commitOn(PR_BRANCH, 'two');
-      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
-      await git(repoPath, 'branch', '-f', PR_BRANCH, `${PR_BRANCH}~1`);
-
-      const env = await provider.create(attempt);
-
-      expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
-      expect(await localHead()).toBe(tip);
-    });
+    test.each([false, true])(
+      'fast-forwards a local branch behind its remote (transient ref lock: %s)',
+      async locked => {
+        await commitOn(PR_BRANCH, 'one');
+        const tip = await commitOn(PR_BRANCH, 'two');
+        await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+        await git(repoPath, 'branch', '-f', PR_BRANCH, `${PR_BRANCH}~1`);
+        const lock = join(repoPath, '.git', 'refs', 'heads', `${PR_BRANCH}.lock`);
+        if (locked) await writeFile(lock, '');
+        const exec = gitModule.execFileAsync;
+        let collisions = 0;
+        const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+          async (cmd, args, options) => {
+            try {
+              return await exec(cmd, args, options);
+            } catch (error) {
+              if (args.includes('fetch') && args.includes('.') && existsSync(lock)) {
+                expect(args.at(-1)).toBe(
+                  `refs/remotes/origin/${PR_BRANCH}:refs/heads/${PR_BRANCH}`
+                );
+                collisions++;
+                await rm(lock);
+              }
+              throw error;
+            }
+          }
+        );
+        try {
+          const env = await provider.create(attempt);
+          expect(collisions).toBe(locked ? 1 : 0);
+          expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(tip);
+          expect(await localHead()).toBe(tip);
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    );
 
     test('diverged local and remote fail before any checkout', async () => {
       const shared = await commitOn(PR_BRANCH, 'shared');

@@ -1834,13 +1834,9 @@ export class WorktreeProvider implements IIsolationProvider {
           // A local-repo fetch without `+` only fast-forwards, and git refuses it for a
           // branch checked out in another worktree, so it cannot discard or move work
           // that changed after the commit count.
-          await execFileAsync(
-            'git',
-            ['-C', repoPath, 'fetch', '.', `${remoteRefName}:${localRefName}`],
-            {
-              timeout: GIT_OPERATION_TIMEOUT_MS,
-            }
-          );
+          await fetchWithRetry(toRepoPath(repoPath), ['.', `${remoteRefName}:${localRefName}`], {
+            timeout: GIT_OPERATION_TIMEOUT_MS,
+          });
           source = 'fast_forwarded';
         }
       }
