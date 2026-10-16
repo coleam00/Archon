@@ -278,6 +278,78 @@ describe('installed packs in the catalog', () => {
     });
   }
 
+  for (const fault of ['duplicate-name', 'support-dispatch'] as const) {
+    test(`authored-name collisions preserve each file's public identity for ${fault}`, async () => {
+      const pack = reviewKit();
+      pack.files['review/code-review.yaml'] =
+        `name: shared\ndescription: Review\nnodes:\n  - id: child\n    ${fault === 'support-dispatch' ? 'workflow: helper' : 'prompt: review'}\n`;
+      pack.files['z-support/support.yaml'] =
+        'name: shared\ndescription: Support\nnodes:\n  - id: done\n    prompt: support\n';
+      if (fault === 'duplicate-name') {
+        pack.files['zz-support/support.yaml'] = pack.files['z-support/support.yaml'];
+      }
+      await install(pack);
+      const catalog = await discover();
+      const selectedErrors = catalog.errors.filter(
+        error => workflowLoadErrorName(error) === REVIEW
+      );
+      const resolution = await resolveFanOutChildDefinition(
+        { ...deps, providers: providerRegistry },
+        project,
+        REVIEW
+      );
+      if (fault === 'support-dispatch') {
+        expect(selectedErrors).toHaveLength(1);
+        expect(selectedErrors[0]).toMatchObject({
+          filename: 'acme/review-kit/review/code-review.yaml',
+          errorType: 'validation_error',
+        });
+        expect(selectedErrors[0].error).toContain('only entrypoints are dispatchable');
+        expect(resolution).toEqual({ unresolved: selectedErrors[0].error });
+      } else {
+        expect(selectedErrors).toEqual([]);
+        expect(names(catalog.workflows)).toContain(REVIEW);
+        expect(resolution).not.toHaveProperty('unresolved');
+        const supportErrors = catalog.errors.filter(
+          error => workflowLoadErrorName(error) === 'acme/review-kit:shared'
+        );
+        expect(supportErrors).toHaveLength(2);
+        for (const error of supportErrors) expect(error.error).toContain('Duplicate workflow name');
+      }
+    });
+  }
+
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a pack-root read fault retains the actual cause for every entrypoint',
+    async () => {
+      const pack = reviewKit();
+      pack.entrypoints.helper = 'helper/helper.yaml';
+      await install(pack);
+      const tree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+      try {
+        await chmod(tree, 0o111);
+        const catalog = await discover();
+        const packErrors = catalog.errors.filter(error =>
+          error.filename.startsWith('acme/review-kit')
+        );
+        expect(packErrors).toHaveLength(2);
+        for (const name of [REVIEW, HELPER]) {
+          const errors = packErrors.filter(error => workflowLoadErrorName(error) === name);
+          expect(errors).toHaveLength(1);
+          expect(errors[0]).toMatchObject({
+            filename: 'acme/review-kit',
+            errorType: 'read_error',
+            cause: { code: 'EACCES' },
+          });
+          expect(errors[0].error).toContain('Directory read error');
+        }
+        expect(packErrors[0].cause).toBe(packErrors[1].cause);
+      } finally {
+        await chmod(tree, 0o755);
+      }
+    }
+  );
+
   test('installed MCP declarations stay checkout-only despite adjacent and home configs', async () => {
     registerBuiltinProviders();
     await install({

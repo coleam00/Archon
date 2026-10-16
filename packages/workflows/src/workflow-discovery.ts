@@ -1086,11 +1086,13 @@ export async function discoverWorkflows(
       for (const file of loaded.files) {
         const { workflow } = file.parsed;
         const filename = `${label}/${file.folder}/${file.filename}`;
+        const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
+        const qualified = installedWorkflowName(pack, entry ?? workflow.name);
         const supportChildren = qualifyPackReferences(workflow, qualifiedByName, entrypoints);
         if (supportChildren.length > 0) {
           allErrors.push({
             filename,
-            workflowName: qualifiedByName.get(workflow.name),
+            workflowName: qualified,
             error: `'workflow:' launches support workflow ${supportChildren.map(name => `'${name}'`).join(', ')} as a child run. A child run is dispatch, and only entrypoints are dispatchable: compose it with 'include:', or declare it as an entrypoint in archon-plugin.json.`,
             errorType: 'validation_error',
           });
@@ -1098,7 +1100,7 @@ export async function discoverWorkflows(
         }
         files.set(filename, {
           ...file.parsed,
-          workflow: { ...workflow, name: qualifiedByName.get(workflow.name) ?? workflow.name },
+          workflow: { ...workflow, name: qualified },
           source: 'installed',
         });
       }
