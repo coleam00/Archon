@@ -28,6 +28,8 @@ function makeFetchMock(response: Response): FetchMock {
   );
 }
 
+const { resolveRepoProjectIdentity } = await import('@archon/paths/archon-paths');
+
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -44,6 +46,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
+  resolveRepoProjectIdentity,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -236,6 +239,23 @@ describe('GitLabAdapter', () => {
       { gitlabUrl: 'https://gitlab.example.com' },
       'gitlab.adapter_initialized'
     );
+  });
+
+  test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+    const adapter = createAdapter();
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'testuser/testrepo-2',
+      default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    });
+    // @ts-expect-error - exercise the private registration boundary
+    const result = await adapter.getOrCreateCodebaseForRepo('testuser/testrepo');
+    expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+    expect(result.codebase.default_cwd).toBe(result.repoPath);
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(expect.objectContaining({ id: 'allocated' }), {
+      default_cwd: result.repoPath,
+    });
   });
 
   test('allocated checkout path reaches preparation and conversation storage', async () => {

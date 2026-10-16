@@ -15,6 +15,7 @@ import * as fsPromises from 'node:fs/promises';
 import { createFileWorkflowHost } from '../workflows/file-host';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { setLogSink, setLogLevel, getLogLevel } from '@archon/paths';
 
@@ -29,7 +30,7 @@ mock.module('../db/connection', () => ({
 }));
 
 import * as git from '@archon/git';
-import { cloneRepository } from './clone';
+import { cloneRepository, registerRepository as registerInStore } from './clone';
 
 const { registerFolder, registerRepository, ProjectRegistrationError } =
   await import('./sql-registration');
@@ -71,6 +72,105 @@ async function storageRoot(codebaseId: string): Promise<string> {
 }
 
 describe('project storage collisions', () => {
+  test.each(['sql', 'file'] as const)(
+    'relative local remotes retain checkout context (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const firstPath = await gitCheckout(join(root, 'a', 'repo'), '../upstream.git');
+      const sameRemote = await gitCheckout(join(root, 'a', 'nested', 'repo'), '../../upstream.git');
+      const differentRemote = await gitCheckout(join(root, 'b', 'repo'), '../upstream.git');
+      const legacy = await store.createCodebase({
+        name: 'local-api',
+        default_cwd: firstPath,
+        repository_url: '../upstream.git',
+      });
+      const first = await registerInStore(store, firstPath);
+      expect(first.codebaseId).toBe(legacy.id);
+      await expect(registerInStore(store, sameRemote)).rejects.toThrow(firstPath);
+      const second = await registerInStore(store, differentRemote);
+      expect(second.codebaseId).not.toBe(first.codebaseId);
+      await expect(
+        store.createCodebase({
+          name: 'bypass',
+          default_cwd: sameRemote,
+          repository_url: '../../upstream.git',
+        })
+      ).rejects.toThrow(firstPath);
+      expect(await store.listCodebases()).toHaveLength(2);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    'restores a missing managed checkout at its persisted path (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const path = join(root, '.archon/workspaces/acme/api-2/source');
+      const url = 'https://github.com/acme/api.git';
+      const project = await store.createCodebase({
+        name: 'acme/api-2',
+        default_cwd: path,
+        repository_url: url,
+      });
+      const clone = spyOn(git, 'cloneRepository').mockImplementation(async (_url, target) => {
+        await gitCheckout(target);
+        return { ok: true, value: undefined };
+      });
+      const safe = spyOn(git, 'addSafeDirectory').mockResolvedValue(undefined);
+      try {
+        const result = await cloneRepository(store, url);
+        expect(result.codebaseId).toBe(project.id);
+        expect(result.defaultCwd).toBe(path);
+        await access(join(path, '.git'));
+        expect(clone).toHaveBeenCalledTimes(1);
+        expect(await store.listCodebases()).toHaveLength(1);
+        await cloneRepository(store, url);
+        expect(clone).toHaveBeenCalledTimes(1);
+      } finally {
+        clone.mockRestore();
+        safe.mockRestore();
+      }
+    }
+  );
+
+  test('refuses to recreate a missing operator-owned checkout', async () => {
+    const root = await makeHome();
+    const path = join(root, 'operator/repo');
+    const url = 'https://github.com/acme/api.git';
+    await createCodebase({ name: 'acme/api', default_cwd: path, repository_url: url });
+    await expect(cloneRepository(codebases, url)).rejects.toThrow(path);
+    await expect(access(path)).rejects.toThrow();
+  });
+
+  test('managed allocation preserves a local remote relative to the supplied checkout', async () => {
+    const root = await makeHome();
+    const path = join(root, 'a/repo');
+    const project = await createManagedCodebase({
+      name: 'acme/api',
+      default_cwd: path,
+      repository_url: '../upstream.git',
+    });
+    expect(project.repository_url).toBe(join(root, 'a/upstream.git'));
+    expect(
+      (await findCodebaseByRepoUrl(pathToFileURL(join(root, 'a/upstream.git')).href))?.id
+    ).toBe(project.id);
+    await expect(
+      createManagedCodebase({
+        name: 'other/api',
+        default_cwd: join(root, 'a/nested/repo'),
+        repository_url: '../../upstream.git',
+      })
+    ).rejects.toThrow(project.default_cwd);
+    expect(await listCodebases()).toHaveLength(1);
+  });
+
   test('forge registrations allocate distinct names, source paths and storage atomically', async () => {
     const root = await makeHome();
     const projects = await Promise.all([

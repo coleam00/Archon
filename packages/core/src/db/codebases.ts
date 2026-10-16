@@ -21,6 +21,7 @@ import {
   allocateProjectName,
   isCheckoutRegistered,
   assertProjectRegistrationAvailable,
+  resolveRegistrationUrl,
 } from '../services/project-registration-identity';
 import { getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { findRegisteredRemote } from '../services/registration-remote';
@@ -71,9 +72,19 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
     const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
     let project = { ...data, kind: data.kind ?? 'repo' };
     if (managed) {
+      if (project.repository_url)
+        project.repository_url = resolveRegistrationUrl(
+          project.repository_url,
+          project.default_cwd
+        );
       const owner =
         project.repository_url &&
-        (await findRegisteredRemote(registered.rows, project.repository_url, 'registration'));
+        (await findRegisteredRemote(
+          registered.rows,
+          project.repository_url,
+          'registration',
+          project.default_cwd
+        ));
       if (owner) {
         throw new Error(
           `Project "${owner.name}" is already registered at ${owner.default_cwd}. ` +

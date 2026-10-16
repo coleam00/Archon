@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getGitCheckoutIdentity } from '@archon/git';
 import {
   isPathInside,
@@ -59,7 +60,8 @@ export function assertProjectRegistrationAvailable(
       existing =>
         existing.kind !== 'folder' &&
         existing.repository_url &&
-        remoteIdentity(existing.repository_url) === remoteIdentity(remote)
+        remoteIdentity(existing.repository_url, existing.default_cwd) ===
+          remoteIdentity(remote, project.default_cwd)
     );
   if (remoteOwner) {
     throw new Error(
@@ -106,8 +108,18 @@ export function allocateProjectName(
   }
 }
 
+export function resolveRegistrationUrl(url: string, cwd: string): string {
+  const value = url.trim();
+  if (value.startsWith('file:')) return fileURLToPath(value);
+  if (isAbsolute(value)) return resolve(value);
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value) && !/^[^/]+:/.test(value)) return resolve(cwd, value);
+  return value;
+}
+
 /** Compare transport spellings without conflating hosts, ports or case-sensitive repo paths. */
-export function remoteIdentity(url: string): string {
+export function remoteIdentity(url: string, cwd = process.cwd()): string {
+  url = resolveRegistrationUrl(url, cwd);
+  if (isAbsolute(url)) return `file:${url}`;
   const cleaned = url
     .trim()
     .replace(/\/+$/, '')

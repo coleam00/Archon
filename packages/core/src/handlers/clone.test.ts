@@ -1386,7 +1386,7 @@ describe('registerRepository', () => {
         mockFindCommandFiles.mockImplementation(discoverCommandFiles);
         // Reusing a registered remote reloads its commands without creating another checkout.
         spyFsAccess.mockImplementation(async (path: Parameters<typeof fsPromises.access>[0]) => {
-          if (String(path).endsWith('.git'))
+          if (!alreadyExists && String(path).endsWith('.git'))
             throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
         });
 
@@ -1961,6 +1961,7 @@ describe('remote registration identity', () => {
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/home/user/repo',
     });
+    spyFsAccess.mockResolvedValue(undefined);
     // A matching remote reuses the registered checkout before cloning.
     mockListCodebases.mockResolvedValueOnce([existingCodebase]);
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);

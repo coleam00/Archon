@@ -2,7 +2,7 @@ import { execFileAsync, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
 import type { Codebase } from '../schemas/codebase';
-import { remoteIdentity } from './project-registration-identity';
+import { remoteIdentity, resolveRegistrationUrl } from './project-registration-identity';
 
 export class ProjectRegistrationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -53,15 +53,16 @@ export async function effectiveRegistrationUrl(
   const selected = remote ?? (await registrationRemote(path));
   if (!selected) return null;
   const { stdout } = await execFileAsync('git', ['-C', path, 'remote', 'get-url', selected]);
-  return stdout.trim() || null;
+  return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
 export async function findRegisteredRemote(
   registered: readonly Codebase[],
   remoteUrl: string,
-  purpose: 'lookup' | 'registration' = 'lookup'
+  purpose: 'lookup' | 'registration' = 'lookup',
+  cwd = process.cwd()
 ): Promise<Codebase | null> {
-  const identity = remoteIdentity(remoteUrl);
+  const identity = remoteIdentity(remoteUrl, cwd);
   const matches: Codebase[] = [];
   const failures: ProjectRegistrationError[] = [];
   for (const project of registered) {
@@ -83,7 +84,7 @@ export async function findRegisteredRemote(
         continue;
       }
     }
-    if (registeredUrl && remoteIdentity(registeredUrl) === identity) {
+    if (registeredUrl && remoteIdentity(registeredUrl, project.default_cwd) === identity) {
       matches.push(project);
     }
   }

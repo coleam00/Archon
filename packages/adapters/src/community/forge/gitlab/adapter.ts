@@ -21,6 +21,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -559,6 +560,9 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     if (existing) {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
       if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+        const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
+        if (!identity) throw new Error(`Cannot resolve checkout for project "${existing.name}"`);
+        const canonicalPath = getProjectSourcePath(identity.owner, identity.repo);
         getLog().info(
           { codebaseName: existing.name, canonicalPath },
           'gitlab.stale_worktree_path_fixed'
