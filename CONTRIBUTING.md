@@ -28,7 +28,7 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only),
+`generated-files`, `type-check`, `lint`, `ratchet`, `format`, `installer` (POSIX only),
 `package-tests`, `cli-tests`, and `script-tests`.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
@@ -40,6 +40,13 @@ endings on every OS. On Windows, `bun run format` converts CRLF working files to
 Git still normalizes text through the existing `.gitattributes`. `.archon/**` remains
 excluded from formatting while its TypeScript scripts remain linted. Markdown and HTML
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
+
+The ratchet (`bun run check:ratchet`) refuses a change that raises the cognitive complexity
+of a function in a file it touches, or makes a touched source file longer, compared with the
+merge base with `origin/dev` (fetch it locally). It scores the TS/JS files Biome lints. To
+land an increase on purpose, add a trailer to one of the change's commits:
+`Ratchet-Allow: <path>` for a file's length, `Ratchet-Allow: <path>:<function>` for a function,
+using the names the failure prints.
 
 The SDK check reads exported types from installed provider SDK declarations and scans
 tracked and untracked TypeScript sources outside `packages/providers/`. Import SDK
