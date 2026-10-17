@@ -370,7 +370,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'doctor',
     spec: 'doctor',
-    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
+    description: 'Verify installed provider diagnostics, DB, and adapters',
   },
   {
     command: 'auth',

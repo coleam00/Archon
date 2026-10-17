@@ -12,8 +12,9 @@ want to work on unless setting up globally.
 
 ```bash
 archon --version      # CLI present?
-archon doctor         # installed providers, gh auth, database, adapters
+archon doctor         # installed providers, database, adapters
 archon doctor --full  # also probes the OpenCode runtime SDK
+archon workflow run archon-forge-check  # can the SDLC workflows reach the forge?
 ```
 
 If `doctor` is green, skip to Configuration. Only set up what is actually broken.
