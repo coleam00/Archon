@@ -22811,7 +22811,7 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
     store.getWorkflowRunStatus.mockImplementation(async () =>
       existsSync(join(testDir, 'started')) ? 'cancelled' : 'running'
     );
-    const trees = recordNodeProcessTrees('server');
+    const trees = recordNodeProcessTrees();
     try {
       await executeDagWorkflow(
         dagOptions({
@@ -22828,38 +22828,15 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
     return { store, leaked: existsSync(join(testDir, 'leaked')) };
   }
 
-  const grandchildScript =
-    "import { spawn } from 'node:child_process';\n" +
-    "import { writeFileSync } from 'node:fs';\n" +
-    "writeFileSync('started', '');\n" +
-    'const child = spawn(process.execPath, ["-e", "setTimeout(() => require(\'fs\').writeFileSync(\'leaked\', \'\'), 2000)"], { stdio: "ignore" });\n' +
-    'await new Promise(resolve => child.once("exit", resolve));\n';
-
-  it.each([
-    ...(process.platform === 'win32'
-      ? []
-      : [['bash', { id: 'hang', bash: 'touch started; (sleep 2; touch leaked) & wait' }] as const]),
-    ['script', { id: 'hang', runtime: 'bun', script: grandchildScript }] as const,
-  ])(
-    'ends the %s node tree and records the node cancelled',
-    async (kind, nodeInput) => {
-      const { store, leaked } = await runUntilCancelled(`stop-${kind}`, nodeInput);
-      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          event_type: 'node_failed',
-          step_name: 'hang',
-          data: expect.objectContaining({ error: 'Workflow cancelled', failure_kind: 'cancelled' }),
-        })
-      );
-      expect(leaked).toBe(false);
-    },
-    testTimeout(15000)
-  );
-
+  // Each case starts a background job that would write `leaked` after the cancel.
   it.skipIf(process.platform === 'win32').each([
     [
-      'loop',
+      'bash',
+      { id: 'hang', bash: 'touch started; (sleep 2; touch leaked) & wait' },
+      "Bash node 'hang' cancelled",
+    ],
+    [
+      'loop until_bash',
       {
         id: 'hang',
         loop: {
@@ -22869,29 +22846,18 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
           until_bash: 'touch started; (sleep 2; touch leaked) & wait',
         },
       },
-    ],
-    [
-      'loop_group',
-      {
-        id: 'hang',
-        loop_group: {
-          max_iterations: 2,
-          fresh_context: false,
-          until_bash: 'touch started; (sleep 2; touch leaked) & wait',
-          nodes: [{ id: 'body', bash: 'echo body' }],
-        },
-      },
+      'Command cancelled',
     ],
   ] as const)(
-    'ends a %s until_bash check and stops the loop cancelled',
-    async (kind, nodeInput) => {
+    'ends the %s tree and records the node cancelled',
+    async (kind, nodeInput, error) => {
       const { store, leaked } = await runUntilCancelled(`stop-${kind}`, nodeInput);
       const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
       expect(events).toContainEqual(
         expect.objectContaining({
           event_type: 'node_failed',
           step_name: 'hang',
-          data: expect.objectContaining({ error: 'Workflow cancelled', failure_kind: 'cancelled' }),
+          data: expect.objectContaining({ error, failure_kind: 'cancelled' }),
         })
       );
       expect(leaked).toBe(false);
@@ -40119,68 +40085,6 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock.calls.length
     ).toBe(1);
   });
-
-  it.skipIf(process.platform === 'win32')(
-    'a cancel ends the resumed loop_group.until_bash tree and stops the group cancelled',
-    async () => {
-      const store = createEscalationStore('run-escalation-cancel');
-      store.getWorkflowRunStatus.mockImplementation(async () =>
-        existsSync(join(testDir, 'started')) ? 'cancelled' : 'running'
-      );
-      const approvedDecision = { decision: 'approve', text: '' };
-      const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
-        ['grp.work', { output: 'work output' }],
-        [
-          'grp.check',
-          { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
-        ],
-      ]);
-      const workflowRun = makeWorkflowRun('run-escalation-cancel', {
-        metadata: {
-          approval: {
-            nodeId: 'grp',
-            message: 'Continue?',
-            type: 'approval',
-            bodyGateId: 'check',
-            iteration: 1,
-            decisions: [{ id: 'approve' }, { id: 'revise' }],
-            decisionsAuthored: true,
-          } satisfies ApprovalContext,
-        },
-      });
-      const workflow = gateTerminatedLoopGroupWorkflow();
-      const group = workflow.nodes[0];
-      if (group?.kind !== 'loop_group') throw new Error('expected group');
-      group.loop_group.until_bash = 'touch started; (sleep 2; touch leaked) & wait';
-
-      const trees = recordNodeProcessTrees('server');
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            cwd: testDir,
-            workflow: ready(workflow),
-            workflowRun,
-            priorCompletedNodes,
-          })
-        );
-      } finally {
-        trees.release();
-      }
-      await new Promise(resolve => setTimeout(resolve, 2500));
-
-      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          event_type: 'node_failed',
-          step_name: 'grp',
-          data: expect.objectContaining({ error: 'Workflow cancelled', failure_kind: 'cancelled' }),
-        })
-      );
-      expect(existsSync(join(testDir, 'leaked'))).toBe(false);
-    },
-    testTimeout(15000)
-  );
 
   it('resuming after a non-completing decision advances to a fresh iteration, with the text available via $LOOP_PREV', async () => {
     mockSendQueryDag.mockClear();

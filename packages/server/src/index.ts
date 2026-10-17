@@ -185,7 +185,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Every host bash and script node leads its own process group, so a run's cancel ends
   // that run's node trees, and each node's watcher ends its tree if the server dies.
   // The server never ends every tree at once, so the handle is not kept.
-  recordNodeProcessTrees('server');
+  recordNodeProcessTrees();
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by

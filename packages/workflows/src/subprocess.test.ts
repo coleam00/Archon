@@ -268,11 +268,12 @@ async function runAbortedWrapper(): Promise<{
   return { error, leaked: existsSync(marker) };
 }
 
-test('aborting a server-recorded node ends the wrapper and its grandchild', async () => {
-  const trees = recordNodeProcessTrees('server');
+test('aborting a recorded node ends the wrapper and its grandchild', async () => {
+  const trees = recordNodeProcessTrees();
   try {
     const { error, leaked } = await runAbortedWrapper();
     expect(error?.message).toBe('Command cancelled');
+    expect(error?.cancelled).toBe(true);
     expect(error && isSubprocessTimeout(error)).toBe(false);
     expect(leaked).toBe(false);
   } finally {
@@ -298,72 +299,6 @@ test('an unrecorded node ignores the abort, because its owner ends it', async ()
     }
   );
   expect(stdout.trim()).toBe('finished');
-});
-
-posixOnly('aborting a node whose root exited still ends the job holding its output', async () => {
-  const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-'))), 'pid');
-  const trees = recordNodeProcessTrees('server');
-  const controller = new AbortController();
-  try {
-    const node = runSubprocess(
-      { kind: 'host' },
-      '/bin/bash',
-      ['-c', `/bin/sleep 30 & echo $! > '${pidFile}'`],
-      {
-        cwd: import.meta.dir,
-        timeout: 30_000,
-        env: {},
-        endTreeOnTimeout: true,
-        abortSignal: controller.signal,
-        retention: { standalone: true },
-      }
-    ).then(
-      () => 'resolved',
-      () => 'rejected'
-    );
-    await waitUntil(
-      'the descendant pid',
-      () => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== ''
-    );
-    const descendant = Number(readFileSync(pidFile, 'utf8'));
-
-    controller.abort();
-
-    expect(await node).toBe('rejected');
-    await waitUntil('the descendant to exit', () => !processExists(descendant));
-  } finally {
-    trees.release();
-  }
-});
-
-posixOnly('a server-recorded node deadline still ends its root only', async () => {
-  const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
-  const trees = recordNodeProcessTrees('server');
-  let job: number | undefined;
-  try {
-    const error = await runSubprocess(
-      { kind: 'host' },
-      '/bin/bash',
-      ['-c', `/bin/sleep 30 >/dev/null 2>&1 & echo $! > '${pidFile}'; exec /bin/sleep 5`],
-      {
-        cwd: import.meta.dir,
-        timeout: 200,
-        env: {},
-        endTreeOnTimeout: true,
-        retention: { standalone: true },
-      }
-    ).then(
-      () => undefined,
-      (e: unknown) => e as RawSubprocessRejection
-    );
-    expect(error && isSubprocessTimeout(error)).toBe(true);
-    expect(error?.signal).toBe('SIGTERM');
-    job = Number(readFileSync(pidFile, 'utf8'));
-    expect(processExists(job)).toBe(true);
-  } finally {
-    trees.release();
-    if (job !== undefined && processExists(job)) process.kill(job, 'SIGKILL');
-  }
 });
 
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {

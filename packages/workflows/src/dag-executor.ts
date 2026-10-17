@@ -1026,27 +1026,9 @@ async function waitForNodeRetry(
 const SUBPROCESS_STOP_CHECK_INTERVAL_MS = 1_000;
 
 /**
- * The node's run stopped while its subprocess ran, and the subprocess was ended for it.
- * The rejection stays as `cause` for diagnostics.
- */
-class SubprocessRunStoppedError extends Error {
-  constructor(
-    readonly status: WorkflowRunStatus | 'deleted',
-    cause: RawSubprocessRejection
-  ) {
-    super(
-      cause.treeSurvived
-        ? `Workflow ${status}, but the subprocess tree could not be ended: ${cause.message}`
-        : `Workflow ${status}`,
-      { cause }
-    );
-    this.name = 'SubprocessRunStoppedError';
-  }
-}
-
-/**
- * `runSubprocess` for a node of `runId`, ending its tree when that run stops. Only this
- * run's status aborts it, so another run's subprocess is never signalled.
+ * `runSubprocess` for a node of `runId`, ending its tree when that run stops; the
+ * rejection is then marked `cancelled`. Only this run's status aborts it, so another
+ * run's subprocess is never signalled.
  */
 async function runSubprocessUntilRunStops(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
@@ -1055,7 +1037,6 @@ async function runSubprocessUntilRunStops(
   ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
 ): ReturnType<typeof runSubprocess> {
   const controller = new AbortController();
-  let stoppedStatus: WorkflowRunStatus | 'deleted' | undefined;
   let reading = false;
   const poll = setInterval(() => {
     if (reading) return;
@@ -1063,11 +1044,10 @@ async function runSubprocessUntilRunStops(
     store
       .getWorkflowRunStatus(runId)
       .then(status => {
-        if (stoppedStatus !== undefined || shouldContinueStreamingForStatus(status)) return;
-        stoppedStatus = status ?? 'deleted';
+        if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
         clearInterval(poll);
         getLog().info(
-          { workflowRunId: runId, nodeId, status: stoppedStatus },
+          { workflowRunId: runId, nodeId, status },
           'dag.stop_detected_during_subprocess'
         );
         controller.abort();
@@ -1088,16 +1068,6 @@ async function runSubprocessUntilRunStops(
       ...options,
       abortSignal: controller.signal,
     });
-  } catch (error) {
-    if (stoppedStatus === undefined) throw error;
-    const stopped = new SubprocessRunStoppedError(stoppedStatus, error as RawSubprocessRejection);
-    if ((error as RawSubprocessRejection).treeSurvived) {
-      getLog().error(
-        { err: stopped, workflowRunId: runId, nodeId },
-        'dag.subprocess_tree_survived_stop'
-      );
-    }
-    throw stopped;
   } finally {
     clearInterval(poll);
   }
@@ -3591,21 +3561,6 @@ async function recordExecTimeoutSkip(
   );
 }
 
-async function recordExecRunStopped(
-  ctx: RunLayersContext,
-  execution: NodeExecutionRecord,
-  stopped: SubprocessRunStoppedError
-): Promise<NodeExecutionResult> {
-  return recordNodeState(
-    { store: ctx.deps.store, logDir: ctx.logDir },
-    finishNodeExecution(
-      execution,
-      { status: 'failed', error: stopped.message, failureKind: 'cancelled' },
-      { output: { text: '' } }
-    )
-  );
-}
-
 /** How much of the offending stdout a contract failure quotes back to the author. */
 const EXEC_CONTRACT_STDOUT_PREVIEW = 200;
 
@@ -3841,9 +3796,6 @@ async function executeBashNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
-    if (error instanceof SubprocessRunStoppedError) {
-      return recordExecRunStopped(ctx, execution, error);
-    }
     const err = error as RawSubprocessRejection;
     // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
     // rejection. Report it verbatim and keep it outside subprocess classification.
@@ -3864,6 +3816,8 @@ async function executeBashNode(
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
@@ -3887,7 +3841,13 @@ async function executeBashNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4222,9 +4182,6 @@ async function executeScriptNode(
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
     if (error instanceof RunSourceUnreadableError) throw error;
-    if (error instanceof SubprocessRunStoppedError) {
-      return recordExecRunStopped(ctx, execution, error);
-    }
     const err = error as RawSubprocessRejection;
     // See executeBashNode: a contract failure (#2453) stays outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
@@ -4244,6 +4201,8 @@ async function executeScriptNode(
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (execContext.kind === 'host' && err.code === 'EACCES') {
@@ -4264,7 +4223,13 @@ async function executeScriptNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4985,16 +4950,16 @@ async function executeLoopGroupBody(
           );
           resumedBashComplete = true;
         } catch (e) {
-          if (e instanceof SubprocessRunStoppedError) {
+          const bashErr = e as RawSubprocessRejection;
+          if (bashErr.cancelled) {
             return {
               state: 'failed',
               output: '',
-              error: e.message,
+              error: bashErr.message,
               failureKind: 'cancelled',
               ...usage,
             };
           }
-          const bashErr = e as NodeJS.ErrnoException;
           if (
             bashErr.code === 'ENOENT' ||
             bashErr.code === 'EACCES' ||
@@ -5468,16 +5433,16 @@ async function executeLoopGroupBody(
         );
         bashComplete = true;
       } catch (e) {
-        if (e instanceof SubprocessRunStoppedError) {
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
           return {
             state: 'failed',
             output: '',
-            error: e.message,
+            error: bashErr.message,
             failureKind: 'cancelled',
             ...usage,
           };
         }
-        const bashErr = e as NodeJS.ErrnoException;
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
@@ -7001,17 +6966,17 @@ async function executeLoopNode(
         );
         bashComplete = true; // exit 0 = complete
       } catch (e) {
-        if (e instanceof SubprocessRunStoppedError) {
-          return failLoopNode(e.message, {
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
+          return failLoopNode(bashErr.message, {
             failureKind: 'cancelled',
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
             loopIterations: i,
-            data: { status: e.status, iteration: i },
+            data: { iteration: i },
           });
         }
-        const bashErr = e as NodeJS.ErrnoException;
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the loop with a clear actionable error instead.

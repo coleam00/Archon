@@ -68,12 +68,14 @@ export type RawSubprocessRejection = Error & {
    * never a timeout `on_timeout: skip` could pass over while the tree may still run.
    */
   treeSurvived?: true;
+  /** The node's run stopped and its tree was ended for it; never a timeout. */
+  cancelled?: true;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  if (error.treeSurvived) return false;
+  if (error.treeSurvived || error.cancelled) return false;
   return error.timedOut === true || (error.killed === true && error.code === null);
 }
 
@@ -114,11 +116,7 @@ export function redactSubprocessError(
   return e;
 }
 
-/** The process that records node trees, which decides how they are ended. */
-type NodeProcessOwner = 'foreground' | 'server';
-
 interface NodeProcessRecorder {
-  owner: NodeProcessOwner;
   /** Each in-flight node's root PID, with the function that disarms its owner-death watcher. */
   roots: Map<number, () => void>;
   ended: boolean;
@@ -145,11 +143,8 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * `end()` refuses every later node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
  */
-export function recordNodeProcessTrees(owner: NodeProcessOwner = 'foreground'): {
-  end(): Promise<void>;
-  release(): void;
-} {
-  const recorder: NodeProcessRecorder = { owner, roots: new Map(), ended: false };
+export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
+  const recorder: NodeProcessRecorder = { roots: new Map(), ended: false };
   nodeProcessRecorder = recorder;
   return {
     end: async () => {
@@ -233,10 +228,10 @@ export async function runSubprocess(
     ownProcessGroup?: true;
     /**
      * A host node body: its deadline ends the node's whole tree before the timeout is
-     * reported. On POSIX that needs a foreground recording owner. An unrecorded POSIX node
-     * shares its owner's group, which `archon workflow cancel` kills to end a detached run,
-     * and a server-recorded POSIX node keeps the root-only deadline it had before serve
-     * recorded, so either deadline still ends the root only.
+     * reported. On POSIX that needs the node's own process group, which only a recording
+     * owner gives it; an unrecorded POSIX node shares its owner's group, which
+     * `archon workflow cancel` kills to end a detached run, so its deadline still ends the
+     * root only.
      */
     endTreeOnTimeout?: true;
     /**
@@ -293,9 +288,7 @@ export async function runSubprocess(
                 env: subprocessEnv,
                 node: {
                   recorder: nodeProcessRecorder,
-                  endTreeOnTimeout:
-                    options.endTreeOnTimeout === true &&
-                    !(nodeProcessRecorder?.owner === 'server' && process.platform !== 'win32'),
+                  endTreeOnTimeout: options.endTreeOnTimeout === true,
                   abortSignal: options.abortSignal,
                 },
               })
@@ -537,6 +530,7 @@ export async function execOwnedProcessGroup(
         signal: exit.signal,
         timedOut,
         ...(node && terminationError ? { treeSurvived: true as const } : {}),
+        ...(cancelled ? { cancelled: true as const } : {}),
         cmd: `${cmd} ${args.join(' ')}`,
         spawnargs: args,
       }
