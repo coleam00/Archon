@@ -22,10 +22,10 @@ Before you start, make sure you have:
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Git**                          | `git --version`    | [git-scm.com](https://git-scm.com/)                                                                                 |
 | **Bun** (replaces Node.js + npm) | `bun --version`    | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI**              | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — in compiled Archon binaries, also set `CLAUDE_BIN_PATH` ([details](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
+| **AI provider** | Depends on your selection | Choose Claude, Codex, or Pi and follow the [AI Assistants setup guide](/getting-started/ai-assistants/). Claude Code is required only when selecting Claude. |
 | **GitHub account**               | —                  | [github.com](https://github.com/)                                                                                   |
 
-> **Do not run as root.** Archon (and the Claude Code CLI it depends on) does not work when run as the `root` user. If you're on a VPS or server that only has root, create a regular user first:
+> **Do not run as root.** Run Archon as a regular user; Claude Code also requires this when Claude is selected. If you're on a VPS or server that only has root, create a regular user first:
 >
 > ```bash
 > adduser archon          # create user (Debian/Ubuntu)
@@ -84,7 +84,7 @@ This installs all dependencies across the monorepo. Takes about 30 seconds.
 
 ## Step 2: Set Up Authentication
 
-You need two things: a GitHub token (for cloning repos) and Claude authentication (for the AI assistant).
+You need a GitHub token for cloning repos and authentication for your selected AI provider. Follow the [AI Assistants guide](/getting-started/ai-assistants/) for Claude, Codex, or Pi.
 
 ### GitHub Token
 
@@ -95,7 +95,9 @@ You need two things: a GitHub token (for cloning repos) and Claude authenticatio
 
 > **Why classic and not fine-grained?** GitHub exposes no Checks permission to fine-grained tokens, so they cannot read GitHub Actions check runs — which `gh pr checks` queries through GraphQL `statusCheckRollup` — and a workflow that waits on CI fails at that gate. The `repo` scope is broad in exchange; [GitHub App mode](/adapters/github-app-setup/) grants access per repository instead, if you would rather not hand over a repo-wide token.
 
-### Claude Authentication
+### Claude Authentication (when selected)
+
+Skip this section if you selected Codex or Pi; use their instructions in the [AI Assistants guide](/getting-started/ai-assistants/).
 
 If you already use Claude Code, you're probably already authenticated. Check with:
 
@@ -115,30 +117,33 @@ Follow the browser flow to log in. This stores credentials globally — no API k
 
 ## Step 3: Create Your .env File
 
-> **Required for Web UI / server mode. Optional for CLI-only usage** — the CLI uses your existing Claude authentication by default.
+> **Required for Web UI / server mode. Optional for CLI-only usage** — when Claude is selected, the CLI uses your existing Claude authentication.
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in your editor and set these two values:
+Open `.env` in your editor and set your GitHub token and selected provider:
 
 ```ini
 # Paste your GitHub token in both (they serve different parts of the system)
 GH_TOKEN=ghp_your_token_here
 GITHUB_TOKEN=ghp_your_token_here
 
-# Use your existing Claude Code login
-CLAUDE_USE_GLOBAL_AUTH=true
+# Choose your provider: claude, codex, or pi
+DEFAULT_AI_ASSISTANT=codex
+
+# Only when selecting Claude: use your existing Claude Code login
+# CLAUDE_USE_GLOBAL_AUTH=true
 ```
 
 That's it. Everything else has sensible defaults:
 
 - **Database:** SQLite at `~/.archon/archon.db` (auto-created, zero setup)
 - **Port:** 3090 for the API server, 5173 for the Web UI dev server
-- **AI assistant:** Claude (default)
+- **AI assistant:** Set `DEFAULT_AI_ASSISTANT` to your selected provider. The copied `.env.example` uses `claude`; change it for Codex or Pi. The CLI does not read this repository `.env`; it reads Archon-owned files such as `~/.archon/.env` and `~/.archon/config.yaml`. Without a configured default, Archon selects only a sole registered provider; with multiple providers, run `archon setup` or configure the default explicitly.
 
-> **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
+> **Why two GitHub token variables?** `GH_TOKEN` and `GITHUB_TOKEN` are both supported. The GitHub CLI (`gh`), Archon's adapter API calls and clones in PAT mode, repository clones and forge credential resolution prefer `GH_TOKEN` when both are set. Activating the GitHub adapter in PAT mode still requires `GITHUB_TOKEN` and `WEBHOOK_SECRET`; `GH_TOKEN` alone does not activate it. SDLC workflows such as `archon-ship` use `gh` by default. Set `ARCHON_SDLC_FORGE=forge` to opt into the [forge plugin](/reference/forge/), whose host resolves credentials in this order: `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth login`. Without the GitHub adapter, a `gh` login alone is enough.
 
 ---
 
@@ -271,19 +276,19 @@ cd /path/to/your/repository
 # See available workflows
 archon workflow list
 
-# Ask a question about the codebase
-archon workflow run archon-assist "How does the auth module work?"
+# Investigate a question about the codebase
+archon workflow run archon-investigate "How does the auth module validate sessions?"
 
-# Plan a feature on an isolated branch
-archon workflow run archon-feature-development --branch feat/dark-mode "Add dark mode"
+# Plan a feature
+archon workflow run archon-plan "Add dark mode"
 
-# Fix a GitHub issue
-archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
+# Fix a GitHub issue and open a reviewed PR
+archon workflow run archon-ship --branch fix/issue-42 "Fix issue #42"
 ```
 
 That's it. The CLI auto-detects the git repo, uses SQLite for state tracking (`~/.archon/archon.db`), and streams output to stdout.
 
-> **The target directory is usually a git repository.** Archon uses git worktrees for isolation, so a git repo gets a `.git` folder and per-run branch isolation. But a non-git directory — a multi-repo root or an ops folder — can be registered as a [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) with `--folder` instead, running in place with no worktree. If you want git isolation and your project isn't a repo yet, run `git init && git add . && git commit -m "initial commit"` first.
+> **The target directory is usually a git repository.** Archon uses git worktrees for isolation, so a git repo gets a `.git` folder and per-run branch isolation. Any directory, including a git root, can be registered as a [folder project](/getting-started/concepts/#folder-projects) with `--folder` instead, running in place with no worktree. If you want git isolation and your project isn't a repo yet, run `git init && git add . && git commit -m "initial commit"` first.
 
 ---
 
@@ -314,7 +319,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 |---------|-------------|
 | `archon chat <message>` | Send a message to the orchestrator |
 | `archon setup` | Interactive setup wizard for credentials and config |
-| `archon doctor` | Verify your setup (Claude/Codex binaries, gh auth, DB, adapters; `--full` also probes the OpenCode runtime) |
+| `archon doctor` | Verify registered provider diagnostics, gh auth, DB, and adapters |
 | `archon workflow list` | List available workflows |
 | `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
 | `archon workflow status` | Show active runs (running + paused) |
@@ -322,9 +327,9 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 | `archon workflow get <id>` | Show detail for a single run (any status) |
 | `archon workflow resume <id>` | Resume a failed or paused workflow |
 | `archon workflow cancel <id>` | Actively stop a running detached CLI workflow |
-| `archon workflow abandon <id>` | Abandon a run (running, paused, or failed) |
-| `archon workflow approve <id> [comment]` | Approve an interactive loop gate (no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
-| `archon workflow reject <id> [--reason "..."]` | Reject an approval gate |
+| `archon workflow abandon <id>` | Abandon a run (running, paused, or failed) and remove its worktree, keeping the branch; rerun on a cancelled run to retry a failed removal |
+| `archon workflow approve <id> [comment]` | Answer `approve` to a paused run (attention wait or deprecated approval gate) |
+| `archon workflow reject <id> [--reason "..."]` | Answer `reject` to a paused run (attention wait or deprecated approval gate) |
 | `archon workflow cleanup [days]` | Delete old run records (default: 7 days) |
 | `archon workflow event emit` | Emit a workflow event |
 | `archon isolation list` | List active worktrees |
@@ -345,36 +350,29 @@ archon isolation cleanup 14        # custom staleness threshold
 archon isolation cleanup --merged            # remove merged branches (deletes remote too)
 archon isolation cleanup --merged --include-closed  # also remove closed/abandoned PR branches
 archon complete <branch>           # complete branch lifecycle (worktree + branches)
-archon complete <branch> --force   # skip uncommitted-changes check
+archon complete <branch> --force   # bypass safety checks, including live runs and open PRs
 ```
+
+`complete --force` also bypasses uncommitted-change and unmerged/unpushed-commit checks. Ownership checks still apply. See [completion safety checks](/reference/cli/#complete-branch-branch2-).
 
 ### Available Workflows
 
 | Workflow | What It Does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration, CI failures — catch-all |
-| `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
-| `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
-| `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
-| `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews, self-fix |
-| `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
-| `archon-feature-development` | Implement feature from plan, validate, create PR |
-| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
-| `archon-smart-pr-review` | Complexity-adaptive PR review — routes to relevant agents only |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
-| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-resolve-conflicts` | Detect, analyze, and resolve merge conflicts in PRs |
+| `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
+| `archon-triage` | Check an issue against the current code and decide what it needs next |
+| `archon-investigate` | Prove the root cause of a bug or open question and write a report |
+| `archon-plan` | Turn decided intent into an implementable plan |
+| `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |
+| `archon-pr` | Open a pull request for committed work on the current branch |
+| `archon-deliver` | Implement, open a draft PR, review, fix findings, validate, and flip it ready |
+| `archon-review` | Review a PR or the working diff through parallel specialist lenses |
+| `archon-validate` | Run the project's own checks and report a structured verdict |
+| `archon-upkeep` | Update one dependency through the reviewed delivery tail |
 
-These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
+These are the `sdlc` pack, bundled with Archon. To customize them, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it — same-named workflows override the bundled ones. The older `archon-*` workflows such as `archon-fix-github-issue` no longer ship; see [Workflows that no longer ship](/book/essential-workflows/#workflows-that-no-longer-ship).
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. If nothing matches clearly, it falls back to `archon-assist`.
+> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-ship`, while "review this PR" routes to `archon-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
 
 ---
 
@@ -478,7 +476,7 @@ If you want Claude Code to be able to invoke Archon workflows on your behalf, in
 Archon skill into your project. The setup wizard handles this automatically — just run
 `archon setup` and accept the skill installation prompt.
 
-To install manually instead, run `archon skill install /path/to/your/repo`, or copy it by hand:
+To install manually instead, run `archon skill add /path/to/your/repo`, or copy it by hand:
 
 ```bash
 mkdir -p /path/to/your/repo/.claude/skills
@@ -497,19 +495,15 @@ The CLI is standalone, but if you also want to interact via Telegram, Slack, Dis
 
 ## Troubleshooting
 
-### "Cannot create worktree: repository registration failed" (stale workspace symlink)
+### "Cannot run workflow: project registration failed"
 
-This happens when `~/.archon/workspaces/<owner>/<repo>/source` is a symlink pointing at a previous checkout (common after moving or renaming the repo). The error message includes the exact cleanup path to follow:
+If the error says a project is already registered at another path, Archon has found another clone of that remote. Run from the registered checkout and use worktrees for parallel checkouts. A second clone cannot be registered as a separate project.
 
-```
-Cannot create worktree: repository registration failed.
-Error: Source symlink at ~/.archon/workspaces/<owner>/<repo>/source already points to <old-path>, expected <new-path>
-Hint: Remove the stale workspace entry at ~/.archon/workspaces/<owner>/<repo> and retry, or use --no-worktree to skip isolation.
-```
+If you moved or renamed the registered checkout, repair its path with `/update-project "<project-name>" <new-absolute-path>`. Do not delete `~/.archon/workspaces/<owner>/<repo>`: it holds the project's state, artifacts and logs, and deleting it does not repair the registration. Legacy nested GitLab projects use a checkout-dependent storage root; follow [legacy nested GitLab storage recovery](/reference/troubleshooting/#legacy-nested-gitlab-storage-recovery) before updating their path.
 
-Follow the hint — delete the stale workspace folder and re-run, or pass `--no-worktree` to skip isolation for one run.
+A source-symlink error without an existing registered remote can instead mean an abandoned workspace entry. Inspect its `source` link and contents first. Preserve any state, logs and artifacts; only remove an obsolete source link after confirming no registered project uses it, then retry registration.
 
-> On Archon versions before this fix, the same root cause surfaced as the misleading "Cannot create worktree: not in a git repository" (even though the repo was valid). If you see that string, upgrade and you'll get the actionable message above.
+`--no-worktree` does not bypass a failed registration or project lookup. The command stops before execution so it cannot fall back to shared `_cwd/<folder name>` storage.
 
 ---
 
@@ -576,12 +570,14 @@ bun install
 | Start frontend only | `bun run dev:web`                   |
 | Run tests           | `bun run test`                      |
 | Type check          | `bun run type-check`                |
-| Full validation     | `bun run validate`                  |
+| Local validation    | `bun run validate`                  |
 | Web UI              | http://localhost:5173               |
 | API server          | http://localhost:3090               |
 | Health check        | `curl http://localhost:3090/health` |
 
 ---
+
+CI is the full validation gate. Format and workflow fixtures are explicit local checks: `bun run validate --only format,workflow-fixtures`.
 
 ## What's Next?
 

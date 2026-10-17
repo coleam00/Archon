@@ -1,0 +1,3 @@
+# Repository reformat with Biome (Refs #2856). The squash merge of #4313; it also carries
+# the formatter config switch, which is small.
+b40848aa638a63a7fb053b4eb9431b320d1c2509

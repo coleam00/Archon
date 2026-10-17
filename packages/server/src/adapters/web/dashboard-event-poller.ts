@@ -4,31 +4,27 @@
  *
  * The in-process `WorkflowEventBridge` only sees runs executed inside the server.
  * Runs started by a separate process — the `archon` CLI, especially
- * `archon workflow run --detach` — write their events to the
- * `remote_agent_workflow_events` table but never reach the server's emitter. This
- * poller tails that table and replays new rows to `__dashboard__`, covering every
- * process that writes events to the DB.
- *
- * Correctness vs SQLite's 1-second `datetime('now')` resolution: the cursor uses
- * `created_at >= cursor` (not `>`), so events that arrive late at the boundary
- * second are not skipped; a `seenAtBoundary` id-set suppresses re-emitting rows
- * already sent at that second. Duplicate emissions are harmless anyway — the
- * dashboard client reacts to events by invalidating + refetching (idempotent), so
- * the REST response is always the source of truth. The query is filtered to the
- * dashboard-relevant event types, which keeps high-frequency `tool_*` rows out of
- * the result so a 1-second bucket realistically never exceeds `DRAIN_LIMIT`.
+ * `archon workflow run --detach` — commit their events to the store but never
+ * reach the server's emitter. This poller follows the store's commit-ordered
+ * event feed and replays new dashboard-relevant rows to `__dashboard__`, covering
+ * every process that writes events to the store.
  */
 import { createLogger } from '@archon/paths';
-import { listWorkflowEventsSince } from '@archon/core/db/workflow-events';
+import type { IWorkflowStore, WorkflowEventCursor } from '@archon/workflows/store';
 import { mapWorkflowEventRow, DASHBOARD_SOURCE_EVENT_TYPES } from './workflow-bridge';
+import { DASHBOARD_STREAM } from './transport';
 
 const log = createLogger('adapter.web.dashboard-poller');
 
-const DASHBOARD_STREAM = '__dashboard__';
-/** Max rows per drain. With the event-type filter, a single second won't realistically overflow. */
-const DRAIN_LIMIT = 500;
+/** Max rows per feed page; a drain keeps paging until the feed is exhausted. */
+const PAGE_LIMIT = 500;
 /** Escalate from warn → error after this many consecutive failed drains (a sustained outage). */
 const FAILURE_ESCALATION_THRESHOLD = 5;
+
+export type DashboardEventFeed = Pick<
+  IWorkflowStore,
+  'getWorkflowEventHead' | 'readWorkflowEventsAfter'
+>;
 
 /**
  * The narrow slice of `SSETransport` the poller needs — decouples it from the
@@ -42,18 +38,26 @@ export interface DashboardTransport {
 export class DashboardEventPoller {
   private transport: DashboardTransport | null = null;
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private cursor: Date = new Date(); // start at boot — never replay history
-  private seenAtBoundary = new Set<string>();
+  private cursor: WorkflowEventCursor | null = null;
   private draining = false;
   private redrainRequested = false;
   private consecutiveFailures = 0;
 
-  /** Begin polling. `intervalMs` is the (SQLite) poll cadence / (Postgres) backstop. */
-  start(transport: DashboardTransport, intervalMs: number): void {
+  constructor(private readonly feed: DashboardEventFeed) {}
+
+  /**
+   * Begin polling from the feed's current head — history is never replayed.
+   * `intervalMs` is the (SQLite) poll cadence / (Postgres) backstop.
+   * A failed head read never fails startup: the first drain reads the head instead.
+   */
+  async start(transport: DashboardTransport, intervalMs: number): Promise<void> {
     if (this.intervalId) return;
+    try {
+      this.cursor = await this.feed.getWorkflowEventHead();
+    } catch (err) {
+      log.warn({ err }, 'dashboard_poller.start_head_failed');
+    }
     this.transport = transport;
-    this.cursor = new Date();
-    this.seenAtBoundary.clear();
     this.intervalId = setInterval(() => {
       void this.drain();
     }, intervalMs);
@@ -84,14 +88,6 @@ export class DashboardEventPoller {
       this.redrainRequested = true;
       return;
     }
-    // Cheap when idle: with no dashboard client, skip the query and keep the cursor
-    // fresh so a later-connecting client streams only new events (its initial REST
-    // fetch already shows current state — no need to replay the idle gap).
-    if (!this.transport.hasActiveStream(DASHBOARD_STREAM)) {
-      this.cursor = new Date();
-      this.seenAtBoundary.clear();
-      return;
-    }
 
     this.draining = true;
     try {
@@ -120,30 +116,36 @@ export class DashboardEventPoller {
   private async drainOnce(): Promise<void> {
     const transport = this.transport;
     if (!transport) return;
-
-    const rows = await listWorkflowEventsSince(
-      this.cursor,
-      DRAIN_LIMIT,
-      DASHBOARD_SOURCE_EVENT_TYPES
-    );
-    if (rows.length === 0) return;
-
-    let maxTs = this.cursor.getTime();
-    for (const row of rows) {
-      if (this.seenAtBoundary.has(row.id)) continue; // already emitted at the boundary second
-      const sse = mapWorkflowEventRow(row);
-      if (sse) transport.emitWorkflowEvent(DASHBOARD_STREAM, sse);
-      const ts = new Date(row.created_at).getTime();
-      if (!Number.isNaN(ts) && ts > maxTs) maxTs = ts;
+    if (this.cursor === null) {
+      this.cursor = await this.feed.getWorkflowEventHead();
+      return;
+    }
+    // With no dashboard client, keep the cursor at the head so a later-connecting
+    // client streams only new events (its initial REST fetch already shows current
+    // state — no need to replay the idle gap). The stream is checked again after the
+    // head read: a client that connected during it drains from the old cursor, since
+    // the head may already cover an event committed after that client connected.
+    if (!transport.hasActiveStream(DASHBOARD_STREAM)) {
+      const head = await this.feed.getWorkflowEventHead();
+      if (!transport.hasActiveStream(DASHBOARD_STREAM)) {
+        this.cursor = head;
+        return;
+      }
     }
 
-    // Advance the cursor to the newest created_at seen, and remember the ids at
-    // exactly that second so the next `>= cursor` query doesn't re-emit them.
-    const nextBoundary = new Set<string>();
-    for (const row of rows) {
-      if (new Date(row.created_at).getTime() === maxTs) nextBoundary.add(row.id);
+    // `next` advances past rows the type filter dropped, so a page can be empty
+    // while more events follow it: only a cursor that stops moving means exhausted.
+    for (;;) {
+      const page = await this.feed.readWorkflowEventsAfter(this.cursor, {
+        limit: PAGE_LIMIT,
+        eventTypes: DASHBOARD_SOURCE_EVENT_TYPES,
+      });
+      for (const { event } of page.events) {
+        const sse = mapWorkflowEventRow(event);
+        if (sse) transport.emitWorkflowEvent(DASHBOARD_STREAM, sse);
+      }
+      if (page.next === this.cursor) return;
+      this.cursor = page.next;
     }
-    this.cursor = new Date(maxTs);
-    this.seenAtBoundary = nextBoundary;
   }
 }

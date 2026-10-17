@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
@@ -29,6 +30,7 @@ import {
   getDecryptedAccessToken,
   deleteUserGithubToken,
   getUserGithubNoreplyEmail,
+  getUserGithubAuthor,
 } from './user-github-token-store';
 import type { UserGithubTokenRow } from '../schemas/user-github-token-row';
 
@@ -171,6 +173,22 @@ describe('user-github-token-store', () => {
       mockQuery.mockRejectedValueOnce(new Error('db write failed')); // saveUserGithubToken
       expect(await getDecryptedAccessToken('user-1')).toBe('ghu_refreshed');
       expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getUserGithubAuthor', () => {
+    test('reads only the initiating connection once for both author fields', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([tokenRow()]));
+      expect(await getUserGithubAuthor('user-1')).toEqual({
+        name: 'alice',
+        email: '42+alice@users.noreply.github.com',
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0]?.[1]).toEqual(['user-1']);
+    });
+    test('returns undefined for an unconnected user', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      expect(await getUserGithubAuthor('user-x')).toBeUndefined();
     });
   });
 

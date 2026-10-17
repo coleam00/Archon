@@ -37,14 +37,21 @@ installations operate without an identity.
 
 ## Persisted view preferences
 
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `archon.console.detailView` | `log` | Run-detail tab |
-| `archon.console.showToolCalls` | `1` | Show tool calls in the stream |
-| `archon.console.showSystem` | `0` | Show system events |
-| `archon.console.runNodeFilter` | `all` | Filter the run stream by node |
-| `archon.console.railWidth` | unset | Project rail width |
-| `archon.console.lastWorkflow` | unset | Last selected workflow |
-| `archon.console.builderProject` | unset | Builder project selection |
+| Key                              | Default | Purpose                                |
+| -------------------------------- | ------- | -------------------------------------- |
+| `archon.console.detailView`      | `log`   | Run-detail tab                         |
+| `archon.console.showToolCalls`   | `1`     | Show tool calls in the stream          |
+| `archon.console.showSystem`      | `0`     | Show system events                     |
+| `archon.console.runNodeFilter`   | `all`   | Filter the run stream by node          |
+| `archon.console.railWidth`       | unset   | Project rail width                     |
+| `archon.console.lastWorkflow`    | unset   | Last selected workflow                 |
+| `archon.console.builderProject`  | unset   | Builder project selection              |
+| `archon.console.attentionAlerts` | `0`     | Alert when a run needs you or finishes |
 
 Local storage reads are guarded and fall back to these defaults.
+
+### Closed-console notifications
+
+Settings → Alerts has a separate opt-in for Web Push. It requires an authenticated web identity, HTTPS or localhost, notification permission, and a browser with Push API support. Every opted-in browser receives run attention notices for this install. Notification clicks open `/runs/<id>`. On iOS, install the site as a home-screen web app first.
+
+The first subscription quietly baselines existing pauses. Delivery is recorded per destination, after sending. A crash or a partial delivery failure can re-send to browsers that already received the notice; notifications use `tag: runId` so duplicates replace each other. Turning the toggle off deletes the subscription and unsubscribes the browser. The in-tab alert toggle stays independent.

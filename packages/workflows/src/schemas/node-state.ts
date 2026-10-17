@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
 
@@ -39,11 +39,16 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  *  - `'child_workflow'` — never resolved by the approve/reject endpoints directly
  *    (redirected instead — `assertApprovable`/`assertRejectable`); re-inspected by
  *    `executeWorkflowNode` re-running on parent resume (dag-executor.ts).
+ *  - `'fan_out'` — a `fan_out:` workflow node waiting on its non-terminal children.
+ *    Resolved only by those children reaching terminal states, never by approve/reject
+ *    (redirected like `'child_workflow'`); re-inspected by `executeFanOutWorkflowNode`
+ *    on parent re-entry (dag-executor.ts).
  */
 export const suspendReasonSchema = z.enum([
   'approval',
   'interactive_loop',
   'writeback',
   'child_workflow',
+  'fan_out',
 ]);
 export type SuspendReason = z.infer<typeof suspendReasonSchema>;

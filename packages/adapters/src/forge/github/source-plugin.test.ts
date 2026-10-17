@@ -62,6 +62,7 @@ function binding(overrides: Record<string, unknown> = {}) {
       repository: { source: 'field', field: 'repository.path' },
       revision: { source: 'field', field: 'check.revision' },
       checkName: { source: 'field', field: 'check.unit.name' },
+      lane: { source: 'literal', value: 'ci' },
     },
     ...overrides,
   };
@@ -137,12 +138,13 @@ describe('GitHub source plugin', () => {
           launch: {
             cwd: '/srv/owner/repo',
             workflowName: 'react-to-check',
-            inputs: {
-              configured: true,
-              repository: 'owner/repo',
-              revision: 'opaque-revision-id',
-              checkName: 'build',
-            },
+            inputs: { configured: true, lane: 'ci' },
+          },
+          // Field mappings carry event content, kept apart from the operator's literals.
+          eventInputs: {
+            repository: 'owner/repo',
+            revision: 'opaque-revision-id',
+            checkName: 'build',
           },
         },
       ],
@@ -158,7 +160,7 @@ describe('GitHub source plugin', () => {
 
     await github.receiveWebhook(payload, sign(payload), 'delivery-zero-pr', 'check_run');
 
-    expect(recorded.calls[0]?.bindings[0]?.launch.inputs).toMatchObject({
+    expect(recorded.calls[0]?.bindings[0]?.eventInputs).toMatchObject({
       repository: 'owner/repo',
       revision: 'opaque-revision-id',
     });
@@ -237,6 +239,63 @@ describe('GitHub source plugin', () => {
           reason: "Input 'result': Required event field check.result is unavailable",
         },
       ],
+    });
+  });
+
+  test('delivers a label change with who made it, and a created comment with its author', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({
+          bindingId: 'promote',
+          selector: { kind: 'label.changed', actions: ['added'] },
+          inputMapping: {
+            number: { source: 'field', field: 'subject.number' },
+            labeller: { source: 'field', field: 'label.actor.login' },
+            labellerId: { source: 'field', field: 'label.actor.id' },
+          },
+        }),
+        binding({
+          bindingId: 'wake',
+          selector: { kind: 'comment.changed', actions: ['created'] },
+          inputMapping: {
+            number: { source: 'field', field: 'subject.number' },
+            author: { source: 'field', field: 'comment.author.login' },
+          },
+        }),
+      ]),
+      recorded.intake
+    );
+    const labelled = JSON.stringify({
+      action: 'labeled',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 4242, login: 'maintainer' },
+      issue: { number: 8, state: 'open' },
+      label: { id: 1, name: 'archon-triage' },
+    });
+    const commented = JSON.stringify({
+      action: 'created',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 5, login: 'reporter' },
+      issue: { number: 8 },
+      comment: { id: 900, user: { id: 5, login: 'reporter' }, body: 'more detail' },
+    });
+
+    await github.receiveWebhook(labelled, sign(labelled), 'delivery-label', 'issues');
+    await github.receiveWebhook(commented, sign(commented), 'delivery-comment', 'issue_comment');
+
+    expect(recorded.calls[0]).toMatchObject({
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'promote',
+          eventInputs: { number: 8, labeller: 'maintainer', labellerId: '4242' },
+        },
+      ],
+    });
+    expect(recorded.calls[1]).toMatchObject({
+      outcome: 'matched',
+      bindings: [{ bindingId: 'wake', eventInputs: { number: 8, author: 'reporter' } }],
     });
   });
 });

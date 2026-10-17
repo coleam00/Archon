@@ -13,7 +13,9 @@
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
+import { sessionPreview } from '@archon/provider-contract';
 import type {
   CopilotClientOptions,
   CopilotSession,
@@ -27,16 +29,19 @@ import type {
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ProviderWarning,
   SendQueryOptions,
 } from '../../types';
 import { loadMcpConfig } from '../../mcp/config';
-import { resolveSkillDirectories } from '../../shared/skills';
+import { resolveSkillDirectories } from '@archon/paths/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
-import { clampEffort } from '@archon/paths/effort';
+import { clampEffort } from '@archon/provider-contract';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
+import { failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -72,14 +77,6 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export function resetCopilotSingleton(): void {
   // no-op
-}
-
-// ─── Warning collection ─────────────────────────────────────────────────────
-
-/** Structured provider warning collected during translation; flushed as a system chunk. */
-interface ProviderWarning {
-  code: string;
-  message: string;
 }
 
 // ─── Env + auth ─────────────────────────────────────────────────────────────
@@ -144,11 +141,9 @@ function resolveCopilotReasoning(
 
 function resolveSystemMessage(requestOptions?: SendQueryOptions): SystemMessageConfig | undefined {
   const requestPrompt = requestOptions?.systemPrompt;
-  const nodePrompt =
-    typeof requestOptions?.nodeConfig?.systemPrompt === 'string'
-      ? requestOptions.nodeConfig.systemPrompt
-      : undefined;
-  const content = requestPrompt ?? nodePrompt;
+  const explicitPrompt = requestPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
+  const prompt = explicitPrompt ?? requestOptions?.appendSystemPrompt;
+  const content = Array.isArray(prompt) ? prompt.join('\n') : prompt;
   if (typeof content === 'string' && content.length > 0) {
     return { mode: 'append', content };
   }
@@ -404,6 +399,10 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * per-request env vars are honored.
  */
 export class CopilotProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   getType(): string {
     return 'copilot';
   }
@@ -412,7 +411,36 @@ export class CopilotProvider implements IAgentProvider {
     return COPILOT_CAPABILITIES;
   }
 
+  /**
+   * One call is one turn. A failure, including one thrown while setting the turn up,
+   * ends in a `result` carrying a typed `failure`, then `settled`: Copilot reports
+   * no structured failure class, so a failure is `unknown` with its text as evidence
+   * unless Archon's own MCP config check classified it. Only cancellation throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'copilot.error_after_result');
+      else yield failureResult(failureClassOfThrown(err), 'copilot_query_failed', err.message);
+    }
+    // Nothing more runs for this turn once its stream has ended.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
@@ -420,18 +448,11 @@ export class CopilotProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const log = getLog();
 
-    // forkSession / persistSession are boolean flags the executor may set in
-    // normal operation; log-warn rather than throw — throwing would block
-    // ordinary session reuse.
+    // The executor sets forkSession in normal operation; log rather than throw,
+    // which would block ordinary session reuse.
     if (requestOptions?.forkSession !== undefined) {
       log.debug(
         { option: 'forkSession', value: requestOptions.forkSession },
-        'copilot.option_not_supported'
-      );
-    }
-    if (requestOptions?.persistSession !== undefined) {
-      log.debug(
-        { option: 'persistSession', value: requestOptions.persistSession },
         'copilot.option_not_supported'
       );
     }
@@ -459,11 +480,11 @@ export class CopilotProvider implements IAgentProvider {
     // Flush translation warnings before session creation so the user sees
     // them even if session construction fails.
     for (const w of warnings) {
-      yield { type: 'system', content: `⚠️ ${w.message}` };
+      yield { type: 'warning', ...w };
     }
 
-    // Best-effort structured output: Copilot has no native JSON-mode, so we
-    // augment the prompt with the schema. bridgeSession parses the
+    // Best-effort structured output: augment the prompt with the schema.
+    // bridgeSession parses the
     // accumulated assistant transcript and attaches `structuredOutput` to
     // the terminal result chunk.
     const outputFormat = requestOptions?.outputFormat;
@@ -514,12 +535,15 @@ export class CopilotProvider implements IAgentProvider {
     const wantsFork = requestOptions?.forkSession === true;
     try {
       if (resumeSessionId && !wantsFork) {
-        log.debug({ sessionId: resumeSessionId, cwd }, 'copilot.resume_attempt');
+        log.debug(
+          { sessionIdPreview: sessionPreview(resumeSessionId), cwd },
+          'copilot.resume_attempt'
+        );
         try {
           session = await client.resumeSession(resumeSessionId, sessionConfig);
         } catch (err) {
           log.debug(
-            { err, sessionId: resumeSessionId },
+            { err, sessionIdPreview: sessionPreview(resumeSessionId) },
             'copilot.resume_failed_falling_back_to_create'
           );
           resumeFailed = true;
@@ -528,7 +552,7 @@ export class CopilotProvider implements IAgentProvider {
       } else {
         if (resumeSessionId && wantsFork) {
           log.warn(
-            { requestedResumeSessionId: resumeSessionId },
+            { requestedResumeSessionIdPreview: sessionPreview(resumeSessionId) },
             'copilot.fork_unsupported_creating_fresh_session'
           );
           forkedToFresh = true;
@@ -549,20 +573,22 @@ export class CopilotProvider implements IAgentProvider {
 
     if (resumeFailed) {
       yield {
-        type: 'system',
-        content: '⚠️ Could not resume Copilot session — starting a fresh conversation.',
+        type: 'warning',
+        code: 'copilot.resume_failed',
+        message: 'Could not resume Copilot session — starting a fresh conversation.',
       };
     } else if (forkedToFresh) {
       yield {
-        type: 'system',
-        content:
-          '⚠️ Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
+        type: 'warning',
+        code: 'copilot.fork_unsupported',
+        message:
+          'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
       };
     }
 
     log.info(
       {
-        sessionId: session.sessionId,
+        sessionIdPreview: sessionPreview(session.sessionId),
         model: sessionConfig.model,
         cwd,
         reasoningEffort: sessionConfig.reasoningEffort,
@@ -577,15 +603,21 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        wantsStructured ? outputFormat.schema : undefined
+      yield* closeOpenToolCalls(
+        bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          wantsStructured ? outputFormat.schema : undefined
+        ),
+        { resultEndsTurn: true }
       );
-      log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
+      log.info({ sessionIdPreview: sessionPreview(session.sessionId) }, 'copilot.prompt_completed');
     } catch (err) {
-      log.error({ err, sessionId: session.sessionId }, 'copilot.prompt_failed');
+      log.error(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.prompt_failed'
+      );
       throw buildFriendlyCopilotError(err);
     } finally {
       // Stop the client so its CLI subprocess shuts down; bridgeSession already

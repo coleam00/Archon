@@ -1,9 +1,17 @@
-import { describe, test, expect, afterEach } from 'bun:test';
-import { SqliteAdapter } from './sqlite';
+// @archon-test-isolated
+import { describe, test, expect, afterEach, spyOn } from 'bun:test';
+import {
+  resourceStartOverlapSchema,
+  resourceStartRequestStatusSchema,
+  startBindingPreparationStatusSchema,
+  sourceReceiptOutcomeSchema,
+} from '@archon/workflows/schemas/resource-start';
+import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
-import { Database, type Statement } from 'bun:sqlite';
-import { unlinkSync } from 'fs';
+import { webPushSubscriptionRowSchema } from '../../schemas/web-push';
+import { Database, SQLiteError, type Statement } from 'bun:sqlite';
+import { readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
@@ -58,6 +66,8 @@ async function makeDbWithoutEventOrder(): Promise<string> {
   try {
     raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
     raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+    raw.run('DROP INDEX IF EXISTS idx_workflow_events_order');
+    raw.run('DROP TABLE IF EXISTS remote_agent_workflow_event_sequence');
     raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
   } finally {
     raw.close();
@@ -76,13 +86,199 @@ function columnsOf(path: string, table: string): string[] {
   }
 }
 
+describe('SqliteAdapter failure logging', () => {
+  test.each(['query', 'transaction'] as const)(
+    'keeps diagnostics without bound values for a failing %s insert',
+    async mode => {
+      const path = await upgradeFixturePath();
+      const db = new SqliteAdapter(path);
+      const sql =
+        'INSERT INTO remote_agent_messages (conversation_id, role, content) VALUES ($1, $2, $3)';
+      const secret = 'recognizable-private-message-3809';
+      const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
+      let failure: unknown;
+      let lines: string[];
+      try {
+        const insert = (query: SqliteAdapter['query']) =>
+          query(sql, ['missing-conversation', 'user', secret]);
+        failure = await (mode === 'query'
+          ? insert(db.query.bind(db))
+          : db.withTransaction(insert)
+        ).catch((error: unknown) => error);
+        lines = output.mock.calls.map(call => String(call[0]));
+      } finally {
+        output.mockRestore();
+        await db.close();
+      }
+      expect(failure).toBeInstanceOf(SQLiteError);
+      if (!(failure instanceof SQLiteError)) throw new Error('Expected SQLite constraint failure');
+      const record = lines
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+        .find(line => line.msg === 'db.sqlite_query_failed');
+      expect(record).toMatchObject({
+        sql,
+        paramCount: 3,
+        err: {
+          code: failure.code,
+          errno: failure.errno,
+          message: 'Query failed (error details withheld to protect bound values)',
+        },
+      });
+      expect(lines.join('')).not.toContain(secret);
+      expect(lines.join('')).not.toContain('missing-conversation');
+      expect(record).not.toHaveProperty('params');
+    }
+  );
+
+  test.each(
+    (['query', 'transaction'] as const).flatMap(mode =>
+      [
+        'SELECT json_extract($1, $2)',
+        'WITH value AS (SELECT json_extract($1, $2) AS result) SELECT * FROM value',
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('test', json_extract($1, $2), '/tmp')",
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('test', json_extract($1, $2), '/tmp') RETURNING *",
+      ].map(sql => ({ mode, sql }))
+    )
+  )('withholds driver-echoed values for $mode: $sql', async ({ mode, sql }) => {
+    const db = new SqliteAdapter(await upgradeFixturePath());
+    const secret = 'recognizable-private-json-path-3809';
+    const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let failure: unknown;
+    let lines: string[];
+    try {
+      const query = (execute: SqliteAdapter['query']) => execute(sql, ['{}', secret]);
+      failure = await (mode === 'query'
+        ? query(db.query.bind(db))
+        : db.withTransaction(query)
+      ).catch((error: unknown) => error);
+      lines = output.mock.calls.map(call => String(call[0]));
+    } finally {
+      output.mockRestore();
+      await db.close();
+    }
+    expect(failure).toBeInstanceOf(SQLiteError);
+    if (!(failure instanceof SQLiteError)) throw new Error('Expected SQLite JSON-path failure');
+    expect(failure.message).toContain(secret);
+    const record = lines
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line.msg === 'db.sqlite_query_failed');
+    expect(record).toMatchObject({
+      sql,
+      paramCount: 2,
+      err: {
+        code: failure.code,
+        errno: failure.errno,
+        message: 'Query failed (error details withheld to protect bound values)',
+      },
+    });
+    expect(lines.join('')).not.toContain(secret);
+  });
+});
+
 describe('SqliteAdapter upgrade path', () => {
+  test('upgrades the shipped MAX allocator and keeps its head after deletes and reopen', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('DROP TRIGGER remote_agent_workflow_events_assign_order');
+      raw.run('DROP TABLE remote_agent_workflow_event_sequence');
+      raw.run(`CREATE TRIGGER remote_agent_workflow_events_assign_order AFTER INSERT ON remote_agent_workflow_events
+        WHEN NEW.event_order IS NULL BEGIN
+        UPDATE remote_agent_workflow_events SET event_order = (SELECT COALESCE(MAX(event_order), 0) + 1 FROM remote_agent_workflow_events) WHERE rowid = NEW.rowid; END`);
+      raw.run(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('feed-conversation', 'test', 'feed')"
+      );
+      raw.run(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('feed-run', 'feed-conversation', 'feed', '')"
+      );
+      for (const id of ['first', 'second'])
+        raw.run(
+          "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES (?, 'feed-run', 'workflow_started')",
+          [id]
+        );
+    } finally {
+      raw.close();
+    }
+    let db = new SqliteAdapter(path);
+    try {
+      await db.query("DELETE FROM remote_agent_workflow_events WHERE id = 'second'");
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('third', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'third'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 3 }]);
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      await db.close();
+      db = new SqliteAdapter(path);
+      expect(
+        (
+          await db.query<{ id: string }>(
+            'SELECT id FROM remote_agent_workflow_event_archive ORDER BY event_order'
+          )
+        ).rows
+      ).toEqual([{ id: 'first' }, { id: 'second' }, { id: 'third' }]);
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('fourth', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'fourth'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 4 }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   // Regression: the event_order index and trigger were briefly created inside
   // createSchema(). Both reference a column absent from any database predating
   // it, and CREATE INDEX on a missing column aborts the entire createSchema()
   // exec block — so createSchema() threw and migrateColumns(), which adds the
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
+  // The archive trigger copies by position; an events column added after the archive
+  // existed made every event delete fail until the archive gained it too.
+  test('archives deleted events after the events table gains a column', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN later_column TEXT');
+    } finally {
+      raw.close();
+    }
+    const db = new SqliteAdapter(path);
+    try {
+      await db.query(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('c', 'test', 'c')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('r', 'c', 'w', '')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, later_column) VALUES ('e', 'r', 'workflow_started', 'kept')"
+      );
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      expect(
+        (
+          await db.query<{ id: string; later_column: string }>(
+            'SELECT id, later_column FROM remote_agent_workflow_event_archive'
+          )
+        ).rows
+      ).toEqual([{ id: 'e', later_column: 'kept' }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   test('converges a database that predates event_order', async () => {
     const path = await makeDbWithoutEventOrder();
     expect(columnsOf(path, 'remote_agent_workflow_events')).not.toContain('event_order');
@@ -632,6 +828,14 @@ describe('SqliteAdapter', () => {
         columnsByTable.set(table, columns);
       }
 
+      const derivedTableRe =
+        /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s+AS\s+SELECT\s+\*\s+FROM\s+"?([a-z0-9_]+)"?\s+WHERE\s+false/gi;
+      for (const match of sql.matchAll(derivedTableRe)) {
+        const owner = columnsByTable.get(match[2].toLowerCase());
+        if (!owner) throw new Error(`Missing schema owner: ${match[2]}`);
+        columnsByTable.set(match[1].toLowerCase(), new Set(owner));
+      }
+
       return columnsByTable;
     }
 
@@ -642,6 +846,16 @@ describe('SqliteAdapter', () => {
       );
       return new Map(result.rows.map(r => [r.name, new Set(raw_pragma(currentDbPath, r.name))]));
     }
+
+    test('the subscription row schema matches both persisted table shapes', async () => {
+      db = createTestDb();
+      const table = 'remote_agent_web_push_subscriptions';
+      const expected = Object.keys(webPushSubscriptionRowSchema.shape).sort();
+      const sqliteColumns = (await sqliteSchemaColumns()).get(table);
+      const postgresColumns = postgresArchonColumns().get(table);
+      expect([...(sqliteColumns ?? [])].sort()).toEqual(expected);
+      expect([...(postgresColumns ?? [])].sort()).toEqual(expected);
+    });
 
     test('every non-auth Postgres table is created by the SQLite schema', async () => {
       db = createTestDb();
@@ -673,6 +887,12 @@ describe('SqliteAdapter', () => {
       // require editing the allowlist and nothing else.
       expect(postgresColumns.get('remote_agent_codebases')?.has('default_cwd')).toBe(true);
       expect(postgresColumns.get('remote_agent_users')?.has('role')).toBe(true);
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')?.has('event_order')).toBe(
+        true
+      );
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')).toEqual(
+        postgresColumns.get('remote_agent_workflow_events')
+      );
 
       const missing: string[] = [];
       let compared = 0;
@@ -788,6 +1008,50 @@ describe('SqliteAdapter', () => {
       db = createTestDb();
       expect(raw_pragma(currentDbPath, 'remote_agent_workflow_runs')).toContain('output_root');
       expect(getSchemaSQL()).toContain('output_root');
+    });
+
+    test('admission CHECK vocabularies match their owning schemas in both dialects', async () => {
+      db = createTestDb();
+      const checks = [
+        {
+          table: 'remote_agent_start_receipts',
+          column: 'outcome',
+          values: sourceReceiptOutcomeSchema.options,
+        },
+        {
+          table: 'remote_agent_start_receipt_bindings',
+          column: 'preparation_status',
+          values: startBindingPreparationStatusSchema.options,
+        },
+        {
+          table: 'remote_agent_resource_start_requests',
+          column: 'overlap_policy',
+          values: resourceStartOverlapSchema.options,
+        },
+        {
+          table: 'remote_agent_resource_start_requests',
+          column: 'status',
+          values: resourceStartRequestStatusSchema.options.map(option => option.value),
+        },
+      ];
+      const postgres = stripSqlComments(getSchemaSQL());
+      for (const { table, column, values } of checks) {
+        const sqlite = await db.query<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $1",
+          [table]
+        );
+        const declaration = new RegExp(
+          `CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+${table}\\s*\\(`
+        ).exec(postgres);
+        if (!declaration) throw new Error(`Missing Postgres table ${table}`);
+        const pgBody = readBalancedParens(postgres, declaration.index + declaration[0].length - 1);
+        for (const body of [sqlite.rows[0]?.sql, pgBody]) {
+          const constraint = new RegExp(`${column} IN \\(([^)]+)\\)`).exec(body ?? '');
+          expect(constraint).not.toBeNull();
+          const stored = [...(constraint?.[1] ?? '').matchAll(/'([^']+)'/g)].map(match => match[1]);
+          expect(stored.sort()).toEqual([...values].sort());
+        }
+      }
     });
 
     test('authored outcome is nullable and constrained identically in both schema sources', async () => {
@@ -1048,7 +1312,7 @@ function splitTopLevelCommas(body: string): string[] {
 function raw_pragma(dbPath: string, table: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    const rows = raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[];
+    const rows = raw.query(`PRAGMA table_info('${table}')`).all() as { name: string }[];
     return rows.map(r => r.name);
   } finally {
     raw.close();
@@ -1058,7 +1322,7 @@ function raw_pragma(dbPath: string, table: string): string[] {
 function raw_indexes(dbPath: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    const rows = raw.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as {
+    const rows = raw.query("SELECT name FROM sqlite_master WHERE type='index'").all() as {
       name: string;
     }[];
     return rows.map(r => r.name);
@@ -1070,7 +1334,9 @@ function raw_indexes(dbPath: string): string[] {
 function raw_query(dbPath: string, sql: string): unknown[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    return raw.prepare(sql).all();
+    // query(), not prepare(): close() finalizes query() statements, while a prepared one
+    // keeps the file open and Windows then refuses to remove the temp root.
+    return raw.query(sql).all();
   } finally {
     raw.close();
   }
@@ -1143,5 +1409,332 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
     // Passes trivially where POSIX unlink tolerates open handles, but on
     // windows-latest this fails with EBUSY while any statement is unfinalized.
     unlinkSync(currentDbPath);
+  });
+});
+
+describe('SqliteAdapter busy locks', () => {
+  let adapter: SqliteAdapter;
+  let holder: Database;
+
+  /** An adapter plus a second connection that holds the write lock until `release`. */
+  async function lockedAdapter(): Promise<void> {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-core-sqlite-busy-')));
+    const path = join(root, 'archon.db');
+    adapter = new SqliteAdapter(path);
+    // The adapter's own 5 s busy_timeout would make these tests slow, not different.
+    await adapter.query('PRAGMA busy_timeout = 20');
+    holder = new Database(path);
+    holder.run('BEGIN IMMEDIATE');
+  }
+
+  afterEach(async () => {
+    if (holder.inTransaction) holder.run('ROLLBACK');
+    holder.close();
+    await adapter.close();
+  });
+
+  /**
+   * Settle `promise` and return its rejection message. On Windows, Bun's
+   * `expect(promise).rejects` on a promise still waiting on a timer started inside
+   * AsyncLocalStorage.run (the adapter's transaction scope) blocks the event loop, so
+   * the timer never fires and the test hangs past its own timeout.
+   */
+  async function rejectionMessage(promise: Promise<unknown>): Promise<string | undefined> {
+    try {
+      await promise;
+      return undefined;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
+  async function codebaseCount(): Promise<number> {
+    const result = await adapter.query<{ cnt: number }>(
+      'SELECT COUNT(*) AS cnt FROM remote_agent_codebases'
+    );
+    return Number(result.rows[0]?.cnt);
+  }
+
+  test('a statement waits past busy_timeout and writes once', async () => {
+    await lockedAdapter();
+    // Several 20 ms busy timeouts elapse before the holder lets go.
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+
+    await insertCodebase(adapter, 'cb-busy');
+    await released;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a transaction rolls back and reruns from BEGIN until the lock clears', async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+    let attempts = 0;
+
+    await adapter.withTransaction(async query => {
+      attempts++;
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-tx', 'cb-tx', '/tmp/test-cwd']
+      );
+    });
+    await released;
+
+    expect(attempts).toBeGreaterThan(1);
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a block that wraps the busy error in its own still reruns from BEGIN', async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+    let attempts = 0;
+
+    await adapter.withTransaction(async query => {
+      attempts++;
+      try {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-wrapped', 'cb-wrapped', '/tmp/test-cwd']
+        );
+      } catch (error) {
+        throw new Error(`Failed to create codebase: ${(error as Error).message}`);
+      }
+    });
+    await released;
+
+    expect(attempts).toBeGreaterThan(1);
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a stale snapshot reruns the transaction instead of retrying the statement', async () => {
+    await lockedAdapter();
+    holder.run(
+      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-holder', 'cb-holder', '/tmp')"
+    );
+    const seen: number[] = [];
+
+    await adapter.withTransaction(async query => {
+      const before = await query<{ cnt: number }>(
+        'SELECT COUNT(*) AS cnt FROM remote_agent_codebases'
+      );
+      seen.push(Number(before.rows[0]?.cnt));
+      // The holder commits after this transaction took its read snapshot, so the
+      // first write fails with SQLITE_BUSY_SNAPSHOT however long it waits.
+      if (holder.inTransaction) holder.run('COMMIT');
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-snapshot', 'cb-snapshot', '/tmp/test-cwd']
+      );
+    });
+
+    expect(seen).toEqual([0, 1]);
+    expect(await codebaseCount()).toBe(2);
+  });
+
+  test("a waiting statement does not retry into another caller's transaction", async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(100).then(() => holder.run('COMMIT'));
+
+    const statement = insertCodebase(adapter, 'cb-outside');
+    // Let the statement fail busy once and start its backoff sleep.
+    await Bun.sleep(30);
+    // A transaction that stays open past the statement's retry, then rolls back.
+    const transaction = adapter.withTransaction(async query => {
+      await query('SELECT 1');
+      await Bun.sleep(300);
+      throw new Error('abort');
+    });
+
+    await statement;
+    expect(await rejectionMessage(transaction)).toBe('abort');
+    await released;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test("a plain statement never runs inside another caller's open transaction", async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+
+    const transaction = adapter.withTransaction(async query => {
+      await query('SELECT 1');
+      await Bun.sleep(100);
+      throw new Error('abort');
+    });
+    // Issued while the transaction is open and waiting on something else.
+    await Bun.sleep(20);
+    const statement = insertCodebase(adapter, 'cb-plain');
+
+    expect(await rejectionMessage(transaction)).toBe('abort');
+    await statement;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('the public query inside a transaction block fails instead of waiting on itself', async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+
+    await expect(
+      adapter.withTransaction(async () => {
+        await adapter.query('SELECT 1');
+      })
+    ).rejects.toThrow("use the transaction's query instead");
+    await expect(
+      adapter.withTransaction(() => adapter.withTransaction(async () => undefined))
+    ).rejects.toThrow("use the transaction's query instead");
+    // The connection is still usable afterwards.
+    await insertCodebase(adapter, 'cb-after');
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a non-busy error still fails on the first attempt', async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+    await insertCodebase(adapter, 'cb-dup');
+    let attempts = 0;
+
+    await expect(insertCodebase(adapter, 'cb-dup')).rejects.toMatchObject({
+      code: 'SQLITE_CONSTRAINT_PRIMARYKEY',
+    });
+    await expect(
+      adapter.withTransaction(async query => {
+        attempts++;
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-dup', 'cb-dup', '/tmp/test-cwd']
+        );
+      })
+    ).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' });
+    expect(attempts).toBe(1);
+  });
+});
+
+/** Read a child's stdout line by line until `done` accepts one; the stream may split lines. */
+async function readUntil(
+  stream: ReadableStream<Uint8Array>,
+  done: (line: string) => boolean
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for await (const chunk of stream) {
+    buffered += decoder.decode(chunk, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    if (lines.some(line => done(line.trim()))) return;
+  }
+  throw new Error('stream ended before the expected line');
+}
+
+describe('SqliteAdapter fresh schema', () => {
+  /** Commit frames in the WAL: one per committed write transaction since the last checkpoint. */
+  function walCommits(path: string): number {
+    const wal = readFileSync(`${path}-wal`);
+    const pageSize = wal.readUInt32BE(8);
+    let commits = 0;
+    for (let offset = 32; offset + 24 <= wal.length; offset += 24 + pageSize) {
+      if (wal.readUInt32BE(offset + 4) !== 0) commits++;
+    }
+    return commits;
+  }
+
+  test('a fresh database receives its tables in one commit, not one per table', async () => {
+    // Each commit is an fsync; per-statement commits made a first open cost seconds on
+    // a slow disk.
+    const path = await upgradeFixturePath();
+    const adapter = new SqliteAdapter(path);
+    try {
+      const tables = raw_query(
+        path,
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'"
+      ) as { n: number }[];
+      expect(walCommits(path)).toBeLessThan(Number(tables[0]?.n) / 2);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  test('opening waits out another process that holds a fresh file instead of failing', async () => {
+    // Switching a file to WAL fails with SQLITE_BUSY at once, without busy_timeout,
+    // while another connection holds a write lock on it. The holder releases only after
+    // the opener has reported waiting, so the test always exercises the contention.
+    const path = await upgradeFixturePath();
+    const holder = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { Database } = require('bun:sqlite');
+const db = new Database(${JSON.stringify(path)});
+// COMMIT needs the opener's read lock gone; without a timeout it can fail SQLITE_BUSY.
+db.run('PRAGMA busy_timeout = 30000');
+db.run('CREATE TABLE IF NOT EXISTS held (a)');
+db.run('BEGIN IMMEDIATE');
+db.run('INSERT INTO held VALUES (1)');
+console.log('held');
+for await (const _ of console) break;
+db.run('COMMIT');`,
+      ],
+      { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' }
+    );
+    await readUntil(holder.stdout, line => line === 'held');
+    const opener = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+const adapter = new SqliteAdapter(${JSON.stringify(path)});
+await adapter.query('SELECT COUNT(*) FROM remote_agent_codebases');
+await adapter.close();`,
+      ],
+      { stdout: 'pipe', stderr: 'inherit', env: { ...process.env, LOG_LEVEL: 'warn' } }
+    );
+    try {
+      await readUntil(opener.stdout, line => line.includes('db.sqlite_busy_waiting'));
+    } finally {
+      holder.stdin.write('release\n');
+      await holder.stdin.end();
+    }
+    expect(await holder.exited).toBe(0);
+    expect(await opener.exited).toBe(0);
+  });
+
+  test('processes opening the same fresh file at once all get the full schema', async () => {
+    const path = await upgradeFixturePath();
+    const source = `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+await new SqliteAdapter(${JSON.stringify(path)}).close();`;
+    const children = Array.from({ length: 4 }, () =>
+      Bun.spawn([process.execPath, '-e', source], { stdout: 'ignore', stderr: 'pipe' })
+    );
+    const results = await Promise.all(
+      children.map(async child => ({
+        code: await child.exited,
+        stderr: await new Response(child.stderr).text(),
+      }))
+    );
+    expect(results.filter(result => result.code !== 0)).toEqual([]);
+    const reopened = new SqliteAdapter(path);
+    try {
+      await reopened.query('SELECT COUNT(*) FROM remote_agent_codebases');
+    } finally {
+      await reopened.close();
+    }
+  });
+});
+
+describe('sqliteDialect', () => {
+  test('jsonText reads a dotted path with json_extract', () => {
+    expect(sqliteDialect.jsonText('w.metadata', 'approval.attempt')).toBe(
+      "json_extract(w.metadata, '$.approval.attempt')"
+    );
+  });
+
+  test('jsonRemove removes every key in one json_remove', () => {
+    expect(sqliteDialect.jsonRemove('metadata', 'approval', 'wait')).toBe(
+      "json_remove(metadata, '$.approval', '$.wait')"
+    );
+  });
+
+  test('rowLock is empty because SQLite has no row locks', () => {
+    expect(sqliteDialect.rowLock('w')).toBe('');
   });
 });

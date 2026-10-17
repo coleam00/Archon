@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: getLiveRunOwningEnv against a REAL bun:sqlite database.
  *
@@ -7,7 +8,7 @@
  * an env through either attachment route, while historical conversation rows and
  * terminal runs never do.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with isolation-environments.test.ts's
  * fake.
  */
@@ -78,6 +79,14 @@ async function seedRunAt(
   );
 }
 
+/** Stamp a failed run's failure time the way failWorkflowRun's datetime('now') does. */
+async function failedDaysAgo(id: string, days: number): Promise<void> {
+  await db.query(
+    `UPDATE remote_agent_workflow_runs SET completed_at = datetime('now', '-' || $1 || ' days') WHERE id = $2`,
+    [days, id]
+  );
+}
+
 describe('getLiveRunOwningEnv — real SQLite behavior', () => {
   test('an env whose conversation holds only terminal runs is NOT pinned (#2868)', async () => {
     const env = await create({
@@ -141,9 +150,8 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
     await expect(getLiveRunOwningEnv(env.id)).resolves.toBeNull();
   });
 
-  // 'failed' is terminal but resumable. Releasing its env lets cleanup run
-  // `git branch -D` on the only branch `--resume`/`--adopt` can attach to, so a
-  // failed run keeps its pin while completed and cancelled runs let go.
+  // 'failed' is terminal but resumable: without a release it keeps its pin while
+  // completed and cancelled runs let go.
   test('a failed run still pins the env — it remains resumable', async () => {
     const env = await create({
       codebase_id: 'cb-1',
@@ -159,6 +167,62 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
       id: 'run-failed',
       status: 'failed',
     });
+  });
+
+  test('a failed run stops pinning once a sweep settles its outcome', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-failed-settled',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-failed-settled', env.id);
+    await seedRun('run-failed-settled', 'conv-failed-settled', 'failed');
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toBeNull();
+  });
+
+  test('a failed run stops pinning only once it has been inactive past the stale window', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-failed-stale',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-failed-stale', env.id);
+    await seedRun('run-failed-stale', 'conv-failed-stale', 'failed');
+    const stale = { kind: 'stale', staleDays: 7 } as const;
+
+    await failedDaysAgo('run-failed-stale', 1);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toEqual({
+      id: 'run-failed-stale',
+      status: 'failed',
+    });
+
+    await failedDaysAgo('run-failed-stale', 10);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toBeNull();
+  });
+
+  test('a paused run pins the env through every release, whatever its age', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-old-paused',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-old-paused', env.id);
+    await seedRunAt('run-old-paused', 'conv-old-paused', 'paused', '2020-01-01 00:00:00');
+    await seedRunAt('run-newer-failed', 'conv-old-paused', 'failed', '2020-01-02 00:00:00');
+    await failedDaysAgo('run-newer-failed', 30);
+    const paused = { id: 'run-old-paused', status: 'paused' };
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(
+      paused
+    );
   });
 
   test.each(['completed', 'cancelled'])(
@@ -198,4 +262,53 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
       status: 'paused',
     });
   });
+
+  test('excludeRunId leaves out the deciding run but not another claimant', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-exclude',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-exclude', env.id);
+    await seedRunAt('run-deciding', 'conv-exclude', 'running', '2026-08-02T00:00:00.000Z');
+    const deciding = { id: 'run-deciding', status: 'running' };
+
+    await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual(deciding);
+    await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toBeNull();
+
+    await seedRunAt('run-other', 'conv-exclude', 'failed', '2026-08-01T00:00:00.000Z');
+    const other = { id: 'run-other', status: 'failed' };
+    await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toEqual(other);
+    // The exclusion's placeholder follows the release filter's parameters.
+    await expect(
+      getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 }, 'run-deciding')
+    ).resolves.toEqual(other);
+    await expect(
+      getLiveRunOwningEnv(env.id, { kind: 'settled' }, 'run-deciding')
+    ).resolves.toBeNull();
+  });
 });
+
+test.each(['pending', 'running', 'paused', 'failed'])(
+  'same-path %s run pins environment without a conversation link',
+  async status => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: `path-${status}`,
+      working_path: `/tmp/path-${status}`,
+      branch_name: '' as never,
+    });
+    const conversation = `path-conv-${status}`;
+    const run = `path-run-${status}`;
+    await seedConversation(conversation, null);
+    await seedRun(run, conversation, status);
+    await db.query(
+      'UPDATE remote_agent_workflow_runs SET codebase_id = $1, working_path = $2 WHERE id = $3',
+      ['cb-1', env.working_path, run]
+    );
+    await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
+  }
+);

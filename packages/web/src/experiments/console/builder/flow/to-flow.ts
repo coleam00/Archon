@@ -6,7 +6,7 @@
  * saved position map and any node missing from it falls back to a dagre layout
  * computed over the whole graph, so a freshly-imported workflow lays itself out.
  */
-import { VARIANT_REGISTRY } from '../variants';
+import { nodeLabel } from '../variants';
 import type { BuilderWorkflow } from '../types';
 import { layoutWithDagre, NODE_HEIGHT, NODE_WIDTH } from './layout';
 import type { BuilderFlowEdge, BuilderFlowNode, XYPosition } from './types';
@@ -87,7 +87,7 @@ export function builderToFlow(
       // the node's real rendered height on the canvas.
       initialWidth: NODE_WIDTH,
       initialHeight: NODE_HEIGHT,
-      data: { node, label: VARIANT_REGISTRY[node.variant].label },
+      data: { node, label: nodeLabel(node) },
     };
   });
 

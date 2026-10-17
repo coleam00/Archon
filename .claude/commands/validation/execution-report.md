@@ -34,7 +34,6 @@ Type Checking:  ✅/❌ [details if failed]
 Linting:        ✅/❌ [details if failed]
 Formatting:     ✅/❌ [details if failed]
 Tests:          ✅/❌ [X passed, Y failed]
-Full Validate:  ✅/❌ [bun run validate result]
 ```
 
 ### What Went Well
@@ -74,5 +73,5 @@ List anything from the plan that was not implemented:
 Based on this implementation, what should change for next time?
 - Plan command improvements: [suggestions]
 - Execute command improvements: [suggestions]
-- CLAUDE.md additions: [suggestions]
+- AGENTS.md additions: [suggestions]
 - `.claude/rules/` updates: [suggestions]

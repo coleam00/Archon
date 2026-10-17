@@ -1,8 +1,9 @@
 # Adapter Implementation Guide
 
-> **Purpose**: Complete reference for understanding and building platform adapters in Archon.
-> **When to use**: Building a new adapter, debugging adapter behavior, understanding cross-platform message flow.
-> **Size**: ~400 lines — use a scout sub-agent to check relevance before loading.
+> **Purpose**: Reference for maintaining existing bundled platform adapters.
+> **When to use**: Debugging bundled adapter behavior and understanding cross-platform message flow.
+
+New chat platforms ship as plugins in contributor-owned repositories using `ChatPlugin` from `@archon/chat-contract`. Follow the [chat plugin publishing guide](../../packages/docs-web/src/content/docs/guides/publishing-plugins.md#chat-plugins) and the [chat contract](../../packages/chat-contract/README.md). New forges use the [forge plugin publishing guide](../../packages/docs-web/src/content/docs/guides/publishing-plugins.md#tags-and-executable-release-assets). Do not add a bundled adapter or register a new platform in the server.
 
 ---
 
@@ -12,6 +13,7 @@ Defined at `packages/core/src/types/index.ts` — search for `export interface I
 
 | Method | Signature | Required |
 |--------|-----------|----------|
+| `capabilities` | `{ messagePersistence: 'core' \| 'adapter'; defaultWorkflowDispatch: 'foreground' \| 'background' }` (readonly property) | Yes |
 | `sendMessage` | `(conversationId: string, message: string, metadata?: MessageMetadata): Promise<void>` | Yes |
 | `ensureThread` | `(originalConversationId: string, messageContext?: unknown): Promise<string>` | Yes |
 | `getStreamingMode` | `(): 'stream' \| 'batch'` | Yes |
@@ -20,8 +22,9 @@ Defined at `packages/core/src/types/index.ts` — search for `export interface I
 | `stop` | `(): void` | Yes |
 | `sendStructuredEvent` | `(conversationId: string, event: MessageChunk): Promise<void>` | Optional |
 | `emitRetract` | `(conversationId: string): Promise<void>` | Optional |
+| `prepareBackgroundConversation` | `(context: { workerConversationId; parentConversationId; conversationDbId }): Promise<() => Promise<void>>` — runs before a background worker starts; core awaits the returned finalizer when dispatch setup or the worker ends | Optional |
 
-`IWebPlatformAdapter` extends this with web-only methods — search for `export interface IWebPlatformAdapter`: `sendStructuredEvent` (required), `setConversationDbId`, `setupEventBridge`, `emitLockEvent`, `registerOutputCallback`, `removeOutputCallback`. Type guard: `isWebAdapter()` checks `getPlatformType() === 'web'`.
+`WebAdapter` (`packages/server/src/adapters/web.ts`) adds web-only methods such as `setConversationDbId` and `emitLockEvent`. The server holds the concrete `WebAdapter` and calls them directly; core sees only `IPlatformAdapter`.
 
 ---
 
@@ -208,7 +211,6 @@ Only Discord creates real threads. Slack's `channel:ts` format already ensures t
 - No polling/WebSocket — output-only
 - Message persistence layer (other adapters don't persist)
 - `emitLockEvent()` for UI lock indicators
-- `setupEventBridge()` for workflow worker → parent SSE forwarding
 - `SSETransport.scheduleCleanup()` with `RECONNECT_GRACE_MS = 5000ms`
 
 ---
@@ -233,16 +235,3 @@ GitHub is different — self-contained, handles its own lock acquisition interna
 Web is always enabled (not conditional on env vars).
 
 ---
-
-## Building a New Adapter: Checklist
-
-1. Create `packages/adapters/src/{category}/{platform}/adapter.ts`
-2. Create `packages/adapters/src/{category}/{platform}/auth.ts` with `parseAllowedXxx()` + `isXxxAuthorized()`
-3. Implement `IPlatformAdapter` — all 6 required methods
-4. Use the lazy logger pattern (never module-scope init)
-5. Parse auth whitelist in constructor from env var
-6. Check auth in message handler before calling `onMessage` callback
-7. Use `splitIntoParagraphChunks()` from `../../utils/message-splitting`
-8. Register in `packages/server/src/index.ts` following the env-check → instantiate → onMessage → start pattern
-9. Add the platform type string to any switch/if chains that check `getPlatformType()`
-10. Export from `packages/adapters/src/index.ts`

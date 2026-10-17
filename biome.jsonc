@@ -1,0 +1,184 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    // dag-executor.test.ts is over Biome's 1 MiB default and would be skipped silently.
+    "maxSize": 2097152,
+    "includes": [
+      "**",
+      "!packages/docs-web",
+      "!packages/providers/src/codex/protocol",
+      "!packages/provider-contract/schema",
+      "!packages/chat-contract/schema",
+      "!**/*.generated.ts",
+      "!.archon/commands",
+      "!.archon/maintainer-standup",
+      "!.archon/workflows/**/commands",
+      "!.archon/workflows/**/fixtures",
+      "!.archon/scripts/__tests__/fixtures/malicious",
+      "!.agents",
+      "!.claude",
+      "!.github",
+      "!docs",
+      "!workspace"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf",
+    "includes": ["**", "!.archon/**", "!.worktrees/**", "!**/*.yml", "!**/*.yaml", "!**/*.html"]
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "es5",
+      "arrowParentheses": "asNeeded",
+      "bracketSpacing": true,
+      "quoteProperties": "asNeeded"
+    }
+  },
+  "json": {
+    "formatter": { "trailingCommas": "none" }
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noTsIgnore": "error",
+        "noAsyncPromiseExecutor": "error",
+        "noCompareNegZero": "error",
+        "noConstantBinaryExpressions": "error",
+        "noDuplicateElseIf": "error",
+        "noDuplicateCase": "error",
+        "noCatchAssign": "error",
+        "noSparseArray": "error",
+        "noDebugger": "error",
+        "noMisleadingCharacterClass": "error",
+        "noIrregularWhitespace": "error",
+        "noGlobalAssign": "error"
+      },
+      "correctness": {
+        "noUnsafeFinally": "error",
+        "useValidForDirection": "error",
+        "noConstantCondition": "error",
+        "noEmptyCharacterClassInRegex": "error",
+        "noEmptyPattern": "error",
+        "noPrecisionLoss": "error",
+        "noSelfAssign": "error",
+        "noSwitchDeclarations": "error"
+      },
+      "style": {
+        "useThrowOnlyError": "error"
+      },
+      "nursery": {
+        "usePromiseRejectErrors": "error"
+      },
+      "complexity": {
+        "noBannedTypes": "error"
+      }
+    },
+    "includes": [
+      "packages/*/src/**/*.ts",
+      "packages/*/src/**/*.tsx",
+      "scripts/**/*.ts",
+      ".archon/scripts/**/*.ts",
+      ".archon/workflows/**/*.ts"
+    ]
+  },
+  // Biome takes a rule's options from the last override that matches a file; options for
+  // the same rule do not merge. Keep the restricted-import overrides from overlapping.
+  "overrides": [
+    // Source only: tests use `!` and empty blocks freely, and neither hides a failure there.
+    {
+      "includes": [
+        "packages/*/src/**",
+        "scripts/**",
+        ".archon/**",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!**/*.spec.ts",
+        "!**/*.spec.tsx",
+        "!**/src/test/**",
+        "!**/__tests__/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          },
+          "suspicious": {
+            "noEmptyBlockStatements": "error"
+          }
+        }
+      }
+    },
+    // Provider attempts are admitted against the operator's concurrency caps, so callers get
+    // providers from core's admission seam. The web bundle is excluded: it has no
+    // @archon/providers dependency (check:package-edges rejects the import), and including
+    // it would let the console override below replace these paths there.
+    {
+      "includes": [
+        "packages/*/src/**",
+        "!packages/providers/src/**",
+        "!packages/core/src/services/provider-admission.ts",
+        "!packages/web/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@archon/providers": {
+                    "importNames": ["getAgentProvider"],
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
+                  },
+                  "@archon/providers/registry": {
+                    "importNames": ["getAgentProvider"],
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    // The console owns its API and reactive state instead of a second data layer.
+    {
+      "includes": ["packages/web/src/experiments/console/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@tanstack/react-query": "The console uses its own reactive store (store/cache.ts)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

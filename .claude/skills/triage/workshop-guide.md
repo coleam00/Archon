@@ -48,7 +48,7 @@ file reads, and reasoning are discarded.
 **Key properties:**
 - The forked context has **no access** to the main conversation history
 - Only the **final summary** flows back — intermediate work is discarded
-- `CLAUDE.md` files are still loaded in the forked context
+- `CLAUDE.md` files are still loaded in the forked context; this project's root file is only a pointer to `AGENTS.md`, which holds the project rules
 - The fork cannot spawn further subagents (no nesting)
 - Forked skills must contain **concrete tasks**, not just reference material
 

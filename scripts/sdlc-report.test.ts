@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { writeNodeArtifactsListing } from '../packages/workflows/src/artifacts-index';
-import { caveats } from '../.archon/workflows/sdlc/.shared/report';
+import { caveats, failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
@@ -20,10 +20,11 @@ function artifactsDir(): string {
   return dir;
 }
 
-/** A gate's typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
-function gate(
+/** A typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
+function typed(
   dir: string,
   stem: string,
+  outputType: string,
   producedAt: string,
   result: Record<string, unknown> | string
 ): void {
@@ -35,7 +36,7 @@ function gate(
     join(dir, 'nodes', `${stem}.meta.json`),
     JSON.stringify({
       nodeId: stem,
-      outputType: 'green-gate',
+      outputType,
       path: `nodes/${stem}.md`,
       runId: 'run',
       producedAt,
@@ -45,167 +46,150 @@ function gate(
 }
 
 /** The report as a tail composes it: with the engine listing this node received. */
-async function report(dir: string, failed: boolean): Promise<string> {
+async function report(dir: string): Promise<string> {
   const listingFile = await writeNodeArtifactsListing(dir, 'run');
-  return caveats(dir, { failed, listingFile });
+  return caveats(dir, { listingFile });
 }
 
-describe("the terminal report reads passed reds from the gates' typed artifacts", () => {
-  it('lists every gate that passed red, in the order the gates ran', async () => {
-    const dir = artifactsDir();
-    gate(dir, 'zz-gate-validated', '2026-09-10T10:00:00.000Z', {
-      gate: 'green',
-      red_cause: 'inherited',
-      stage: 'The project gate',
-      summary: 'e2e-smoke was red at the starting commit',
-    });
-    gate(dir, 'aa-gate-green', '2026-09-10T09:00:00.000Z', {
-      gate: 'green',
-      red_cause: 'environment',
-      stage: 'The implementation',
-      summary: 'the database was held by a parallel run',
-    });
-    gate(dir, 'gate-correction-green', '2026-09-10T09:30:00.000Z', {
-      gate: 'green',
-      red_cause: '',
-      stage: 'The correction',
-      summary: '',
-    });
-
-    const text = await report(dir, false);
-    expect(text).toContain('Delivered on red (2)');
-    expect(text.indexOf('The implementation: environment red')).toBeLessThan(
-      text.indexOf('The project gate: inherited red')
-    );
-    expect(text).toContain('the database was held by a parallel run');
-    expect(text).not.toContain('The correction');
-  });
-
-  it('says nothing when no gate passed red, and nothing when no gate ran', async () => {
-    const dir = artifactsDir();
-    expect(await report(dir, false)).toBe('');
-    gate(dir, 'gate-green', '2026-09-10T09:00:00.000Z', {
-      gate: 'green',
-      red_cause: '',
-      stage: 'The implementation',
-      summary: '',
-    });
-    expect(await report(dir, false)).toBe('');
-  });
-
-  it('names a gate record it cannot read instead of dropping it', async () => {
-    const dir = artifactsDir();
-    gate(dir, 'gate-green', '2026-09-10T09:00:00.000Z', 'not json');
-    const text = await report(dir, false);
-    expect(text).toContain("could not read the gate's record");
-    expect(text).toContain(join(dir, 'nodes', 'gate-green.md'));
-  });
-
-  it('shows a corrupt sidecar the engine could not read alongside a red gate', async () => {
-    const dir = artifactsDir();
-    gate(dir, 'gate-red', '2026-09-10T09:00:00.000Z', {
-      gate: 'green',
-      red_cause: 'inherited',
-      stage: 'The project gate',
-      summary: '',
-    });
-    writeFileSync(join(dir, 'nodes', 'gate-green.md'), JSON.stringify({ gate: 'green' }));
-    writeFileSync(join(dir, 'nodes', 'gate-green.meta.json'), 'not json');
-
-    const text = await report(dir, false);
-    expect(text).toContain('Delivered on red (1)');
-    expect(text).toContain('The project gate: inherited red');
-    expect(text).toContain('nodes/gate-green.meta.json');
-    expect(text).toContain('invalid_metadata');
-  });
-
-  it('names a missing or unreadable listing instead of reading as no gates', async () => {
-    const dir = artifactsDir();
-    gate(dir, 'gate-red', '2026-09-10T09:00:00.000Z', {
-      gate: 'green',
-      red_cause: 'inherited',
-      stage: 'The project gate',
-      summary: '',
-    });
-    expect(caveats(dir, { failed: false, listingFile: undefined })).toContain(
-      'could not be verified'
-    );
-    expect(caveats(dir, { failed: false, listingFile: join(dir, 'nope.json') })).toContain(
-      'could not be verified'
-    );
-  });
-
-  it('names a shape-invalid listing instead of reading as no gates', () => {
-    const dir = artifactsDir();
-    gate(dir, 'gate-red', '2026-09-10T09:00:00.000Z', {
-      gate: 'green',
-      red_cause: 'inherited',
-      stage: 'The project gate',
-      summary: '',
-    });
-
-    const malformedEnvelopes: Record<string, unknown>[] = [
-      { runId: 'run', artifactsByType: 'corrupt', errors: [] },
-      { runId: 'run', artifactsByType: [], errors: [] },
-      { runId: 'run', artifactsByType: { 'green-gate': 'corrupt' }, errors: [] },
-      { runId: 'run', artifactsByType: { 'green-gate': ['corrupt'] }, errors: [] },
-    ];
-    malformedEnvelopes.forEach((envelope, index) => {
-      const listingFile = join(dir, `malformed-${String(index)}.json`);
-      writeFileSync(listingFile, JSON.stringify(envelope));
-      const text = caveats(dir, { failed: false, listingFile });
-      expect(text).toContain('could not be verified');
-      expect(text).toContain('malformed');
-    });
-
-    const badErrors = join(dir, 'bad-errors.json');
-    writeFileSync(
-      badErrors,
-      JSON.stringify({ runId: 'run', artifactsByType: { 'green-gate': [] }, errors: 'also' })
-    );
-    expect(caveats(dir, { failed: false, listingFile: badErrors })).toContain(
-      '`errors` value is not an array'
-    );
-  });
-
-  it('ignores typed artifacts of other kinds', async () => {
-    const dir = artifactsDir();
-    writeFileSync(join(dir, 'nodes', 'triage.md'), 'a report');
-    writeFileSync(
-      join(dir, 'nodes', 'triage.meta.json'),
-      JSON.stringify({
-        nodeId: 'triage',
-        outputType: 'work-triage',
-        path: 'nodes/triage.md',
-        runId: 'run',
-        producedAt: '2026-09-10T09:00:00.000Z',
-        size: 8,
-      })
-    );
-    expect(await report(dir, false)).toBe('');
-  });
-});
-
 describe('discoveries', () => {
-  it('reports a consolidated file that is not an array with its path', async () => {
-    const dir = artifactsDir();
-    writeFileSync(join(dir, 'discoveries.json'), '{}');
-    const text = await report(dir, false);
-    expect(text).toContain('is not a JSON array of records');
-    expect(text).toContain(join(dir, 'discoveries.json'));
+  const record = (title: string) => ({
+    title,
+    claim: `${title} is real`,
+    evidence: ['a.ts:1'],
+    relation: 'unrelated',
+    source_nodes: ['seams'],
   });
 
-  it('on a failed run, reports raw producer sidecars and names a malformed one', async () => {
+  it('adds raw records written after the last review, and never ones it consolidated', async () => {
     const dir = artifactsDir();
     mkdirSync(join(dir, 'discoveries'));
     writeFileSync(
-      join(dir, 'discoveries', 'code.json'),
-      JSON.stringify([{ title: 'Unused export', relation: 'adjacent', claim: 'dead code' }])
+      join(dir, 'discoveries', 'review-code.json'),
+      JSON.stringify([record('Seen by review')])
     );
-    writeFileSync(join(dir, 'discoveries', 'seams.json'), '{"title":"not a list"}');
-    const text = await report(dir, true);
-    expect(text).toContain('Unconsolidated discoveries (1)');
-    expect(text).toContain('- Unused export [adjacent]');
-    expect(text).toContain('seams.json: not a JSON array of records');
+    utimesSync(join(dir, 'discoveries', 'review-code.json'), 1, 1);
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [record('Stale mock type')],
+    });
+    utimesSync(join(dir, 'nodes', 'review__publish.md'), 2, 2);
+    writeFileSync(
+      join(dir, 'discoveries', 'review-simplify.json'),
+      JSON.stringify([record('Found after review')])
+    );
+    const text = await report(dir);
+    expect(text).toContain('- Stale mock type [unrelated]');
+    expect(text).toContain('- Found after review [unreviewed]');
+    expect(text).not.toContain('Seen by review');
+    expect(text).toContain('If you are an agent reading this');
+  });
+
+  it('relays every raw record when no review ran', async () => {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'discoveries'));
+    writeFileSync(
+      join(dir, 'discoveries', 'plan.json'),
+      JSON.stringify([record('Planner found it')])
+    );
+    expect(await report(dir)).toContain('- Planner found it [unreviewed]');
+  });
+
+  it("lists the latest verdict's discoveries with the relay", async () => {
+    const dir = artifactsDir();
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [record('Old')],
+    });
+    typed(dir, 'recheck__publish', 'review-report', '2026-09-10T10:00:00.000Z', {
+      discoveries: [record('Flaky timeout')],
+    });
+    const text = await report(dir);
+    expect(text).toContain('- Flaky timeout [unrelated]');
+    expect(text).not.toContain('- Old');
+    expect(text).toContain('If you are an agent reading this');
+  });
+
+  it('says nothing when the final verdict recorded no discoveries', async () => {
+    const dir = artifactsDir();
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [],
+    });
+    expect(await report(dir)).toBe('');
+  });
+
+  it('names a missing listing instead of reading as no discoveries', () => {
+    const dir = artifactsDir();
+    expect(caveats(dir, { listingFile: undefined })).toContain('Discoveries could not be listed');
+  });
+});
+
+describe('failed', () => {
+  it('claims no result and still relays the discoveries the run recorded', async () => {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'discoveries'));
+    writeFileSync(
+      join(dir, 'discoveries', 'implement.json'),
+      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
+    );
+    const listingFile = await writeNodeArtifactsListing(dir, 'run');
+    const text = failed(dir, { listingFile });
+    expect(text.startsWith('Not done:')).toBe(true);
+    expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
+    expect(text).not.toContain('Ready');
+  });
+});
+
+/**
+ * Each tail's `report` node, run as the engine runs it: the outcome binding as env
+ * text and this run's listing, with stdout as the node's result.
+ */
+describe.each([
+  {
+    tail: 'deliver',
+    result: 'ready',
+    passed: {
+      ready: true,
+      reason: 'delivered',
+      pr_url: 'https://pr/1',
+      ci_rerun: 'none',
+      summary: 'Ready.',
+    },
+  },
+  {
+    tail: 'ship',
+    result: 'delivered',
+    passed: { delivered: true, reason: 'delivered', pr_url: 'https://pr/1', summary: 'Ready.' },
+  },
+])('$tail report node', ({ tail, result, passed }) => {
+  const script = join(import.meta.dir, '..', '.archon/workflows/sdlc', tail, 'scripts/report.ts');
+
+  async function run(outcome: string): Promise<Record<string, unknown>> {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'discoveries'));
+    writeFileSync(
+      join(dir, 'discoveries', 'implement.json'),
+      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
+    );
+    const child = Bun.spawnSync([process.execPath, script], {
+      env: {
+        ...process.env,
+        ARTIFACTS_DIR: dir,
+        TYPED_ARTIFACTS_FILE: await writeNodeArtifactsListing(dir, 'run'),
+        INPUTS_OUTCOME: outcome,
+      },
+    });
+    expect(child.stderr.toString()).toBe('');
+    expect(child.exitCode).toBe(0);
+    return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
+  }
+
+  it('reports a failed run as not done, with the discoveries it recorded', async () => {
+    const report = await run('null');
+    expect(report[result]).toBe(false);
+    expect(report.reason).toBe('failed');
+    expect(String(report.summary)).toStartWith('Not done:');
+    expect(String(report.summary)).toContain('- Guard refuses an empty diff [unreviewed]');
+  });
+
+  it("relays the outcome node's report unchanged when it ran", async () => {
+    expect(await run(JSON.stringify(passed))).toEqual(passed);
   });
 });

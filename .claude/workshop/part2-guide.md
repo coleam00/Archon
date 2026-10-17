@@ -412,7 +412,7 @@ User invokes /rulecheck [focus area]
   3. Broad scan across all concern types
   4. Pick one cohesive concern
   5. Deep scan + fix every instance
-  6. bun run validate
+  6. Test, lint, type-check own changes
   7. Commit, push, gh pr create
   8. Update memory
 ```
@@ -599,7 +599,7 @@ cat .claude/agent-memory/rulecheck-agent/meta-judge-feedback.md
 | Output | Advisory report (no changes) | Actual fixes + PR |
 | Isolation | None (reads in-place) | Git worktree |
 | Safety | None | PreToolUse command blocklist |
-| Validation | None | `bun run validate` |
+| Validation | None | Tests, lint, type-check on changes; CI is the full gate |
 | Notifications | None | Slack via SubagentStop hook (scoped by matcher) |
 | Learning | None | Persistent memory + meta-judge |
 | Autonomy | Reports findings only | Finds, fixes, validates, PRs |

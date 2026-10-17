@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
@@ -11,7 +11,7 @@ import {
   loadDryRunStubs,
   writeDryRunStubScaffold as writeResolvedDryRunStubScaffold,
 } from './dry-run';
-import type { DryRunResolution } from './dry-run';
+import type { DryRunResolution, DryRunStubValue } from './dry-run';
 import { resolveWorkflow } from './graph-plan';
 import { buildAiProfile } from './model-validation';
 import { resolveWorkflowModelScope } from './node-model-resolution';
@@ -23,18 +23,15 @@ import { readBundleIndex } from './defaults/bundle-inventory';
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
 async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
-  const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
-  mkdirSync(bundled, { recursive: true });
+  const bundled = join(options.sourceRoot, 'empty-bundled');
   for (const pack of await readBundleIndex()) {
-    mkdirSync(join(dirname(bundled), pack), { recursive: true });
+    mkdirSync(join(bundled, pack), { recursive: true });
   }
-  const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
-  const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
+  const workflows = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(bundled);
   try {
     return await captureWorkflowSource(options);
   } finally {
     workflows.mockRestore();
-    commands.mockRestore();
   }
 }
 
@@ -1120,6 +1117,46 @@ describe('dryRunWorkflow', () => {
     expect(result.missingStubs).toEqual([]);
   });
 
+  test('nonnumeric conditions allow OR fallback and record ordinary false skips', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'numeric-fallback',
+      nodes: [
+        { id: 'a', prompt: 'score' },
+        { id: 'b', prompt: 'status' },
+        {
+          id: 'fallback',
+          prompt: 'fallback',
+          depends_on: ['a', 'b'],
+          when: "$a.output > 50 || $b.output == 'ok'",
+        },
+        {
+          id: 'both',
+          prompt: 'both',
+          depends_on: ['a', 'b'],
+          when: "$a.output > 50 && $b.output == 'ok'",
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { a: 'N/A', b: 'ok', fallback: 'ran' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'fallback')).toMatchObject({
+      state: 'stubbed',
+      output: 'ran',
+    });
+    expect(result.trace.find(entry => entry.nodeId === 'both')).toMatchObject({
+      state: 'skipped',
+      reason: 'when_condition_false',
+      cause: { kind: 'condition', expr: "$a.output > 50 && $b.output == 'ok'" },
+    });
+    expect(result.missingStubs).toEqual([]);
+  });
+
   test('fails an object-valued condition field instead of recording a false skip', async () => {
     const workflow = makeTestWorkflow({
       name: 'structured-condition',
@@ -1572,6 +1609,41 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('an executed code node is held to its output_format like a real run', async () => {
+    const okSchema = {
+      type: 'object',
+      properties: { ok: { type: 'boolean' } },
+      required: ['ok'],
+    } as const;
+    const run = (stdout: string) =>
+      dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'exec-contract',
+          nodes: [
+            { id: 'code', bash: `printf '%s' '${stdout}'`, output_format: okSchema },
+            { id: 'next', depends_on: ['code'], bash: 'echo "$code_ok"' },
+          ],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        execCode: true,
+        stubs: { next: 'done' },
+      });
+
+    const bad = await run('{"ok":"yes"}');
+    expect(bad.outcome).toBe('failed');
+    expect(bad.trace[0]).toMatchObject({ state: 'failed' });
+    expect(bad.trace[0]?.reason).toContain("Bash node 'code'");
+    expect(bad.trace[0]?.reason).toContain('did not satisfy its declared output_format');
+
+    const notJson = await run('nope');
+    expect(notJson.trace[0]?.reason).toContain('must be a single JSON document');
+
+    const good = await run('{"ok":true}');
+    expect(good.outcome).toBe('completed');
+    expect(good.trace[0]).toMatchObject({ state: 'completed', reason: 'executed locally' });
+  });
+
   // #2617 + #2619: exec'd nodes get a pre-created ARTIFACTS_DIR/STATE_DIR under
   // <ARCHON_HOME>/temp — never inside the simulated repo — removed when the run ends.
   test('exec-code writes land in an ephemeral ARCHON_HOME temp dir, not the repo', async () => {
@@ -1776,6 +1848,136 @@ describe('dryRunWorkflow', () => {
     });
   });
 
+  test('gate messages, cancel reasons and wait messages keep $ARGUMENTS literal, as a real run renders them', async () => {
+    const preview = async (node: Record<string, unknown>): Promise<string | undefined> => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'literal-arguments',
+          nodes: [{ id: 'step', ...node } as never],
+        }),
+        userMessage: 'secret user text',
+        cwd: process.cwd(),
+        pauseAtGates: true,
+      });
+      return result.trace.find(entry => entry.nodeId === 'step')?.resolvedText;
+    };
+
+    expect(await preview({ approval: { message: 'Approve $ARGUMENTS?' } })).toBe(
+      'Approve $ARGUMENTS?'
+    );
+    expect(await preview({ cancel: 'Stopped for $ARGUMENTS' })).toBe('Stopped for $ARGUMENTS');
+    expect(await preview({ wait: { attention: 'Look at $ARGUMENTS' } })).toBe('Look at $ARGUMENTS');
+  });
+
+  test('a stub answers an attention wait and routes on its decision', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'attention-answer',
+      nodes: [
+        { id: 'review', wait: { attention: 'Post it?', form: 'approval' } },
+        {
+          id: 'post',
+          bash: 'echo $review.output.text',
+          depends_on: ['review'],
+          when: "$review.output.decision == 'approve'",
+        },
+        {
+          id: 'stop',
+          cancel: 'rejected',
+          depends_on: ['review'],
+          when: "$review.output.decision == 'reject'",
+        },
+      ],
+    });
+    const run = (answer: DryRunStubValue) =>
+      dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { review: answer, post: 'posted' },
+      });
+
+    const approved = await run({ decision: 'approve', text: 'ship it' });
+    expect(approved.outcome).toBe('completed');
+    expect(approved.trace[0]).toMatchObject({
+      nodeId: 'review',
+      state: 'stubbed',
+      reason: 'answered by stub',
+      resolvedText: 'Post it?',
+    });
+
+    const rejected = await run({ decision: 'reject', text: '' });
+    expect(rejected.outcome).toBe('cancelled');
+    expect(rejected.trace.find(step => step.nodeId === 'post')?.state).toBe('skipped');
+
+    // The answer owes the form's output contract, like any authored stub.
+    const invalid = await run({ decision: 'maybe', text: '' });
+    expect(invalid.outcome).toBe('failed');
+  });
+
+  test('a stub answer chooses only the options its wait declares', async () => {
+    const options = [{ id: 'use-main' }, { id: 'use-dev' }];
+    const outcome = async (form: 'select' | 'multi_select', answer: DryRunStubValue) => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'attention-options',
+          nodes: [{ id: 'ask', wait: { attention: 'Which base?', form, options } }],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { ask: answer },
+      });
+      return { outcome: result.outcome, reason: result.trace[0]?.reason };
+    };
+
+    expect((await outcome('select', { decision: 'use-dev', text: '' })).outcome).toBe('completed');
+    expect(await outcome('select', { decision: 'unknown', text: '' })).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringContaining("does not declare option 'unknown'"),
+    });
+    expect(
+      (await outcome('multi_select', { decisions: ['use-main', 'use-dev'], text: '' })).outcome
+    ).toBe('completed');
+    expect(await outcome('multi_select', { decisions: [], text: '' })).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringContaining('needs at least one option'),
+    });
+    expect(
+      await outcome('multi_select', { decisions: ['use-main', 'use-main'], text: '' })
+    ).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('at most once') });
+  });
+
+  test('validates stub answers against options from simulated upstream output', async () => {
+    const run = (options: DryRunStubValue, decision: string) =>
+      dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'dynamic-attention-options',
+          nodes: [
+            { id: 'choices', bash: 'unused' },
+            {
+              id: 'ask',
+              depends_on: ['choices'],
+              wait: {
+                attention: 'Which base?',
+                form: 'select',
+                options: '$choices.output.options',
+              },
+            },
+          ],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { choices: { options }, ask: { decision, text: '' } },
+      });
+
+    expect((await run([{ id: 'use-dev' }], 'use-dev')).outcome).toBe('completed');
+    const undeclared = await run([{ id: 'use-dev' }], 'unknown');
+    expect(undeclared.outcome).toBe('failed');
+    expect(undeclared.trace.at(-1)?.reason).toContain("does not declare option 'unknown'");
+    const invalid = await run([{ id: 'duplicate' }, { id: 'duplicate' }], 'duplicate');
+    expect(invalid.outcome).toBe('failed');
+    expect(invalid.trace.at(-1)?.reason).toContain('not a valid option list');
+  });
+
   test('simulates loop completion and max-iteration failure', async () => {
     const completing = makeTestWorkflow({
       name: 'loop-ok',
@@ -1908,8 +2110,7 @@ describe('dryRunWorkflow', () => {
     // Behaviour CHANGE, recorded deliberately (#2563). Before, this combination
     // simulated as a max-iterations failure because only `until` was evaluated. Now
     // the unevaluable `until_bash` triggers the documented assumption, because the
-    // real run's check may well have fired. The shipped `archon-adversarial-dev`
-    // default declares exactly this pair, so the old verdict was a failure the real
+    // real run's check may well have fired, so the old verdict was a failure the real
     // run would not produce. The trade: a dry run can no longer prove a prose stub
     // trips `until:` on a loop that also declares `until_bash`.
     const workflow = makeTestWorkflow({
@@ -1995,6 +2196,182 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[1]?.resolvedText).toBe('finish fresh');
   });
 
+  test('resolves $LOOP_PREV in body bindings and conditions as a real run does (#3996)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-prev-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'report.md'), 'previous PR: [$INPUTS.pr_url]');
+    const workflow = makeTestWorkflow({
+      name: 'loop-prev',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'round',
+                prompt: 'round',
+                output_format: { type: 'object', properties: { pr_url: { type: 'string' } } },
+              },
+              {
+                id: 'report',
+                command: 'report',
+                depends_on: ['round'],
+                with: { pr_url: '$LOOP_PREV.round.output.pr_url' },
+              },
+              {
+                id: 'followup',
+                prompt: 'follow up',
+                depends_on: ['round'],
+                when: "$LOOP_PREV.round.output.pr_url == 'https://example.test/pr/1'",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { round: { pr_url: 'https://example.test/pr/1' }, report: 'more', followup: 'ok' },
+    });
+
+    const entries = (nodeId: string) => result.trace.filter(entry => entry.nodeId === nodeId);
+    expect(entries('report').map(entry => entry.resolvedText)).toEqual([
+      'previous PR: []',
+      'previous PR: [https://example.test/pr/1]',
+    ]);
+    expect(entries('followup').map(entry => [entry.iteration, entry.state])).toEqual([
+      [1, 'skipped'],
+      [2, 'stubbed'],
+    ]);
+  });
+
+  test('substitutes loop variables into a body command file as a real run does (#3954)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'report.md'),
+      'previous: [$LOOP_PREV.round.output.pr_url] feedback: [$LOOP_USER_INPUT]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'loop-command',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'round',
+                prompt: 'round',
+                output_format: { type: 'object', properties: { pr_url: { type: 'string' } } },
+              },
+              { id: 'report', command: 'report', depends_on: ['round'] },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { round: { pr_url: 'https://example.test/pr/1' }, report: 'more' },
+    });
+
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'report').map(entry => entry.resolvedText)
+    ).toEqual(['previous: [] feedback: []', 'previous: [https://example.test/pr/1] feedback: []']);
+  });
+
+  test('gives a command body the output of an include it reads (#3972)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-include-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'check-ci.md'), 'Check CI for [$pr.output]');
+    writeFileSync(join(cwd, '.archon', 'commands', 'retry-ci.md'), 'Retry CI for [$pr.output]');
+    const block = makeTestWorkflow({
+      name: 'open-pr',
+      nodes: [{ id: 'open', prompt: 'open the pr' }],
+    });
+    const parent = makeTestWorkflow({
+      name: 'deliver',
+      nodes: [
+        { id: 'pr', include: 'open-pr' },
+        { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+        {
+          id: 'retry',
+          depends_on: ['pr'],
+          loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+        },
+      ],
+    });
+    const workflow = makeTestComposedWorkflow([block, parent], 'deliver');
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { pr__open: 'PR-42', check: 'ok', retry: 'DONE' },
+    });
+
+    const resolved = (nodeId: string) =>
+      result.trace.find(entry => entry.nodeId === nodeId)?.resolvedText;
+    expect(resolved('check')).toBe('Check CI for [PR-42]');
+    expect(resolved('retry')).toBe('Retry CI for [PR-42]');
+  });
+
+  test('runs a nested body command file through every enclosing loop scope (#3954)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-nested-loop-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'polish.md'),
+      'outer: [$LOOP_PREV.a.output] inner: [$LOOP_PREV.polish.output]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'nested-loop-command',
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            until: 'OUTER_DONE',
+            max_iterations: 2,
+            nodes: [
+              { id: 'a', prompt: 'produce a' },
+              {
+                id: 'inner',
+                depends_on: ['a'],
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 1,
+                  nodes: [{ id: 'polish', command: 'polish' }],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { a: 'A-OUT', polish: 'DONE' },
+    });
+
+    // Stubs are static, so the inner group ends on its first iteration and its own ref is
+    // empty; the outer group never sees OUTER_DONE and runs both iterations.
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'polish').map(entry => entry.resolvedText)
+    ).toEqual(['outer: [] inner: []', 'outer: [A-OUT] inner: []']);
+  });
+
   test('represents cancellation and unsupported subworkflows visibly', async () => {
     const cancelled = makeTestWorkflow({
       name: 'cancel',
@@ -2019,6 +2396,86 @@ describe('dryRunWorkflow', () => {
     });
     expect(childResult).toMatchObject({ outcome: 'failed' });
     expect(childResult.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+  });
+
+  test('a stubbed child workflow node completes with the stub as its output', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        { id: 'pick', bash: 'echo 7' },
+        { id: 'child', workflow: 'other', with: { target: '$pick.output' }, depends_on: ['pick'] },
+        {
+          id: 'after',
+          bash: 'echo next',
+          depends_on: ['child'],
+          when: '$child.output.merged == true',
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { pick: '7', child: { merged: true }, after: 'next' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'child')).toMatchObject({
+      nodeType: 'workflow',
+      state: 'stubbed',
+    });
+    // The child's stubbed output feeds a downstream field condition like any node's.
+    expect(result.trace.find(entry => entry.nodeId === 'after')?.state).toBe('stubbed');
+  });
+
+  test('a stubbed child workflow node still fails on a binding a real launch would reject', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output' } }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { child: { merged: true } },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({ nodeId: 'child', state: 'failed' });
+  });
+
+  test('a --default-stubs placeholder never stands in for a child workflow run', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'child', workflow: 'other' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+  });
+
+  test('a fan-out child workflow node cannot be stubbed and still fails loud', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        {
+          id: 'spread',
+          workflow: 'other',
+          fan_out: { items: '["a"]', max_parallel: 1, join: 'all_done' },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { spread: 'stub' },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
   });
 
   test('fails loud on a reachable composed fan-out node instead of simulating it', async () => {
@@ -2306,6 +2763,34 @@ describe('dryRunWorkflow — declared inputs (#2610)', () => {
     });
 
     expect(result.trace[0]).toMatchObject({ state: 'completed', output: 'v=W' });
+  });
+
+  test("delivers an included block's own inputs to its bash body under --exec-code", async () => {
+    const block = makeTestWorkflow({
+      name: 'blk',
+      inputs: { work: { required: true } },
+      nodes: [{ id: 'code', bash: 'set -u; printf "v=%s" $INPUTS.work' }],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'inc', include: 'blk', with: { work: 'two words' } }],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['blk', block],
+        ['parent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+
+    const result = await dryRunWorkflow({
+      workflow: workflows.get('parent')!,
+      userMessage: '',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+
+    expect(result.trace[0]).toMatchObject({ state: 'completed', output: 'v=two words' });
   });
 });
 
@@ -2812,5 +3297,87 @@ describe('all_done tolerance vs a placeholder that cannot be generated (#2869)',
     );
     expect(result.missingStubs).toEqual(['refine']);
     expect(result.toleratedMissingStubs).toEqual([]);
+  });
+});
+
+test('dry-run nested conditions enforce the same declared contract as live outputs', async () => {
+  const workflow = (field: string) =>
+    makeTestWorkflow({
+      name: 'nested-stub',
+      nodes: [
+        {
+          id: 'review',
+          bash: 'echo json',
+          output_format: {
+            type: 'object',
+            properties: {
+              proposal: { type: 'object', properties: { action: { type: 'string' } } },
+            },
+          },
+        },
+        {
+          id: 'read',
+          bash: 'echo read',
+          depends_on: ['review'],
+          when: `$review.output.proposal.${field} == 'add'`,
+        },
+      ],
+    });
+  const run = (field: string) =>
+    dryRunWorkflow({
+      workflow: workflow(field),
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { review: { proposal: { action: 'add' } }, read: 'read' },
+    });
+  const valid = await run('action');
+  expect(valid.outcome).toBe('completed');
+  expect(valid.trace.find(node => node.nodeId === 'read')?.state).toBe('stubbed');
+  const typo = await run('typo');
+  expect(typo.outcome).toBe('failed');
+  expect(typo.trace.find(node => node.nodeId === 'read')?.reason).toContain("field 'typo'");
+});
+
+describe('dryRunWorkflow — substituted values are previewed verbatim (#4046)', () => {
+  const quoted =
+    "Check $gate.output.decision, read $gate.output, use $INPUTS.plan, keep $& and it's done.";
+
+  test('previews the run message exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-message',
+        nodes: [{ id: 'summarize', prompt: 'Summarize this request: $ARGUMENTS' }],
+      }),
+      userMessage: quoted,
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe(`Summarize this request: ${quoted}`);
+  });
+
+  test('previews a previous-iteration output exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-prior',
+        nodes: [
+          {
+            id: 'grp',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'draft', prompt: 'Prior: [$LOOP_PREV.draft.output]' }],
+            },
+          },
+        ],
+      }),
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { draft: quoted },
+    });
+
+    const drafts = result.trace.filter(entry => entry.nodeId === 'draft');
+    expect(drafts.map(entry => entry.resolvedText)).toEqual(['Prior: []', `Prior: [${quoted}]`]);
   });
 });

@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # scripts/build-binaries.sh
-# Build standalone CLI binaries for all supported platforms.
+# Build standalone server, CLI and maintained provider plugin binaries for all
+# supported platforms. Every binary embeds the same build-time constants, so a
+# provider plugin reports the CLI's version and resolves its agent binary as a
+# release binary does.
 #
 # Modes:
 #   - Multi-target (local dev): no env vars → builds all 4 local targets into dist/binaries/
-#   - Single-target (CI):       TARGET + OUTFILE both set → builds only that target
+#   - Single-target (CI):       TARGET + OUTFILE set → builds only that target
 #
 # Env vars:
 #   VERSION    - version string (default: from package.json)
 #   GIT_COMMIT - short git commit (default: from `git rev-parse --short HEAD`)
 #   TARGET     - bun target triple (e.g. bun-darwin-arm64); CI mode
-#   OUTFILE    - output path for the built binary; CI mode
+#   OUTFILE    - output path for the CLI binary; CI mode. The server and provider
+#                plugin binaries are written beside it under their release asset names.
 
 set -euo pipefail
 
@@ -19,9 +23,9 @@ GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unkn
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
 
-echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
+echo "Building Archon server, CLI and provider plugins v${VERSION} (commit: ${GIT_COMMIT})"
 
-# Regenerate bundled defaults from .archon/{commands,workflows}/defaults/ so the
+# Regenerate the bundled packs named in bundle-index.json so the
 # compiled binary always embeds the current on-disk contents. CI also runs
 # `bun run check:bundled` to catch committed drift.
 echo "Regenerating bundled defaults..."
@@ -44,14 +48,15 @@ is_valid_sha256() {
   printf '%s' "$1" | grep -Eq '^[0-9a-f]{64}$'
 }
 
+compute_sha256() {
+  bun -e 'console.log(new Bun.CryptoHasher("sha256").update(await Bun.file(process.argv[1]).arrayBuffer()).digest("hex"));' "$1"
+}
+
 WEB_DIST_SHA256=""
 if [ -f "archon-web.tar.gz" ]; then
-  # `|| true` is intentional under `set -euo pipefail`: if shasum is missing or
-  # the file is unreadable, we want WEB_DIST_SHA256 to land empty so the
-  # is_valid_sha256 check below can decide between fail-closed (release/CI) and
-  # warn-and-fallback (dev). Without this, pipefail would abort the script
-  # before that policy check ever runs. Don't simplify away.
-  WEB_DIST_SHA256="$(shasum -a 256 archon-web.tar.gz 2>/dev/null | cut -d' ' -f1 || true)"
+  # An unreadable artifact yields an empty hash, so release builds fail closed
+  # while local development retains its existing remote-checksum fallback.
+  WEB_DIST_SHA256="$(compute_sha256 archon-web.tar.gz 2>/dev/null || true)"
   if is_valid_sha256 "$WEB_DIST_SHA256"; then
     echo "Embedded web dist SHA-256: ${WEB_DIST_SHA256}"
   else
@@ -70,6 +75,7 @@ else
   echo "WARNING: archon-web.tar.gz not found — BUNDLED_WEB_DIST_SHA256 will be empty (remote fallback)" >&2
 fi
 
+write_constants() {
 cat > "$BUNDLED_BUILD_FILE" << EOF
 /**
  * Build-time constants embedded into compiled binaries.
@@ -84,7 +90,11 @@ export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
 /** SHA-256 of archon-web.tar.gz, embedded at build time by scripts/build-binaries.sh */
 export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
+export const BUNDLED_SERVER_SHA256 = '${SERVER_SHA256}';
 EOF
+}
+SERVER_SHA256=''
+write_constants
 
 # Determine which targets to build
 if [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; then
@@ -111,40 +121,70 @@ MIN_BINARY_SIZE=1000000
 # Build each target
 for target_pair in "${TARGETS[@]}"; do
   IFS=':' read -r target outfile <<< "$target_pair"
-  echo "Building $target → $outfile"
+  server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
+  server_outfile="$(dirname "$outfile")/$server_asset"
+  # Provider plugins are named the way `archon provider add` requests them.
+  provider_plugins=$(TARGET="$target" bun -e '
+    const { relative } = await import("node:path");
+    const { MAINTAINED_PROVIDER_IDS } = await import("./packages/provider-contract/src/registration.ts");
+    const { getSourceProviderEntry } = await import("./packages/paths/src/archon-paths.ts");
+    const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+    for (const id of MAINTAINED_PROVIDER_IDS) {
+      const manifest = await Bun.file(`plugins/provider-${id}/archon-plugin.json`).json();
+      console.log(relative(process.cwd(), getSourceProviderEntry(id)), pluginReleaseAsset(manifest.executable, process.env.TARGET));
+    }
+  ')
+  entry_outputs=("packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile")
+  while read -r entry asset; do
+    entry_outputs+=("$entry:$(dirname "$outfile")/$asset")
+  done <<< "$provider_plugins"
+  SERVER_SHA256=''
+  write_constants
+  for entry_output in "${entry_outputs[@]}"; do
+    IFS=':' read -r entry output <<< "$entry_output"
+    echo "Building $target → $output"
 
-  # --bytecode disabled: Bun 1.3.11 produces broken bytecode for our module graph
-  # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
-  # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
-  # Always --minify to match release parity.
-  bun build \
-    --compile \
-    --minify \
-    --target="$target" \
-    --outfile="$outfile" \
-    packages/cli/src/cli.ts
+    # --bytecode disabled: Bun 1.3.11 produces broken bytecode for our module graph
+    # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
+    # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
+    # Always --minify to match release parity.
+    bun build \
+      --compile \
+      --minify \
+      --target="$target" \
+      --outfile="$output" \
+      "$entry"
 
-  # Verify build output exists
-  if [ ! -f "$outfile" ]; then
-    echo "ERROR: Build failed - $outfile not created" >&2
-    exit 1
-  fi
+    # Verify build output exists
+    if [ ! -f "$output" ]; then
+      echo "ERROR: Build failed - $output not created" >&2
+      exit 1
+    fi
 
-  # Verify minimum reasonable size (Bun binaries are typically 50MB+)
-  # Use portable stat command (works on both macOS and Linux)
-  if stat -f%z "$outfile" >/dev/null 2>&1; then
-    size=$(stat -f%z "$outfile")
-  else
-    size=$(stat --printf="%s" "$outfile")
-  fi
+    # Verify minimum reasonable size (Bun binaries are typically 50MB+)
+    # Use portable stat command (works on both macOS and Linux)
+    if stat -f%z "$output" >/dev/null 2>&1; then
+      size=$(stat -f%z "$output")
+    else
+      size=$(stat --printf="%s" "$output")
+    fi
 
-  if [ "$size" -lt "$MIN_BINARY_SIZE" ]; then
-    echo "ERROR: Build output suspiciously small ($size bytes): $outfile" >&2
-    echo "Expected at least $MIN_BINARY_SIZE bytes for a Bun-compiled binary" >&2
-    exit 1
-  fi
+    if [ "$size" -lt "$MIN_BINARY_SIZE" ]; then
+      echo "ERROR: Build output suspiciously small ($size bytes): $output" >&2
+      echo "Expected at least $MIN_BINARY_SIZE bytes for a Bun-compiled binary" >&2
+      exit 1
+    fi
 
-  echo "  -> $outfile ($size bytes)"
+    echo "  -> $output ($size bytes)"
+    if [ "$entry" = 'packages/server/src/bin.ts' ]; then
+      SERVER_SHA256="$(compute_sha256 "$output" 2>/dev/null || true)"
+      if ! is_valid_sha256 "$SERVER_SHA256"; then
+        echo "ERROR: invalid server SHA-256 for $output — refusing to build CLI" >&2
+        exit 1
+      fi
+      write_constants
+    fi
+  done
 done
 
 echo ""

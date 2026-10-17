@@ -1,0 +1,298 @@
+name: archon-build-queue
+description: |
+  The build queue: takes intake's triaged work items to a reviewed, ready pull
+  request and stops only for decisions that belong to a person. Each run claims the
+  best waiting item with intake's claim. One agent routes it (and proves a bug's
+  symptom first) and launches archon-ship from a brief; one agent answers how that
+  round ended; and after several rounds that each found new defects, one agent decides
+  whether to ask the scope question instead of running another. A clear case acts on
+  its own. Anything unclear pauses as one attention item whose answer is a declared
+  choice; the ruling is written into the issue body as a dated "Current scope"
+  section. Every decision is recorded on the item's work item. With mode eval the run
+  launches nothing and writes nothing: it replays a recorded round's decision and
+  returns it as its output.
+
+  Use when: a trigger binding the operator installed starts it (see the SDLC pack
+  README, "Build queue"), or an operator replays a recorded stop in eval mode.
+  NOT for: triaging an item (archon-intake), delivering one item by hand
+  (archon-ship), or merging (archon-merge-queue).
+
+requires: [github]
+
+inputs:
+  repo_host:
+    description: The forge host of the repository whose work items the queue builds.
+  repo_path:
+    description: The owner/name path of that repository.
+  order:
+    default: '["urgency desc","importance desc","size asc","created asc"]'
+    description: >-
+      Pickup order, intake's format: a JSON array of "<key> <asc|desc>" with keys
+      urgency, importance, size, complexity and created.
+  round_limit:
+    default: "3"
+    description: >-
+      After this many rounds since the item's scope last changed, a round that ends
+      wanting another goes to the give-up decision first.
+  mode:
+    default: "live"
+    description: >-
+      live or eval. Eval claims, launches and writes nothing: it decides the issue
+      named by number from the rounds in replay and returns the decision as the
+      outcome's evaluation. Any other value refuses the run at facts.
+  number:
+    default: ""
+    description: Eval only. The issue to decide.
+  replay:
+    default: "[]"
+    description: >-
+      Eval only. The item's recorded archon-ship rounds, oldest first, as a JSON
+      array of {run_id, at, delivered, reason, pr_url, summary, artifacts}. The last
+      is the round whose ending is answered; an empty array decides the route.
+  as_of:
+    default: ""
+    description: >-
+      Eval only. The ISO time whose issue body the decision reads, such as the
+      replayed round's end; empty reads the body as it is now.
+
+returns: apply
+
+nodes:
+  # Claims the item (live) and writes the issue's body to build/issue.md, so every
+  # agent reads the same text: the current body in live, the body at as_of in eval.
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, route, answer] }
+        item:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+            number: { type: integer }
+          required: [repo, number]
+        url: { type: string }
+        # The item's work item, as the queue read it at pickup, its history reports
+        # as plain run id and path references: null for an item no pickup recorded.
+        record: { type: [object, 'null'] }
+        # What the next launch starts from: the answer to the last stop, or empty.
+        brief: { type: string }
+        # The rounds before this run's: the work item's in live, the replay's in eval.
+        rounds: { type: array, items: { type: object } }
+        # Eval's replayed round whose ending is answered; null otherwise.
+        recorded: { type: [object, 'null'] }
+        # Whether this run's round reaches round_limit rounds since the scope changed.
+        at_cap: { type: boolean }
+        policy_defaults: { type: string }
+        # The item's pull request as the forge reports it now: the latest round's that
+        # recorded one, or the one triage routed it to continue; else null.
+        pull_request: { type: [object, 'null'] }
+        # The number of that pull request when the round continues it: it is open and
+        # its head is in the item's repository. Null otherwise.
+        continues: { type: [integer, 'null'] }
+        # The branch the round opens its pull request from when it continues none: a new
+        # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
+        branch: { type: string }
+      required: [path, item, url, record, brief, rounds, recorded, at_cap, policy_defaults, pull_request, continues, branch]
+
+  # Routes the item and writes the brief the round starts from. The prompt names the
+  # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
+  # that would refuse the whole run under a provider that cannot load named skills,
+  # and the provider is the user's choice.
+  - id: route
+    command: route
+    depends_on: [facts]
+    when: "$facts.output.path == 'route'"
+    model: large
+    mutates_checkout: false
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      url: "$facts.output.url"
+      record: { from: "$facts.output.record" }
+      brief: "$facts.output.brief"
+      pull_request: { from: "$facts.output.pull_request" }
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [launch, ask] }
+        # The brief archon-ship starts from on launch; on ask, the brief a continue
+        # choice launches.
+        brief: { type: string, pattern: '\S' }
+        reason: { type: string, pattern: '\S' }
+        attention: &attention
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            what: { type: string, pattern: '\S' }
+            why: { type: string, pattern: '\S' }
+            recommendation:
+              type: object
+              additionalProperties: false
+              properties:
+                choice: { type: string }
+                why: { type: string, pattern: '\S' }
+                evidence: { type: string, pattern: '\S' }
+                confidence: { type: string, enum: [low, medium, high] }
+                would_change: { type: string, pattern: '\S' }
+              required: [choice, why, evidence, confidence, would_change]
+            choices:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+                  label: { type: string, pattern: '\S' }
+                  does: { type: string, pattern: '\S' }
+                  effect: { type: string, enum: [continue, park] }
+                  ruling: { type: string }
+                required: [id, label, does, effect, ruling]
+            if_unanswered: { type: string, pattern: '\S' }
+            links: { type: array, items: { type: string } }
+          required: [what, why, recommendation, choices, if_unanswered, links]
+      required: [decision, brief, reason, attention]
+
+  - id: ship
+    include: archon-ship-block
+    depends_on: [facts, route]
+    when: "$route.output.decision == 'launch' && $INPUTS.mode == 'live'"
+    with:
+      target: "$route.output.brief"
+      pull_request: "$facts.output.continues"
+      branch: "$facts.output.branch"
+
+  - id: answer
+    command: answer
+    depends_on: [facts, ship]
+    trigger_rule: none_failed_min_one_success
+    # `&&` binds tighter than `||` and short-circuits, so a skipped route is never read.
+    when: "$facts.output.path == 'answer' || $facts.output.path == 'route' && $route.output.decision == 'launch' && $INPUTS.mode == 'live'"
+    model: large
+    mutates_checkout: false
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      url: "$facts.output.url"
+      record: { from: "$facts.output.record" }
+      rounds: { from: "$facts.output.rounds" }
+      ending: { from: "$ship.output", if_skipped: null }
+      recorded: { from: "$facts.output.recorded" }
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [done, continue, ask] }
+        # What the next round starts from on continue; on ask, what a continue
+        # choice launches. Empty on done.
+        brief: { type: string }
+        # The pull request whose head the checkout's unpushed commits go to; null
+        # pushes nothing.
+        push:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+            number: { type: integer, minimum: 1 }
+          required: [repo, number]
+        reason: { type: string, pattern: '\S' }
+        attention: *attention
+      required: [decision, brief, push, reason, attention]
+
+  - id: give-up
+    command: give-up
+    depends_on: [facts, answer]
+    when: "$answer.output.decision == 'continue' && $facts.output.at_cap == true"
+    model: large
+    mutates_checkout: false
+    with:
+      policy_defaults: "$facts.output.policy_defaults"
+      url: "$facts.output.url"
+      record: { from: "$facts.output.record" }
+      rounds: { from: "$facts.output.rounds" }
+      ending: { from: "$ship.output", if_skipped: null }
+      recorded: { from: "$facts.output.recorded" }
+      answer: { from: "$answer.output" }
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [continue, ask] }
+        reason: { type: string, pattern: '\S' }
+        attention: *attention
+      required: [decision, reason, attention]
+
+  # Checks the decision, performs the writes it declared and reads each one back:
+  # the push, then the work item. Eval writes nothing and returns the decision.
+  - id: apply
+    script: apply
+    runtime: bun
+    depends_on: [facts, route, answer, give-up]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      item: { from: "$facts.output.item" }
+      recorded: { from: "$facts.output.recorded" }
+      route: { from: "$route.output", if_skipped: null }
+      ending: { from: "$ship.output", if_skipped: null }
+      answer: { from: "$answer.output", if_skipped: null }
+      give_up: { from: "$give-up.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [idle, parked, ready, continue, asked, launch] }
+        summary: { type: string }
+        # The attention message; empty when nothing is asked.
+        attention: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+            required: [id, label]
+        class: { type: string, enum: ['', route, stop, scope] }
+        # What the answer node needs: the attention item, the brief a continue choice
+        # launches and which decision asked; null when nothing is asked.
+        asked: { type: [object, 'null'] }
+        # Null in live. In eval, the whole decision and the writes live would make.
+        evaluation: { type: [object, 'null'] }
+      required: [decision, summary, attention, options, class, asked, evaluation]
+
+  # A paused run gives its resource slot back, so the next scheduled run can work
+  # another item while this one waits.
+  - id: ask
+    depends_on: [apply]
+    when: "$apply.output.attention != ''"
+    wait:
+      attention: "$apply.output.attention"
+      form: select
+      options: "$apply.output.options"
+      labels:
+        build: "$apply.output.class"
+
+  - id: ruling
+    script: ruling
+    runtime: bun
+    depends_on: [facts, apply, ask]
+    with:
+      item: { from: "$facts.output.item" }
+      asked: { from: "$apply.output.asked" }
+      choice: "$ask.output.decision"
+      text: "$ask.output.text"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [continue, park] }
+        section: { type: string }
+        summary: { type: string }
+      required: [decision, section, summary]

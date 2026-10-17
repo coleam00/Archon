@@ -5,6 +5,8 @@ export const DETACHED_INSTALL_CONTEXT_KEYS = [
   'ARCHON_DOCKER',
   'WORKSPACE_PATH',
   'HOME',
+  // homedir() reads USERPROFILE on Windows, so it derives the home there as HOME does.
+  'USERPROFILE',
 ] as const;
 
 export type DetachedInstallContextKey = (typeof DETACHED_INSTALL_CONTEXT_KEYS)[number];
@@ -20,6 +22,7 @@ export function captureDetachedInstallContext(
     ARCHON_DOCKER: env.ARCHON_DOCKER ?? '',
     WORKSPACE_PATH: env.WORKSPACE_PATH ?? '',
     HOME: env.HOME ?? '',
+    USERPROFILE: env.USERPROFILE ?? '',
   };
 }
 

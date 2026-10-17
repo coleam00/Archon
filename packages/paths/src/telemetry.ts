@@ -53,7 +53,7 @@ import { createLogger } from './logger';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 9;
+export const TELEMETRY_SCHEMA_VERSION = 10;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -80,10 +80,11 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // registration counts were added, and to `-v4` when aggregate usage totals
 // (tokens/cost/duration/loop iterations) and approval decisions were added, and
 // to `-v5` when install channel and build commit were added, and to `-v6` when
-// runs gained an anonymous per-run reference and cancellations were reported.
-// Bumping re-shows the updated first-run notice once per install so existing
+// runs gained an anonymous per-run reference and cancellations were reported, and
+// to `-v7` when workflow shape (node-type counts, depth, fan-out, command-reference
+// count, prompt-size bucket) and bundled-workflow ancestry were added. Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
-export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v6';
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v7';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -171,21 +172,20 @@ function collectMachineProperties(): Record<string, string | boolean> {
     is_ci: process.env.CI?.toLowerCase() === 'true',
     // `process.stderr.isTTY` is `undefined` at runtime when stderr is not a TTY
     // (servers, pipes, CI), so without coercion the field is silently omitted on
-    // the primary server path. bun-types incorrectly narrows it to `boolean`,
-    // which makes the lint rule think the coercion is redundant — it is not.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- bun-types mis-types process.stderr.isTTY as always-boolean; runtime value is boolean|undefined and the coercion guarantees a present `false`.
+    // the primary server path. bun-types incorrectly narrows it to `boolean`, so
+    // the coercion looks redundant — it is not.
     is_tty: Boolean(process.stderr.isTTY),
   };
 }
 
 /** Discovery source of a workflow, mirrored from `@archon/workflows` as a
  * plain string union so `@archon/paths` keeps zero `@archon/*` dependencies. */
-export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project';
+export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project' | 'installed';
 
 /**
  * Apply the workflow-name privacy rule: bundled (Archon-authored) workflows
  * report their real name so maintainers can see which defaults are popular;
- * user-authored (global/project) workflows report `"custom"` so private names
+ * user-authored (global/project) and installed-pack workflows report `"custom"` so private names
  * (e.g. "deploy-acme-prod") never leave the machine. `workflow_source` is
  * always reported for the custom-vs-default split.
  */
@@ -410,9 +410,12 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also an anonymous per-run\n' +
-    'reference (a hash, never the run id) and cancelled runs, alongside how\n' +
-    'Archon was installed (binary, Docker, or source), the build commit,\n' +
+    'Archon collects anonymous usage telemetry — now also the shape of each\n' +
+    'workflow (node-type counts, depth, fan-out, how many commands it uses, a\n' +
+    'prompt-size bucket) and, for a copy of a bundled workflow, which bundled one\n' +
+    "it came from — never your own workflow's name, description or text. Also\n" +
+    'sent: an anonymous per-run reference (a hash, never the run id), cancelled\n' +
+    'runs, how Archon was installed (binary, Docker, or source), the build commit,\n' +
     'chat activity (platform/provider/model, never message content), aggregate\n' +
     'usage totals (token counts, cost, durations, loop iterations), approval\n' +
     'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
@@ -569,9 +572,37 @@ export interface WorkflowInvokedProperties {
   usesMcp?: boolean;
   usesSkills?: boolean;
   usesFreshContext?: boolean;
-  interactive?: boolean;
   usedIsolation?: boolean;
   isResume?: boolean;
+  shape?: WorkflowShapeProperties;
+  /** Only for a non-bundled workflow copied from a bundled one. */
+  ancestry?: WorkflowAncestryProperties;
+}
+
+export type PromptCharsBucket = 'none' | 'lt_1k' | '1k_5k' | '5k_20k' | 'gte_20k';
+
+/**
+ * Categorical shape of a workflow: counts and buckets only, never ids, names or text.
+ * Two scopes on purpose: the counts measure everything the workflow contains, loop_group
+ * bodies included; depth and fan-out measure the run-level graph the engine schedules.
+ */
+export interface WorkflowShapeProperties {
+  /** Nodes of each type, loop_group bodies included; a type with no nodes is absent. */
+  nodeCounts: Partial<Record<WorkflowNodeType, number>>;
+  /** Number of dependency layers in the top-level graph (loop_group bodies excluded). */
+  graphDepth: number;
+  /** Most direct dependents of any one top-level node (loop_group bodies excluded). */
+  maxFanOut: number;
+  /** Distinct command names referenced by agent and loop nodes. */
+  commandRefs: number;
+  /** Total inline prompt characters, bucketed. Command bodies are not read. */
+  promptCharsBucket: PromptCharsBucket;
+}
+
+export interface WorkflowAncestryProperties {
+  /** The bundled workflow's name. Bundled names are public; a custom name never is. */
+  derivedFrom: string;
+  derivedSimilarity: 'identical' | 'modified';
 }
 
 /**
@@ -633,6 +664,8 @@ export type WorkflowExitReason =
   // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
   // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
   | 'evidence_missing'
+  // The run budget refused new work, or its spend could not be measured (#2814).
+  | 'budget_refused'
   | 'source_unavailable'
   | 'not_finalized'
   | 'process_terminated'
@@ -650,7 +683,7 @@ export type WorkflowCancelReason =
 
 /**
  * Why the first failed node failed, as recorded where the failure happened.
- * `fatal`/`transient`/`unknown` classify a provider error; the rest are
+ * `fatal`/`transient`/`rate_limited`/`unknown` classify a provider error; the rest are
  * engine-detected causes. Mirrored from `NodeFailureKind` in `@archon/workflows`.
  * A fixed enum — raw error text never leaves the machine.
  */
@@ -658,6 +691,8 @@ export type WorkflowErrorClass =
   | 'fatal'
   | 'transient'
   | 'unknown'
+  | 'rate_limited'
+  | 'overloaded'
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'
@@ -782,12 +817,31 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         uses_mcp: Boolean(props.usesMcp),
         uses_skills: Boolean(props.usesSkills),
         uses_fresh_context: Boolean(props.usesFreshContext),
-        interactive: Boolean(props.interactive),
         used_isolation: Boolean(props.usedIsolation),
         is_resume: Boolean(props.isResume),
+        ...(props.shape ? workflowShapeWireProps(props.shape) : {}),
+        ...(props.ancestry
+          ? {
+              derived_from: props.ancestry.derivedFrom,
+              derived_similarity: props.ancestry.derivedSimilarity,
+            }
+          : {}),
       },
     });
   });
+}
+
+function workflowShapeWireProps(shape: WorkflowShapeProperties): Record<string, string | number> {
+  const counts: Record<string, number> = {};
+  for (const [type, count] of Object.entries(shape.nodeCounts))
+    if (count) counts[`nodes_${type}`] = count;
+  return {
+    ...counts,
+    graph_depth: shape.graphDepth,
+    max_fan_out: shape.maxFanOut,
+    command_refs: shape.commandRefs,
+    prompt_chars_bucket: shape.promptCharsBucket,
+  };
 }
 
 /**
@@ -1000,15 +1054,16 @@ export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void
 
 /**
  * Best-effort exit flush. Slow ingestion drops pending events after 75 ms;
- * telemetry must not hold up CLI exit or server shutdown.
+ * telemetry must not hold up CLI exit or server shutdown. Tests may override the
+ * budget to wait for delivery rather than exercise best-effort exit behavior.
  */
-export async function shutdownTelemetry(): Promise<void> {
+export async function shutdownTelemetry(timeoutMs = TELEMETRY_SHUTDOWN_TIMEOUT_MS): Promise<void> {
   if (clientInit === undefined) return;
   try {
     const initialized = await clientInit;
     if (initialized) {
       try {
-        await initialized.client.shutdown(TELEMETRY_SHUTDOWN_TIMEOUT_MS);
+        await initialized.client.shutdown(timeoutMs);
       } finally {
         // The SDK deadline only races its flush; it leaves fetch running.
         initialized.abortController.abort();

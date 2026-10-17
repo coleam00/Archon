@@ -20,6 +20,12 @@ function form(over: Partial<AssistantConfigForm> = {}): AssistantConfigForm {
 }
 
 describe('buildAssistantUpdate', () => {
+  test('omits an unselected default while saving provider model settings', () => {
+    expect(buildAssistantUpdate(form({ assistant: '', models: { codex: 'gpt' } }))).toEqual({
+      assistants: { codex: { model: 'gpt' } },
+    });
+  });
+
   test('passes the default assistant through', () => {
     expect(buildAssistantUpdate(form({ assistant: 'codex' })).assistant).toBe('codex');
   });
@@ -158,6 +164,12 @@ describe('buildAliasesUpdate / seedAliasRows', () => {
       []
     );
     expect(Object.keys(body.aliases)).toEqual([]);
+  });
+
+  test('a complete row without the @ prefix is rejected with the server message', () => {
+    expect(() =>
+      buildAliasesUpdate([{ name: 'fast', provider: 'claude', model: 'haiku', effort: '' }], [])
+    ).toThrow("Alias name 'fast' must start with '@' (e.g. '@fast').");
   });
 
   test('seedAliasRows sorts by name and fills effort with empty string', () => {

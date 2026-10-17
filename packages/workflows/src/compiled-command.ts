@@ -1,14 +1,15 @@
-import type { BindingDirective, TriggerRule } from './schemas';
-import type { JsonValue } from './output-ref';
+import type { BindingDirective, DagNode, IncludeDirective, TriggerRule } from './schemas';
+import { isIncludeDirective, isLoopGroupNode, isLoopNode } from './schemas';
+import { OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
 
 /** Engine-private per-node metadata attached during load-time include expansion.
  * Symbols survive object spreads but stay out of YAML, JSON, API payloads, and
  * persisted workflow definitions.
  *
  * A symbol does NOT ride `structuredClone`, so every payload declared here has to be
- * re-attached by `cloneNodeForInclude` (include-expander.ts) and re-walked by BOTH
- * rewrite passes (`rewriteNodeOutputRefs`, `applyInputsMacro`). A payload that misses
- * any of the three works at one nesting level and silently vanishes at two. */
+ * re-attached by `cloneNodeWithEngineMetadata` below. A payload that carries refs must
+ * also be re-walked by BOTH rewrite passes (`rewriteNodeOutputRefs`, `applyInputsMacro`).
+ * A payload that misses either works at one nesting level and silently vanishes at two. */
 export const COMPILED_LOOP_COMMAND = Symbol('archon.compiled-loop-command');
 
 export type CompiledLoopCommand =
@@ -49,6 +50,61 @@ export function readComposedBindings(node: object): ComposedBindings | undefined
 /** Attach the bindings a materialized command node must keep. @see COMPOSED_BINDINGS */
 export function attachComposedBindings(node: object, bindings: ComposedBindings): void {
   (node as NodeWithComposedBindings)[COMPOSED_BINDINGS] = bindings;
+}
+
+/**
+ * The include ids a command-sourced node can read, each mapped to that include's primary
+ * sink (#3972). A command body is not a template slot: it is read only when the node runs
+ * standalone, or when an including workflow compiles it, and by then expansion has replaced
+ * every include node, so a body's `$<include>.output` would name nothing. Both readers
+ * rename those refs through this map first, exactly as expansion renamed an inline prompt's.
+ *
+ * Its values are ids in the node's own workflow and never need namespacing: an including
+ * workflow consumes the map when it compiles the body, and drops it.
+ */
+const INCLUDE_OUTPUT_ALIASES = Symbol('archon.include-output-aliases');
+
+export type IncludeOutputAliases = Readonly<Record<string, string>>;
+
+interface NodeWithIncludeOutputAliases {
+  [INCLUDE_OUTPUT_ALIASES]?: IncludeOutputAliases;
+}
+
+export function readIncludeOutputAliases(node: object): IncludeOutputAliases | undefined {
+  return (node as NodeWithIncludeOutputAliases)[INCLUDE_OUTPUT_ALIASES];
+}
+
+/** Attach or drop a node's alias map. @see INCLUDE_OUTPUT_ALIASES */
+export function setIncludeOutputAliases(
+  node: object,
+  aliases: IncludeOutputAliases | undefined
+): void {
+  if (aliases === undefined) delete (node as NodeWithIncludeOutputAliases)[INCLUDE_OUTPUT_ALIASES];
+  else (node as NodeWithIncludeOutputAliases)[INCLUDE_OUTPUT_ALIASES] = aliases;
+}
+
+/** Rename a command body's `$<include>.output` refs to the include's primary sink. */
+export function resolveIncludeOutputAliases(node: object, body: string): string {
+  const aliases = readIncludeOutputAliases(node);
+  if (aliases === undefined) return body;
+  return body.replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
+    Object.hasOwn(aliases, id) ? `$${aliases[id]}.output` : match
+  );
+}
+
+// A composed node keeps the directory of its declaring home YAML, not its includer's.
+const HOME_MCP_DIRECTORY = Symbol('archon.home-mcp-directory');
+
+interface NodeWithHomeMcpDirectory {
+  [HOME_MCP_DIRECTORY]?: string;
+}
+
+export function readHomeMcpDirectory(node: object): string | undefined {
+  return (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY];
+}
+
+export function attachHomeMcpDirectory(node: object, directory: string): void {
+  (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY] = directory;
 }
 
 /** @see ComposedNodeMeta */
@@ -115,6 +171,7 @@ export interface IncludeCommandReadError {
   path: string;
   message: string;
   operation: 'inspect' | 'read';
+  cause?: unknown;
 }
 
 export type IncludeCommandContent = string | null | IncludeCommandReadError;
@@ -123,4 +180,43 @@ export function isIncludeCommandReadError(
   value: IncludeCommandContent | undefined
 ): value is IncludeCommandReadError {
   return typeof value === 'object' && value !== null;
+}
+
+/** `structuredClone` a node and re-attach every engine-private payload declared above,
+ * including on loop_group body nodes. */
+export function cloneNodeWithEngineMetadata<T extends DagNode | IncludeDirective>(node: T): T {
+  const clone = structuredClone(node);
+  preserveEngineMetadata(node, clone);
+  return clone;
+}
+
+function preserveEngineMetadata(
+  source: DagNode | IncludeDirective,
+  target: DagNode | IncludeDirective
+): void {
+  if (isIncludeDirective(source) || isIncludeDirective(target)) return;
+  const homeMcpDirectory = readHomeMcpDirectory(source);
+  if (homeMcpDirectory !== undefined) attachHomeMcpDirectory(target, homeMcpDirectory);
+  const meta = readComposedMeta(source);
+  if (meta !== undefined) {
+    (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
+  }
+  const bindings = readComposedBindings(source);
+  if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
+  setIncludeOutputAliases(target, readIncludeOutputAliases(source));
+  if (isLoopNode(source) && isLoopNode(target)) {
+    const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
+      COMPILED_LOOP_COMMAND
+    ];
+    if (compiled !== undefined) {
+      (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
+        structuredClone(compiled);
+    }
+  }
+  if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
+    for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
+      const targetChild = target.loop_group.nodes[index];
+      if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
+    }
+  }
 }

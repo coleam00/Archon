@@ -1,8 +1,9 @@
 /** Re-exports for the builder type layer. */
 export type { WireDagNode, WireWorkflowDefinition } from './wire';
+export type { WireBaseKey, WireVariantKey } from './wire-keys';
+export { WIRE_KEY_ROLES, wireKeysWithRole } from './wire-keys';
 export type {
   VariantId,
-  WireBaseKey,
   BaseFields,
   LoopNodeData,
   ApprovalOnReject,
@@ -19,6 +20,8 @@ export type {
   VariantDataMap,
   VariantData,
   BuilderNode,
+  OpaqueKind,
+  OpaqueBuilderNode,
   WorkflowMeta,
   BuilderWorkflow,
 } from './variant';

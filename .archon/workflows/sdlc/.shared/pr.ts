@@ -1,6 +1,6 @@
 /**
- * The pack's pull-request reads and writes, through whichever source the run
- * selected (./forge.ts).
+ * The pack's pull-request reads and writes, and the marked comment on an issue or
+ * pull request, through whichever source the run selected (./forge.ts).
  *
  * Every write here is performed and then read back before it is reported as
  * applied. On the forge path the plugin owns that verification and reports which
@@ -8,8 +8,8 @@
  * and raises the failure itself. Neither path falls back to the other, and an
  * operation whose outcome could not be established is never retried here.
  *
- * Authored content — a pull-request body, a review report — is passed by file
- * path on both paths, so it never reaches any process's argv.
+ * Authored content — a pull-request body, a comment — travels in a request file
+ * on both paths, so it never reaches any process's argv.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -66,6 +66,17 @@ function ghRepo(repo: QualifiedPr['repo']): string {
 function required(result: Ran, what: string): string {
   if (!result.ok) throw new Error(`${what} failed: ${result.stderr}`);
   return result.stdout;
+}
+
+/** A GitHub GraphQL call through gh; numbers go as typed `-F` fields, strings as `-f`. */
+export function ghGraphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
+  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
+  for (const [key, value] of Object.entries(fields)) {
+    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
+  }
+  const data = record(record(JSON.parse(required(gh(...args), 'gh api graphql')))?.data);
+  if (data === undefined) throw new Error('gh api graphql returned no data');
+  return data;
 }
 
 const PR_FIELDS = [
@@ -257,50 +268,49 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   return view.pr;
 }
 
-/** Replace the pull request body, and prove the replacement landed. */
-export function editPrBody(ref: QualifiedPr, bodyPath: string, source: ForgeSource): PrRecord {
-  const body = readFileSync(bodyPath, 'utf8');
+/**
+ * Put an open pull request into draft (`draft: true`) or take it out of draft, and
+ * return the record read back from the forge. A pull request already in the wanted
+ * state is not written.
+ */
+export function setPrDraft(ref: QualifiedPr, draft: boolean, source: ForgeSource): PrRecord {
   if (source === 'forge') {
-    const value = forgeResult('pr.edit-body', {
+    const value = forgeResult(draft ? 'pr.draft' : 'pr.ready', {
       ref: { repo: ref.repo, number: ref.number },
-      body,
     });
     return parsePrRecord(value.pr);
   }
-  const number = String(ref.number);
-  const edited = gh('pr', 'edit', number, '--repo', ghRepo(ref.repo), '--body-file', bodyPath);
-  if (!edited.ok) throw new Error(`gh pr edit failed: ${edited.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.body !== body) {
-    throw new Error(
-      `the pull request body read back from ${after.pr.url} does not match what was written; it may need reconciling`
-    );
+  const wanted = draft ? 'an open draft' : 'an open pull request ready for review';
+  const before = viewPr(ref, source).pr;
+  if (before.state !== 'open') {
+    throw new Error(`${before.url} is ${before.state} and cannot become ${wanted}`);
   }
-  return after.pr;
+  if (before.is_draft === draft) return before;
+  const flip = gh(
+    'pr',
+    'ready',
+    String(ref.number),
+    '--repo',
+    ghRepo(ref.repo),
+    ...(draft ? ['--undo'] : [])
+  );
+  if (!flip.ok) throw new Error(`the conversion to ${wanted} failed: ${flip.stderr}`);
+  const after = viewPr(ref, source).pr;
+  if (after.is_draft !== draft || after.state !== 'open') {
+    throw new Error(`${after.url} does not report ${wanted} after conversion`);
+  }
+  return after;
 }
 
-/** Take the pull request out of draft, and prove it is no longer a draft. */
-export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.ready', { ref: { repo: ref.repo, number: ref.number } });
-    return parsePrRecord(value.pr);
-  }
-  const ready = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo));
-  if (!ready.ok) throw new Error(`the ready flip failed: ${ready.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.pr.is_draft || after.pr.state !== 'open') {
-    throw new Error(`${after.pr.url} still reports draft after the ready flip`);
-  }
-  return after.pr;
-}
-
-interface GhComment {
+export interface GhComment {
   readonly id: string;
   readonly body: string;
   readonly url: string;
+  /** Null for a deleted account. */
+  readonly author: string | null;
 }
 
-function ghIssueComments(ref: QualifiedPr): GhComment[] {
+export function ghIssueComments(ref: QualifiedPr): GhComment[] {
   const comments: GhComment[] = [];
   // Paged explicitly rather than through `gh api --paginate`, so what this reads
   // does not depend on how gh chooses to join pages of a JSON array.
@@ -322,14 +332,22 @@ function ghIssueComments(ref: QualifiedPr): GhComment[] {
       ) {
         throw new Error('gh api returned an unexpected comment payload');
       }
+      const login = record(comment.user)?.login;
       comments.push({
         id: String(comment.id),
         body: typeof comment.body === 'string' ? comment.body : '',
         url: comment.html_url,
+        author: typeof login === 'string' && login !== '' ? login : null,
       });
     }
     if (rows.length < 100) return comments;
   }
+}
+
+/** An issue or a pull request, as a comment addresses it. */
+export interface CommentSubject {
+  readonly kind: 'issue' | 'pr';
+  readonly ref: QualifiedPr;
 }
 
 /**
@@ -339,18 +357,19 @@ function ghIssueComments(ref: QualifiedPr): GhComment[] {
  * the other.
  */
 export function upsertComment(
-  ref: QualifiedPr,
+  subject: CommentSubject,
   marker: string,
-  bodyPath: string,
+  body: string,
   source: ForgeSource
 ): { readonly url: string } {
-  const body = readFileSync(bodyPath, 'utf8');
+  const ref = { repo: subject.ref.repo, number: subject.ref.number };
   if (source === 'forge') {
-    const value = forgeResult('comment.upsert', {
-      ref: { repo: ref.repo, number: ref.number },
-      marker,
-      body,
-    });
+    // A pull request keeps the original operation, so a plugin that predates
+    // subjects still publishes reviews; an issue needs the subject form.
+    const value =
+      subject.kind === 'pr'
+        ? forgeResult('comment.upsert', { ref, marker, body })
+        : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
     const comment = record(value.comment);
     if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
     return { url: comment.url };
@@ -362,7 +381,7 @@ export function upsertComment(
     comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
   );
   if (marked.length > 1) {
-    throw new Error('more than one comment on this pull request carries the canonical marker');
+    throw new Error('more than one comment on this item carries the canonical marker');
   }
   const previous = marked[0];
   if (previous?.body === body) return { url: previous.url };

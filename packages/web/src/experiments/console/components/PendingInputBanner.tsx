@@ -1,11 +1,14 @@
 import type { ReactElement } from 'react';
+import { Link } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalContext } from './ApprovalContext';
+import { RunActionBar } from './RunActionBar';
+import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
-import { statusLabel } from '../lib/run-status';
+import { runStatusLabel } from '../lib/run-status';
 
 interface PendingInputBannerProps {
   /** Paused runs awaiting user input, already filtered to non-dismissed. */
@@ -16,18 +19,9 @@ interface PendingInputBannerProps {
 }
 
 /**
- * Attention surface for runs paused on a human gate (approval node or a
- * question the agent asked). Pinned above the runs feed so a run that needs
- * action can't be missed — it stays visible regardless of the active filter
- * or how far the feed is scrolled, until the user acts on it or dismisses it.
- *
- * The action surface is the same {@link ApprovalContext} + {@link ApprovalPanel}
- * used inline on a paused card; while a run is surfaced here its feed card
- * collapses to a pointer so the live panel isn't duplicated.
- *
- * Dismiss is session-only — the run is still paused, so it re-surfaces on the
- * next load. Acting on it later happens from the feed card (which restores the
- * inline panel once dismissed).
+ * Pinned above the feed regardless of its filters and pagination. While promoted
+ * here, a run's feed card collapses its action panel to avoid duplicate forms.
+ * Dismissal lasts only for this occurrence in the current browser session.
  */
 export function PendingInputBanner({
   runs,
@@ -83,7 +77,7 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
             className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-warning"
           />
           <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-warning">
-            {statusLabel.paused}
+            {runStatusLabel(run)}
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
           <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
@@ -107,9 +101,36 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
           </div>
         </div>
 
-        {/* Same surfaces as a paused card: the question + the action panel. */}
-        <ApprovalContext run={run} />
-        <ApprovalPanel run={run} />
+        {run.attention?.kind === 'attention' ? (
+          <>
+            <p className="mt-3 whitespace-pre-wrap text-sm text-text-primary">
+              {run.attention.message}
+            </p>
+            <AttentionAnswerPanel run={run} attention={run.attention} />
+            <RunActionBar run={run} />
+          </>
+        ) : run.attention?.kind === 'usage_limit' ? (
+          <>
+            <p className="mt-3 text-sm text-text-primary">
+              Node <span className="font-mono">{run.attention.nodeId}</span> hit a provider usage or
+              rate limit. The run continues by itself at{' '}
+              {new Date(run.attention.resumeAt).toLocaleString()}.
+            </p>
+            <RunActionBar run={run} />
+          </>
+        ) : run.attention?.kind === 'unreadable' ? (
+          <div className="mt-3 text-sm text-error">
+            <p>Repair needed: {run.attention.detail}</p>
+            <Link className="underline" to={`/console/r/${run.id}`}>
+              Inspect run
+            </Link>
+          </div>
+        ) : (
+          <>
+            <ApprovalContext run={run} />
+            <ApprovalPanel run={run} />
+          </>
+        )}
       </div>
     </article>
   );

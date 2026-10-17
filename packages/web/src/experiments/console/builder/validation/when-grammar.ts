@@ -6,7 +6,7 @@
  * declared workflow input), where `<rhs>` is a single-quoted string literal or a
  * bare number/boolean. `||` joins OR-clauses (outer, lower precedence) and `&&`
  * joins atoms within a clause (inner, higher precedence). Six operators:
- * `== != < > <= >=`. No parentheses. This mirrors the engine's one atom parser
+ * `== != < > <= >=`; the four numeric ones need a numeric RHS. No parentheses. This mirrors the engine's one atom parser
  * (`WHEN_ATOM_PATTERN` plus the follow-up rules in `parseWhenAtom`,
  * packages/workflows/src/when-atom.ts) so the builder and the runtime agree on
  * what parses.
@@ -23,6 +23,8 @@ import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types/when';
 
 /** A path segment (`output`, or a field name) — no hyphen, unlike a node id. */
 const SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
+
+const OUTPUT_PATH_SOURCE = `${SEGMENT_SOURCE}(?:\\.${SEGMENT_SOURCE})*`;
 
 /**
  * The reserved scope name for workflow inputs (the engine's `WHEN_INPUTS_SCOPE`).
@@ -47,7 +49,7 @@ const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
  *   2. nodeId    — `$nodeId`, using the package-wide id grammar (`@/lib/node-ref`)
  *   3. segment1  — first path segment (`output` for canonical refs, else a
  *                  shorthand field name)
- *   4. segment2  — optional second segment (the field name when segment1 is `output`)
+ *   4. segment2  — optional object-field path (when segment1 is `output`)
  *   5. op        — one of the six operators
  *   6. quoted    — single-quoted RHS literal (may be empty)
  *   7. bare      — unquoted RHS: number (`-?\d+(.\d+)?`) or `true`/`false`
@@ -66,7 +68,7 @@ export const ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
-    String.raw`\$(${NODE_ID_SOURCE})\.(${SEGMENT_SOURCE})(?:\.(${SEGMENT_SOURCE}))?` +
+    String.raw`\$(${NODE_ID_SOURCE})\.(${SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
     String.raw`\s*(==|!=|<=|>=|<|>)\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
@@ -120,6 +122,14 @@ function parseAtom(raw: string): { ok: true; atom: AtomNode } | { ok: false; err
   const rhs = quoted !== undefined ? quoted : bare;
   if (rhs === undefined) {
     return { ok: false, error: `cannot parse condition: "${trimmed}"` };
+  }
+  // A numeric operator compares `parseFloat` of both sides, so a non-numeric literal
+  // could never compare true. The engine's parseWhenAtom rejects it the same way.
+  if (op !== '==' && op !== '!=' && !Number.isFinite(parseFloat(rhs))) {
+    return {
+      ok: false,
+      error: `cannot parse condition: "${trimmed}" ('${op}' compares numbers, so the right-hand side must be a number)`,
+    };
   }
   const spelling = quoted === undefined ? { bare: true as const } : {};
 

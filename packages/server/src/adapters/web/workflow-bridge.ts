@@ -9,9 +9,10 @@ import {
   type NodeSkipReason,
   type SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import { SSETransport } from './transport';
+import { DASHBOARD_STREAM, type SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -23,6 +24,14 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
   switch (event.type) {
+    case 'run_attention_changed':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: 'running',
+        timestamp: Date.now(),
+      });
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
@@ -133,30 +142,9 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       } satisfies DagNodeSseEvent);
 
-    case 'tool_started':
-      return JSON.stringify({
-        type: 'workflow_tool_activity',
-        runId: event.runId,
-        toolName: event.toolName,
-        stepName: event.stepName,
-        toolCallId: event.toolCallId,
-        status: 'started',
-        timestamp: Date.now(),
-      });
-
-    case 'tool_completed':
-      return JSON.stringify({
-        type: 'workflow_tool_activity',
-        runId: event.runId,
-        toolName: event.toolName,
-        stepName: event.stepName,
-        toolCallId: event.toolCallId,
-        status: 'completed',
-        durationMs: event.durationMs,
-        toolOutcome: event.toolOutcome,
-        exitCode: event.exitCode,
-        timestamp: Date.now(),
-      });
+    case 'provider_event':
+      // The engine's record, unchanged: only the frame's type names the SSE channel.
+      return JSON.stringify({ ...event, type: 'workflow_provider_event' });
 
     case 'approval_pending':
       return JSON.stringify({
@@ -168,6 +156,8 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         approval: {
           nodeId: event.nodeId,
           message: event.message,
+          decisions: event.decisions,
+          pauseId: event.pauseId,
         },
       });
 
@@ -177,35 +167,6 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         workflowName: '',
         status: 'cancelled',
-        timestamp: Date.now(),
-      });
-
-    case 'task_activity':
-      return JSON.stringify({
-        type: 'workflow_task_activity',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        taskId: event.taskId,
-        activity: event.activity,
-        ...(event.description !== undefined ? { description: event.description } : {}),
-        ...(event.summary !== undefined ? { summary: event.summary } : {}),
-        ...(event.usage !== undefined ? { usage: event.usage } : {}),
-        ...(event.lastToolName !== undefined ? { lastToolName: event.lastToolName } : {}),
-        ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
-        timestamp: Date.now(),
-      });
-
-    case 'hook_activity':
-      return JSON.stringify({
-        type: 'workflow_hook_activity',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        hookId: event.hookId,
-        hookName: event.hookName,
-        hookEvent: event.hookEvent,
-        activity: event.activity,
-        ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
-        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
         timestamp: Date.now(),
       });
 
@@ -249,15 +210,21 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
+type RowWorkflowStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
   workflow_started: 'running',
+  run_attention_changed: 'running',
+  wait_started: 'paused',
+  wait_completed: 'running',
+  source_released: 'paused',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
-};
+} satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
-const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skipped'> = {
+type RowNodeStatus = 'running' | 'completed' | 'failed' | 'skipped';
+const ROW_NODE_STATUS: Partial<Record<string, RowNodeStatus>> = {
   node_started: 'running',
   node_suspended: 'running',
   loop_iteration_started: 'running',
@@ -267,7 +234,12 @@ const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skip
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
   node_skipped_prior_success: 'completed',
-};
+} satisfies Partial<Record<WorkflowEventType, RowNodeStatus>>;
+
+const ROW_APPROVAL_STATUS: Partial<Record<string, 'paused' | 'running'>> = {
+  approval_requested: 'paused',
+  approval_received: 'running',
+} satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
 interface WorkflowStatusSsePayload {
@@ -276,22 +248,22 @@ interface WorkflowStatusSsePayload {
   workflowName: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
   error?: string;
-  approval?: { nodeId: string; message: string };
+  approval?: Pick<
+    Extract<WorkflowEmitterEvent, { type: 'approval_pending' }>,
+    'nodeId' | 'message' | 'decisions' | 'pauseId'
+  >;
   timestamp: number;
 }
 
 /**
- * The persisted event types the dashboard poller should query — exactly the ones
- * `mapWorkflowEventRow` maps. Filtering to these in SQL keeps high-frequency `tool_*`
- * rows out of the poller's result, so a single 1-second bucket realistically never
- * exceeds the drain limit (the boundary paging can't stall on overflow).
+ * The persisted event types the dashboard poller reads from the store feed —
+ * exactly the ones `mapWorkflowEventRow` maps, so high-frequency `provider_event`
+ * rows never reach the poller.
  */
-export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
-  ...Object.keys(ROW_WORKFLOW_STATUS),
-  ...Object.keys(ROW_NODE_STATUS),
-  'approval_requested',
-  'approval_received',
-];
+export const DASHBOARD_SOURCE_EVENT_TYPES: readonly WorkflowEventType[] =
+  WORKFLOW_EVENT_TYPES.filter(
+    type => type in ROW_WORKFLOW_STATUS || type in ROW_NODE_STATUS || type in ROW_APPROVAL_STATUS
+  );
 
 /**
  * Map a persisted workflow_events DB row to a dashboard SSE event string (or null
@@ -299,10 +271,9 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
  * process (incl. out-of-process CLI runs) to `__dashboard__`.
  *
  * Only emits the event types the dashboard reacts to — `workflow_status` and
- * `dag_node` (the client `invalidate('runs')` + refetches on those). High-frequency
- * `tool_*` and internal markers (`node_session_resumed`, `node_always_run_reset`,
- * `workflow_artifact`, `ralph_*`) are skipped — the surrounding lifecycle events
- * already trigger the refetch. Keyed by `workflow_run_id`; since the client
+ * `dag_node` (the client `invalidate('runs')` + refetches on those). Every other
+ * event type, including high-frequency `provider_event` rows and internal markers, is
+ * skipped — the surrounding lifecycle events already trigger the refetch. Keyed by `workflow_run_id`; since the client
  * refetches rather than applying the payload, the exact field values are
  * best-effort (the REST refetch is the source of truth).
  */
@@ -324,30 +295,21 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
     return JSON.stringify(payload);
   }
 
-  if (row.event_type === 'approval_requested') {
+  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
+  if (approvalStatus) {
     const payload: WorkflowStatusSsePayload = {
       type: 'workflow_status',
       runId,
       workflowName: '',
-      status: 'paused',
+      status: approvalStatus,
       timestamp,
-      approval: {
-        nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
-        message: dataStr(data, 'message') ?? '',
-      },
-    };
-    return JSON.stringify(payload);
-  }
-
-  // Decision recorded → the run leaves the paused gate; trigger a refetch so the
-  // approval banner clears. The real next status arrives via the refetch.
-  if (row.event_type === 'approval_received') {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: '',
-      status: 'running',
-      timestamp,
+      approval:
+        approvalStatus === 'paused'
+          ? {
+              nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
+              message: dataStr(data, 'message') ?? '',
+            }
+          : undefined,
     };
     return JSON.stringify(payload);
   }
@@ -378,7 +340,6 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
 
 export class WorkflowEventBridge {
   private unsubscribeWorkflowEvents: (() => void) | null = null;
-  private outputCallbacks = new Map<string, (text: string) => void>();
   private onStepTransition: ((workerConversationId: string) => void) | null = null;
 
   constructor(private transport: SSETransport) {}
@@ -405,8 +366,12 @@ export class WorkflowEventBridge {
         if (conversationId) {
           this.transport.emitWorkflowEvent(conversationId, sseEvent);
         }
-        // Fan-out to dashboard stream — no-op when no dashboard client connected
-        this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+        // Fan-out to dashboard connections.
+        // Provider events stay on the run's own stream: the dashboard reads lifecycle
+        // only, and a run streams thousands of them, tool output included.
+        if (event.type !== 'provider_event') {
+          this.transport.emitWorkflowEvent(DASHBOARD_STREAM, sseEvent);
+        }
       }
     });
   }
@@ -416,12 +381,11 @@ export class WorkflowEventBridge {
       this.unsubscribeWorkflowEvents();
       this.unsubscribeWorkflowEvents = null;
     }
-    this.outputCallbacks.clear();
   }
 
   /**
    * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
-   * Forwards compact progress events (step progress, status) and output previews.
+   * Forwards compact progress events (step progress, status).
    */
   bridgeWorkerEvents(workerConversationId: string, parentConversationId: string): () => void {
     const emitter = getWorkflowEventEmitter();
@@ -430,7 +394,8 @@ export class WorkflowEventBridge {
       workerConversationId,
       (event: WorkflowEmitterEvent) => {
         const sseEvent = mapWorkflowEvent(event);
-        if (sseEvent) {
+        // Provider events stay on the worker's stream, where the run view reads them.
+        if (sseEvent && event.type !== 'provider_event') {
           // Send to parent's stream (not worker's)
           this.transport.emitWorkflowEvent(parentConversationId, sseEvent);
         }
@@ -449,28 +414,5 @@ export class WorkflowEventBridge {
     );
 
     return unsubscribe;
-  }
-
-  registerOutputCallback(conversationId: string, cb: (text: string) => void): void {
-    this.outputCallbacks.set(conversationId, cb);
-  }
-
-  removeOutputCallback(conversationId: string): void {
-    this.outputCallbacks.delete(conversationId);
-  }
-
-  emitOutput(conversationId: string, text: string): void {
-    const callback = this.outputCallbacks.get(conversationId);
-    if (callback) {
-      try {
-        callback(text);
-      } catch (e: unknown) {
-        getLog().warn({ conversationId, err: e }, 'output_callback_failed');
-      }
-    }
-  }
-
-  clearConversation(conversationId: string): void {
-    this.outputCallbacks.delete(conversationId);
   }
 }

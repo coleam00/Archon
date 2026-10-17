@@ -1,7 +1,14 @@
+import { parseSlashCommand } from '../utils/command-args';
+
+import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
+import { RunActionForbiddenError } from '../operations/run-authorization';
 /**
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import type { RunActor } from '../operations/run-authorization';
+import { providerRegistry } from '@archon/providers';
+import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
 import { type Conversation, type CommandResult, ConversationNotFoundError } from '../types';
@@ -9,38 +16,44 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import { classifyIsolationError, getIsolationProvider } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  readWorktreeCreationId,
+  WorktreeUncommittedChangesError,
+} from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
+  getLiveRunBlocker,
   getWorktreeStatusBreakdown,
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type {
-  WorkflowWithSource,
-  WorkflowLoadError,
-  ResolvedWorkflow,
+import {
+  findWorkflowLoadError,
+  type WorkflowWithSource,
+  type WorkflowLoadError,
+  type ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import {
+  attentionAnswerLines,
+  spellWorkflowCommand,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import * as workflowDb from '../db/workflows';
 import {
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
-  getWorkflowStatus,
-  resumeWorkflow,
-  abandonWorkflow,
-  cancelWorkflow,
   CancelRefusedError,
+  workflowOperationErrorMessage,
   describeAbandonOwner,
-  abandonResumableRunsForConversation,
-  resetWorkflowNodeSessions,
+  describeReleasedWorktrees,
+  type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { createRegisteredWorktree } from '../workflows/registered-worktree';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
@@ -170,10 +183,8 @@ async function formatRepoContext(
     return 'No codebase configured';
   }
 
-  // Folder projects have no git — show an honest "no git" label instead of a
-  // branch (a folder root may not be a repo at all).
   if (codebase.kind === 'folder') {
-    return `${codebase.name} (folder — no git)`;
+    return `${codebase.name} (folder — runs in place)`;
   }
 
   // If in a worktree, use the worktree's branch name from database
@@ -201,83 +212,18 @@ async function formatRepoContext(
 }
 
 export function parseCommand(text: string): { command: string; args: string[] } {
-  const matches: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let escaping = false;
-  let hasToken = false;
-
-  for (const char of text.trim()) {
-    if (quote) {
-      hasToken = true;
-      if (escaping) {
-        current += char;
-        escaping = false;
-      } else if (char === '\\') {
-        escaping = true;
-      } else if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (hasToken) {
-        matches.push(current);
-        current = '';
-        hasToken = false;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      hasToken = true;
-      continue;
-    }
-
-    current += char;
-    hasToken = true;
-  }
-
-  if (escaping) {
-    current += '\\';
-  }
-  if (hasToken) {
-    matches.push(current);
-  }
-
-  if (matches.length === 0 || !matches[0]) {
-    return { command: '', args: [] };
-  }
-
-  if (!matches[0].startsWith('/')) {
-    return { command: '', args: [] };
-  }
-
-  const command = matches[0].substring(1); // Remove leading '/'
-  const args = matches.slice(1);
-
-  return { command, args };
-}
-
-function findWorkflowLoadError(
-  loadErrors: readonly WorkflowLoadError[],
-  workflowName: string
-): WorkflowLoadError | undefined {
-  // Stripping the .yaml/.yml extension already covers the exact-filename cases.
-  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
+  return parseSlashCommand(text);
 }
 
 async function createResumeRequest(
-  runId: string
+  operations: WorkflowOperations,
+  runId: string,
+  actor: RunActor
 ): Promise<
   | { ok: true; workflow: NonNullable<CommandResult['workflow']> }
   | { ok: false; message: string; resumeHint?: string }
 > {
-  const run = await resumeWorkflow(runId);
+  const run = await operations.resumeWorkflow(runId, actor);
   // A container run can only be resumed where the container can be rewired, so
   // handing this one back for a chat dispatch would fail the run to say what we
   // can say here for free (#2565).
@@ -303,14 +249,16 @@ async function createResumeRequest(
  * that refuses a second decision.
  */
 async function withRunContinuation(
+  operations: WorkflowOperations,
   runId: string,
   headline: string,
   action: 'approve' | 'reject' | 'respond',
-  surface: WorkflowCommandSurface
+  surface: WorkflowCommandSurface,
+  actor: RunActor
 ): Promise<CommandResult> {
   let continuation: Awaited<ReturnType<typeof createResumeRequest>>;
   try {
-    continuation = await createResumeRequest(runId);
+    continuation = await createResumeRequest(operations, runId, actor);
   } catch (error) {
     const err = error as Error;
     getLog().warn(
@@ -391,39 +339,22 @@ async function handleWorktreeCommand(
       }
 
       try {
-        // Use isolation provider for worktree creation
-        const provider = getIsolationProvider();
-        const env = await provider.create({
-          codebaseId: conversation.codebase_id,
-          canonicalRepoPath: toRepoPath(mainPath),
-          workflowType: 'task',
-          identifier: branchName,
-          description: `Manual worktree: ${branchName}`,
+        ensureIsolationConfigured();
+        const { env, envId } = await createRegisteredWorktree(isolationEnvDb, {
+          request: {
+            codebaseId: conversation.codebase_id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: toRepoPath(mainPath),
+            workflowType: 'task',
+            identifier: branchName,
+            description: `Manual worktree: ${branchName}`,
+          },
+          workflowId: `task-${branchName}`,
+          createdByPlatform: conversation.platform_type,
         });
 
-        // Add to git safe.directory
-        await execFileAsync('git', [
-          'config',
-          '--global',
-          '--add',
-          'safe.directory',
-          env.workingPath,
-        ]);
-
-        // Create database record for isolation environment
-        const dbEnv = await isolationEnvDb.create({
-          codebase_id: conversation.codebase_id,
-          workflow_type: 'task',
-          workflow_id: `task-${branchName}`,
-          provider: 'worktree',
-          working_path: env.workingPath,
-          branch_name: env.branchName ?? branchName,
-          created_by_platform: conversation.platform_type,
-        });
-
-        // Update conversation with isolation info (use database UUID)
         await db.updateConversation(conversation.id, {
-          isolation_env_id: dbEnv.id,
+          isolation_env_id: envId,
           cwd: env.workingPath,
         });
 
@@ -432,7 +363,7 @@ async function handleWorktreeCommand(
         const shortPath = shortenPath(env.workingPath, mainPath);
         return {
           success: true,
-          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
+          message: `Worktree created!\n\nBranch: ${env.branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
           modified: true,
         };
       } catch (error) {
@@ -446,15 +377,7 @@ async function handleWorktreeCommand(
             message: 'Failed to create worktree: conversation state changed. Please try again.',
           };
         }
-        if (err.message.includes('already exists')) {
-          return {
-            success: false,
-            message: `Branch '${branchName}' already exists. Use a different name.`,
-          };
-        }
-        // Classified, not raw: the note an isolation failure carries about a
-        // leftover workspace lives outside `err.message`.
-        return { success: false, message: classifyIsolationError(err) };
+        return { success: false, message: err.message };
       }
     }
 
@@ -508,25 +431,41 @@ async function handleWorktreeCommand(
         return { success: false, message: 'Isolation environment not found in database.' };
       }
 
+      if (isolationEnv.provider !== 'worktree') {
+        return {
+          success: false,
+          message:
+            'This environment is not a worktree. Use `archon isolation cleanup 0` for container cleanup.',
+        };
+      }
+
       const forceFlag = args[1] === '--force';
 
       try {
-        const liveRun = await isolationEnvDb.getLiveRunOwningEnv(isolationEnvId);
+        const liveRun = await getLiveRunBlocker(isolationEnvId);
         if (liveRun) {
           return {
             success: false,
-            message:
-              `Worktree is still owned by workflow run ${liveRun.id.slice(0, 8)} ` +
-              `(${liveRun.status}). Resume or abandon it before removing the worktree.`,
+            message: `Worktree kept: ${liveRun.display}. Resume or abandon the run before removing the worktree.`,
           };
         }
 
         // Use isolation provider for removal (pass the working path, not UUID)
         const provider = getIsolationProvider();
-        await provider.destroy(isolationEnv.working_path, { force: forceFlag });
+        const result = await provider.destroy(isolationEnv.working_path, {
+          force: forceFlag,
+          canonicalRepoPath: toRepoPath(mainPath),
+          creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
+        });
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          return {
+            success: false,
+            message: `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`,
+          };
+        }
 
         // Update database record status
-        await isolationEnvDb.updateStatus(isolationEnvId, 'destroyed');
+        await isolationEnvDb.markWorktreeDestroyed(isolationEnv);
 
         // Clear isolation reference, set cwd to main repo
         await db.updateConversation(conversation.id, {
@@ -561,7 +500,7 @@ async function handleWorktreeCommand(
           };
         }
         // Provide friendly error for uncommitted changes
-        if (err.message.includes('untracked files') || err.message.includes('modified')) {
+        if (error instanceof WorktreeUncommittedChangesError) {
           return {
             success: false,
             message:
@@ -641,6 +580,9 @@ async function handleWorktreeCommand(
           for (const branch of result.removed) {
             msg += `  • ${branch}\n`;
           }
+          for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+            msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
+          }
         } else {
           msg += `No ${cleanupType} worktrees to clean up.\n`;
         }
@@ -693,22 +635,153 @@ async function resolveChatRunId(arg: string, conversation: Conversation): Promis
   return matches[0]?.id ?? arg;
 }
 
-async function handleWorkflowCommand(
-  conversation: Conversation,
-  args: string[],
+/** What a run needs from the operator, and the commands that answer it, one line each. */
+function runAttentionLines(
+  run: Parameters<typeof runAttention>[0] & { id: string },
   surface: WorkflowCommandSurface
-): Promise<CommandResult> {
-  const subcommand = args[0];
+): string {
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  const attention = runAttention(run);
+  let msg = '';
+  if (attention?.kind === 'stalled_tool_calls') {
+    msg += '  Tool calls need attention; work remains running.\n';
+    for (const call of attention.calls)
+      msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
+  } else if (attention?.kind === 'attention') {
+    msg += `  Needs attention: ${attention.message}\n`;
+    for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
+    msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
+  } else if (attention?.kind === 'awaiting_response') {
+    msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
+    msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
+  }
+  return msg;
+}
 
-  // Workflow commands work with or without a project context
+/** Workflow commands work with or without a project context. */
+async function resolveWorkflowCwd(conversation: Conversation): Promise<string> {
   const codebase = conversation.codebase_id
     ? await codebaseDb.getCodebase(conversation.codebase_id)
     : null;
+  return codebase ? (conversation.cwd ?? codebase.default_cwd) : getArchonWorkspacesPath();
+}
 
-  const workflowCwd = codebase
-    ? (conversation.cwd ?? codebase.default_cwd)
-    : getArchonWorkspacesPath();
+/**
+ * Resolve a workflow by name and return the request that starts it with `workflowArgs`
+ * as its message. Chat reaches this through `/workflow run`; the run route calls it
+ * directly so the message is never tokenized as a command.
+ */
+export async function startWorkflow(
+  conversation: Conversation,
+  workflowName: string,
+  workflowArgs: string,
+  force: boolean,
+  surface: WorkflowCommandSurface
+): Promise<CommandResult> {
+  const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  const workflowCwd = await resolveWorkflowCwd(conversation);
+
+  getLog().debug(
+    { workflowName, args: workflowArgs, cwd: workflowCwd },
+    'cmd.workflow_run_invoked'
+  );
+
+  // Discover workflows with error handling
+  let workflowEntries: readonly WorkflowWithSource[];
+  let loadErrors: readonly WorkflowLoadError[];
+  try {
+    const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
+    workflowEntries = result.workflows;
+    loadErrors = result.errors;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
+    return {
+      success: false,
+      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+    };
+  }
+
+  const workflows = workflowEntries.map(ws => ws.workflow);
+  getLog().debug(
+    {
+      count: workflows.length,
+      names: workflows.map(w => w.name),
+      searchingFor: workflowName,
+    },
+    'cmd.workflows_discovered'
+  );
+
+  let workflow: ResolvedWorkflow | undefined;
+  try {
+    workflow = resolveWorkflowName(workflowName, workflows);
+  } catch (err) {
+    // Ambiguous match — surface the candidates to the user
+    getLog().warn(
+      { requested: workflowName, error: (err as Error).message },
+      'cmd.workflow_resolve_ambiguous'
+    );
+    return {
+      success: false,
+      message: (err as Error).message,
+    };
+  }
+
+  if (!workflow) {
+    // Check if the requested workflow had a load error
+    const loadError = findWorkflowLoadError(loadErrors, workflowName);
+    if (loadError) {
+      return {
+        success: false,
+        message: `Workflow \`${workflowName}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
+      };
+    }
+    getLog().warn(
+      { requested: workflowName, available: workflows.map(w => w.name) },
+      'cmd.workflow_not_found'
+    );
+    return {
+      success: false,
+      message: `Workflow \`${workflowName}\` not found.\n\nUse ${cmd('list')} to see available workflows.`,
+    };
+  }
+
+  getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
+
+  // Recover the discovery entry the `.map()` above dropped, so the keys the
+  // engine ignores reach the conversation when the run STARTS — not only
+  // when the author happens to browse `/workflow list` (#2213).
+  const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
+
+  // Return special result that triggers workflow execution in orchestrator
+  return {
+    success: true,
+    message: `Starting workflow: \`${workflow.name}\``,
+    workflow: {
+      kind: 'start',
+      definition: workflow,
+      args: workflowArgs,
+      force: force ? true : undefined,
+      ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
+        ? { parseWarnings: resolvedEntry.parseWarnings }
+        : {}),
+    },
+  };
+}
+
+async function handleWorkflowCommand(
+  operations: WorkflowOperations,
+  conversation: Conversation,
+  args: string[],
+  surface: WorkflowCommandSurface,
+  actor: RunActor
+): Promise<CommandResult> {
+  const subcommand = args[0];
+  const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  /** A child-run redirect is spelled for THIS surface; anything else reports as-is. */
+  const failureText = (err: Error): string => workflowOperationErrorMessage(err, surface);
+
+  const workflowCwd = await resolveWorkflowCwd(conversation);
 
   switch (subcommand) {
     case 'list':
@@ -716,7 +789,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let errors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         errors = result.errors;
       } catch (error) {
@@ -769,7 +842,7 @@ async function handleWorkflowCommand(
     case 'reload': {
       try {
         const { workflows: reloadedWorkflows, errors: reloadErrors } =
-          await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         let msg = `Discovered ${String(reloadedWorkflows.length)} workflow(s).`;
         if (reloadErrors.length > 0) {
           msg += `\n\n**${String(reloadErrors.length)} failed to load:**\n`;
@@ -802,7 +875,7 @@ async function handleWorkflowCommand(
           }
           runId = activeWorkflow.id;
         }
-        const result = await cancelWorkflow(runId);
+        const result = await operations.cancelWorkflow(runId, actor);
         if (result.kind === 'cooperative') {
           return {
             success: true,
@@ -812,11 +885,12 @@ async function handleWorkflowCommand(
           };
         }
         let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: \`${result.run.workflow_name}\``;
+        for (const warning of result.cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (result.cascadeFailures > 0) {
           message += `\n⚠️ ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (result.blockedParentRunId) {
-          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -836,9 +910,37 @@ async function handleWorkflowCommand(
       }
     }
 
+    case 'get': {
+      const arg = args[1];
+      if (!arg) {
+        return { success: false, message: `Usage: ${cmd('get <id>')}` };
+      }
+      try {
+        const runId = await resolveChatRunId(arg, conversation);
+        const run = await workflowDb.getWorkflowRun(runId);
+        // Same scope as the lookup above: a project conversation sees its own runs.
+        if (!run || (conversation.codebase_id && run.codebase_id !== conversation.codebase_id))
+          return { success: false, message: `Workflow run not found: ${arg}` };
+        let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
+        if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
+        msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
+        if (run.completed_at !== null)
+          msg += `  Finished: ${new Date(run.completed_at).toISOString()}\n`;
+        const error = run.metadata.error;
+        if (typeof error === 'string' && error.length > 0)
+          msg += `  Error: ${error.slice(0, 300)}\n`;
+        msg += runAttentionLines(run, surface);
+        return { success: true, message: msg.trim() };
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId: arg }, 'cmd.workflow_get_failed');
+        return { success: false, message: `Failed to look up workflow run: ${err.message}` };
+      }
+    }
+
     case 'status': {
       try {
-        const { runs: activeRuns } = await getWorkflowStatus();
+        const { runs: activeRuns } = await operations.getWorkflowStatus();
 
         if (activeRuns.length === 0) {
           return { success: true, message: 'No active workflows.' };
@@ -854,15 +956,7 @@ async function handleWorkflowCommand(
             msg += `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}\n`;
           }
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
-          const attention = runAttention(run);
-          if (attention?.kind === 'action_required') {
-            msg += `  Action required: ${attention.message}\n`;
-            msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
-            msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
-          } else if (attention?.kind === 'awaiting_response') {
-            msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
-            msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
-          }
+          msg += runAttentionLines(run, surface);
           msg += '\n';
         }
 
@@ -889,7 +983,7 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const continuation = await createResumeRequest(runId);
+        const continuation = await createResumeRequest(operations, runId, actor);
         if (!continuation.ok) {
           return { success: false, message: continuation.message };
         }
@@ -915,13 +1009,25 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
-        let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        const {
+          run,
+          cascadeFailures,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId,
+          owner,
+        } = await operations.abandonWorkflow(runId, actor);
+        let message = [
+          ...describeAbandonOwner(owner),
+          `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
+          ...describeReleasedWorktrees(releasedWorktrees),
+        ].join('\n');
+        for (const warning of cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (blockedParentRunId) {
-          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -941,7 +1047,7 @@ async function handleWorkflowCommand(
         };
       }
       try {
-        const { deleted } = await resetWorkflowNodeSessions({
+        const { deleted } = await operations.resetWorkflowNodeSessions({
           workflow_name: workflowName,
           scope_key: conversation.id,
           node_id: nodeId,
@@ -969,16 +1075,14 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('approve <id> [comment]')}\n\nApproves a paused workflow run.`,
         };
       }
-      // Pass the RAW comment through (undefined when the user typed none) —
-      // approveWorkflow defaults the recorded comment internally, but "no
-      // feedback" must survive so a signal-bearing interactive-loop gate
-      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
-      // the HTTP route and CLI.
-      const rawComment = args.slice(2).join(' ');
-      const comment = rawComment.length > 0 ? rawComment : undefined;
+      // approveWorkflow owns the empty-comment default and the "no feedback"
+      // reading an interactive-loop gate finalizes on (#2074).
+      const comment = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await approveWorkflow(runId, comment);
+        const result = await operations.approveWorkflow(runId, comment, actor, {
+          via: conversation.platform_type,
+        });
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
           result.type === 'interactive_loop'
@@ -987,11 +1091,11 @@ async function handleWorkflowCommand(
         // Resolving is only half the action — continue the run too (#2565).
         // Before #2565 this told the user to "type your response to resume",
         // which relied on a natural-language branch that no longer exists.
-        return await withRunContinuation(runId, headline, 'approve', surface);
+        return await withRunContinuation(operations, runId, headline, 'approve', surface, actor);
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_approve_failed');
-        return { success: false, message: `Failed to approve workflow run: ${err.message}` };
+        return { success: false, message: `Failed to approve workflow run: ${failureText(err)}` };
       }
     }
 
@@ -1003,10 +1107,12 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('reject <id> [reason]')}\n\nRejects a paused workflow run.`,
         };
       }
-      const reason = args.slice(2).join(' ') || 'Rejected';
+      const reason = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await rejectWorkflow(runId, reason);
+        const result = await operations.rejectWorkflow(runId, reason, actor, {
+          via: conversation.platform_type,
+        });
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return {
@@ -1019,17 +1125,19 @@ async function handleWorkflowCommand(
         // continue the run either way so the resolution actually takes effect
         // (#2565).
         return await withRunContinuation(
+          operations,
           runId,
           result.newMode
             ? `Workflow \`${result.workflowName}\` rejected.`
             : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
           'reject',
-          surface
+          surface,
+          actor
         );
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_reject_failed');
-        return { success: false, message: `Failed to reject workflow run: ${err.message}` };
+        return { success: false, message: `Failed to reject workflow run: ${failureText(err)}` };
       }
     }
 
@@ -1050,15 +1158,12 @@ async function handleWorkflowCommand(
             `are sugar for the dedicated ${cmd('approve|reject')} commands).`,
         };
       }
-      const rawText = args.slice(3).join(' ');
-      // Mirrors the dedicated /workflow reject command's default: an empty reason
-      // becomes 'Rejected' rather than reaching a new-mode gate's structured
-      // output as ''. Only for decision === 'reject' — respond's other decisions
-      // (including 'approve', which stays optional/undefined) are unaffected.
-      const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
+      const text = args.slice(3).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await respondToWorkflow(runId, decision, text);
+        const result = await operations.respondToWorkflow(runId, decision, text, actor, {
+          via: conversation.platform_type,
+        });
         if ('cancelled' in result) {
           if (result.cancelled) {
             const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -1068,12 +1173,14 @@ async function handleWorkflowCommand(
             };
           }
           return await withRunContinuation(
+            operations,
             runId,
             result.newMode
               ? `Workflow \`${result.workflowName}\` rejected.`
               : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
             'respond',
-            surface
+            surface,
+            actor
           );
         }
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
@@ -1081,11 +1188,14 @@ async function handleWorkflowCommand(
           result.type === 'interactive_loop'
             ? `Workflow \`${result.workflowName}\` loop input received.${pathInfo}`
             : `Workflow \`${result.workflowName}\` responded '${decision}'.${pathInfo}`;
-        return await withRunContinuation(runId, headline, 'respond', surface);
+        return await withRunContinuation(operations, runId, headline, 'respond', surface, actor);
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, decision }, 'cmd.workflow_respond_failed');
-        return { success: false, message: `Failed to respond to workflow run: ${err.message}` };
+        return {
+          success: false,
+          message: `Failed to respond to workflow run: ${failureText(err)}`,
+        };
       }
     }
 
@@ -1103,92 +1213,7 @@ async function handleWorkflowCommand(
         };
       }
 
-      getLog().debug(
-        { workflowName, args: workflowArgs, cwd: workflowCwd },
-        'cmd.workflow_run_invoked'
-      );
-
-      // Discover workflows with error handling
-      let workflowEntries: readonly WorkflowWithSource[];
-      let loadErrors: readonly WorkflowLoadError[];
-      try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
-        workflowEntries = result.workflows;
-        loadErrors = result.errors;
-      } catch (error) {
-        const err = error as Error;
-        getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
-        return {
-          success: false,
-          message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
-        };
-      }
-
-      const workflows = workflowEntries.map(ws => ws.workflow);
-      getLog().debug(
-        {
-          count: workflows.length,
-          names: workflows.map(w => w.name),
-          searchingFor: workflowName,
-        },
-        'cmd.workflows_discovered'
-      );
-
-      let workflow: ResolvedWorkflow | undefined;
-      try {
-        workflow = resolveWorkflowName(workflowName, workflows);
-      } catch (err) {
-        // Ambiguous match — surface the candidates to the user
-        getLog().warn(
-          { requested: workflowName, error: (err as Error).message },
-          'cmd.workflow_resolve_ambiguous'
-        );
-        return {
-          success: false,
-          message: (err as Error).message,
-        };
-      }
-
-      if (!workflow) {
-        // Check if the requested workflow had a load error
-        const loadError = findWorkflowLoadError(loadErrors, workflowName);
-        if (loadError) {
-          return {
-            success: false,
-            message: `Workflow \`${workflowName}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
-          };
-        }
-        getLog().warn(
-          { requested: workflowName, available: workflows.map(w => w.name) },
-          'cmd.workflow_not_found'
-        );
-        return {
-          success: false,
-          message: `Workflow \`${workflowName}\` not found.\n\nUse ${cmd('list')} to see available workflows.`,
-        };
-      }
-
-      getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
-
-      // Recover the discovery entry the `.map()` above dropped, so the keys the
-      // engine ignores reach the conversation when the run STARTS — not only
-      // when the author happens to browse `/workflow list` (#2213).
-      const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
-
-      // Return special result that triggers workflow execution in orchestrator
-      return {
-        success: true,
-        message: `Starting workflow: \`${workflow.name}\``,
-        workflow: {
-          kind: 'start',
-          definition: workflow,
-          args: workflowArgs,
-          force: force ? true : undefined,
-          ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
-            ? { parseWarnings: resolvedEntry.parseWarnings }
-            : {}),
-        },
-      };
+      return startWorkflow(conversation, workflowName, workflowArgs, force, surface);
     }
 
     default:
@@ -1199,6 +1224,7 @@ async function handleWorkflowCommand(
           `  ${cmd('list')} - Show available workflows`,
           `  ${cmd('reload')} - Reload workflow definitions`,
           `  ${cmd('status')} - Show all active workflows`,
+          `  ${cmd('get <id>')} - Show one run, whatever its status`,
           `  ${cmd('cancel [id]')} - Cancel a running workflow (default: the one in this conversation)`,
           `  ${cmd('resume <id>')} - Resume a failed or paused run`,
           `  ${cmd('abandon <id>')} - Abandon a running, failed, or paused run`,
@@ -1214,7 +1240,9 @@ async function handleWorkflowCommand(
 export async function handleCommand(
   conversation: Conversation,
   message: string,
-  surface: WorkflowCommandSurface = {}
+  actor: RunActor,
+  surface: WorkflowCommandSurface = {},
+  operations: WorkflowOperations = createSqlWorkflowOperations()
 ): Promise<CommandResult> {
   const { command, args } = parseCommand(message);
   const cmd = (workflowCommand: string): string => spellWorkflowCommand(surface, workflowCommand);
@@ -1238,6 +1266,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`${cmd('list')}\` — List available workflows
 - \`${cmd('run <name> [message]')}\` — Run a workflow explicitly
 - \`${cmd('status')}\` — Show all active workflows
+- \`${cmd('get <id>')}\` — Show one run, whatever its status
 - \`${cmd('cancel [id]')}\` — Cancel a running workflow (default: the one in this conversation)
 - \`${cmd('resume <id>')}\` — Resume a failed or paused run
 - \`${cmd('abandon <id>')}\` — Abandon a running, failed, or paused run
@@ -1250,6 +1279,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
 - \`/setproject <name>\` — Bind this conversation to a registered project
+- \`/detach-project "<current-project-name>"\` — Make this conversation neutral after resolving its runs and attached environment; keep the project registered
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -1351,6 +1381,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
             }
             msg += `\n  • ${String(breakdown.active)} active`;
           }
+          for (const env of breakdown.activeEnvs) {
+            if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
+          }
         } catch (error) {
           // Don't fail status if breakdown fails
           const err = error as Error;
@@ -1392,7 +1425,26 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // `codebase_id` is deliberately PRESERVED. The resulting row —
       // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
       // byte what /setproject already writes, so this is a well-trodden state,
-      // not a novel one. Detaching the project is /setproject none's job.
+      // not a novel one. Detaching the project is /detach-project's job.
+      let abandoned = 0;
+      let cleanupWarnings: string[] | undefined;
+      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
+      let abandonBlockedParentRunId: string | null = null;
+      try {
+        ({
+          abandoned,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId: abandonBlockedParentRunId,
+        } = await operations.abandonResumableRunsForConversation(conversation.id, actor));
+      } catch (error) {
+        const err = error as Error;
+        if (error instanceof RunActionForbiddenError)
+          return { success: false, message: error.message };
+        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
+        return { success: false, message: `Could not reset conversation: ${err.message}` };
+      }
+
       let hadActiveSession = false;
       let sessionError: string | null = null;
       try {
@@ -1405,23 +1457,6 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         const err = error as Error;
         getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_clear_session_failed');
         sessionError = err.message;
-      }
-
-      // Three independent effects, three independent try blocks. Sharing the
-      // run and binding effects would mean that a binding-clear failure AFTER
-      // a successful abandon swallows
-      // the count and reports only the failure — precisely the case where the
-      // user most needs to know that N runs were already cancelled.
-      let abandoned = 0;
-      let abandonBlockedParentRunId: string | null = null;
-      let abandonError: string | null = null;
-      try {
-        ({ abandoned, blockedParentRunId: abandonBlockedParentRunId } =
-          await abandonResumableRunsForConversation(conversation.id));
-      } catch (error) {
-        const err = error as Error;
-        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
-        abandonError = err.message;
       }
 
       let bindingCleared = true;
@@ -1447,21 +1482,17 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
           ? 'Cleared workspace binding (worktree + isolation env).'
           : `Could not clear the workspace binding: ${bindingError ?? 'unknown error'}`
       );
+      for (const warning of cleanupWarnings ?? []) parts.push(`⚠️ ${warning}`);
       if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
+      parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
-          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
+          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`
         );
-      }
-      if (abandonError !== null) {
-        parts.push(`⚠️ Could not look up resumable runs: ${abandonError}`);
       }
 
       const resetComplete =
-        sessionError === null &&
-        bindingCleared &&
-        abandonError === null &&
-        abandonBlockedParentRunId === null;
+        sessionError === null && bindingCleared && abandonBlockedParentRunId === null;
       parts.push(
         resetComplete
           ? 'Project attachment preserved — next message starts fresh.'
@@ -1478,7 +1509,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       return handleWorktreeCommand(conversation, args);
 
     case 'workflow':
-      return handleWorkflowCommand(conversation, args, surface);
+      return handleWorkflowCommand(operations, conversation, args, surface, actor);
 
     case 'init': {
       // Create .archon structure in the effective working directory:

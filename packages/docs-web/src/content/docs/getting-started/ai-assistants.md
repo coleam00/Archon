@@ -13,6 +13,24 @@ You must configure **at least one** AI assistant. All five can be configured and
 
 For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
 
+## Install a provider
+
+Release binaries (quick install, Homebrew) ship without Claude, Codex and Pi. Install the ones you use:
+
+```bash
+archon provider add claude codex pi   # any subset
+```
+
+`archon setup` asks which to install and then configures their authentication. Each provider is a separate executable from the same Archon release; it must match the CLI version, so reinstall after upgrading Archon. Your native provider configuration and login (`~/.claude`, `~/.codex`, Pi's `auth.json`) are used as before. Source checkouts and Docker run all three from source with no install step. OpenCode and GitHub Copilot stay bundled (see below). See [Installation → Providers](/getting-started/installation/#providers).
+
+## Deprecated providers
+
+OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.
+
+The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin add`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
+
+Archon shows the notice only to someone who uses one, at most once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log instead.
+
 ## Structured output guarantees
 
 When a workflow node sets `output_format`, the guarantee level depends on the provider's tier (exposed as `capabilities.structuredOutput` on `GET /api/providers`):
@@ -74,7 +92,7 @@ If none of the three resolves in a compiled binary, Archon throws with install i
 
 The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
-**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
+**CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node fails at the idle timeout, saying that the provider never signalled that its turn settled.
 
 **Typical paths by install method:**
 
@@ -89,6 +107,10 @@ The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the n
 | Docker (`ghcr.io/coleam00/archon`) | Pre-set via `ENV CLAUDE_BIN_PATH` in the image — no action required |
 
 If in doubt, `which claude` (macOS/Linux) or `where claude` (Windows) will resolve the executable on your PATH after any of the installers above.
+
+### Binary path configuration for source installs
+
+When running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. The env pin takes precedence over the config pin. An invalid explicit pin fails in either mode.
 
 ### Authentication Options
 
@@ -158,6 +180,12 @@ DEFAULT_AI_ASSISTANT=claude
 
 Archon does not bundle the Codex CLI. Install it, then authenticate.
 
+### Chat tools
+
+New Codex chats receive Archon's typed `invoke_workflow` and `register_project` tools; project-scoped chats also receive `manage_run`. Calls use the same validation and authorization handlers as Claude and Pi. Workflow launches start after the chat turn completes. Text resembling a slash command in a Codex reply does not launch a workflow or register a project.
+
+These tools use the Codex app-server's experimental dynamic-tool API, supported by the pinned Codex 0.160.0. Archon opts into it for turns with tools and preserves your native Codex configuration and guidance. Tool catalogs are saved when a thread starts: resuming a tool-enabled thread uses the current handlers. Archon records the catalog fingerprint in its session identifier. If a chat predates that record or its tools have changed, Archon stops before starting a model turn and asks you to start a new chat.
+
 ### Install the Codex CLI
 
 ```bash
@@ -192,7 +220,7 @@ In compiled Archon binaries, if `codex` is not on the default PATH Archon expect
 3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
 4. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
 
-Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
+A source install (`bun run`) needs none of the above unless you pin a binary: it runs the native binary of the `@openai/codex` package Archon depends on, from `node_modules`.
 
 ### Authenticate
 
@@ -216,14 +244,26 @@ type %USERPROFILE%\.codex\auth.json
 
 ### Set Environment Variables
 
-Set all four environment variables in your `.env`:
+Set all four environment variables in your `.env`. They carry an `ARCHON_` prefix because Codex reads `CODEX_ACCESS_TOKEN` itself, so an unprefixed copy would override your own Codex login. If your `.env` still has the old `CODEX_*` names from an earlier Archon, re-run `archon setup` to move them to the new names, or rename all four yourself and delete the old lines. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
 
 ```ini
-CODEX_ID_TOKEN=eyJhbGc...
-CODEX_ACCESS_TOKEN=eyJhbGc...
-CODEX_REFRESH_TOKEN=rt_...
-CODEX_ACCOUNT_ID=6a6a7ba6-...
+ARCHON_CODEX_ID_TOKEN=eyJhbGc...
+ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
+ARCHON_CODEX_REFRESH_TOKEN=rt_...
+ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
+
+### Use an API key instead (optional)
+
+By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. To run Codex on an OpenAI API key instead, set `CODEX_API_KEY` in Archon's environment, for example in `~/.archon/.env`. Archon hands the key to the Codex process in memory and never writes it into your Codex home, so your own login is untouched. Codex does not read `OPENAI_API_KEY`.
+
+A credential you connect in Archon for `openai` (`archon ai key set openai` or `archon ai login openai`) also runs Codex without touching your Codex home. A connected API key reaches Codex as `CODEX_API_KEY`, and a connected ChatGPT subscription logs the Codex process in in memory. Both work in workflows and direct chat, and both take precedence over your native Codex login. Your Codex config, global `AGENTS.md`, hooks, plugins and MCP servers load as usual. A subscription token that expires during a run fails the turn with `auth`; resuming the run picks up a refreshed token.
+
+### How Archon runs Codex
+
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so the run [waits until the reset](/reference/configuration/#workflow-attention-and-continuation-settings)), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+
+Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title if provider generation fails. In per-user mode, a missing or unusable user credential skips generation and leaves the current title unchanged.
 
 ### Codex Configuration Options
 
@@ -253,12 +293,16 @@ DEFAULT_AI_ASSISTANT=codex
 Codex supports installed skills from `.agents/skills/`. In workflow nodes Archon
 turns the automatic skill catalog off, so commands and prompts invoke a skill
 explicitly with `$skill-name`. Direct Codex chat keeps native discovery behavior.
-Run `archon skill install` (or `archon setup`) to install the bundled
+Run `archon skill add` (or `archon setup`) to install the bundled
 `archon-cli` skill for both Claude Code and Codex.
 
 See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
 
 ## OpenCode (Community Provider)
+
+:::caution[Deprecated]
+This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+:::
 
 **SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
 
@@ -268,7 +312,7 @@ Archon always runs OpenCode as a **managed embedded runtime** — it spawns and 
 
 ### Install
 
-OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+`bun install` pulls in `@opencode-ai/sdk` through `@archon/providers`, but the SDK does not include the `opencode` executable. Install the [OpenCode CLI](https://opencode.ai/docs/#install) separately and put it on the Archon process's `PATH`. For Docker, install it in a derived image on `appuser`'s `PATH` (see [Customizing the Image](/deployment/docker/#customizing-the-image)). Run `archon doctor` to check both dependencies without starting the server.
 
 ### Authenticate
 
@@ -278,7 +322,7 @@ OpenCode handles authentication internally — Archon does not pass API keys thr
 2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
 3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
 
-OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Codebase env vars are not passed to OpenCode: every node shares one embedded server that starts without them, so Archon warns when a node would have received any.
 
 ### Configuration Options
 
@@ -304,12 +348,12 @@ assistants:
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
-| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
+| MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers) |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
-| Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
-| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Codebase env vars (`envInjection`) | ❌ | Not delivered: all nodes share one embedded OpenCode server, so a codebase's env would leak into another's node. Archon warns when env vars are configured |
+| Skills | ❌ | Not translated to an OpenCode request yet; a node naming `skills:` fails the run at start |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |
@@ -318,7 +362,7 @@ assistants:
 | Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
 | Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
 
-Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend. An `mcp:` declared `optional: true` is the exception: the node runs without its servers and the run records why.
 
 ### Usage in workflows
 
@@ -339,11 +383,17 @@ nodes:
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [OpenCode on GitHub](https://github.com/opencode-ai/opencode) — upstream project.
 
-## Pi (Community Provider)
+## Pi
 
-**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
+**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness that Archon integrates as a maintained provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
-Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
+Pi is maintained by the Archon core team alongside Claude and Codex. It is registered as `builtIn: true` and exposes both an in-process factory and a provider plugin entry.
+
+### Azure models
+
+Pi uses `azure/<model-id>` for Azure models, including Foundry Chat Completions deployments. The `AZURE_OPENAI_*` environment variables remain unchanged. Archon credentials previously connected as `azure-openai-responses` still deliver to `azure`.
+
+When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azure` in your Archon model references and in Pi's provider keys in `auth.json` and `models.json`, plus `defaultProvider`, `enabledModels`, and `modelThinkingLevels` in `settings.json`. The API id `azure-openai-responses` is unchanged. Archon does not rewrite native Pi configuration. Existing Pi sessions using the old provider may select another model on resume and lose their prompt cache; see the [Pi 1.0.3 release notes](https://github.com/earendil-works/pi/releases/tag/v1.0.3).
 
 ### Install
 
@@ -351,14 +401,15 @@ Pi is included as a dependency of `@archon/providers` — no separate install ne
 
 ### Quick setup via wizard
 
-Run `archon setup` and select **Pi (community)** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
+Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
 
 ### Authenticate
 
-Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
+Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) and from env vars. Without a delivered per-user credential, env vars take priority per request so codebase-scoped overrides work. When Archon delivers a per-user credential, it takes priority over native files, env vars and project authentication settings.
+
+For Anthropic models, use `provider: claude` with your Claude Pro/Max subscription, or give Pi an `ANTHROPIC_API_KEY`. Claude Pro/Max OAuth through Pi, including a native `pi /login` session, is not a supported Anthropic path: Pi's default system prompt can be rejected by Anthropic for subscription tokens. Archon preserves Pi's native credentials but does not deliver its stored Claude subscription to Pi.
 
 **OAuth subscriptions (run `pi /login` locally):**
-- Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro
 - GitHub Copilot
 - Google Gemini CLI
@@ -368,7 +419,7 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 
 | Pi provider id | Env var |
 |---|---|
-| `anthropic` | `ANTHROPIC_OAUTH_TOKEN` (subscription, read first) or `ANTHROPIC_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
 | `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
@@ -392,6 +443,14 @@ assistants:
 ```
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
+
+### Stored key-command caching (Pi 1.0.2)
+
+In the pinned Pi **1.0.2**, an API key stored as `!command` in `~/.pi/agent/auth.json` uses Pi's process-wide command-result cache, keyed by command text. Fresh Pi runtimes for different Archon nodes share that cache in one server process. If the command returns a short-lived token, the server can keep sending the cached value after it expires. Restart the Archon server to resolve the command again, or use a suitable longer-lived credential.
+
+A separately invoked `archon doctor` runs in a fresh process and can resolve a usable key while the server retains an expired cached value. "Usable" means the key resolved; only a model request proves the vendor accepts it. Launch and execution checks within one process can reuse the stored command result.
+
+This limitation concerns stored `auth.json` key commands, not `models.json` commands. Pi's request-time `models.json` key/header resolution uses uncached commands. For catalogued models (and Anthropic), Archon pins a resolved models-command key for the node; a short-lived token can still expire during a long node. Extension-provider models can retain Pi's per-request resolution. [Pi issue #1835](https://github.com/earendil-works/pi/issues/1835) is closed and describes that `models.json` change, not a fix for the stored-auth cache. This is a version-specific limitation and can go away if Pi changes stored-key resolution.
 
 ### Pi settings (baseline behavior)
 
@@ -421,13 +480,15 @@ assistants:
     # interactive: false       # keep extensions loaded, but give them no UI bridge
 ```
 
+An exception that escapes a detached extension callback (a timer, a watcher) fails the Pi node that loaded that extension instead of the Archon process. The error carries a stack but no session identifier, so Archon routes it by the extension path in the stack. When several concurrent Pi nodes loaded that extension, Archon cannot tell which one failed, so each of them fails with an error that says so and carries the original stack. An escaped error that names no loaded extension still terminates the process.
+
 Most extensions need three config surfaces:
 
 | Surface | Purpose |
 |---|---|
 | `extensionFlags` | Per-extension feature flags (maps 1:1 to Pi's `--flag` CLI switches) |
 | `env` | Env vars the extension reads at runtime (managed via `.archon/config.yaml` or the Web UI codebase env panel) |
-| `interactive: true` | Binds a UI context so approval-gate extensions can block for human input; also set the **workflow-level** `interactive: true` on the web UI so the run stays foreground |
+| `interactive: true` | Binds a UI context so approval-gate extensions can block for human input |
 
 #### Scoping extension posture per node
 
@@ -465,7 +526,6 @@ Then grant the `plan` flag and a UI context to the planner node, and explicitly 
 # .archon/workflows/plan-then-build.yaml
 name: plan-then-build
 provider: pi
-interactive: true             # workflow-level: keeps the run foreground on the web UI so you can approve
 nodes:
   - id: plan
     prompt: "Draft a plan for: $ARGUMENTS"
@@ -664,15 +724,15 @@ nodes:
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
-| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists. An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
-| In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
+| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists, so a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers). An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
+| In-process native tools | ✅ | none — Archon's `invoke_workflow` and `register_project` tools are auto-injected in every chat, and `manage_run` in project-scoped chat, via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
 
-Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend. An `mcp:` declared `optional: true` is the exception: the node runs without its servers and the run records why.
 
 ### See also
 
@@ -681,6 +741,10 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 - [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
 
 ## GitHub Copilot (Community Provider)
+
+:::caution[Deprecated]
+This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+:::
 
 **Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
 
@@ -730,7 +794,7 @@ You can configure Copilot's behavior in `.archon/config.yaml`:
 assistants:
   copilot:
     model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
-    modelReasoningEffort: medium  # 'minimal'..'ultra' — clamped to the SDK's 'low'..'xhigh'
+    modelReasoningEffort: medium  # 'minimal'..'persistent' — clamped to the SDK's 'low'..'max'
     # configDir: /absolute/path/to/copilot-config
     # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
     # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
@@ -743,8 +807,8 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Returns `sessionId`; reused on resume |
-| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
+| Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max` passes through; `ultra` and `persistent` map to SDK `max`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
@@ -772,6 +836,10 @@ DEFAULT_AI_ASSISTANT=copilot
 ## Per-user credentials and AI Settings
 
 Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
+
+Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
+
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
 
 ### When you need this
 
@@ -804,12 +872,12 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). An `anthropic` subscription runs only on Claude Code, so it does not make the Pi card ready; One credential is stored per vendor, so connecting an Anthropic API key would replace the subscription; Pi's Anthropic row marks the subscription as used by another agent and points at the env channel instead (`ANTHROPIC_API_KEY` in the install or codebase env). Disconnect the subscription from the Claude Code card. Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
 - **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
 
 ### Per-user model preferences ("Just me")
 
-When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before.
+When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before. If your personal settings fail to load for any other reason, the panels say so ("Couldn't load your personal settings") and stay on install scope.
 
 If a chat asks for the `large` tier and only a different tier is configured, Archon uses the nearest preset and posts a one-line notice telling you which tier answered and where to set `large`.
 

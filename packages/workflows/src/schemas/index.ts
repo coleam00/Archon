@@ -5,7 +5,7 @@
  * Types are derived from schemas via `z.infer<typeof Schema>` (WorkflowDefinition
  * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader.ts).
  *
- * Import `z` from `@hono/zod-openapi` in all schema files (project convention).
+ * Import `z` from plain `zod`; name OpenAPI components with `.meta({ id })`.
  */
 
 // Retry configuration
@@ -87,6 +87,8 @@ export {
   TRIGGER_RULES,
   dagNodeBaseSchema,
   nodeContextSchema,
+  nodeMcpSchema,
+  mcpDeclaration,
   promptSourceSchema,
   agentNodeSchema,
   execNodeSchema,
@@ -121,7 +123,8 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
-  loopGroupBodySinks,
+  definedOutputPaths,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
@@ -129,6 +132,9 @@ export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,
   isPersistableNode,
+  nodeUsesPersistedScope,
+  runMayPersistSessions,
+  persistedSessionHandling,
   isNodeContextResume,
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
@@ -151,6 +157,8 @@ export type {
   TriggerRule,
   DagNodeBase,
   NodeContext,
+  NodeMcp,
+  McpDeclaration,
   BindingDirective,
   PromptSource,
   AgentNode,
@@ -183,6 +191,7 @@ export {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowRunBudgetSchema,
   workflowInputSpecSchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
@@ -195,6 +204,7 @@ export type {
   WebSearchMode,
   WorkflowRequirement,
   WorkflowEvidencePolicy,
+  WorkflowRunBudget,
   WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,
@@ -205,6 +215,10 @@ export {
   workflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowWaitContextSchema,
+  sessionCursorSchema,
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
   scheduledWorkflowResumeSchema,
   workflowStepStatusSchema,
   nodeStateSchema,
@@ -220,9 +234,13 @@ export {
   isTerminalRunStatus,
   runAttention,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
+  pausedUsageLimitWait,
   workflowWaitStepName,
   isScheduledWorkflowResume,
+  readSourceRelease,
   isRunBlockedOnChild,
+  isFanOutBlockReleased,
   suspendReasonSchema,
   isRecognizedSuspendReason,
   reRunsOwnNodeOnResume,
@@ -254,6 +272,8 @@ export type {
   ArtifactType,
   ApprovalContext,
   WorkflowAttentionWaitContext,
+  WorkflowDeadlineWaitContext,
+  WorkflowUsageLimitWaitContext,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
   SuspendReason,
@@ -272,7 +292,7 @@ export type {
 } from './workflow-run';
 
 // Per-node persisted provider sessions
-export { workflowNodeSessionSchema } from './workflow-node-session';
+export { workflowNodeSessionSchema, persistScopeKey } from './workflow-node-session';
 export type { WorkflowNodeSession } from './workflow-node-session';
 
 // Private provider session handles scoped to one workflow run
@@ -288,6 +308,7 @@ export type {
   LoadCommandResult,
   WorkflowExecutionResult,
   WorkflowLoadError,
+  ParsedWorkflowLoadError,
   WorkflowLoadResult,
   GraphPlan,
   ResolvedWorkflow,
@@ -298,3 +319,19 @@ export type {
 
 // DagWorkflow — alias kept for backward compatibility
 export type { WorkflowDefinition as DagWorkflow } from './workflow';
+
+export * from './workflow-run-listing';
+
+export { workflowRunOriginSchema } from './workflow-run';
+export type { WorkflowRunOrigin } from './workflow-run';
+
+export * from './workflow-event';
+
+export {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionSchema,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from './workflow-run';
+
+export type { SessionCursor } from './workflow-run';

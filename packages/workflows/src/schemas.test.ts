@@ -1,5 +1,12 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  approvalContextSchema,
+  continuablePause,
+  isApprovalContext,
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+} from './schemas/workflow-run';
+import {
   isExecNode,
   isGateNode,
   isWaitNode,
@@ -8,6 +15,7 @@ import {
   isLoopGroupNode,
   isIncludeDirective,
   isTriggerRule,
+  loopGroupOutputNodes,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
@@ -22,6 +30,7 @@ import {
   dagNodeFlatSchema,
   dagNodeSchema,
   execNodeSchema,
+  loopNodeSchema,
   MAX_DURABLE_WAIT_MS,
   waitConfigSchema,
   inputEnvKey,
@@ -33,6 +42,8 @@ import {
   workflowWaitStepName,
   runAttention,
   nodeOutputSchema,
+  isRunBlockedOnChild,
+  isFanOutBlockReleased,
 } from './schemas';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
 import type {
@@ -82,6 +93,33 @@ describe('nodeOutputSchema', () => {
   });
 });
 
+describe('authored approval context', () => {
+  const base = { nodeId: 'review', message: 'Choose' };
+  test.each([
+    { decisions: undefined },
+    { decisions: [] },
+    { decisions: [{ label: 'Missing id' }] },
+  ])('refuses authored contexts without usable decisions (%j)', ({ decisions }) => {
+    const approval = { ...base, decisionsAuthored: true, decisions };
+    expect(approvalContextSchema.safeParse(approval).success).toBe(false);
+    expect(isApprovalContext(approval)).toBe(false);
+  });
+  test('round trips authored decisions and legacy contexts', () => {
+    for (const approval of [
+      base,
+      { ...base, decisionsAuthored: false as const },
+      {
+        ...base,
+        decisionsAuthored: true as const,
+        decisions: [{ id: 'accept', label: 'Accept plan' }, { id: 'revise' }],
+      },
+    ]) {
+      expect(approvalContextSchema.parse(approval)).toEqual(approval);
+      expect(isApprovalContext(approval)).toBe(true);
+    }
+  });
+});
+
 describe('persisted workflow continuation schemas', () => {
   const timeWait = {
     owner: 'node' as const,
@@ -90,6 +128,53 @@ describe('persisted workflow continuation schemas', () => {
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2026-08-25T10:00:00.000Z',
   };
+
+  test('round trips named owner cursors in approvals and every loop wait kind', () => {
+    const bodySessionCursors = { owner: { sessionId: 'O', provider: 'pi' } };
+    for (const cursors of [undefined, {}, bodySessionCursors]) {
+      const approval = {
+        nodeId: 'group',
+        message: 'Review',
+        ...(cursors
+          ? { bodySessionCursors: cursors, bodySessionCursorAncestry: { '["group",[]]': cursors } }
+          : {}),
+      };
+      expect(approvalContextSchema.parse(JSON.parse(JSON.stringify(approval)))).toEqual(approval);
+      for (const condition of [
+        { kind: 'time' as const, resumeAt: timeWait.resumeAt },
+        { kind: 'event' as const, event: 'checks.complete', resumeAt: timeWait.resumeAt },
+        { kind: 'attention' as const, message: 'Fix checks' },
+      ]) {
+        const wait = {
+          owner: 'loop_group' as const,
+          nodeId: 'group',
+          bodyWaitId: 'checks',
+          iteration: 1,
+          sessionId: null,
+          sessionProvider: null,
+          waitingSince: timeWait.waitingSince,
+          ...condition,
+          ...(cursors
+            ? {
+                bodySessionCursors: cursors,
+                bodySessionCursorAncestry: { '["group",[]]': cursors },
+              }
+            : {}),
+        };
+        expect(workflowWaitContextSchema.parse(JSON.parse(JSON.stringify(wait)))).toEqual(wait);
+      }
+    }
+    for (const cursor of [
+      { sessionId: '', provider: 'pi' },
+      { sessionId: 'O' },
+      { sessionId: 'O', provider: '' },
+    ]) {
+      expect(bodySessionCursorsSchema.safeParse({ owner: cursor }).success).toBe(false);
+      expect(
+        bodySessionCursorAncestrySchema.safeParse({ '["group",[]]': { owner: cursor } }).success
+      ).toBe(false);
+    }
+  });
 
   test('requires the fields belonging to the persisted wait kind and owner', () => {
     expect(workflowWaitContextSchema.safeParse(timeWait).success).toBe(true);
@@ -289,6 +374,32 @@ describe('dagNodeSchema — context', () => {
         "'context.resume' is only supported on command and prompt nodes"
       );
     }
+  });
+});
+
+describe('dagNodeSchema — mcp', () => {
+  const parseMcp = (mcp: unknown) => dagNodeSchema.safeParse({ id: 'node', prompt: 'work', mcp });
+
+  test('keeps the string form as a required path', () => {
+    const result = parseMcp(' .archon/mcp/github.json ');
+    expect(result.success && (result.data as DagNode).mcp).toBe('.archon/mcp/github.json');
+  });
+
+  test('parses the optional form and trims its path', () => {
+    const result = parseMcp({ path: ' .archon/mcp/posthog.json ', optional: true });
+    expect(result.success && (result.data as DagNode).mcp).toEqual({
+      path: '.archon/mcp/posthog.json',
+      optional: true,
+    });
+  });
+
+  test('rejects a misspelled key instead of treating the server as required', () => {
+    expect(parseMcp({ path: 'mcp.json', optinal: true }).success).toBe(false);
+  });
+
+  test('rejects an empty path', () => {
+    const result = parseMcp({ path: '', optional: true });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -533,12 +644,17 @@ describe('approval.decisions — new authoring surface (#2707)', () => {
     }
   });
 
-  test('rejects an id outside {approve, reject}', () => {
-    const result = dagNodeSchema.safeParse({
+  test.each([
+    { decisions: [{ id: 'accept' }, { id: 'revise' }] },
+    { decisions: [{ id: 'reject' }] },
+  ])('accepts an authored vocabulary without approve (%j)', ({ decisions }) => {
+    const result = dagNodeSchema.parse({
       id: 'gate',
-      approval: { message: 'ok?', decisions: [{ id: 'escalate' }] },
+      approval: { message: 'Choose', decisions },
     });
-    expect(result.success).toBe(false);
+    if (isIncludeDirective(result) || !isGateNode(result)) throw new Error('Expected gate');
+    expect(result.decisionsAuthored).toBe(true);
+    expect(result.decisions).toEqual([...decisions]);
   });
 
   test('rejects duplicate ids', () => {
@@ -548,15 +664,6 @@ describe('approval.decisions — new authoring surface (#2707)', () => {
     });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.error?.issues)).toContain('unique');
-  });
-
-  test('rejects decisions with no approve entry (R3 fix)', () => {
-    const result = dagNodeSchema.safeParse({
-      id: 'gate',
-      approval: { message: 'ok?', decisions: [{ id: 'reject' }] },
-    });
-    expect(result.success).toBe(false);
-    expect(JSON.stringify(result.error?.issues)).toContain('approve');
   });
 
   test('accepts an approve-only decisions array (acknowledge gate, reject optional)', () => {
@@ -663,6 +770,19 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       expect(result.error.issues[0]?.path).toEqual(['thinking']);
       expect(result.error.issues[0]?.message).toContain('effort:');
     }
+  });
+
+  test('parses trimmed plugin ids and rejects an empty one', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      plugins: [' formatter@tools '],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as AgentNode).plugins).toEqual(['formatter@tools']);
+    expect(dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', plugins: ['  '] }).success).toBe(
+      false
+    );
   });
 
   test('parses maxBudgetUsd as positive number', () => {
@@ -1295,6 +1415,7 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       'hooks',
       'mcp',
       'skills',
+      'plugins',
       'effort',
       'maxBudgetUsd',
       'systemPrompt',
@@ -1384,6 +1505,55 @@ describe('LOOP_NODE_AI_FIELDS', () => {
 // dagNodeSchema — loop field projection and author-facing classification
 // ---------------------------------------------------------------------------
 
+describe('loop iteration retry policy', () => {
+  const loop = { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false };
+  test.each([
+    { max_attempts: 1, delay_ms: 0 },
+    { max_attempts: 5, delay_ms: 60000, on_error: 'transient' },
+    { max_attempts: 2, delay_ms: 17 },
+    { max_attempts: 3 },
+  ] as const)('preserves valid retry %j in authored and typed loops', retry => {
+    const authored = dagNodeSchema.parse({ id: 'work', loop, retry });
+    const typed = loopNodeSchema.parse({ id: 'work', kind: 'loop', loop, retry });
+    expect(authored.kind).toBe('loop');
+    if (authored.kind !== 'loop') throw new Error('Expected a loop');
+    expect(authored.retry).toEqual(retry);
+    expect(typed.retry).toEqual(retry);
+  });
+  test.each([
+    { delay_ms: 0 },
+    { max_attempts: 0 },
+    { max_attempts: 6 },
+    { max_attempts: 1.5 },
+    { max_attempts: 1, delay_ms: -1 },
+    { max_attempts: 1, delay_ms: 60001 },
+    { max_attempts: 1, on_error: 'all' },
+    { max_attempts: 1, delay_ms: 0, on_error: 'all' },
+  ])('rejects invalid retry %j in authored and typed loops', retry => {
+    const authored = dagNodeSchema.safeParse({ id: 'work', loop, retry });
+    expect(authored.success).toBe(false);
+    if (!authored.success)
+      expect(authored.error.issues.some(issue => issue.path[0] === 'retry')).toBe(true);
+    expect(loopNodeSchema.safeParse({ id: 'work', kind: 'loop', loop, retry }).success).toBe(false);
+  });
+  test.each([
+    { prompt: 'Work' },
+    { command: 'work' },
+    { bash: 'true' },
+    { script: 'work', runtime: 'bun' },
+  ])('preserves ordinary retry constraints for %j', mode => {
+    for (const delay_ms of [0, 17, 999]) {
+      expect(
+        dagNodeSchema.safeParse({ id: 'work', ...mode, retry: { max_attempts: 1, delay_ms } })
+          .success
+      ).toBe(false);
+    }
+    const retry = { max_attempts: 1, delay_ms: 1000, on_error: 'all' } as const;
+    const node = dagNodeSchema.parse({ id: 'work', ...mode, retry });
+    expect('retry' in node && node.retry).toEqual(retry);
+  });
+});
+
 describe('dagNodeSchema — LoopNode AI-field survival', () => {
   /**
    * One valid authored value per AI field, so each can be parsed on its own and
@@ -1400,6 +1570,7 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
     hooks: { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
     mcp: '.mcp.json',
     skills: ['code-review'],
+    plugins: ['formatter@tools'],
     agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
     pi: { enableExtensions: false },
     effort: 'low',
@@ -1591,6 +1762,26 @@ describe('dagNodeSchema — loop_group', () => {
       expect(isLoopGroupNode(inner as never)).toBe(true);
       expect(inner?.loop_group?.nodes).toHaveLength(1);
     }
+  });
+});
+
+describe('loopGroupOutputNodes', () => {
+  const body = (sink: Record<string, unknown>): DagNode[] =>
+    [
+      { id: 'work', bash: 'echo work' },
+      { ...sink, id: 'end', depends_on: ['work'] },
+    ].map(n => dagNodeSchema.parse(n) as DagNode);
+  const outputIds = (sink: Record<string, unknown>): string[] =>
+    loopGroupOutputNodes(body(sink)).map(n => n.id);
+
+  test('reads past a sink that asks a human to the work it depends on', () => {
+    expect(outputIds({ approval: { message: 'ok?' } })).toEqual(['work']);
+    expect(outputIds({ wait: { attention: 'Check it.' } })).toEqual(['work']);
+  });
+
+  test('keeps any other wait as the output, as before #4043', () => {
+    expect(outputIds({ wait: { duration_ms: 1 } })).toEqual(['end']);
+    expect(outputIds({ wait: { event: 'checks.complete', deadline_ms: 1 } })).toEqual(['end']);
   });
 });
 
@@ -1937,7 +2128,7 @@ describe('dagNodeSchema — include', () => {
   test('parses a valid include node (only structural fields survive)', () => {
     const result = dagNodeSchema.safeParse({
       id: 'review',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       depends_on: ['finalize-pr'],
       when: 'always',
       trigger_rule: 'all_success',
@@ -1947,7 +2138,7 @@ describe('dagNodeSchema — include', () => {
       expect(isIncludeDirective(result.data)).toBe(true);
       const node = result.data as IncludeDirective;
       expect(node.kind).toBe('include');
-      expect(node.include).toBe('archon-review-block');
+      expect(node.include).toBe('acme-review-block');
       expect(node.depends_on).toEqual(['finalize-pr']);
       expect(node.when).toBe('always');
       expect(node.trigger_rule).toBe('all_success');
@@ -1955,10 +2146,10 @@ describe('dagNodeSchema — include', () => {
   });
 
   test('trims surrounding whitespace on the target name', () => {
-    const result = dagNodeSchema.safeParse({ id: 'r', include: '  archon-review-block  ' });
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '  acme-review-block  ' });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect((result.data as IncludeDirective).include).toBe('archon-review-block');
+      expect((result.data as IncludeDirective).include).toBe('acme-review-block');
     }
   });
 
@@ -1966,7 +2157,7 @@ describe('dagNodeSchema — include', () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
       command: 'build',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -1983,7 +2174,7 @@ describe('dagNodeSchema — include', () => {
   test("include accepts and retains a string-valued 'with:' mapping", () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: { pr: '$create.output', base_branch: 'main', empty: '' },
     });
     expect(result.success).toBe(true);
@@ -2004,7 +2195,7 @@ describe('dagNodeSchema — include', () => {
   ])("include rejects 'with:' when it is %s", (_description, withValue) => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: withValue,
     });
     expect(result.success).toBe(false);
@@ -2018,7 +2209,7 @@ describe('dagNodeSchema — include', () => {
   test("include accepts and retains typed JSON 'with:' values", () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: { flag: true, count: 3, tags: ['a', 'b'], meta: { k: 'v' }, nothing: null },
     });
     expect(result.success).toBe(true);
@@ -2045,7 +2236,7 @@ describe('dagNodeSchema — include', () => {
   test('include node drops AI/exec fields (they are ignored)', () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       model: 'opus',
       always_run: true,
       output_type: 'code',
@@ -2084,7 +2275,7 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
   test('include + fan_out parses to a deferred compose_fan_out node', () => {
     const result = dagNodeSchema.safeParse({
       id: 'review',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       depends_on: ['gather'],
       fan_out: { items: '$list.output', as: 'item', max_parallel: 3 },
     });
@@ -2092,7 +2283,7 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     if (result.success) {
       const node = result.data as ComposeFanOutNode;
       expect(node.kind).toBe('compose_fan_out');
-      expect(node.include).toBe('archon-review-block');
+      expect(node.include).toBe('acme-review-block');
       expect(node.fan_out.max_parallel).toBe(3);
       expect(node.fan_out.join).toBe('all_done');
       expect(isIncludeDirective(result.data)).toBe(false);
@@ -2300,7 +2491,7 @@ describe('runAttention', () => {
       expect(runAttention(run)).toBeNull();
     });
 
-    test('reports an attention wait as an explicit resume action', () => {
+    test('reads a legacy attention wait as the message form at its legacy occurrence', () => {
       const run = {
         id: 'run-1',
         status: 'paused' as const,
@@ -2319,11 +2510,51 @@ describe('runAttention', () => {
         },
       };
       expect(runAttention(run)).toEqual({
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'run-1',
         nodeId: 'recover-ci.operator-action',
+        occurrence: 'legacy:recover-ci.operator-action',
         message: 'Rerun the failing check, then resume.',
+        form: 'message',
+        options: [],
       });
+    });
+
+    test('reports an attention wait with its form, options and pause occurrence', () => {
+      const wait = {
+        owner: 'node' as const,
+        nodeId: 'ask',
+        kind: 'attention' as const,
+        waitingSince: '2026-08-28T10:00:00.000Z',
+        message: 'Which base?',
+        pauseId: 'pause-1',
+      };
+      const attentionOf = (extra: Record<string, unknown>) =>
+        runAttention({ id: 'run-1', status: 'paused', metadata: { wait: { ...wait, ...extra } } });
+      expect(attentionOf({ form: 'select', options: [{ id: 'use-main', label: 'Main' }] })).toEqual(
+        {
+          kind: 'attention',
+          runId: 'run-1',
+          nodeId: 'ask',
+          occurrence: 'pause-1',
+          message: 'Which base?',
+          form: 'select',
+          options: [{ id: 'use-main', label: 'Main' }],
+        }
+      );
+      expect(attentionOf({ form: 'approval' })).toMatchObject({
+        form: 'approval',
+        options: [{ id: 'approve' }, { id: 'reject' }],
+      });
+      // Answered, it waits on the continuation host, not on anyone.
+      expect(
+        attentionOf({
+          form: 'approval',
+          answer: { decision: 'reject', text: '' },
+          answeredVia: 'cli',
+          answeredAt: '2026-08-28T10:05:00.000Z',
+        })
+      ).toBeNull();
     });
 
     test('a resolved child_workflow gate is still nobody’s decision', () => {
@@ -2364,7 +2595,7 @@ describe('runAttention', () => {
   });
 
   describe('awaiting a human', () => {
-    // Every recognized reason EXCEPT child_workflow, plus the legacy undefined.
+    // Every recognized reason EXCEPT child_workflow and fan_out, plus the legacy undefined.
     const humanReasons: (SuspendReason | undefined)[] = [
       'approval',
       'interactive_loop',
@@ -2378,10 +2609,23 @@ describe('runAttention', () => {
         kind: 'awaiting_response',
         runId: 'run-1',
         respondTo: { runId: 'run-1', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve the plan.',
       });
     });
   });
+
+  test.each(['approval', 'interactive_loop', 'writeback'] as const)(
+    'uses the pause id for %s and changes on a re-ask',
+    type => {
+      expect(runAttention(pausedOn(gate({ type, pauseId: 'first' })))).toMatchObject({
+        occurrence: 'first',
+      });
+      expect(runAttention(pausedOn(gate({ type, pauseId: 'second' })))).toMatchObject({
+        occurrence: 'second',
+      });
+    }
+  );
 
   describe('blocked on a child', () => {
     test('reports the block and never claims a human is needed', () => {
@@ -2402,6 +2646,29 @@ describe('runAttention', () => {
       for (const childRunId of [undefined, '']) {
         const attention = runAttention(
           pausedOn(gate({ type: 'child_workflow', nodeId: 'sub', childRunId }))
+        );
+        expect(attention).toMatchObject({ kind: 'unreadable', reason: 'child_pointer_missing' });
+      }
+    });
+  });
+
+  describe('blocked on fan-out children', () => {
+    test('reports every child it waits on, never its own item', () => {
+      const attention = runAttention(
+        pausedOn(gate({ type: 'fan_out', nodeId: 'work', childRunIds: ['k0', 'k2'] }))
+      );
+      expect(attention).toEqual({
+        kind: 'blocked_on_children',
+        runId: 'run-1',
+        nodeId: 'work',
+        childRunIds: ['k0', 'k2'],
+      });
+    });
+
+    test('a fan-out block with no children recorded is unreadable', () => {
+      for (const childRunIds of [undefined, []]) {
+        const attention = runAttention(
+          pausedOn(gate({ type: 'fan_out', nodeId: 'work', childRunIds }))
         );
         expect(attention).toMatchObject({ kind: 'unreadable', reason: 'child_pointer_missing' });
       }
@@ -2481,7 +2748,7 @@ describe('runAttention', () => {
         },
       },
     });
-    expect(attention?.kind).toBe('action_required');
+    expect(attention?.kind).toBe('attention');
   });
 
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
@@ -2566,5 +2833,132 @@ describe('resource start resource names', () => {
       expect(schema.safeParse(reserved).success).toBe(false);
       expect(schema.safeParse('deploy-lane').success).toBe(true);
     }
+  });
+});
+
+describe('fan-out block predicates (#4044)', () => {
+  const fanOutGate = (childRunIds: string[], unspawnedItems = 0) =>
+    approvalContextSchema.parse({
+      type: 'fan_out',
+      nodeId: 'work',
+      message: 'waiting',
+      childRunIds,
+      unspawnedItems,
+    });
+  const statuses =
+    (map: Record<string, WorkflowRunStatus>) =>
+    (id: string): WorkflowRunStatus | undefined =>
+      map[id];
+
+  test('isRunBlockedOnChild is true only for a listed child of a paused fan-out parent', () => {
+    const parent = { status: 'paused' as const, metadata: { approval: fanOutGate(['a', 'b']) } };
+    expect(isRunBlockedOnChild(parent, 'b')).toBe(true);
+    expect(isRunBlockedOnChild(parent, 'c')).toBe(false);
+    expect(isRunBlockedOnChild({ ...parent, status: 'running' }, 'b')).toBe(false);
+  });
+
+  test('released once every listed child is terminal', () => {
+    const gate = fanOutGate(['a', 'b']);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'failed' }))).toBe(true);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'paused' }))).toBe(false);
+  });
+
+  test('a missing child row counts as finished', () => {
+    expect(isFanOutBlockReleased(fanOutGate(['a', 'b']), statuses({ a: 'cancelled' }))).toBe(true);
+  });
+
+  test('with unspawned items, one finished child frees a slot', () => {
+    const gate = fanOutGate(['a', 'b'], 3);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed', b: 'paused' }))).toBe(true);
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'running', b: 'paused' }))).toBe(false);
+  });
+
+  test('never releases a gate of another type', () => {
+    const gate = approvalContextSchema.parse({
+      type: 'child_workflow',
+      nodeId: 'sub',
+      message: 'blocked',
+      childRunId: 'a',
+    });
+    expect(isFanOutBlockReleased(gate, statuses({ a: 'completed' }))).toBe(false);
+  });
+});
+
+describe('continuablePause', () => {
+  const attentionWait = {
+    owner: 'node' as const,
+    nodeId: 'ask',
+    kind: 'attention' as const,
+    waitingSince: '2026-08-28T10:00:00.000Z',
+    message: 'Which base?',
+  };
+  const gate = {
+    nodeId: 'review',
+    message: 'Review',
+    type: 'approval' as const,
+    pauseId: 'gate-1',
+  };
+  const paused = (metadata: Record<string, unknown>) => ({
+    status: 'paused' as const,
+    metadata,
+  });
+
+  test('covers gates and attention waits, answered or not', () => {
+    expect(continuablePause(paused({ approval: gate }))).toEqual({
+      nodeId: 'review',
+      pauseId: 'gate-1',
+      answered: false,
+    });
+    expect(continuablePause(paused({ approval: { ...gate, resolved: 'rejected' } }))).toEqual({
+      nodeId: 'review',
+      pauseId: 'gate-1',
+      answered: true,
+    });
+    expect(continuablePause(paused({ wait: { ...attentionWait, pauseId: 'wait-1' } }))).toEqual({
+      nodeId: 'ask',
+      pauseId: 'wait-1',
+      answered: false,
+    });
+    expect(
+      continuablePause(
+        paused({
+          wait: {
+            ...attentionWait,
+            pauseId: 'wait-1',
+            form: 'message',
+            answer: { text: 'done' },
+            answeredVia: 'api',
+            answeredAt: '2026-08-28T10:05:00.000Z',
+          },
+        })
+      )
+    ).toEqual({ nodeId: 'ask', pauseId: 'wait-1', answered: true });
+  });
+
+  test('leaves out pauses the host cannot continue by itself', () => {
+    // A wait from before pause identities has nothing to claim against; `resume` moves it.
+    expect(continuablePause(paused({ wait: attentionWait }))).toBeUndefined();
+    expect(
+      continuablePause(
+        paused({ isolation: 'container', wait: { ...attentionWait, pauseId: 'wait-1' } })
+      )
+    ).toBeUndefined();
+    expect(
+      continuablePause(paused({ approval: { ...gate, type: 'child_workflow', childRunId: 'c' } }))
+    ).toBeUndefined();
+    expect(
+      continuablePause(
+        paused({
+          wait: {
+            owner: 'node',
+            nodeId: 'hold',
+            kind: 'time',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            resumeAt: '2026-08-28T11:00:00.000Z',
+          },
+          approval: gate,
+        })
+      )
+    ).toBeUndefined();
   });
 });

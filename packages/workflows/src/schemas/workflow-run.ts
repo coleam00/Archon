@@ -1,20 +1,29 @@
 /**
  * Zod schemas for workflow run state types.
  */
-import { z } from '@hono/zod-openapi';
 import {
-  skipCauseSchema,
-  suspendReasonSchema,
-  type NodeState,
-  type SuspendReason,
-} from './node-state';
-import type { TokenUsage } from '@archon/providers/types';
+  declaredOutputPathsSchema,
+  outputPathsFromRootFields,
+  type DeclaredOutputPaths,
+} from '../output-ref';
+import { z } from 'zod';
 import {
-  nodeExecutionMetadataSchema,
-  nodeFailureKindSchema,
-  type NodeExecutionMetadata,
-} from './node-execution';
+  APPROVAL_ATTENTION_OPTIONS,
+  approvalDecisionConfigSchema,
+  attentionFormSchema,
+  attentionLabelsSchema,
+  attentionOptionSchema,
+  type AttentionForm,
+  type AttentionLabels,
+  type AttentionOption,
+} from './dag-node';
+import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
+import { tokenUsageSchema } from '@archon/provider-contract';
+import { providerFailureSchema } from '@archon/provider-contract';
+import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
+import { recordSurfaceSchema } from './record-surface';
+import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
@@ -54,12 +63,19 @@ export const workflowRunOutcomeSchema = z.enum(['succeeded', 'failed']);
 
 export type WorkflowRunOutcome = z.infer<typeof workflowRunOutcomeSchema>;
 
+// Optional only for waits persisted before occurrence IDs were introduced.
+const workflowWaitDeadlineOccurrenceFields = {
+  pauseId: z.string().min(1).optional(),
+};
+
 const workflowWaitTimeFields = {
+  ...workflowWaitDeadlineOccurrenceFields,
   kind: z.literal('time'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),
 } as const;
 const workflowWaitEventFields = {
+  ...workflowWaitDeadlineOccurrenceFields,
   kind: z.literal('event'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),
@@ -67,15 +83,67 @@ const workflowWaitEventFields = {
   signaledAt: z.string().datetime().optional(),
   payload: z.unknown().optional(),
 } as const;
+/**
+ * A run whose failed nodes all hit a provider usage limit with a reported reset, or a rate
+ * limit that outlasted its retries, waits until the latest of their deadlines
+ * (`usageLimitWait` in the DAG executor). The resume claim clears it, and the nodes run
+ * again; a repeat limit pauses on a new wait.
+ */
+const workflowWaitQuotaFields = {
+  pauseId: z.string().min(1),
+  kind: z.literal('quota'),
+  waitingSince: z.string().datetime(),
+  resumeAt: z.string().datetime(),
+} as const;
+/**
+ * The answer an attention wait received, as the next node reads it. Its shape is the
+ * wait's form's output contract (`ATTENTION_OUTPUT_FORMATS`).
+ */
+export const attentionAnswerSchema = z.union([
+  z.strictObject({ text: z.string() }),
+  z.strictObject({ decision: z.string().min(1), text: z.string() }),
+  z.strictObject({ decisions: z.array(z.string().min(1)).min(1), text: z.string() }),
+]);
+export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
+
+/**
+ * An attention wait paused before answers existed has only `waitingSince` and `message`:
+ * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
+ * wait carries its occurrence, its form and resolved options, and once answered, the
+ * answer with the surface it came through and when. `labels` holds the node's resolved
+ * labels merged with every label write since, and `revision` counts those writes from 1;
+ * a wait without them has no labels and is at revision 1.
+ */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
   waitingSince: z.string().datetime(),
   message: z.string().trim().min(1),
+  pauseId: z.string().min(1).optional(),
+  form: attentionFormSchema.optional(),
+  options: z.array(attentionOptionSchema).optional(),
+  answer: attentionAnswerSchema.optional(),
+  answeredVia: recordSurfaceSchema.optional(),
+  answeredAt: z.string().datetime().optional(),
+  labels: attentionLabelsSchema.optional(),
+  revision: z.number().int().positive().optional(),
 } as const;
 const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),
   nodeId: z.string().min(1),
 } as const;
+export const sessionCursorSchema = z.object({
+  sessionId: z.string().min(1),
+  provider: z.string().min(1),
+});
+export type SessionCursor = z.infer<typeof sessionCursorSchema>;
+export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
+
+export const bodySessionCursorAncestrySchema = z.record(
+  z.string().min(1),
+  bodySessionCursorsSchema
+);
+export type BodySessionCursorAncestry = z.infer<typeof bodySessionCursorAncestrySchema>;
+
 const workflowWaitLoopOwnerFields = {
   owner: z.literal('loop_group'),
   nodeId: z.string().min(1),
@@ -83,6 +151,8 @@ const workflowWaitLoopOwnerFields = {
   iteration: z.number().int().positive(),
   sessionId: z.string().nullable(),
   sessionProvider: z.string().nullable(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
 } as const;
 
 /**
@@ -94,12 +164,14 @@ export const workflowWaitContextSchema = z.union([
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitTimeFields }),
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitEventFields }),
   z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitAttentionFields }),
+  z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitQuotaFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitTimeFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitEventFields }),
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitAttentionFields }),
 ]);
 export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
 export type WorkflowAttentionWaitContext = Extract<WorkflowWaitContext, { kind: 'attention' }>;
+export type WorkflowUsageLimitWaitContext = Extract<WorkflowWaitContext, { kind: 'quota' }>;
 
 export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitContext {
   return workflowWaitContextSchema.safeParse(value).success;
@@ -107,6 +179,100 @@ export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitCont
 
 export function workflowWaitStepName(wait: WorkflowWaitContext): string {
   return wait.owner === 'loop_group' ? `${wait.nodeId}.${wait.bodyWaitId}` : wait.nodeId;
+}
+
+/** The attention wait a paused run sits at, answered or not, if it sits at one. */
+export function pausedAttentionWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowAttentionWaitContext | undefined {
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  const wait = run.metadata.wait;
+  return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
+}
+
+/** The usage-limit wait a paused run sits at, if it sits at one. */
+export function pausedUsageLimitWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowUsageLimitWaitContext | undefined {
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  const wait = run.metadata.wait;
+  return isWorkflowWaitContext(wait) && wait.kind === 'quota' ? wait : undefined;
+}
+
+/** The form and literal options an attention wait declares, paused or authored. */
+type AttentionDeclaration = { form?: AttentionForm; options?: readonly AttentionOption[] };
+
+/** The form an attention wait is answered in; a wait from before forms is a message. */
+export function attentionForm(wait: AttentionDeclaration): AttentionForm {
+  return wait.form ?? 'message';
+}
+
+/** The ids an attention wait's answer may choose from: none for a message. */
+export function attentionOptions(wait: AttentionDeclaration): readonly AttentionOption[] {
+  switch (attentionForm(wait)) {
+    case 'message':
+      return [];
+    case 'approval':
+      return APPROVAL_ATTENTION_OPTIONS;
+    case 'select':
+    case 'multi_select':
+      return wait.options ?? [];
+  }
+}
+
+/**
+ * Why choosing `choose` does not answer a wait in `form` that declares the option ids
+ * `declared`, or undefined when it does: a message takes only text; approval and select
+ * take exactly one declared option; multi_select takes one or more distinct declared
+ * options. Every answer surface, and a dry run's authored answer, holds this one rule.
+ */
+export function attentionChoiceProblem(
+  form: AttentionForm,
+  declared: readonly string[],
+  choose: readonly string[]
+): string | undefined {
+  if (form === 'message') return choose.length > 0 ? 'takes only text, not an option.' : undefined;
+  const undeclared = choose.filter(id => !declared.includes(id));
+  if (undeclared.length > 0)
+    return `does not declare option '${undeclared.join("', '")}'. Declared options: ${declared.join(', ')}.`;
+  if (form === 'multi_select') {
+    if (choose.length === 0) return 'needs at least one option.';
+    if (new Set(choose).size !== choose.length) return 'takes each option at most once.';
+    return undefined;
+  }
+  return choose.length === 1
+    ? undefined
+    : `takes exactly one option. Declared options: ${declared.join(', ')}.`;
+}
+
+/** An attention wait's current labels. */
+export function attentionLabels(wait: WorkflowAttentionWaitContext): AttentionLabels {
+  return wait.labels ?? {};
+}
+
+/** How many label writes an attention wait has seen, counting from 1. */
+export function attentionRevision(wait: WorkflowAttentionWaitContext): number {
+  return wait.revision ?? 1;
+}
+
+const LEGACY_OCCURRENCE_PREFIX = 'legacy:';
+
+/**
+ * The step a `legacy:<step>` occurrence names, or undefined for a pause id. A legacy
+ * occurrence identifies a pause from before pause identities existed.
+ */
+export function legacyOccurrenceStep(occurrence: string): string | undefined {
+  return occurrence.startsWith(LEGACY_OCCURRENCE_PREFIX)
+    ? occurrence.slice(LEGACY_OCCURRENCE_PREFIX.length)
+    : undefined;
+}
+
+/**
+ * The occurrence id of an attention wait, by the same rule as `gateOccurrence`: its
+ * `pauseId`, or `legacy:<step>` for a wait paused before pause identities existed.
+ */
+export function attentionOccurrence(wait: WorkflowAttentionWaitContext): string {
+  return wait.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${workflowWaitStepName(wait)}`;
 }
 
 export const scheduledWorkflowResumeSchema = z
@@ -202,11 +368,11 @@ export type { NodeState, SkipCause, NodeSkipReason } from './node-state';
  * when the result chunk includes one). Downstream `$nodeId.output.field` substitution and
  * `when:` conditions prefer this object over re-parsing `output`, so providers that emit
  * fence-wrapped or preamble-prefixed JSON (Pi/Minimax) survive the round-trip.
- * `declaredFields` is the property-name set of a producer's `output_format` schema
- * (`Object.keys(output_format.properties)`), captured when the node completes. The
- * consumer uses it to tell a declared-but-optional-absent field (resolves to `''`) from a
- * field not in the contract at all (a typo → throws). Undefined for non-schema producers
- * (bash/script/prose) and schemas without a `properties` map.
+ * `declaredOutputPaths` is every object-field path a producer's `output_format` schema
+ * declares, captured when the node completes. The consumer uses it to tell a
+ * declared-but-optional-absent field (resolves to `''`) from a path not in the contract
+ * at all (a typo → throws). Undefined for non-schema producers (bash/script/prose) and
+ * schemas without a `properties` map.
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
@@ -215,7 +381,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     output: z.string(),
     sessionId: z.string().optional(),
     structuredOutput: z.unknown().optional(),
-    declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Session-resume outcome from the provider: false ⇒ a requested resume came
      *  back cold (fresh session). Drives the executor's cold-resume warning.
      *  Absent on 'failed' nodes — the retry path, not this signal, handles those. */
@@ -228,7 +394,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     sessionId: z.string().optional(),
     error: z.string(),
     structuredOutput: z.unknown().optional(),
-    declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Set by a producer whose failure is a deterministic diagnosis of its own output
      *  (an exec node's stdout missing its declared `output_format`): re-running yields
      *  the same stdout, so the retry loop must not consult the error text, which quotes
@@ -237,6 +403,8 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     retryable: z.literal(false).optional(),
     /** Why the node failed, when the producer knows it (see `nodeFailureKindSchema`). */
     failureKind: nodeFailureKindSchema.optional(),
+    /** The provider's own typed failure, unchanged, when a provider reported one. */
+    providerFailure: providerFailureSchema.optional(),
   }),
   z.object({
     execution: nodeExecutionMetadataSchema.optional(),
@@ -257,13 +425,21 @@ export type NodeOutput = z.infer<typeof nodeOutputSchema>;
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
-/**
- * Runtime workflow run state stored in database.
- */
+export const workflowRunOriginSchema = z
+  .object({
+    conversationId: z.string().optional(),
+    parentConversationId: z.string().optional(),
+    userId: z.string().optional(),
+  })
+  .strict();
+
+export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
+
 export const workflowRunSchema = z.object({
+  origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
   workflow_name: z.string(),
-  conversation_id: z.string(),
+  conversation_id: z.string().nullable(),
   parent_conversation_id: z.string().nullable(),
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
@@ -314,6 +490,84 @@ export const workflowRunSchema = z.object({
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
+export type WorkflowDeadlineWaitContext = Extract<WorkflowWaitContext, { resumeAt: string }>;
+
+/** The validated deadline-bearing wait for a paused run, if it has one. */
+export function pendingWorkflowWaitDeadline(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowDeadlineWaitContext | undefined {
+  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  const wait = run.metadata.wait;
+  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  return wait;
+}
+
+/**
+ * Whether a deadline-bearing wait is ready to continue: its deadline passed, or its event
+ * was signaled (a signal leaves `resumeAt` in the future). The SQL continuation listing
+ * restates this; the store conformance suite pins the two together.
+ */
+export function workflowWaitDue(wait: WorkflowDeadlineWaitContext, now: number): boolean {
+  return (
+    Date.parse(wait.resumeAt) <= now || (wait.kind === 'event' && wait.signaledAt !== undefined)
+  );
+}
+
+/** The identity a continuation host claims an answered pause by. */
+export interface PauseContinuation {
+  nodeId: string;
+  pauseId: string;
+}
+
+/**
+ * The answerable pause a paused run sits at, if the continuation host continues it once
+ * it is answered: a gate, or an attention wait. `answered` says whether that has
+ * happened. This is the one place that decides which answerable pauses the engine
+ * continues by itself.
+ *
+ * Excluded: a parent blocked on a child (it continues through the child), a container
+ * write-back (only a CLI holding the container can apply it), any container run (the
+ * host cannot resume one), and a gate or attention wait from before `pauseId` existed
+ * (no identity to claim against). A gate beside a `wait:` is a leftover the wait
+ * replaced; that also covers file-store rows written before a wait pause began removing
+ * the previous gate's answer. Time and event waits continue on their deadline instead
+ * (`pendingWorkflowWaitDeadline`).
+ */
+export function continuablePause(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): (PauseContinuation & { answered: boolean }) | undefined {
+  if (run.status !== 'paused' || isContainerRun(run) || readSourceRelease(run.metadata))
+    return undefined;
+  const wait = run.metadata.wait;
+  if (wait !== undefined) {
+    if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)
+      return undefined;
+    return { nodeId: wait.nodeId, pauseId: wait.pauseId, answered: wait.answer !== undefined };
+  }
+  const approval = run.metadata.approval;
+  if (!isApprovalContext(approval)) return undefined;
+  if (
+    approval.type === 'child_workflow' ||
+    approval.type === 'fan_out' ||
+    approval.type === 'writeback'
+  )
+    return undefined;
+  if (approval.pauseId === undefined || approval.nodeId === '') return undefined;
+  return { nodeId: approval.nodeId, pauseId: approval.pauseId, answered: isGateResolved(approval) };
+}
+
+/**
+ * The answered pause a paused run is waiting to be continued past, if it has one.
+ * Answering only records the answer; continuing is the continuation host's job, so an
+ * answer given through any surface moves the run on.
+ */
+export function answeredPauseContinuation(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): PauseContinuation | undefined {
+  const pause = continuablePause(run);
+  return pause?.answered === true ? { nodeId: pause.nodeId, pauseId: pause.pauseId } : undefined;
+}
+
 /**
  * Keys the sub-run machinery writes into a child run's untyped `metadata` JSONB, and the
  * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string
@@ -340,13 +594,15 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
- * `summary_declared_fields` — additive sibling of `summary_value` (#2453): the top-level
- *                    field names the child's selected `returns:` node declared, so a
- *                    parent reads `$<node>.output.field` under the CHILD's contract — a
+ * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
+ *                    paths the child's selected `returns:` node declared, so a parent
+ *                    reads `$<node>.output.a.b` under the CHILD's contract — a
  *                    `workflow:` node cannot declare a schema of its own. Only the
  *                    derived projection travels; the schema itself stays in captured
- *                    workflow source. Absent on schemaless children and pre-#2453 rows,
- *                    which carry no field contract.
+ *                    workflow source. Absent on schemaless children.
+ * `summary_declared_fields` — the top-level fields of the same contract (#2453), still
+ *                    written for older binaries. A row that has only this key reads as
+ *                    a depth-1 path contract.
  */
 export const SUBRUN_METADATA_KEYS = {
   parentNodeId: 'parent_node_id',
@@ -356,6 +612,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
   summaryDeclaredFields: 'summary_declared_fields',
+  summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
@@ -365,7 +622,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   fanOutItemHash: string | undefined;
   inputs: Record<string, JsonValue> | undefined;
   summaryValue: unknown;
-  summaryDeclaredFields: string[] | undefined;
+  summaryDeclaredOutputPaths: DeclaredOutputPaths | undefined;
 } {
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
@@ -387,14 +644,16 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     rawLegacy !== undefined && Object.values(rawLegacy).every(v => typeof v === 'string')
       ? (rawLegacy as Record<string, string>)
       : undefined;
-  // A field projection is only usable as a field-access contract when it is exactly an
-  // array of strings. Anything else is corrupt or foreign metadata: degrade to
-  // "no contract" rather than authorize access from a shape nobody wrote.
+  // A path contract this binary wrote must parse; a malformed one fails rather than
+  // authorizing nothing. A legacy field projection is only usable as a contract when it
+  // is exactly an array of strings; anything else degrades to "no contract".
   const rawDeclaredFields = metadata?.[SUBRUN_METADATA_KEYS.summaryDeclaredFields];
-  const summaryDeclaredFields =
-    Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
-      ? rawDeclaredFields
-      : undefined;
+  const summaryDeclaredOutputPaths =
+    metadata && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths)
+      ? declaredOutputPathsSchema.parse(metadata[SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths])
+      : Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
+        ? outputPathsFromRootFields(rawDeclaredFields)
+        : undefined;
   return {
     parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
@@ -405,7 +664,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
       metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
         ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
         : undefined,
-    summaryDeclaredFields,
+    summaryDeclaredOutputPaths,
   };
 }
 
@@ -460,7 +719,8 @@ export function readContinuationMode(
  * local to one host and one user, so when no owner answers, this record is what
  * `abandon` shows the operator, including whether the owner ran on another host or
  * as another user. It is a report, never a liveness signal: nothing decides a run is
- * dead from it.
+ * dead from it. `workflow wait` reads its host and uid only to refuse reporting owner
+ * loss when this host and user could not reach that owner's endpoint.
  */
 export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
 
@@ -491,6 +751,75 @@ export function readIdentityUnresolved(
 ): boolean | undefined {
   const raw = metadata?.[RUN_METADATA_KEYS.identityUnresolved];
   return typeof raw === 'boolean' ? raw : undefined;
+}
+
+/**
+ * Key under which a run records WHY it stopped (#3479).
+ *
+ * A stopped run's status says `failed`, which in this codebase also means
+ * "resumable" — so an operator who pressed Ctrl-C sees the same row as an
+ * operator whose workflow broke. The categorical cause is already durable in the
+ * terminal `workflow_failed` event's `exit_reason`, but no operator surface reads
+ * events for it: `workflow get` reads the run row, and the console's list endpoint
+ * returns run rows with no events at all. This key is the same fact on the row,
+ * so both read it without a second mechanism each.
+ *
+ * Written by the process that owns the run, from the signal it received. Cleared
+ * by `resumeWorkflowRun`, so a resumed-and-completed run does not go on claiming
+ * it was interrupted. Absent on runs that stopped before this key existed.
+ */
+export const RUN_STOP_REASON_METADATA_KEY = 'stop_reason';
+
+/** Typed view of the stop reason; undefined when the run carries none this build can read. */
+export function readRunStopReason(
+  metadata: Record<string, unknown> | undefined
+): RunStopReason | undefined {
+  const parsed = runStopReasonSchema.safeParse(metadata?.[RUN_STOP_REASON_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Key under which a paused run that gave back its resource slot records that its
+ * continuation was refused for capacity (#4045): `{ since }`, the first refusal. The run
+ * is then a capacity waiter: it keeps its place ahead of queued new starts, ordered by
+ * `since`, so a later refusal keeps the first value. Cleared by `resumeWorkflowRun` and by
+ * `releasePausedRunSlot`, so a later pause never inherits it.
+ */
+export const CAPACITY_WAIT_METADATA_KEY = 'capacity_wait';
+
+const capacityWaitSchema = z.object({ since: z.string() });
+
+/** Typed view of the capacity wait; undefined when the run carries none this build can read. */
+export function readCapacityWait(
+  metadata: Record<string, unknown> | undefined
+): z.infer<typeof capacityWaitSchema> | undefined {
+  const parsed = capacityWaitSchema.safeParse(metadata?.[CAPACITY_WAIT_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Key under which a run released after this host could not read its frozen source
+ * (#4209) records where it stopped: `{ nodeId, releaseId, releasedAt, path? }`. Written by
+ * `releaseRunForUnreadableSource`, cleared by `resumeWorkflowRun`. It makes the paused
+ * run a due `source` continuation, so any host that can read the source continues it.
+ */
+export const SOURCE_RELEASE_METADATA_KEY = 'source_release';
+
+const sourceReleaseSchema = z.object({
+  nodeId: z.string().min(1),
+  releaseId: z.string().uuid().optional(),
+  releasedAt: z.string().datetime({ offset: true }),
+  path: z.string().optional(),
+});
+
+export type SourceRelease = z.infer<typeof sourceReleaseSchema>;
+
+/** Typed view of the source release; undefined when the run carries none this build can read. */
+export function readSourceRelease(
+  metadata: Record<string, unknown> | undefined
+): SourceRelease | undefined {
+  const parsed = sourceReleaseSchema.safeParse(metadata?.[SOURCE_RELEASE_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -541,6 +870,12 @@ export const workflowSourceConfigSchema = z.object({
   load_default_workflows: z.boolean(),
   load_default_commands: z.boolean(),
   command_folder: z.string().optional(),
+  /**
+   * Names (never values) from `.archon/config.yaml`'s `env:` section at capture time —
+   * the exec env-read checker's "this name is configured" signal for a resumed or
+   * child run, which discovers against the frozen capture rather than live config.
+   */
+  env_var_names: z.array(z.string()).optional(),
 });
 
 export type WorkflowSourceConfig = Readonly<z.infer<typeof workflowSourceConfigSchema>>;
@@ -631,9 +966,11 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
 }
 
 /** Approval context stored in workflow run metadata when paused for human review. */
-export interface ApprovalContext {
-  nodeId: string;
-  message: string;
+const approvalContextBaseSchema = z.object({
+  nodeId: z.string(),
+  /** Unique occurrence identity; absent only on pauses created by older builds. */
+  pauseId: z.string().optional(),
+  message: z.string(),
   /**
    * Distinguishes the pause kind — see `SuspendReason` above for the resume-path
    * pointer each variant carries:
@@ -651,21 +988,36 @@ export interface ApprovalContext {
    *    auto-resume hook re-enters the parent (executor.ts), which re-runs the
    *    workflow node, finds the child terminal, and threads its output. NO
    *    node_completed is written for the parent's node on this pause.
+   *  - `fan_out`          — a `fan_out:` workflow node (#4044) whose children have not
+   *    all finished because some paused. `nodeId` is the fan-out node, `childRunIds`
+   *    the children it waits on. Each child is answered by its own run id; the parent
+   *    re-enters once `isFanOutBlockReleased` holds and joins as usual.
    */
-  type?: SuspendReason;
+  type: suspendReasonSchema.optional(),
   /**
    * Child run id when `type === 'child_workflow'` — the specific paused sub-run
    * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
    * child of the same parent can't trigger the wrong re-entry.
    */
-  childRunId?: string;
+  childRunId: z.string().optional(),
+  /**
+   * `type === 'fan_out'` only: every non-terminal child of the node at pause time, in
+   * item order. A paused child keeps its `max_parallel` slot, so this holds at most
+   * `max_parallel` ids.
+   */
+  childRunIds: z.array(z.string()).optional(),
+  /**
+   * `type === 'fan_out'` only: items with no child run yet because the `max_parallel`
+   * window is full of unfinished children.
+   */
+  unspawnedItems: z.number().int().min(0).optional(),
   /**
    * Set only on an ESCALATED pause: a `gate:` node that is the sole terminal sink
    * of a `loop_group` body (#2707 step 3), still `type: 'approval'`. The enclosing
    * loop_group's own id occupies `nodeId` — required for the top-level DAG's
    * resume walk to find it (it only knows top-level node ids, never a nested body
    * id) — so this field carries the body gate's own bare id, the one piece the
-   * rewrite would otherwise lose. `approveWorkflow`/`rejectWorkflow`/
+   * group address would otherwise hide. `approveWorkflow`/`rejectWorkflow`/
    * `respondToWorkflowWithDeclaredDecision` read it to namespace the resolution's
    * `node_completed` event as `<nodeId>.<bodyGateId>` instead of bare `nodeId` —
    * the exact `<groupId>.<bodyId>` step name #2748's `outerNodeOutputs`
@@ -673,15 +1025,15 @@ export interface ApprovalContext {
    * findable again after a resume the same way any other body node's output is.
    * Absent for every other pause kind, including an ordinary top-level gate.
    */
-  bodyGateId?: string;
+  bodyGateId: z.string().optional(),
   /** Current loop iteration when paused (interactive loops only). */
-  iteration?: number;
+  iteration: z.number().optional(),
   /**
    * Session ID to restore on resume (interactive loops only). Gate pauses write an
    * explicit null when the loop has no session cursor to restore; readers treat that
    * exactly like an absent key.
    */
-  sessionId?: string | null;
+  sessionId: z.string().nullable().optional(),
   /**
    * Provider that created `sessionId` (#1992). Persisted by loop_group gates and
    * restored together with the session id so a resumed loop never threads the
@@ -690,37 +1042,15 @@ export interface ApprovalContext {
    * Absent on single-node loop gates — those restore the session into the same
    * node, so the provider is the same by construction.
    */
-  sessionProvider?: string | null;
+  sessionProvider: z.string().nullable().optional(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
   /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
-  captureResponse?: boolean;
+  captureResponse: z.boolean().optional(),
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
-  onRejectPrompt?: string;
+  onRejectPrompt: z.string().optional(),
   /** Max rejection attempts before cancellation (default 3). */
-  onRejectMaxAttempts?: number;
-  /**
-   * The gate's declared decisions (#2707 step 1), snapshotted at pause time so
-   * approve/reject handlers don't need the workflow def to know the vocabulary
-   * — mirrors why `onRejectPrompt` is snapshotted rather than looked up.
-   * Always populated (synthesized default pair, `on_reject`-translated pair,
-   * or the authored array) regardless of mode — see `decisionsAuthored` for
-   * the actual mode signal. Absent on gates paused by builds that predate
-   * this field.
-   */
-  decisions?: { id: string; label?: string }[];
-  /**
-   * True only when the author wrote `approval.decisions:` explicitly in YAML
-   * (mirrors `GateNode.decisionsAuthored` — see its doc for the full
-   * rationale). THIS, not `onRejectPrompt`'s absence, is the signal
-   * `approveWorkflow`/`rejectWorkflow` use to pick the new structured-output
-   * resolution path: no workflow authored before #2707 step 1 can have
-   * written `decisions:`, so keying the new behavior on it — rather than on
-   * "no on_reject configured" — guarantees every already-authored gate
-   * (bare, or `capture_response`-only) keeps its exact pre-PR output shape
-   * AND reject-always-cancels behavior, unaffected by this PR. Absent (falsy)
-   * on gates paused by builds that predate this field, which resolves to
-   * legacy behavior — the safe default.
-   */
-  decisionsAuthored?: boolean;
+  onRejectMaxAttempts: z.number().optional(),
   /**
    * Gate resolution marker. Set by approve/reject handlers while the run STAYS
    * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
@@ -733,7 +1063,14 @@ export interface ApprovalContext {
    * approval object, so a gate that sets no `resolved` stores none and a prior
    * gate's 'approved' cannot survive to block it (#2673).
    */
-  resolved?: 'approved' | 'rejected' | null;
+  resolved: z.enum(['approved', 'rejected']).nullable().optional(),
+  /**
+   * Audit facts of the answer that set `resolved`: the surface it arrived through
+   * (`cli`, `api`, `manage_run`, or a chat platform id) and when it was committed. Never
+   * who answered. Replaced with the rest of the context by the next pause.
+   */
+  answeredVia: recordSurfaceSchema.optional(),
+  answeredAt: z.string().optional(),
   /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the
    * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
@@ -741,13 +1078,13 @@ export interface ApprovalContext {
    * finalizes the node from `signaledOutput` instead of re-running. Cleared by the next
    * fresh pause the same way `resolved` is — the whole approval object is replaced.
    */
-  completionSignaled?: boolean | null;
+  completionSignaled: z.boolean().nullable().optional(),
   /**
    * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
    * persisted so the finalize path can write node_completed with the real output for
    * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
    */
-  signaledOutput?: string | null;
+  signaledOutput: z.string().nullable().optional(),
   /**
    * Interactive-loop only. The signal-bearing iteration's structured payload (#2637),
    * persisted beside `signaledOutput` so a bare-approve finalize attaches the same
@@ -758,7 +1095,7 @@ export interface ApprovalContext {
    * null otherwise. Absent on gates paused by builds predating this field — those
    * finalize text-only, exactly as before.
    */
-  signaledStructuredOutput?: unknown;
+  signaledStructuredOutput: z.unknown().optional(),
   /**
    * Interactive-loop only, and written by the single-node `loop` gate ONLY. Cumulative
    * token usage through this pause, restored when the loop resumes so later gates and
@@ -766,11 +1103,11 @@ export interface ApprovalContext {
    * compatibility with already-paused runs. A `loop_group` gate deliberately omits it:
    * body nodes persist their own namespaced usage rows before the pause.
    */
-  signaledTokens?: TokenUsage | null;
+  signaledTokens: tokenUsageSchema.nullable().optional(),
   /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
-  signaledCostUsd?: number | null;
+  signaledCostUsd: z.number().nullable().optional(),
   /** Original execution facts retained across a gate; no private session handle. */
-  execution?: NodeExecutionMetadata;
+  execution: nodeExecutionMetadataSchema.optional(),
   /**
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,
@@ -779,8 +1116,31 @@ export interface ApprovalContext {
    * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
    * that predate this field; those resume from the current prompt or command source.
    */
-  commandSnapshot?: string | null;
-}
+  commandSnapshot: z.string().nullable().optional(),
+});
+
+/** Authored vocabularies are required and nonempty; older default gates may omit both fields. */
+const approvalDecisionsSchema = z.union([
+  z.object({
+    decisionsAuthored: z.literal(true),
+    decisions: z.array(approvalDecisionConfigSchema).min(1),
+  }),
+  z.object({
+    decisionsAuthored: z.literal(false).optional(),
+    decisions: z.array(approvalDecisionConfigSchema).optional(),
+  }),
+]);
+
+export const approvalContextSchema = approvalContextBaseSchema.and(approvalDecisionsSchema);
+export const expectedApprovalGateSchema = z.union([
+  z.string().min(1),
+  z.object({ nodeId: z.string().min(1), pauseId: z.string().min(1) }),
+]);
+
+export type ApprovalContext = z.infer<typeof approvalContextSchema>;
+
+/** Old node-only buttons may resolve only contexts without a pause identity. */
+export type ExpectedApprovalGate = z.infer<typeof expectedApprovalGateSchema>;
 
 /**
  * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
@@ -812,7 +1172,7 @@ export function isGateResolved(approval: ApprovalContext): boolean {
 
 /**
  * Type guard for ApprovalContext.
- * Validates that the value is an object with the required nodeId and message fields.
+ * Validates the gate identity, message and decision vocabulary.
  * Use before accessing `workflowRun.metadata.approval` to prevent runtime throws on
  * malformed metadata (e.g., stale data from older runs where metadata shape differs).
  */
@@ -821,7 +1181,8 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
     typeof val === 'object' &&
     val !== null &&
     typeof (val as Record<string, unknown>).nodeId === 'string' &&
-    typeof (val as Record<string, unknown>).message === 'string'
+    typeof (val as Record<string, unknown>).message === 'string' &&
+    approvalDecisionsSchema.safeParse(val).success
   );
 }
 
@@ -829,38 +1190,133 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 // RunAttention — "what does this run need from outside, if anything"
 // ---------------------------------------------------------------------------
 
+export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
+
+export const toolCallAttentionSchema = z
+  .object({
+    streamId: z.string().min(1),
+    nodeId: z.string().min(1),
+    provider: z.string().min(1),
+    toolCallId: z.string().min(1),
+    name: z.string().min(1).max(1024),
+    title: z.string().max(1024).optional(),
+    startedAt: z.iso.datetime(),
+    lastProgressAt: z.iso.datetime(),
+    raisedAt: z.iso.datetime(),
+    thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
+export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
+
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
-export interface GateAddress {
-  /** The run the response is recorded against. NOT always the run that was asked about. */
-  runId: string;
-  /** The gate node inside that run. */
-  nodeId: string;
-}
+export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string() });
+export type GateAddress = z.infer<typeof gateAddressSchema>;
 
 /**
- * Why a run cannot be described. An enum rather than prose alone because the
+ * Why a run cannot be described, or why nothing will continue it unless someone looks.
+ * An enum rather than prose alone because the
  * reasons are not interchangeable to a reader: `assertRejectable` still rejects a
  * run whose gate metadata is unreadable, but must refuse one whose gate type this
  * build does not know — and no caller should tell those apart by matching strings.
  *
- * `malformed_gate`, `unrecognized_gate_type`, and `child_pointer_missing` come from
+ * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
+ * `child_pointer_missing`, and `source_release_not_continued` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
- * produced by a reader that follows a `blocked_on_child` pointer into the database
- * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
+ * produced by a reader that follows a `blocked_on_child` or `blocked_on_children`
+ * pointer into the store (`resolveRunAttention`); the projection is pure and never does.
  */
-export type RunAttentionUnreadableReason =
-  | 'malformed_gate'
-  | 'unrecognized_gate_type'
-  | 'child_pointer_missing'
-  | 'child_run_missing'
-  | 'child_chain_too_deep';
+export const runAttentionUnreadableReasonSchema = z.enum([
+  'malformed_tool_call_attention',
+  'malformed_gate',
+  'unrecognized_gate_type',
+  'child_pointer_missing',
+  'child_run_missing',
+  'child_chain_too_deep',
+  'source_release_not_continued',
+]);
+export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
+const terminalAttentionShape = {
+  kind: z.literal('terminal'),
+  runId: z.string(),
+  status: terminalWorkflowRunStatusSchema,
+};
+
+const nonTerminalRunAttentionSchemas = [
+  z.object({
+    kind: z.literal('stalled_tool_calls'),
+    runId: z.string(),
+    status: z.literal('running'),
+    calls: z.array(
+      toolCallAttentionSchema.extend({ elapsedMs: z.number(), stalledForMs: z.number() })
+    ),
+  }),
+  z.object({
+    kind: z.literal('awaiting_response'),
+    runId: z.string(),
+    respondTo: gateAddressSchema,
+    message: z.string(),
+    occurrence: z.string(),
+  }),
+  z.object({
+    kind: z.literal('attention'),
+    runId: z.string(),
+    nodeId: z.string(),
+    message: z.string(),
+    occurrence: z.string(),
+    form: attentionFormSchema,
+    options: z.array(attentionOptionSchema),
+  }),
+  z.object({
+    kind: z.literal('usage_limit'),
+    runId: z.string(),
+    nodeId: z.string(),
+    resumeAt: z.string().datetime(),
+  }),
+  z.object({
+    kind: z.literal('blocked_on_child'),
+    runId: z.string(),
+    childRunId: z.string(),
+    nodeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal('blocked_on_children'),
+    runId: z.string(),
+    nodeId: z.string(),
+    childRunIds: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal('unreadable'),
+    runId: z.string(),
+    reason: runAttentionUnreadableReasonSchema,
+    detail: z.string(),
+  }),
+] as const;
+
+export function createRunAttentionSchema<T extends z.ZodDate | z.ZodString>(
+  timestamp: T
+): z.ZodDiscriminatedUnion<
+  [
+    ...typeof nonTerminalRunAttentionSchemas,
+    z.ZodObject<typeof terminalAttentionShape & { at: z.ZodNullable<T> }>,
+  ],
+  'kind'
+> {
+  return z.discriminatedUnion('kind', [
+    ...nonTerminalRunAttentionSchemas,
+    z.object({ ...terminalAttentionShape, at: z.nullable(timestamp) }),
+  ]);
+}
+
+export const runAttentionSchema = createRunAttentionSchema(z.date());
 /**
- * A run has reached a state it will not leave without someone acting.
+ * Terminal and gate attention, or advisory attention for overdue live tools.
  *
- * `runAttention` returns null while the run is still progressing under its own
- * power, which includes a resolved gate awaiting auto-resume and a `wait:` node
- * whose timer or event has not fired.
+ * `runAttention` returns null for ordinary progress without an advisory, including
+ * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
+ * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
+ * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
@@ -870,18 +1326,10 @@ export type RunAttentionUnreadableReason =
  * wake a host for normal progress; returning null would strand one when the child
  * really is on a gate. So the projection reports what it knows — this run is blocked
  * on that child — and a reader with database access resolves the chain.
+ * `blocked_on_children` is the same for a fan-out node waiting on several children:
+ * each child is its own queue item, never the parent's.
  */
-export type RunAttention =
-  | { kind: 'terminal'; runId: string; status: RunTerminalStatus; at: Date | null }
-  | { kind: 'awaiting_response'; runId: string; respondTo: GateAddress; message: string }
-  | {
-      kind: 'action_required';
-      runId: string;
-      nodeId: string;
-      message: string;
-    }
-  | { kind: 'blocked_on_child'; runId: string; childRunId: string; nodeId: string }
-  | { kind: 'unreadable'; runId: string; reason: RunAttentionUnreadableReason; detail: string };
+export type RunAttention = z.infer<typeof runAttentionSchema>;
 
 /** The run shape `runAttention` reads. Structural so a caller can pass a partial row. */
 export interface RunAttentionInput {
@@ -900,40 +1348,95 @@ function unreadableAttention(
 }
 
 /**
+ * The occurrence id of a gate pause: its `pauseId`, or `legacy:<nodeId>` for a gate paused
+ * before pause identities existed. Run-attention reports it and answers record it, so a
+ * reader can tie an answer to the exact pause it resolved.
+ */
+export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pauseId'>): string {
+  return approval.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${approval.nodeId}`;
+}
+
+/**
  * The single derivation of "what does this run need from outside, if anything".
  *
- * Pure: no database, no clock, no I/O. The run ROW is the authority — attention is
- * never derived from the event log, because terminal transitions exist that write no
- * terminal event (`resolveAndCancelApprovalGate` cancels a run while inserting only
- * `approval_received`), and two gate pauses write an unreliable event or none at all.
+ * No database or I/O. The clock computes display durations only. The run row is
+ * the authority: attention is never derived from the event log. Every write that
+ * changes it commits an event, which the attention watch uses only as a wake, because
+ * a delivered event can later be retracted by recovery.
  *
  * Consumed by `assertApprovable`/`assertRejectable`, the server approve/reject/respond
- * routes, the orchestrator's paused-gate prompt section, and `waitForRunAttention`.
+ * routes, the orchestrator's paused-gate prompt section, `waitForRunAttention`, and the
+ * attention queue (`attention-queue.ts`).
  * Before this existed each of those re-derived the same four steps independently, in
  * three different orders, and the load-bearing "act on the child, not this run"
  * conclusion survived only inside an error string.
  */
-export function runAttention(run: RunAttentionInput): RunAttention | null {
+export function runAttention(run: RunAttentionInput, now = Date.now()): RunAttention | null {
   if (isTerminalRunStatus(run.status)) {
     return { kind: 'terminal', runId: run.id, status: run.status, at: run.completed_at ?? null };
   }
+  if (run.status === 'running') {
+    const raw = run.metadata?.[TOOL_CALL_ATTENTION_METADATA_KEY];
+    if (raw === undefined) return null;
+    const parsed = toolCallAttentionArraySchema.safeParse(raw);
+    if (!parsed.success)
+      return unreadableAttention(
+        run.id,
+        'malformed_tool_call_attention',
+        'running with unreadable tool-call attention'
+      );
+    return parsed.data.length === 0
+      ? null
+      : {
+          kind: 'stalled_tool_calls',
+          runId: run.id,
+          status: 'running',
+          calls: parsed.data.map(call => ({
+            ...call,
+            elapsedMs: Math.max(0, now - Date.parse(call.startedAt)),
+            stalledForMs: Math.max(0, now - Date.parse(call.lastProgressAt)),
+          })),
+        };
+  }
   if (run.status !== 'paused') return null;
 
+  // A release is written only by the running -> paused transition and cleared on resume,
+  // so while it is present it is why the run is paused; any gate or wait beside it is
+  // history. The host continues a released run, except a container run.
+  const release = readSourceRelease(run.metadata);
+  if (release) {
+    return isContainerRun(run)
+      ? unreadableAttention(
+          run.id,
+          'source_release_not_continued',
+          `paused because a host could not read its frozen source for node '${release.nodeId}'; a container run is only resumed by hand`
+        )
+      : null;
+  }
+
   const wait = run.metadata?.wait;
+  if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
+    return { kind: 'usage_limit', runId: run.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+  }
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
+    // Answered: like a resolved gate, it waits on the machine, not on an answer.
+    if (wait.answer !== undefined) return null;
     return {
-      kind: 'action_required',
+      kind: 'attention',
       runId: run.id,
       nodeId: workflowWaitStepName(wait),
       message: wait.message,
+      occurrence: attentionOccurrence(wait),
+      form: attentionForm(wait),
+      options: [...attentionOptions(wait)],
     };
   }
 
   const raw = run.metadata?.approval;
   if (raw === undefined) {
-    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is
-    // a run parked with nothing that describes why, which nothing but an outside
-    // response can unstick.
+    // No gate recorded. A durable `wait:` owns its own resumption. Anything else is a
+    // run parked with nothing that describes why, which nothing but an outside response
+    // can unstick.
     return isWorkflowWaitContext(run.metadata?.wait)
       ? null
       : unreadableAttention(
@@ -979,6 +1482,21 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
       nodeId: raw.nodeId,
     };
   }
+  if (raw.type === 'fan_out') {
+    if (raw.childRunIds === undefined || raw.childRunIds.length === 0) {
+      return unreadableAttention(
+        run.id,
+        'child_pointer_missing',
+        `blocked on fan-out sub-runs at node '${raw.nodeId}' but no child run ids are recorded`
+      );
+    }
+    return {
+      kind: 'blocked_on_children',
+      runId: run.id,
+      nodeId: raw.nodeId,
+      childRunIds: raw.childRunIds,
+    };
+  }
 
   // Every remaining recognized reason — `approval`, `interactive_loop`, `writeback`,
   // and `undefined` for legacy plain gates — needs a response from outside the run.
@@ -989,7 +1507,51 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
     runId: run.id,
     respondTo: { runId: run.id, nodeId: raw.nodeId },
     message: raw.message,
+    occurrence: gateOccurrence(raw),
   };
+}
+
+/** The run-attention of a run the attention queue lists. */
+export type QueuedRunAttention = Extract<
+  RunAttention,
+  { kind: 'attention' | 'awaiting_response' | 'usage_limit' | 'unreadable' }
+>;
+
+/**
+ * The run-attention that puts `run` in the attention queue, if any: a paused run with a
+ * pause someone must answer, a paused run waiting for a provider usage or rate limit,
+ * which an operator may want to see or cancel, or a paused run nothing can read or will
+ * continue, which
+ * needs someone to look. The queue's list and single read both build items by this one rule.
+ */
+export function queuedRunAttention(
+  run: RunAttentionInput,
+  attention: RunAttention | null = runAttention(run)
+): QueuedRunAttention | undefined {
+  if (run.status !== 'paused' || attention === null) return undefined;
+  switch (attention.kind) {
+    case 'attention':
+    case 'awaiting_response':
+    case 'usage_limit':
+    case 'unreadable':
+      return attention;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * True when the attention queue reads `run`: a queue item on its own
+ * (`queuedRunAttention`), or a paused parent blocked on sub-runs, which resolves to a
+ * child's item or, when its sub-run tree cannot be read, to an unreadable item of its own.
+ */
+export function isAttentionQueueRow(run: RunAttentionInput): boolean {
+  const attention = runAttention(run);
+  return (
+    queuedRunAttention(run, attention) !== undefined ||
+    (run.status === 'paused' &&
+      (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children'))
+  );
 }
 
 /**
@@ -1002,8 +1564,8 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
  * because `rejectWorkflow`'s stage-rework path never writes `node_completed`
  * (only `metadata.approval.resolved`/`rejection_reason`/`rejection_count`).
  *
- * - `interactive_loop` / `child_workflow` — always true: both kinds are
- *   re-entered by the node executor's own re-read of `metadata.approval`,
+ * - `interactive_loop` / `child_workflow` / `fan_out` — always true: these kinds
+ *   are re-entered by the node executor's own re-read of its state,
  *   independent of `priorCompletedNodes` (`executeLoopNode`/
  *   `executeLoopGroupNode`/`executeWorkflowNode` in dag-executor.ts).
  * - `writeback` — always false: there is no DAG node behind this gate to
@@ -1026,6 +1588,7 @@ export function reRunsOwnNodeOnResume(
   switch (approval.type) {
     case 'interactive_loop':
     case 'child_workflow':
+    case 'fan_out':
       return true;
     case 'writeback':
       return false;
@@ -1049,7 +1612,8 @@ export function reRunsOwnNodeOnResume(
 /**
  * True when `run` is currently paused blocked on the child sub-run `childRunId`
  * (#2121 Phase 2) — i.e. a `paused` run whose `metadata.approval` is a
- * `child_workflow` gate pointing at that child. This is the single source of the
+ * `child_workflow` gate pointing at that child, or a `fan_out` gate listing it in
+ * `childRunIds`. This is the single source of the
  * "parent blocked on this child" invariant, shared by the abandon-strand detector
  * (`findParentBlockedOn`, @archon/core) and the auto-resume hook
  * (`maybeResumeParentRun`, @archon/workflows) so the two cannot drift if the gate
@@ -1061,11 +1625,30 @@ export function isRunBlockedOnChild(
 ): boolean {
   if (run.status !== 'paused') return false;
   const approval = run.metadata?.approval;
-  return (
-    isApprovalContext(approval) &&
-    approval.type === 'child_workflow' &&
-    approval.childRunId === childRunId
-  );
+  if (!isApprovalContext(approval)) return false;
+  if (approval.type === 'child_workflow') return approval.childRunId === childRunId;
+  if (approval.type === 'fan_out') return approval.childRunIds?.includes(childRunId) === true;
+  return false;
+}
+
+/**
+ * True when a parent paused on a `fan_out` gate should continue: every child it waits
+ * on is terminal (or has no row), or a slot is free for an unspawned item. A paused
+ * child holds its `max_parallel` slot, so with `unspawnedItems > 0` one finished child
+ * is enough to let the next item start. `childStatus` returns undefined for a missing row.
+ * False for every other gate type.
+ */
+export function isFanOutBlockReleased(
+  approval: ApprovalContext,
+  childStatus: (childRunId: string) => WorkflowRunStatus | undefined
+): boolean {
+  if (approval.type !== 'fan_out') return false;
+  const ids = approval.childRunIds ?? [];
+  const finished = ids.filter(id => {
+    const status = childStatus(id);
+    return status === undefined || isTerminalRunStatus(status);
+  }).length;
+  return finished === ids.length || ((approval.unspawnedItems ?? 0) > 0 && finished > 0);
 }
 
 /**
@@ -1109,3 +1692,18 @@ type AssertNodeOutputCoversNodeState = NodeOutput['state'] extends NodeState
   : never;
 const nodeOutputStateCoverage: AssertNodeOutputCoversNodeState = true;
 void nodeOutputStateCoverage; // suppress unused-variable lint warning
+
+export const ownedWorktreeSchema = z
+  .object({
+    envId: z.string().min(1),
+    creationId: z.string().uuid(),
+  })
+  .strict();
+export type OwnedWorktree = z.infer<typeof ownedWorktreeSchema>;
+
+export function readOwnedWorktree(
+  metadata: Record<string, unknown> | undefined
+): OwnedWorktree | undefined {
+  const result = ownedWorktreeSchema.safeParse(metadata?.owned_worktree);
+  return result.success ? result.data : undefined;
+}

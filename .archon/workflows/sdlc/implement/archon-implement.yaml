@@ -1,7 +1,7 @@
 name: archon-implement
 description: |
-  Implement a change and keep working until it is complete and the project's own
-  checks pass. Commits as it goes; opens no PR. The input is anything intent-shaped:
+  Implement a change and keep working until it is complete and the focused checks
+  on what it changed pass. Commits as it goes; opens no PR. The input is anything intent-shaped:
   a plan (path or inline), review findings, a CI failure to fix, or a plain
   description of what to build.
 
@@ -26,13 +26,16 @@ nodes:
   # Run success ≠ green. The loop completes on `done`, which deliberately includes
   # a definitive blocked decline (green: false) — so a completed run's status never
   # certifies the work. Consumers read $implement.output.green; compositions gate on
-  # it deterministically before spending or shipping (deliver does), and the
+  # it deterministically before spending or shipping (deliver's pr step does), and the
   # workflow's outcome_field records it as the run's authored outcome.
+  # Each turn is a fresh session: work that continues past a seam is carried by its
+  # commits and implementation.md, never by a conversation that grows with the work.
   - id: implement
     loop:
       command: implement
       until_field: done
       max_iterations: 5
+      fresh_context: true
     output_type: implementation
     output_format:
       type: object
@@ -47,8 +50,7 @@ nodes:
         # any schema whose `required` omits a declared property, so optionality has to
         # live inside the type rather than in what `required` leaves out: every
         # archon-deliver run on a Codex config died at the first turn while this
-        # was optional by omission. '' is the value gate-green.ts already treats as
-        # no cause declared, so the gate that spends on this verdict is unchanged.
+        # was optional by omission.
         red_cause:
           type: string
           enum: [introduced, inherited, environment, incomplete, ""]

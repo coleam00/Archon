@@ -56,7 +56,7 @@ Most requests land here. The short version; details in the running reference:
 
 5. Find the run id (`archon workflow runs --json`), then arm
    `archon workflow wait <run-id> --json` as a background task of your harness —
-   it blocks until the run ends or needs a human decision, waking you at exactly
+   it blocks until the run ends or needs attention, waking you at exactly
    the right moment. `archon workflow get <run-id> --json` is for on-demand state,
    not a polling loop.
 6. When a run pauses at a gate, resolve it deliberately:
@@ -67,11 +67,8 @@ Four hard rules:
 - Never launch against a thin brief. A weak input does not produce a weak result — it
   produces a confident, well-formed answer to the wrong question, at full price.
 
-- A fresh launch of an interactive-class workflow refuses `--detach`. Run that
-  launch in the foreground as a background *task* of your harness. Once the run
-  pauses, `resume`/`approve`/`reject`/`respond --detach` are supported continuation
-  actions.
-- Prefer `--detach` if the workflow is not interactive.
+- Prefer `--detach`. A run that pauses for an answer waits in the attention queue;
+  `resume`/`approve`/`reject`/`respond --detach` continue it.
 - One workflow per shell; multiple tasks = separate invocations, separate branches.
 
 ## Gotchas

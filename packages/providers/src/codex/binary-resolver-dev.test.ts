@@ -53,13 +53,13 @@ describe('resolveCodexBinaryPath (dev mode)', () => {
     });
   });
 
-  test('an invalid config pin fails instead of using the SDK binary', async () => {
+  test('an invalid config pin fails instead of using the bundled binary', async () => {
     await expect(resolveCodexBinaryPath('/missing/config/codex')).rejects.toThrow(
       'assistants.codex.codexBinaryPath'
     );
   });
 
-  test('an invalid env pin fails instead of using the SDK binary, taking precedence over a valid config path', async () => {
+  test('an invalid env pin fails instead of using the bundled binary, taking precedence over a valid config path', async () => {
     process.env.CODEX_BIN_PATH = '/missing/env/codex';
     await expect(resolveCodexBinaryPath(process.execPath)).rejects.toThrow('CODEX_BIN_PATH');
   });

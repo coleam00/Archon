@@ -14,6 +14,8 @@ describe('detached install context', () => {
       ARCHON_DOCKER: 'true',
       WORKSPACE_PATH: '/workspace',
       HOME: '/repo-user',
+      // homedir() reads USERPROFILE on Windows, so it derives the home like HOME does.
+      USERPROFILE: 'C:\\Users\\repo-user',
     };
 
     restoreDetachedInstallContext(context, target);
@@ -29,11 +31,13 @@ describe('detached install context', () => {
       ARCHON_DOCKER: 'true',
       WORKSPACE_PATH: '/workspace',
       HOME: '/root',
+      USERPROFILE: 'C:\\Users\\parent',
     });
     const target: NodeJS.ProcessEnv = {};
 
     restoreDetachedInstallContext(context, target);
 
     expect(target).toEqual(context);
+    expect(target.USERPROFILE).toBe('C:\\Users\\parent');
   });
 });

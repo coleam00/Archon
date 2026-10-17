@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
@@ -6,10 +6,14 @@ import {
   type NodeInvocation,
 } from './schemas/node-execution';
 import {
+  DEFERRED_NODE_USAGE_EVENT_TYPE,
+  serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
   type SerializedNodeData,
   type SerializedNodeEvent,
+  type SerializedDeferredNodeUsageEvent,
 } from './node-record-serialization';
+import { outputPathsFromRootFields } from './output-ref';
 
 export interface NodeRecordEventEnvelope {
   workflow_run_id: string;
@@ -24,7 +28,7 @@ export interface ReadNodeRecordEvent {
   eventType: SerializedNodeEvent['event_type'];
   data: SerializedNodeData;
   /** Raw values retained so accounting can diagnose malformed historical usage. */
-  rawUsage: { tokens?: unknown; costUsd?: unknown };
+  rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown };
   metadata?: NodeExecutionMetadata;
 }
 
@@ -48,10 +52,21 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   const projected: Record<string, unknown> = {};
   for (const [key, schema] of Object.entries(serializedNodeDataSchema.shape)) {
     if (!Object.hasOwn(raw, key)) continue;
+    if (key === 'declared_output_paths') {
+      projected[key] = serializedNodeDataSchema.shape.declared_output_paths
+        .unwrap()
+        .parse(raw[key]);
+      continue;
+    }
     const parsed = schema.safeParse(raw[key]);
     if (parsed.success) projected[key] = parsed.data;
   }
-  return projected as SerializedNodeData;
+  const data = projected as SerializedNodeData;
+  // A row written before nested paths carries only the root-field projection.
+  if (data.declared_output_paths === undefined && data.declared_fields !== undefined) {
+    data.declared_output_paths = outputPathsFromRootFields(data.declared_fields);
+  }
+  return data;
 }
 
 function lifecycleFor(
@@ -70,6 +85,9 @@ function lifecycleFor(
             error: data.error,
             ...(data.retryable === false ? { retryable: false } : {}),
             ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
+            ...(data.provider_failure !== undefined
+              ? { providerFailure: data.provider_failure }
+              : {}),
           }
         : undefined;
     case 'node_skipped':
@@ -133,6 +151,10 @@ export function readNodeRecordEvent(
     data,
     rawUsage: {
       ...(Object.hasOwn(raw, 'tokens') ? { tokens: raw.tokens } : {}),
+      ...(metadata?.spend.tokens.source === 'unavailable' &&
+      metadata.spend.tokens.reason === 'incomplete'
+        ? { tokensUnknown: true }
+        : {}),
       ...(Object.hasOwn(raw, 'cost_usd') ? { costUsd: raw.cost_usd } : {}),
     },
     ...(metadata === undefined ? {} : { metadata }),
@@ -141,4 +163,25 @@ export function readNodeRecordEvent(
 
 export function nodeInvocationKey(path: string, loopPath: NodeInvocation['loopPath']): string {
   return JSON.stringify([path, loopPath]);
+}
+
+export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
+  | (Pick<ReadNodeRecordEvent, 'path' | 'rawUsage'> & {
+      data: SerializedDeferredNodeUsageEvent['data'];
+    })
+  | undefined {
+  if (!envelope.step_name || envelope.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE)
+    return undefined;
+  const raw = readNodeRecordData(envelope.data);
+  const data = serializedDeferredNodeUsageDataSchema.parse(projectSerializedData(raw));
+  return {
+    path: envelope.step_name,
+    data,
+    rawUsage: {
+      tokens: raw.tokens,
+      tokensUnknown:
+        data.spend?.tokens.source === 'unavailable' && data.spend.tokens.reason === 'incomplete',
+      costUsd: raw.cost_usd,
+    },
+  };
 }

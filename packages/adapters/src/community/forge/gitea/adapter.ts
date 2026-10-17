@@ -4,6 +4,8 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
+import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -22,6 +24,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -30,11 +33,9 @@ import {
   addSafeDirectory,
   toRepoPath,
   toBranchName,
-  isWorktreePath,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { WebhookEvent } from './types';
@@ -54,6 +55,10 @@ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
 export class GiteaAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private baseUrl: string;
   private token: string;
   private webhookSecret: string;
@@ -87,7 +92,7 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info({ botMention: this.botMention, baseUrl: this.baseUrl }, 'adapter_initialized');
+    getLog().info({ baseUrl: this.baseUrl }, 'adapter_initialized');
   }
 
   /**
@@ -239,7 +244,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'gitea';
+    return giteaPolicy.id;
   }
 
   /**
@@ -269,7 +274,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Verify webhook signature using HMAC SHA-256
    * Gitea uses X-Gitea-Signature header with raw hex (no sha256= prefix)
    */
-  private verifySignature(payload: string, signature: string): boolean {
+  private verifySignature(payload: Uint8Array, signature: string): boolean {
     try {
       const hmac = createHmac('sha256', this.webhookSecret);
       const digest = hmac.update(payload).digest('hex');
@@ -481,23 +486,23 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Ensure repository is cloned and ready.
    * Uses @archon/git functions for safe, testable git operations.
    *
-   * For new codebases: clone (directory won't exist)
-   * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
+   * Without a checkout (no source/ or an empty one): clone
+   * With content (a checkout, or a registered subdirectory of one): sync if
+   * shouldSync=true, skip if shouldSync=false
    *
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing checkout (pass true to ensure latest code)
    */
   private async ensureRepoReady(
     owner: string,
     repo: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    // Check if directory exists
-    let directoryExists = false;
+    const { name: projectName, default_cwd: repoPath } = codebase;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -508,10 +513,9 @@ export class GiteaAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -531,13 +535,16 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Parse URL to get host for authenticated clone
     const urlObj = new URL(this.baseUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}.git`;
 
     const token = process.env.GITEA_TOKEN;
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
@@ -570,8 +577,6 @@ export class GiteaAdapter implements IPlatformAdapter {
       const unhandled: never = cloneResult.error;
       throw new Error(`Unhandled clone error: ${JSON.stringify(unhandled)}`);
     }
-
-    await addSafeDirectory(toRepoPath(repoPath));
   }
 
   /**
@@ -639,12 +644,14 @@ export class GiteaAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
-        getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
+      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
+        getLog().info(
+          { codebaseName: existing.name, canonicalPath: checkout },
+          'stale_worktree_path_fixed'
+        );
       }
 
       getLog().info(
@@ -654,16 +661,14 @@ export class GiteaAdapter implements IPlatformAdapter {
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    // Include owner in name to distinguish repos with same name from different owners
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info({ codebaseName: codebase.name, path: codebase.default_cwd }, 'codebase_created');
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   /**
@@ -681,7 +686,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     getLog().info({ conversationId, merged }, 'isolation_cleanup_started');
 
     try {
-      await onConversationClosed('gitea', conversationId, { merged });
+      await onConversationClosed(giteaPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'isolation_cleanup_complete');
     } catch (error) {
       const err = error as Error;
@@ -743,25 +748,25 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
   /**
    * Handle incoming webhook event
    */
-  async handleWebhook(payload: string, signature: string): Promise<void> {
-    // 1. Verify signature
+  async handleWebhook(payload: Uint8Array, signature: string): Promise<void> {
+    // 1. Verify signature over the bytes Gitea signed, before any decoding
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
-        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.length },
+        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.byteLength },
         'invalid_webhook_signature'
       );
       return;
     }
 
-    // 2. Parse event
-    const event = JSON.parse(payload) as WebhookEvent;
+    // 2. Parse event (the default decoder drops a leading BOM, which JSON.parse rejects)
+    const event = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(payload)
+    ) as WebhookEvent;
 
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGiteaUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'unauthorized_webhook');
+      getLog().info({ platform: giteaPolicy.id }, 'unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
@@ -793,13 +798,13 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // Primary: Check for hidden marker in comment body (works with user's token)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.comment?.user?.login }, 'ignoring_marked_comment');
+      getLog().debug('ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author (works with dedicated bot account)
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'ignoring_own_comment');
+      getLog().debug('ignoring_own_comment');
       return;
     }
 
@@ -818,25 +823,18 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (attributedLogin) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'gitea',
+          giteaPolicy.id,
           attributedLogin,
           attributedLogin
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn(
-          { err: toError(err), giteaLogin: attributedLogin },
-          'gitea.user_resolve_failed'
-        );
+        getLog().warn({ err: toError(err), platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
       }
     }
 
     // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
-
-    // 8. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
 
     // 9. Get/create codebase (checks for existing first!)
     const {
@@ -845,8 +843,20 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 9b. Link conversation to codebase
-    if (isNewConversation) {
+    // 10. Get default branch from repository info
+    const defaultBranch = event.repository.default_branch;
+
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation(
+      giteaPolicy.id,
+      conversationId,
+      codebase.id
+    );
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
       try {
         await db.updateConversation(existingConv.id, {
           codebase_id: codebase.id,
@@ -864,12 +874,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         throw updateError;
       }
     }
-
-    // 10. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
     // 12. Auto-load commands if new codebase
     if (isNewCodebase) {
@@ -914,7 +918,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'slash_command_processing');
+      getLog().debug('slash_command_processing');
 
       // Add issue/PR reference context
       if (isPR && pullRequest) {
@@ -948,7 +952,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
-          userId: archonUserId,
+          actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
         });
       } catch (error) {
         const err = toError(error);

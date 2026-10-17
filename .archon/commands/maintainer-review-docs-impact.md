@@ -61,7 +61,7 @@ For each user-facing change in the diff, identify the docs that should be update
 - `packages/docs-web/src/content/docs/deployment/` — Docker, cloud.
 - `CLAUDE.md` — only if the change affects how *agents* working in this repo should behave.
 
-> **CHANGELOG.md is out of scope for this review.** The project's release process generates the changelog from squash-commit history at release time; contributors do not add CHANGELOG entries per PR. Do not flag a missing CHANGELOG entry under any severity.
+> **CHANGELOG.md is out of scope for this review.** At release time the release skill keeps any optional hand-written `[Unreleased]` entries and drafts entries for the remaining merged PRs; contributors are not required to add CHANGELOG entries per PR. Do not flag a missing CHANGELOG entry under any severity.
 
 ---
 

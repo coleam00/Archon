@@ -1,8 +1,15 @@
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { providerCapabilitiesSchema } from '@archon/provider-contract';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
+  maintainedProviderPluginId,
+  isMaintainedProviderPlugin,
   forgeManifestSchema,
-  forgeReleaseAsset,
+  type ChatManifest,
+  type ChatReceipt,
+  pluginReleaseAsset,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
@@ -63,6 +70,7 @@ describe('workflow-pack manifest', () => {
       { review: 'review/review.md' },
       { Review: 'review/review.yaml' },
       { 'owner/x': 'review/review.yaml' },
+      { review: 'review/review.yaml', again: 'review/review.yaml' },
     ]) {
       expect(pluginManifestSchema.safeParse({ ...pack, entrypoints }).success).toBe(false);
     }
@@ -99,13 +107,13 @@ describe('compatibility.archon', () => {
 
 describe('forge release asset', () => {
   test('names each asset from the executable and the Bun compile target', () => {
-    expect(forgeReleaseAsset('archon-forge-github', 'bun-linux-x64')).toBe(
+    expect(pluginReleaseAsset('archon-forge-github', 'bun-linux-x64')).toBe(
       'archon-forge-github-linux-x64'
     );
-    expect(forgeReleaseAsset('archon-forge-github', 'bun-windows-x64')).toBe(
+    expect(pluginReleaseAsset('archon-forge-github', 'bun-windows-x64')).toBe(
       'archon-forge-github-windows-x64.exe'
     );
-    expect(() => forgeReleaseAsset('archon-forge-github', 'bun-freebsd-x64')).toThrow();
+    expect(() => pluginReleaseAsset('archon-forge-github', 'bun-freebsd-x64')).toThrow();
   });
 });
 
@@ -155,3 +163,139 @@ describe('plugin receipt', () => {
     }
   });
 });
+
+const providerManifest = {
+  ...manifest,
+  schemaVersion: 1 as const,
+  kind: 'provider' as const,
+  executable: 'archon-provider-example',
+};
+test('provider receipts validate the owned descriptor contract', () => {
+  expect(pluginManifestSchema.parse(providerManifest)).toEqual(providerManifest);
+  for (const executable of [
+    'archon-forge-example',
+    '../archon-provider-example',
+    'archon-provider-example.exe',
+  ]) {
+    expect(pluginManifestSchema.safeParse({ ...providerManifest, executable }).success).toBe(false);
+  }
+  const receipt = {
+    schemaVersion: 1 as const,
+    id: 'owner/provider',
+    manifest: providerManifest,
+    tag: 'v1',
+    commit: 'a'.repeat(40),
+    installedAt: new Date(0).toISOString(),
+    files: [{ path: 'archon-provider-example', sha256: 'b'.repeat(64) }],
+    descriptor: providerPluginDescriptorSchema.parse({
+      protocol: PROVIDER_PLUGIN_PROTOCOL,
+      id: 'example',
+      displayName: 'Example',
+      version: '1',
+      credentials: { kind: 'static', specs: [] },
+      configSchema: { type: 'object' },
+      capabilities: {
+        ...Object.fromEntries(
+          Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])
+        ),
+        backgroundWork: 'none',
+        sessionFork: undefined,
+        knownToolNames: undefined,
+        renamedTools: undefined,
+      },
+    }),
+  };
+  expect(pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)))).toEqual(receipt);
+  expect(
+    pluginReceiptSchema.safeParse({
+      ...receipt,
+      descriptor: {
+        ...receipt.descriptor,
+        capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
+      },
+    }).success
+  ).toBe(true);
+  for (const descriptor of [
+    { id: 'example' },
+    { ...receipt.descriptor, protocol: 1 },
+    { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
+  ]) {
+    expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);
+  }
+});
+
+describe('chat manifests and receipts', () => {
+  const chat: ChatManifest = {
+    schemaVersion: 1,
+    kind: 'chat',
+    name: 'example-chat',
+    description: 'Example chat',
+    executable: 'archon-chat-example',
+  };
+  const descriptor: ChatReceipt['descriptor'] = {
+    protocol: 'archon-chat/1',
+    id: 'slack',
+    displayName: 'Example',
+    version: '1',
+    capabilities: { defaultWorkflowDispatch: 'background', resultFooter: true, runEvents: true },
+    policy: { workspaceRetention: 'retain', streaming: { defaultMode: 'batch', envVar: 'STREAM' } },
+    allowlist: { envVar: 'ALLOWED' },
+    workflowCommand: { prefix: '/workflow ' },
+  };
+  const receipt: ChatReceipt = {
+    schemaVersion: 1,
+    id: 'owner/repo',
+    manifest: chat,
+    descriptor,
+    tag: 'v1',
+    commit: 'a'.repeat(40),
+    installedAt: '2026-10-07T00:00:00.000Z',
+    files: [{ path: 'archon-chat-example.exe', sha256: 'a'.repeat(64) }],
+  };
+
+  test('accepts chat executables and rejects wrong prefixes, traversal and manifest exe suffixes', () => {
+    expect(pluginManifestSchema.parse(chat)).toEqual(chat);
+    for (const executable of [
+      'archon-forge-example',
+      '../archon-chat-example',
+      'archon-chat-example.exe',
+      'archon-chat-Example',
+    ]) {
+      expect(pluginManifestSchema.safeParse({ ...chat, executable }).success).toBe(false);
+    }
+  });
+
+  test('receipts round-trip and narrow as chat and binary receipts', async () => {
+    const { isChatReceipt, isBinaryReceipt, isProviderReceipt } = await import('./index');
+    const parsed = pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)));
+    expect(parsed).toEqual(receipt);
+    expect(isChatReceipt(parsed)).toBe(true);
+    expect(isBinaryReceipt(parsed)).toBe(true);
+    expect(isProviderReceipt(parsed)).toBe(false);
+  });
+
+  test('rejects missing or invalid owned descriptors', () => {
+    for (const invalid of [
+      undefined,
+      {},
+      { ...descriptor, id: '../slack' },
+      { ...descriptor, protocol: 'archon-chat/2' },
+      { ...descriptor, policy: { workspaceRetention: 'delete' } },
+    ]) {
+      expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor: invalid }).success).toBe(
+        false
+      );
+    }
+  });
+});
+
+test.each(['claude', 'codex', 'pi'] as const)(
+  'maintained %s install refs and receipt identity share one resolver',
+  id => {
+    const pluginId = maintainedProviderPluginId(id);
+    expect(pluginId).toBe(`coleam00/Archon/plugins/provider-${id}`);
+    expect(isMaintainedProviderPlugin(pluginId.toUpperCase(), id)).toBe(true);
+    expect(isMaintainedProviderPlugin(`other/Archon/plugins/provider-${id}`, id)).toBe(false);
+    expect(isMaintainedProviderPlugin(`${pluginId}/extra`, id)).toBe(false);
+  }
+);

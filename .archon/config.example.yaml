@@ -41,8 +41,7 @@
 # aliases:    { '@name': { provider, model, effort? } }
 # docsPath:   <path>                     overrides the project docs path
 # envVars:    { KEY: value }             extra env for this run's nodes
-# workflows:  { autoResumeOnQuotaReset, quotaFallbackDelayMs,
-#               quotaMaxAttempts, quotaDeadlineMs }
+# workflows:  { toolCallAttentionMs, autoResumeOnQuotaReset }
 #
 # Alias names must start with `@`. Tier names are exactly small / medium / large.
 #
@@ -81,11 +80,10 @@
 #   '@mini': { provider: pi, model: minimax/MiniMax-M3 }
 #
 # ---------------------------------------------------------------------------
-# Example: keep a long batch alive across a quota reset
+# Example: fail on a provider usage or rate limit instead of waiting
 # ---------------------------------------------------------------------------
 # workflows:
-#   autoResumeOnQuotaReset: true
-#   quotaMaxAttempts: 3
+#   autoResumeOnQuotaReset: false
 
 # The file you copy needs at least one real key. This one is deliberately inert.
 tiers: {}

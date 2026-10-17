@@ -1,7 +1,8 @@
 /**
  * SQLite adapter using bun:sqlite
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
@@ -16,6 +17,74 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.sqlite');
   return cachedLog;
+}
+
+/**
+ * SQLITE_BUSY and its extended codes (BUSY_SNAPSHOT, BUSY_RECOVERY, BUSY_TIMEOUT):
+ * another connection holds the lock. SQLITE_LOCKED (6) is a same-connection conflict
+ * that waiting cannot clear, so it is not included.
+ */
+function isSqliteBusy(error: unknown): error is SQLiteError {
+  return error instanceof SQLiteError && (error.errno & 0xff) === 5;
+}
+
+const BUSY_RETRY_MAX_DELAY_MS = 2000;
+const BUSY_WARN_INTERVAL_MS = 30_000;
+
+/**
+ * Run `attempt` until it stops failing with SQLITE_BUSY. Each attempt already waits
+ * up to busy_timeout inside SQLite; between attempts this backs off without blocking
+ * the event loop. There is deliberately no deadline: the lock belongs to another live
+ * process, and a timer that gives up would end a run whose work is not lost, only
+ * waiting. A lock that never clears shows up as a repeating warning, not a failure.
+ */
+async function retryWhileBusy<T>(
+  operation: 'statement' | 'transaction',
+  attempt: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  let delayMs = 50;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation, code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      await Bun.sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
+}
+
+/**
+ * `retryWhileBusy` for the synchronous open path. Switching a fresh file to WAL takes
+ * a lock that SQLite does not wait for through busy_timeout, so a process opening the
+ * same new database as another one gets SQLITE_BUSY there instead of waiting.
+ */
+function retryWhileBusySync(attempt: () => void): void {
+  const startedAt = Date.now();
+  let delayMs = 10;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      attempt();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation: 'open', code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      Bun.sleepSync(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
 }
 
 /**
@@ -41,10 +110,11 @@ export class SqliteAdapter implements IDatabase {
   readonly dialect = 'sqlite' as const;
   readonly sql: SqlDialect = sqliteDialect;
   /**
-   * Tail of the transaction queue. bun:sqlite is a single connection, so two
+   * Tail of the connection queue. bun:sqlite is a single connection, so two
    * overlapping `withTransaction` blocks would interleave their BEGINs and throw
-   * "cannot start a transaction within a transaction." Chaining each transaction
-   * onto this tail serializes them: the second waits for the first to COMMIT,
+   * "cannot start a transaction within a transaction", and a plain `query()` would
+   * run inside whichever transaction is open. Chaining every transaction and every
+   * plain statement onto this tail serializes them: the second waits for the first to COMMIT,
    * then sees its committed state — exactly what the approval-gate CAS needs so a
    * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
    */
@@ -64,7 +134,7 @@ export class SqliteAdapter implements IDatabase {
     this.db.run('PRAGMA busy_timeout = 5000');
 
     // Enable WAL mode for better concurrent performance
-    this.db.run('PRAGMA journal_mode = WAL');
+    retryWhileBusySync(() => this.db.run('PRAGMA journal_mode = WAL'));
 
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
@@ -73,7 +143,30 @@ export class SqliteAdapter implements IDatabase {
     this.initSchema();
   }
 
+  /**
+   * Marks code running inside one of this adapter's transaction blocks. The public
+   * query() and withTransaction() queue behind that open transaction, so calling them
+   * from inside it would wait forever; they throw instead.
+   */
+  private readonly transactionScope = new AsyncLocalStorage<SqliteAdapter>();
+
+  private assertNotInOwnTransaction(): void {
+    if (this.transactionScope.getStore() === this) {
+      throw new Error(
+        "SQLite query() or withTransaction() was called inside withTransaction; use the transaction's query instead"
+      );
+    }
+  }
+
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    this.assertNotInOwnTransaction();
+    // bun:sqlite is one connection shared by every caller. Queue each attempt behind
+    // open transactions, or the statement would join another caller's transaction
+    // and vanish if that transaction rolls back.
+    return retryWhileBusy('statement', () => this.serialize(() => this.execute<T>(sql, params)));
+  }
+
+  private async execute<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     // Convert $1, $2, etc. to ? placeholders and reorder params to match
     const { sql: convertedSql, params: reorderedParams } = this.convertPlaceholders(
       sql,
@@ -117,8 +210,21 @@ export class SqliteAdapter implements IDatabase {
         return { rows: [], rowCount };
       }
     } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, sql: convertedSql, params }, 'db.sqlite_query_failed');
+      // A busy statement is retried by query() or withTransaction(), which log the wait.
+      if (!isSqliteBusy(error)) {
+        // Driver messages and stacks can echo bound values (e.g. invalid JSON paths).
+        getLog().error(
+          {
+            err: {
+              message: 'Query failed (error details withheld to protect bound values)',
+              ...(error instanceof SQLiteError ? { code: error.code, errno: error.errno } : {}),
+            },
+            sql,
+            paramCount: params?.length ?? 0,
+          },
+          'db.sqlite_query_failed'
+        );
+      }
       throw error;
     }
   }
@@ -126,24 +232,51 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
-    const run = async (): Promise<T> => {
-      await this.query('BEGIN');
+    this.assertNotInOwnTransaction();
+    // The block's own statements run directly on the open transaction, without a
+    // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
+    // good, so only rerunning the whole block can succeed.
+    const execute = this.execute.bind(this);
+    const runOnce = async (): Promise<T> => {
+      // A busy statement spoils this attempt however the block handles it: callers wrap
+      // errors in their own messages, which would hide the busy code from the retry. So
+      // the adapter remembers it, rolls back, and rethrows the busy error itself.
+      let busy: SQLiteError | undefined;
+      const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
+        try {
+          return await execute<U>(sql, params);
+        } catch (error) {
+          if (isSqliteBusy(error)) busy = error;
+          throw error;
+        }
+      };
+      await execute('BEGIN');
       try {
-        const result = await fn(this.query.bind(this));
-        await this.query('COMMIT');
+        const result = await this.transactionScope.run(this, () => fn(blockQuery));
+        if (busy) throw busy;
+        await execute('COMMIT');
         return result;
       } catch (e) {
         try {
-          await this.query('ROLLBACK');
+          await execute('ROLLBACK');
         } catch (rollbackError) {
           getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
         }
-        throw e;
+        throw busy ?? e;
       }
     };
-    // Serialize against any in-flight transaction (see `txTail`). The stored tail
-    // is made non-rejecting so one transaction's failure never blocks the next.
-    const result = this.txTail.then(run, run);
+    // A busy failure anywhere in the block, COMMIT included, has already rolled back,
+    // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
+    // queries and compute a return value, which makes rerunning them safe.
+    return this.serialize(() => retryWhileBusy('transaction', runOnce));
+  }
+
+  /**
+   * Run `work` after every queued transaction and statement (see `txTail`). The stored tail is
+   * made non-rejecting so one failure never blocks the next.
+   */
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.txTail.then(work, work);
     this.txTail = result.then(
       () => undefined,
       () => undefined
@@ -183,7 +316,12 @@ export class SqliteAdapter implements IDatabase {
   private prepareRun(sql: string, params: SQLQueryBindings[] = []): number {
     const stmt = this.db.prepare(sql);
     try {
-      return stmt.run(...params).changes;
+      const changes = stmt.run(...params).changes;
+      // Bun includes foreign-key actions in .changes; rowCount must describe only
+      // the statement's rows, as PostgreSQL does (not children updated by SET NULL).
+      return changes === 0
+        ? 0
+        : (this.prepareGet<{ count: number }>('SELECT changes() AS count')?.count ?? 0);
     } finally {
       stmt.finalize();
     }
@@ -227,7 +365,26 @@ export class SqliteAdapter implements IDatabase {
     // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
     // no way left to tell a fresh database from one that predates version tracking.
     const preExisting = this.hasAnyArchonTable();
-    this.createSchema();
+    if (preExisting) {
+      // Every statement is an IF NOT EXISTS no-op on an existing database, so this takes
+      // no write lock beside a running server.
+      this.createSchema();
+    } else {
+      // A fresh database gets its schema in one commit instead of one per statement:
+      // each commit is an fsync, and on a slow disk dozens of them took seconds. IMMEDIATE
+      // makes a second process creating the same fresh file wait (busy_timeout) and then
+      // find every table present, instead of failing to upgrade a stale read.
+      this.db.run('BEGIN IMMEDIATE');
+      try {
+        this.createSchema();
+        this.db.run('COMMIT');
+      } catch (error) {
+        // SQLite may already have rolled back (SQLITE_FULL, SQLITE_IOERR); a ROLLBACK
+        // then would throw and hide the error that explains the failure.
+        if (this.db.inTransaction) this.db.run('ROLLBACK');
+        throw error;
+      }
+    }
     const allApplied = this.migrateColumns();
     this.recordSchemaVersion(preExisting, allApplied);
   }
@@ -300,7 +457,8 @@ export class SqliteAdapter implements IDatabase {
     // database missing a failed migration must NOT be stamped as fully applied
     // by this build, or the vintage becomes a wrong answer that gets believed.
     let allApplied = true;
-    // Users columns. `role` is the web-auth identity seam (default 'admin').
+    // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
+    // Changing a SQLite column default would require a table rebuild.
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
@@ -394,6 +552,10 @@ export class SqliteAdapter implements IDatabase {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_conversation_id TEXT'
         );
+      }
+
+      if (!wfColNames.has('origin')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN origin TEXT');
       }
 
       if (!wfColNames.has('working_path')) {
@@ -519,37 +681,53 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
-    // Lifecycle ordering: SQLite timestamps have one-second precision. A trigger
-    // assigns a durable, monotonically increasing value for each inserted event.
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_workflow_events')"
-      );
-      if (!new Set(cols.map(c => c.name)).has('event_order')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
-      }
-      this.db.run(
-        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
-           ON remote_agent_workflow_events(workflow_run_id, event_order)
-           WHERE event_order IS NOT NULL`
-      );
-      this.db.run(
-        `CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_assign_order
-           AFTER INSERT ON remote_agent_workflow_events
-           WHEN NEW.event_order IS NULL
-           BEGIN
-             UPDATE remote_agent_workflow_events
-             SET event_order = (
-               SELECT COALESCE(MAX(event_order), 0) + 1
-               FROM remote_agent_workflow_events
-             )
-             WHERE rowid = NEW.rowid;
-           END`
-      );
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_events_columns_failed');
-      allApplied = false;
-    }
+    // The high-water row survives event deletion. SQLite serializes writers;
+    // PostgreSQL records its sequence allocation here in the deferred trigger.
+    this.db
+      .transaction(() => {
+        const cols = this.prepareAll<{ name: string }>(
+          "PRAGMA table_info('remote_agent_workflow_events')"
+        );
+        if (!new Set(cols.map(c => c.name)).has('event_order')) {
+          this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
+        }
+        this.db.run(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
+         ON remote_agent_workflow_events(workflow_run_id, event_order)
+         WHERE event_order IS NOT NULL`
+        );
+        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_sequence (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      value INTEGER NOT NULL DEFAULT 0
+    )`);
+        this.db.run(`INSERT INTO remote_agent_workflow_event_sequence (id, value)
+      SELECT 1, COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events WHERE true
+      ON CONFLICT(id) DO UPDATE SET value = MAX(value, excluded.value)`);
+        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
+          SELECT * FROM remote_agent_workflow_events WHERE false`);
+        this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
+          ON remote_agent_workflow_event_archive(event_order)`);
+        this.db.run(`CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_archive
+          BEFORE DELETE ON remote_agent_workflow_events
+          BEGIN
+            INSERT INTO remote_agent_workflow_event_archive
+              SELECT * FROM remote_agent_workflow_events WHERE rowid = OLD.rowid;
+          END`);
+        this.db.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+        this.db.run(
+          `CREATE TRIGGER remote_agent_workflow_events_assign_order
+         AFTER INSERT ON remote_agent_workflow_events
+         BEGIN
+           UPDATE remote_agent_workflow_event_sequence SET value = value + 1 WHERE id = 1;
+           UPDATE remote_agent_workflow_events
+           SET event_order = (SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1)
+           WHERE rowid = NEW.rowid;
+         END`
+        );
+        this.db.run(`CREATE INDEX IF NOT EXISTS idx_workflow_events_order
+      ON remote_agent_workflow_events(event_order)`);
+      })
+      .immediate();
 
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
     // copilot→github-copilot). Idempotent data fix mirroring
@@ -628,6 +806,57 @@ export class SqliteAdapter implements IDatabase {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_resource_slot_holders_failed');
       allApplied = false;
     }
+
+    // Names of event-derived inputs live beside the binding intent, not in it: older
+    // binaries parse `intent` strictly and would refuse an extra key.
+    try {
+      const cols = this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_start_receipt_bindings')"
+      );
+      if (!new Set(cols.map(c => c.name)).has('event_input_names')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_receipt_bindings_columns_failed');
+      allApplied = false;
+    }
+
+    // The surface a state write outside a run came through; older rows came through the CLI.
+    try {
+      const cols = this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_state_revisions')"
+      );
+      if (cols.length && !new Set(cols.map(c => c.name)).has('writer_via')) {
+        this.db.run('ALTER TABLE remote_agent_state_revisions ADD COLUMN writer_via TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_state_revisions_columns_failed');
+      allApplied = false;
+    }
+
+    // The archive trigger copies an event row by position, and CREATE TABLE AS ran
+    // only once. Give the archive every column a later ADD COLUMN gave the events
+    // table, in the same order, so deleting an event never fails on a shape mismatch.
+    // The write transaction keeps a concurrent opener from adding the same column.
+    this.db
+      .transaction(() => {
+        const archived = new Set(
+          this.prepareAll<{ name: string }>(
+            "PRAGMA table_info('remote_agent_workflow_event_archive')"
+          ).map(column => column.name)
+        );
+        for (const column of this.prepareAll<{ name: string; type: string }>(
+          "PRAGMA table_info('remote_agent_workflow_events')"
+        )) {
+          if (!archived.has(column.name))
+            this.db.run(
+              `ALTER TABLE remote_agent_workflow_event_archive ADD COLUMN "${column.name}" ${column.type}`
+            );
+        }
+      })
+      .immediate();
 
     return allApplied;
   }
@@ -814,6 +1043,7 @@ export class SqliteAdapter implements IDatabase {
       -- the COMMENT ON COLUMN in migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        origin TEXT,
         conversation_id TEXT NOT NULL REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
         codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
         workflow_name TEXT NOT NULL,
@@ -832,6 +1062,21 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT,
         output_root TEXT,
         checkout_baseline TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+        project_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        value TEXT,
+        operation TEXT NOT NULL,
+        writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+        writer_run_id TEXT,
+        writer_node_path TEXT,
+        writer_identity TEXT,
+        writer_via TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (project_key, name, revision)
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
@@ -854,6 +1099,7 @@ export class SqliteAdapter implements IDatabase {
         binding_revision TEXT,
         host_id TEXT,
         intent TEXT,
+        event_input_names TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,
@@ -887,12 +1133,23 @@ export class SqliteAdapter implements IDatabase {
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 
+      CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
+
       CREATE INDEX IF NOT EXISTS idx_resource_start_queue
         ON remote_agent_resource_start_requests(resource_key, status, queue_position);
       CREATE INDEX IF NOT EXISTS idx_resource_start_host_queue
         ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
       CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
         ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
+
+      CREATE TABLE IF NOT EXISTS remote_agent_web_push_subscriptions (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
@@ -1018,17 +1275,23 @@ export const sqliteDialect: SqlDialect = {
     return `json_patch(${column}, $${String(paramIndex)})`;
   },
 
-  jsonArrayContains(column: string, path: string, paramIndex: number): string {
-    // SQLite: check if JSON array contains value using instr
-    // Use $N placeholder for consistent param ordering
-    return `instr(json_extract(${column}, '$.${path}'), $${String(paramIndex)}) > 0`;
-  },
-
   nowMinusDays(paramIndex: number): string {
     return `datetime('now', '-' || $${String(paramIndex)} || ' days')`;
   },
 
   daysSince(column: string): string {
     return `(julianday('now') - julianday(${column}))`;
+  },
+
+  jsonText(column: string, path: string): string {
+    return `json_extract(${column}, '$.${path}')`;
+  },
+
+  jsonRemove(column: string, ...keys: string[]): string {
+    return `json_remove(${[column, ...keys.map(key => `'$.${key}'`)].join(', ')})`;
+  },
+
+  rowLock(): string {
+    return '';
   },
 };

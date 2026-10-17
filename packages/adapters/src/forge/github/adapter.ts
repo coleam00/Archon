@@ -2,11 +2,13 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
+import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
-import { readdir, access } from 'fs/promises';
-import { join } from 'path';
+import { readdir, access, rm } from 'fs/promises';
+import { join, resolve } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
 import type { IsolationHints } from '@archon/isolation';
 import {
@@ -26,10 +28,11 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
 } from '@archon/paths';
 import {
-  isWorktreePath,
   cloneRepository,
+  githubTokenCredentials,
   syncRepository,
   addSafeDirectory,
   toRepoPath,
@@ -43,7 +46,6 @@ import {
   signalWorkflowWait,
   type WorkflowEventSignalCandidate,
 } from '@archon/core/db/workflows';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -62,6 +64,9 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+// Webhook readiness runs before conversation locking; adapter instances can share a checkout.
+const repositoryReadiness = new Map<string, Promise<void>>();
 
 interface PullRequestIdentity {
   host: string;
@@ -150,6 +155,10 @@ type GitHubAdapterAuth =
     };
 
 export class GitHubAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   /**
    * PAT-mode Octokit: a singleton constructed at startup. Null in App mode —
    * App-mode callers use `resolveOctokit(owner, repo)` to get a per-installation
@@ -212,10 +221,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info(
-      { botMention: this.botMention, authMode: auth.kind },
-      'github.adapter_initialized'
-    );
+    getLog().info({ authMode: auth.kind }, 'github.adapter_initialized');
   }
 
   /**
@@ -506,7 +512,7 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'github';
+    return githubPolicy.id;
   }
 
   /**
@@ -551,7 +557,10 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Does NOT handle:
    * - issues.opened / pull_request.opened → returns null (see #96)
    */
-  private parseEvent(event: WebhookEvent): {
+  private parseEvent(
+    event: WebhookEvent,
+    githubEvent?: string
+  ): {
     owner: string;
     repo: string;
     number: number;
@@ -562,8 +571,13 @@ export class GitHubAdapter implements IPlatformAdapter {
     isCloseEvent?: boolean;
     isMerged?: boolean;
   } | null {
-    const owner = event.repository.owner.login;
-    const repo = event.repository.name;
+    const repository = event.repository;
+    if (!repository?.owner) {
+      getLog().debug({ githubEvent }, 'github.repositoryless_webhook_ignored');
+      return null;
+    }
+    const owner = repository.owner.login;
+    const repo = repository.name;
 
     // Detect issue closed
     if (event.issue && event.action === 'closed') {
@@ -689,22 +703,47 @@ export class GitHubAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready
-   * For new codebases: clone (directory won't exist)
+   * For new codebases: clone when git metadata is absent
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
-  private async ensureRepoReady(
+  private ensureRepoReady(
+    owner: string,
+    repo: string,
+    defaultBranch: string,
+    codebase: { name: string; default_cwd: string },
+    shouldSync: boolean
+  ): Promise<void> {
+    const key = resolve(codebase.default_cwd);
+    const prepare = () =>
+      this.prepareRepository(
+        owner,
+        repo,
+        defaultBranch,
+        codebase.default_cwd,
+        codebase.name,
+        shouldSync
+      );
+    const previous = repositoryReadiness.get(key) ?? Promise.resolve();
+    const pending = previous.then(prepare, prepare).finally(() => {
+      if (repositoryReadiness.get(key) === pending) repositoryReadiness.delete(key);
+    });
+    repositoryReadiness.set(key, pending);
+    return pending;
+  }
+
+  private async prepareRepository(
     owner: string,
     repo: string,
     defaultBranch: string,
     repoPath: string,
+    projectName: string,
     shouldSync: boolean
   ): Promise<void> {
-    // Check if directory exists
-    let directoryExists = false;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      await access(join(repoPath, '.git'));
+      repositoryExists = true;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -715,10 +754,12 @@ export class GitHubAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
+      // Missing git metadata includes the empty source/ left by a failed clone.
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
+      await addSafeDirectory(toRepoPath(repoPath));
+      await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -736,12 +777,13 @@ export class GitHubAdapter implements IPlatformAdapter {
       return;
     }
 
-    // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'github.repo_cloning');
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    await ensureProjectStructure(owner, repo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     // Resolve the right auth token per mode. App mode talks to the auth
     // provider (installation token, ~1h validity); PAT mode reads env directly.
@@ -761,10 +803,20 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
+    // Readiness is serialized through cleanup, so an empty target cannot be
+    // populated by a sibling webhook while this attempt owns it.
+    let cloneOwnsTarget = true;
+    try {
+      cloneOwnsTarget = (await readdir(repoPath)).length === 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
-      ghToken ? { credentials: { username: ghToken, password: '' } } : undefined
+      ghToken ? { credentials: githubTokenCredentials(ghToken) } : undefined
     );
 
     if (!cloneResult.ok) {
@@ -772,6 +824,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         { error: cloneResult.error, owner, repo, repoPath },
         'github.repo_clone_failed'
       );
+      if (cloneOwnsTarget) await rm(repoPath, { recursive: true, force: true });
 
       if (cloneResult.error.code === 'not_a_repo') {
         throw new Error(
@@ -789,8 +842,14 @@ export class GitHubAdapter implements IPlatformAdapter {
       );
     }
 
-    await addSafeDirectory(toRepoPath(repoPath));
+    await this.ensureRepositorySetup(owner, repo, repoPath);
+  }
 
+  private async ensureRepositorySetup(
+    owner: string,
+    repo: string,
+    repoPath: string
+  ): Promise<void> {
     // App mode requires a refreshable credential source after the
     // request-scoped clone token expires.
     if (this.auth.kind === 'app') {
@@ -876,16 +935,14 @@ export class GitHubAdapter implements IPlatformAdapter {
     const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      // Either it's an actual worktree, or it looks like one (contains /worktrees/ in path)
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath },
+          { codebaseName: existing.name, canonicalPath: checkout },
           'github.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
       }
 
       getLog().info(
@@ -895,17 +952,17 @@ export class GitHubAdapter implements IPlatformAdapter {
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    // Include owner in name to distinguish repos with same name from different owners
-    // resolve() converts relative paths to absolute (cross-platform)
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'github.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   /**
@@ -922,7 +979,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     getLog().info({ conversationId, merged }, 'github.isolation_cleanup_started');
 
     try {
-      await onConversationClosed('github', conversationId, { merged });
+      await onConversationClosed(githubPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'github.isolation_cleanup_completed');
     } catch (error) {
       const err = error as Error;
@@ -1089,13 +1146,11 @@ ${userComment}`;
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGitHubUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'github.unauthorized_webhook');
+      getLog().info({ platform: githubPolicy.id }, 'github.unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
-    const parsed = this.parseEvent(event);
+    const parsed = this.parseEvent(event, githubEvent);
     if (!parsed) return;
 
     const { owner, repo, number, comment, eventType, issue, pullRequest, isCloseEvent, isMerged } =
@@ -1121,10 +1176,7 @@ ${userComment}`;
     // Primary: Check for hidden marker in comment body (works with user's PAT)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug(
-        { commentAuthor: event.comment?.user?.login },
-        'github.ignoring_marked_comment'
-      );
+      getLog().debug('github.ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author. In App mode the bot account is
@@ -1134,7 +1186,7 @@ ${userComment}`;
     // user-to-server token would otherwise be misfiltered.
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botLogin.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'github.ignoring_own_comment');
+      getLog().debug('github.ignoring_own_comment');
       return;
     }
 
@@ -1176,14 +1228,14 @@ ${userComment}`;
     if (attributedLogin) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'github',
+          githubPolicy.id,
           attributedLogin,
           attributedLogin
         );
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), githubLogin: attributedLogin },
+          { err: toError(err), platform: githubPolicy.id },
           'github.user_resolve_failed'
         );
       }
@@ -1198,36 +1250,12 @@ ${userComment}`;
       this.actorByConversation.set(conversationId, archonUserId);
     }
 
-    // 5. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('github', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
     // 6. Get/create codebase (checks for existing first!)
     const {
       codebase,
       repoPath,
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
-
-    // 6b. Link conversation to codebase (fixes #97)
-    if (isNewConversation) {
-      try {
-        await db.updateConversation(existingConv.id, {
-          codebase_id: codebase.id,
-          cwd: repoPath,
-        });
-      } catch (updateError) {
-        if (updateError instanceof ConversationNotFoundError) {
-          getLog().error(
-            { conversationId: existingConv.id, codebaseId: codebase.id },
-            'github.conversation_codebase_link_failed'
-          );
-          // Re-throw as this is a critical setup step
-          throw new Error('Failed to set up GitHub conversation - please try again');
-        }
-        throw updateError;
-      }
-    }
 
     // 7. Get default branch
     let defaultBranch: string;
@@ -1252,7 +1280,33 @@ ${userComment}`;
     }
 
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation(
+      githubPolicy.id,
+      conversationId,
+      codebase.id
+    );
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
+      try {
+        await db.updateConversation(existingConv.id, {
+          codebase_id: codebase.id,
+          cwd: repoPath,
+        });
+      } catch (updateError) {
+        if (updateError instanceof ConversationNotFoundError) {
+          getLog().error(
+            { conversationId: existingConv.id, codebaseId: codebase.id },
+            'github.conversation_codebase_link_failed'
+          );
+          // Re-throw as this is a critical setup step
+          throw new Error('Failed to set up GitHub conversation - please try again');
+        }
+        throw updateError;
+      }
+    }
 
     // 9. Auto-load commands if new codebase (defaults loaded at runtime, not copied)
     if (isNewCodebase) {
@@ -1340,7 +1394,7 @@ ${userComment}`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'github.slash_command_processing');
+      getLog().debug('github.slash_command_processing');
 
       // Add issue/PR reference context
       if (eventType === 'issue' && issue) {
@@ -1386,7 +1440,7 @@ ${userComment}`;
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
-          userId: archonUserId,
+          actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
         });
       } catch (error) {
         const err = toError(error);

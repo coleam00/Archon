@@ -1,12 +1,19 @@
-import { describe, expect, it } from 'bun:test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { beforeAll, describe, expect, it } from 'bun:test';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { DETACHED_RUN_FAILED_EXIT_CODE } from './workflow-exit-code';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+
+import {
+  DETACHED_RESUME_RECEIPT_ENV,
+  waitForDetachedResumeReceipt,
+} from './detached-resume-receipt';
 
 // These fixtures are torn down after tests that spawn, and then kill, a real detached
 // child. A killed process can still hold a handle inside its temp tree at the instant of
@@ -24,9 +31,27 @@ const FIXTURE_STATE_DEADLINE_MS = 5_000;
 
 /**
  * For a test that runs a real stop. On Windows the stop reads the process table through
- * `Get-CimInstance`, and the first such query on a fresh runner took about 4 s.
+ * `Get-CimInstance`; once WMI is warm (see `WMI_WARM_UP_TIMEOUT_MS`) a listing takes 1-3 s.
  */
 const STOP_TEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The first `Get-CimInstance` on a fresh Windows runner pays WMI's one-time start-up. It
+ * took 6-8 s under CPU burners and up to 19 s under the full suite's load, where it pushed
+ * the first stop test past `STOP_TEST_TIMEOUT_MS` while every later stop test passed in
+ * seconds.
+ * The cost is per machine, not per query: each listing runs in a fresh PowerShell and the
+ * second one is already fast. So it is paid once before the stop tests, not inside one.
+ */
+const WMI_WARM_UP_TIMEOUT_MS = 90_000;
+
+/**
+ * For the stop that races a spawning target. That stop takes up to six process listings
+ * before it gives up (one before `taskkill`, five to confirm), and on a Windows runner
+ * under CPU load a listing took 4-8 s and this test up to 55 s, so a correct stop there
+ * can by itself outlast `STOP_TEST_TIMEOUT_MS`. This bounds a hang, not the stop's speed.
+ */
+const RACING_STOP_TEST_TIMEOUT_MS = 90_000;
 
 async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -68,6 +93,38 @@ function processExists(pid: number): boolean {
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * PIDs of the live Windows processes whose command line contains `marker`. The marker
+ * travels in the environment so that this query's own command line does not match it,
+ * and the filter runs inside WMI so that a loaded runner is not made to serialize the
+ * whole process table: the stop being checked has already spent most of the test's
+ * budget listing it. `marker` must hold no WQL wildcard (`%`, `_`, `[`).
+ */
+async function windowsProcessesNaming(marker: string): Promise<number[]> {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$pids = @(Get-CimInstance -ClassName Win32_Process -Filter "CommandLine LIKE \'%$($env:ARCHON_SPEC_MARKER)%\'" | ForEach-Object { [int]$_.ProcessId })',
+    'ConvertTo-Json -Compress -InputObject $pids',
+  ].join('\n');
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+    { env: { ...process.env, ARCHON_SPEC_MARKER: marker }, windowsHide: true }
+  );
+  const pids: unknown = JSON.parse(stdout);
+  if (!Array.isArray(pids) || !pids.every(pid => Number.isInteger(pid))) {
+    throw new Error(`Unexpected process listing: ${stdout}`);
+  }
+  return pids as number[];
+}
+
 async function listen(server: Server, path: string): Promise<void> {
   await new Promise<void>((resolve: () => void, reject: (reason?: unknown) => void): void => {
     server.once('error', reject);
@@ -100,8 +157,8 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
  *
- * `leaseMs` closes the lease that long after committing it, as a real owner does when
- * its termination lease lapses.
+ * `leaseMs` closes the lease that long after committing it, as a real owner's lease
+ * closes when the owner exits.
  */
 function stubOwner(pid: number, leaseMs?: number): Server {
   return createServer((socket: Socket): void => {
@@ -123,6 +180,83 @@ function stubOwner(pid: number, leaseMs?: number): Server {
 }
 
 describe('detached run control integration', () => {
+  beforeAll(async (): Promise<void> => {
+    // A fresh marker names no process; only the query's cost matters here.
+    if (process.platform === 'win32') await windowsProcessesNaming(crypto.randomUUID());
+  }, WMI_WARM_UP_TIMEOUT_MS);
+
+  for (const closedLauncher of [false, true]) {
+    it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {
+      const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-receipt-')));
+      const fixturePath = join(fixtureDir, 'receipt.ts');
+      const continuedPath = join(fixtureDir, 'continued');
+      const errorPath = join(fixtureDir, 'transport-error');
+      writeFileSync(
+        fixturePath,
+        `
+        import { consumeDetachedResumeReceiptRequest } from ${JSON.stringify(join(import.meta.dir, 'detached-resume-receipt.ts'))};
+        import { writeFileSync } from 'node:fs';
+        const notify = consumeDetachedResumeReceiptRequest((runId, error) => {
+          writeFileSync(process.argv[3], JSON.stringify({ runId, code: error instanceof Error && 'code' in error ? error.code : null }));
+        });
+        setTimeout(() => {
+          notify?.('fixture');
+          writeFileSync(process.argv[2], 'continued');
+        }, 100);
+      `
+      );
+      const child = spawn(process.execPath, [fixturePath, continuedPath, errorPath], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+        env: { ...process.env, [DETACHED_RESUME_RECEIPT_ENV]: '1' },
+      });
+      const exit = waitForExit(child);
+      try {
+        const pipe = child.stdio[3];
+        if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+        if (closedLauncher) {
+          pipe.destroy();
+          child.unref();
+        } else {
+          await waitForDetachedResumeReceipt(
+            child,
+            pipe,
+            (code, signal) => new Error(`No receipt: ${String(code)} ${String(signal)}`)
+          );
+        }
+        await waitForFixtureProcess(() => existsSync(continuedPath));
+        expect(await exit).toEqual({ code: 0, signal: null });
+        if (closedLauncher) {
+          expect(JSON.parse(readFileSync(errorPath, 'utf8'))).toMatchObject({
+            runId: 'fixture',
+            code: 'EPIPE',
+          });
+        }
+      } finally {
+        if (child.pid !== undefined && processExists(child.pid)) child.kill();
+      }
+    });
+  }
+
+  for (const code of [0, DETACHED_RUN_FAILED_EXIT_CODE]) {
+    it(`preserves exit ${String(code)} when the real child sends no receipt`, async () => {
+      const child = spawn(process.execPath, ['-e', `process.exit(${String(code)})`], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      });
+      const pipe = child.stdio[3];
+      if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+      const error = await rejectedError(() =>
+        waitForDetachedResumeReceipt(
+          child,
+          pipe,
+          (exitCode, signal) => new Error(`No receipt: ${String(exitCode)} ${String(signal)}`)
+        )
+      );
+      expect(error.message).toBe(`No receipt: ${String(code)} null`);
+    });
+  }
+
   it(
     'stops the detached owner process group before its descendant can leak work',
     async () => {
@@ -137,7 +271,6 @@ describe('detached run control integration', () => {
         stdio: 'ignore',
       });
       if (owner.pid === undefined) throw new Error('Failed to spawn detached owner fixture');
-      const exited = waitForExit(owner);
 
       try {
         await waitForFixtureProcess(() => existsSync(readyPath));
@@ -152,10 +285,19 @@ describe('detached run control integration', () => {
         expect(processExists(pids.leakWriter)).toBe(true);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
-        await exited;
+        // The deadline starts once the stop resolves, so it measures the stop's effect
+        // and not fixture startup plus a slow first process listing on a loaded runner.
+        await waitForFixtureProcess(() => owner.exitCode !== null || owner.signalCode !== null);
         // Event-driven proof instead of a fixed sleep: wait for the descendant's
-        // observable death. A dead process cannot act on any future signal.
-        await waitForFixtureProcess(() => !processExists(pids.leakWriter));
+        // observable death. A dead process cannot act on any future signal. Windows
+        // reuses a dead PID fast enough that the recorded one may already name an
+        // unrelated process, so there the descendant is found by the fixture directory
+        // on its command line instead.
+        if (process.platform === 'win32') {
+          expect(await windowsProcessesNaming(basename(fixtureDir))).toEqual([]);
+        } else {
+          await waitForFixtureProcess(() => !processExists(pids.leakWriter));
+        }
         writeFileSync(goPath, 'go');
         expect(existsSync(leakPath)).toBe(false);
       } finally {
@@ -220,8 +362,13 @@ describe('detached run control integration', () => {
       const runId = `spawner-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const kidsDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-spawner-')));
-      // Each child's PID is recorded twice, by the spawner and by the child itself, as the
-      // file's name, so a record can never be read half-written.
+      // Every process in the tree carries this unique directory on its command line, which
+      // is how the check below finds a survivor. A recorded PID cannot: Windows hands a
+      // killed child's PID to unrelated processes within the stop's own runtime, and one
+      // such reuser (TrustedInstaller.exe) once failed this test as a "survivor".
+      const marker = basename(kidsDir);
+      // The spawner records each child's PID as a file name, so the test can wait until
+      // the target is spawning before the stop begins.
       const spawner = spawn(
         process.execPath,
         [
@@ -231,7 +378,7 @@ describe('detached run control integration', () => {
             "const fs = require('node:fs');",
             "const path = require('node:path');",
             'const dir = process.argv[1];',
-            "const kid = \"require('node:fs').writeFileSync(require('node:path').join(process.argv[1], String(process.pid)), ''); setInterval(() => undefined, 1000);\";",
+            "const kid = 'setInterval(() => undefined, 1000);';",
             'const loop = () => {',
             "  const child = spawn(process.execPath, ['-e', kid, dir], { detached: true, stdio: 'ignore' });",
             "  fs.writeFileSync(path.join(dir, String(child.pid)), '');",
@@ -244,32 +391,34 @@ describe('detached run control integration', () => {
         { detached: true, stdio: 'ignore' }
       );
       if (spawner.pid === undefined) throw new Error('Failed to spawn the spawning target');
-      const recordedKids = (): number[] => readdirSync(kidsDir).map(Number);
 
       const server = stubOwner(spawner.pid);
       await listen(server, path);
+      let survivors: number[] | undefined;
       try {
         // The target is spawning before the stop begins, so the race is live.
-        await waitForFixtureProcess(() => recordedKids().length >= 3);
+        await waitForFixtureProcess(() => readdirSync(kidsDir).length >= 3);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
-        // every child the target ever recorded.
-        expect(processExists(spawner.pid)).toBe(false);
-        expect(recordedKids().filter(pid => processExists(pid))).toEqual([]);
+        // every process that belongs to the tree, the spawner included.
+        survivors = await windowsProcessesNaming(marker);
+        expect(survivors).toEqual([]);
       } finally {
-        for (const pid of [spawner.pid, ...recordedKids()]) {
+        spawner.kill();
+        // Listed again only when the stop threw before the check did.
+        for (const pid of survivors ?? (await windowsProcessesNaming(marker))) {
           try {
             process.kill(pid);
           } catch {
-            // Already gone: the assertions above report a survivor.
+            // Already gone: the assertion above reports a survivor.
           }
         }
         await close(server);
       }
     },
-    STOP_TEST_TIMEOUT_MS
+    RACING_STOP_TEST_TIMEOUT_MS
   );
 
   it(
@@ -323,7 +472,7 @@ describe('detached run control integration', () => {
   );
 
   it(
-    'kills nothing on Windows when the lease lapses before the kill',
+    'kills nothing on Windows when the lease closes before the kill',
     async () => {
       // The first process listing takes hundreds of milliseconds at least. A lease that
       // closes during it no longer proves the listed root is the owner, so the stop must

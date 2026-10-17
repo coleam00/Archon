@@ -21,7 +21,9 @@ const baseRun: Omit<Run, 'id' | 'workflow' | 'status'> = {
   conversationPlatformId: null,
   workerPlatformId: null,
   origin: 'cli',
+  attention: null,
   outcome: null,
+  terminalRecord: null,
   startedAt: new Date(Date.now() - 4 * 60 * 1000 - 12 * 1000).toISOString(),
   finishedAt: null,
   workingPath: null,
@@ -36,7 +38,6 @@ const SAMPLE_RUNS: Run[] = [
     workflow: 'plan',
     status: 'running',
     activeNodes: ['plan/draft'],
-    currentNode: 'plan/draft',
     lastTool: 'read_file',
   },
   {
@@ -63,7 +64,6 @@ const SAMPLE_RUNS: Run[] = [
     status: 'failed',
     startedAt: new Date(Date.now() - 2 * 60 * 1000 - 41 * 1000).toISOString(),
     finishedAt: new Date().toISOString(),
-    currentNode: 'implement/verify',
   },
   {
     ...baseRun,

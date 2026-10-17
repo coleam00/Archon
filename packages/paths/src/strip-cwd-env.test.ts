@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { stripCwdEnv } from './strip-cwd-env';
 
 describe('stripCwdEnv', () => {
-  const tmpDir = join(import.meta.dir, '__strip-cwd-env-test-tmp__');
+  const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-test-'));
 
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true });
@@ -87,7 +88,7 @@ describe('stripCwdEnv', () => {
 });
 
 describe('stripCwdEnv — operator logging (#1302)', () => {
-  const tmpDir = join(import.meta.dir, '__strip-cwd-env-log-test-tmp__');
+  const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-log-test-'));
   let stderrSpy: ReturnType<typeof spyOn>;
   let stderrWrites: string[];
 
@@ -146,7 +147,7 @@ describe('stripCwdEnv — operator logging (#1302)', () => {
 });
 
 describe('stripCwdEnv — nested Claude Code marker stripping', () => {
-  const tmpDir = join(import.meta.dir, '__strip-markers-test-tmp__');
+  const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-markers-test-'));
 
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true });

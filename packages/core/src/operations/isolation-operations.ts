@@ -1,13 +1,15 @@
 /**
- * Shared isolation business logic — list, cleanup stale, cleanup merged.
+ * Shared isolation business logic — list and cleanup merged.
  *
  * CLI and command-handler are thin formatting adapters over these functions.
  */
+import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platforms/registry';
 import { createLogger } from '@archon/paths';
-import { toWorktreePath, worktreeExists } from '@archon/git';
+import { lstat } from 'node:fs/promises';
+import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as isolationDb from '../db/isolation-environments';
-import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
-import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
+import { cleanupMergedWorktrees, getLiveRunBlocker } from '../services/cleanup-service';
+import type { MergedCleanupResult } from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -24,7 +26,9 @@ export interface CodebaseEnvironments {
   codebaseId: string;
   repositoryUrl: string | null;
   defaultCwd: string;
-  environments: readonly Awaited<ReturnType<typeof isolationDb.listByCodebaseWithAge>>[number][];
+  environments: readonly (Awaited<ReturnType<typeof isolationDb.listByCodebaseWithAge>>[number] & {
+    cleanupSkipReason?: string;
+  })[];
 }
 
 export interface EnvironmentListData {
@@ -46,32 +50,43 @@ export { type CleanupOperationResult, type MergedCleanupResult } from '../servic
  * An env a run can still claim is left active even with its directory gone: marking
  * it destroyed invalidates that run's resume handle, and this runs from
  * `listEnvironments()` ahead of the per-item live-run guard in the `isolation
- * cleanup` commands, so a row ghosted here never reaches that guard. Same rule as
- * the scheduled sweep's path-missing branch. The env stays visible in `isolation
- * list` with its missing path, which is the operator's signal to act.
+ * cleanup` commands, so a row ghosted here never reaches that guard. A failed run
+ * stays here too: no outcome is judged here, and those per-item sweeps release
+ * its lock once they settle one. The env stays visible in `isolation list` with
+ * its missing path, which is the operator's signal to act.
  */
-async function reconcileGhosts(
-  envs: readonly {
-    id: string;
-    working_path: string;
-    branch_name: string | null;
-    workflow_id: string;
-  }[]
-): Promise<number> {
+async function reconcileGhosts(envs: readonly IsolationEnvironmentRow[]): Promise<number> {
   let reconciled = 0;
   for (const env of envs) {
+    if (env.provider !== 'worktree') continue;
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) {
+      getLog().warn({ envId: env.id, reason }, 'isolation.cleanup_skipped');
+      continue;
+    }
     try {
-      const exists = await worktreeExists(toWorktreePath(env.working_path));
+      const exists = await lstat(env.working_path).then(
+        () => true,
+        (error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+      );
       if (!exists) {
-        const liveRun = await isolationDb.getLiveRunOwningEnv(env.id);
+        const liveRun = await getLiveRunBlocker(env.id);
         if (liveRun) {
           getLog().info(
-            { envId: env.id, path: env.working_path, runId: liveRun.id, runStatus: liveRun.status },
+            {
+              envId: env.id,
+              path: env.working_path,
+              runId: liveRun.runId,
+              runStatus: liveRun.runStatus,
+            },
             'isolation.ghost_kept_for_live_run'
           );
           continue;
         }
-        await isolationDb.updateStatus(env.id, 'destroyed');
+        await isolationDb.markWorktreeDestroyed(env);
         getLog().info({ envId: env.id, path: env.working_path }, 'isolation.ghost_reconciled');
         reconciled++;
       }
@@ -124,6 +139,7 @@ function extractCodebases(
  * Reconciles ghost entries (worktree missing on disk) before returning.
  */
 export async function listEnvironments(): Promise<EnvironmentListData> {
+  getRegisteredPlatformPolicies();
   const allActive = await isolationDb.listAllActiveWithCodebase();
   const codebases = extractCodebases(allActive);
 
@@ -152,28 +168,15 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
       codebaseId: codebase.id,
       repositoryUrl: codebase.repository_url,
       defaultCwd: codebase.default_cwd,
-      environments: liveEnvs,
+      environments: liveEnvs.map(env => {
+        const reason = unknownPlatformReason(env.created_by_platform);
+        return reason ? { ...env, cleanupSkipReason: reason } : env;
+      }),
     });
     totalEnvironments += liveEnvs.length;
   }
 
   return { codebases: result, totalEnvironments, ghostsReconciled: totalGhosts };
-}
-
-/**
- * Cleanup stale worktrees for a codebase.
- * Wraps cleanupStaleWorktrees from cleanup-service.
- */
-export async function cleanupStaleEnvironments(
-  codebaseId: string,
-  mainPath: string
-): Promise<CleanupOperationResult> {
-  // First reconcile ghost entries
-  const allActive = await isolationDb.listAllActiveWithCodebase();
-  const codebaseEnvs = allActive.filter(e => e.codebase_id === codebaseId);
-  await reconcileGhosts(codebaseEnvs);
-
-  return cleanupStaleWorktrees(codebaseId, mainPath);
 }
 
 /**

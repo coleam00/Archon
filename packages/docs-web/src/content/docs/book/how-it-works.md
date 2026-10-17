@@ -8,75 +8,70 @@ sidebar:
   order: 3
 ---
 
-Let's trace exactly what happened when you ran `archon-fix-github-issue`. What looked like one command was actually multiple AI nodes running in a DAG, a shared workspace, and a chain of files passing context from phase to phase.
+Let's trace exactly what happened when you ran `archon-ship`. What looked like one command was actually several workflows composed into one DAG, a shared workspace, and a chain of files passing context from stage to stage.
 
 ---
 
 ## The Workflow Definition
 
-Here's the YAML you ran — it lives in Archon's bundled defaults:
+`archon-ship` runs its stages as one block, `archon-ship-block`, and adds one thing around it: when the run stops where only a person can take it forward, such as a question triage or the planner could not settle or a delivery that ended not ready, it pauses as an attention item and continues on the answer. Here's the block, abridged. It lives in Archon's bundled `sdlc` pack at `.archon/workflows/sdlc/ship/archon-ship-block.yaml`:
 
 ```yaml
-name: archon-fix-github-issue
+name: archon-ship-block
 
 nodes:
-  # PHASE 1: CLASSIFY
-  - id: classify
-    command: archon-investigate-issue
-    # Classifies issue type (bug/feature/etc), produces classification artifact
+  # STAGE 1: TRIAGE. Check the issue against the current code and pick a route
+  - id: triage
+    include: archon-triage-block
 
-  # PHASE 2: INVESTIGATE or PLAN
-  - id: investigate
-    command: archon-investigate-issue
-    depends_on: [classify]
-    context: fresh
-    # For bugs: analyzes root cause, creates investigation.md artifact
+  # STAGE 2: INVESTIGATE or PLAN, depending on the route triage chose
+  - id: inv
+    include: archon-investigate
+    depends_on: [triage]
+    when: "$triage.output.route == 'investigate'"
 
-  # PHASE 3: IMPLEMENT
-  - id: implement
-    command: archon-fix-issue
-    depends_on: [investigate]
-    context: fresh
-    # Implements fix from investigation, commits (no PR)
+  - id: intel
+    command: intel
+    depends_on: [triage]
+    when: "$triage.output.route == 'plan'"
 
-  # PHASE 4: CREATE PR
-  - id: create-pr
-    command: archon-create-pr
-    depends_on: [implement]
-    context: fresh
-    # Pushes branch, creates draft PR linked to issue
+  - id: planned
+    include: archon-plan-block
+    depends_on: [triage, intel]
+    when: "$triage.output.route == 'plan'"
 
-  # PHASE 5: REVIEW
-  - id: code-review
-    command: archon-code-review-agent
-    depends_on: [create-pr]
-    context: fresh
+  # STAGE 3: DELIVER. Rounds of implement, draft PR, review; then CI flips it ready
+  - id: deliver
+    include: archon-deliver-block
+    depends_on: [triage, inv, planned]
+    trigger_rule: none_failed_min_one_success
+    when: "$triage.output.route == 'deliver' || ..."
 
-  # PHASE 6: SELF-FIX
-  - id: self-fix
-    command: archon-self-fix-all
-    depends_on: [code-review]
-    context: fresh
-    # Reads all review artifacts, fixes findings, pushes fix report
+  # STAGE 4: OUTCOME. Record whether a PR was delivered
+  - id: outcome
+    script: outcome
+    depends_on: [triage, deliver]
 ```
 
-That's the shape of it. Each entry under `nodes:` references a markdown file — a **command** — that tells the AI what to do at that step. Nodes declare `depends_on` to express ordering; independent nodes can run concurrently.
+That's the shape of it. Each `include:` node pulls in another bundled workflow, and each of those workflows is built from nodes that run a **command** (a markdown file that tells the AI what to do), a script, or a shell step. Nodes declare `depends_on` to express ordering, and `when:` skips a branch the route did not choose. The abridged `when:` on `deliver` lets it start only after a route actually succeeded: the direct route, a rooted investigation, or a ready plan.
 
 ---
 
-## What Each Step Did
+## What Each Stage Did
 
-| Phase | Command | What the AI Did | Artifact Produced |
-|-------|---------|-----------------|-------------------|
-| Investigate | `archon-investigate-issue` | Read the GitHub issue, explored relevant code files, documented root cause and a fix plan | `investigation.md` |
-| Fix | `archon-fix-issue` | Read `investigation.md`, made code changes, ran tests, committed the changes | `implementation.md` |
-| Create PR | `archon-create-pr` | Pushed the branch, created a pull request linked to the issue with a full description | PR on GitHub |
-| Review scope | `archon-pr-review-scope` | Gathered PR metadata and changed files | `.pr-number`, `scope.md` |
-| Code review | `archon-code-review-agent` | Read the diff with full codebase context, produced structured findings | `review-findings.md` |
-| Post review | `archon-post-review-to-pr` | Read `review-findings.md`, posted it as a comment on the PR | GitHub PR comment |
-| Auto-fix | `archon-auto-fix-review` | Read all review artifacts, fixed the surfaced issues, pushed to the PR branch, posted a fix report | GitHub PR comment |
+| Stage | Workflow | What the AI Did | Artifact Produced |
+|-------|----------|-----------------|-------------------|
+| Triage | `archon-triage-block` | Read the issue, checked its claims against the current code, and chose a route | `triage.md` |
+| Investigate | `archon-investigate` | For an unknown cause: reproduced the problem and proved the root cause | `investigation.md` |
+| Intel | `intel` agent (plan route) | Judged whether usage data could change a design call, and said so when no data source is connected | `intel.md` |
+| Plan | `archon-plan-block` | For an undecided shape: made the design calls from the project's own documents, citing what settled each one, and stopped with the open questions when a call needs a person | `plan.md` |
+| Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran focused checks on what it changed, committed | `implementation.md` |
+| Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened a draft PR | Draft PR on GitHub |
+| Review | `archon-review-block` (inside deliver) | Ran the review lenses a route agent picked; open findings went back to the implementer for another round | PR comment |
+| Simplify | `archon-simplify` (inside deliver) | Once a review passed, looked for a smaller shape; the implementer adopted or declined each finding | `shape.md` |
+| CI | `ci` agent (inside deliver) | Marked the PR ready, waited for CI (the project's full validation), and put the PR back in draft if CI was red; a red the change caused, or a conflict with the base, went back to the implementer and review | PR checks |
 
-Each step is independent and focused. The investigation step doesn't know about PR creation; it just writes a file. The fix step doesn't know about code review; it just reads from `investigation.md` and makes changes. The workflow stitches them together.
+Each stage is independent and focused. Triage doesn't know how the fix will be built; it writes a file. Deliver doesn't repeat triage's checks; it reads `triage.md` and whichever of `investigation.md` or `plan.md` the route produced. The workflow stitches them together.
 
 ---
 
@@ -86,9 +81,9 @@ Commands are **atoms** — each is a single focused task, written in plain markd
 
 Workflows are **molecules** — YAML files that arrange commands into a graph with a clear purpose.
 
-**Artifacts** are the connectors. They're files written to a shared directory (`$ARTIFACTS_DIR`) that each node can read. When the AI finishes investigating, it writes `investigation.md`. When the implement node starts, it reads that file. When the review node runs, it reads `implementation.md`. This is how information travels across nodes with fresh context.
+**Artifacts** are the connectors. They're files written to a shared directory (`$ARTIFACTS_DIR`) that each node can read. When triage finishes, it writes `triage.md`. When deliver starts, it reads that file. When implementation finishes, it writes `implementation.md` for the steps after it. This is how information travels across nodes with fresh context.
 
-You could run each command manually. Workflows automate the graph.
+You could run each stage as its own workflow. `archon-ship` automates the graph.
 
 ---
 
@@ -114,7 +109,7 @@ your-repo/.archon/                          <- Repo-level config (checked into g
 └── config.yaml                             <- Repo-specific settings
 ```
 
-When you ran `archon-fix-github-issue --branch fix/my-first-run`, Archon:
+When you ran `archon-ship --branch fix/my-first-run`, Archon:
 
 1. Created a **worktree** at `~/.archon/workspaces/owner/repo/worktrees/fix/my-first-run`
 2. Created an **artifacts directory** for this run inside `~/.archon/workspaces/owner/repo/artifacts/`
@@ -126,11 +121,11 @@ Your main repo was never touched.
 
 ## Context and Memory
 
-Notice that most nodes have `context: fresh`. This is deliberate.
+Notice that the stages hand each other files, not conversation history. This is deliberate.
 
-Each AI node runs inside a Claude Code session. That session accumulates context — files read, tool calls made, conversation history. After investigating a complex codebase issue, that context can be thousands of tokens long, with lots of detail that's irrelevant to the next phase.
+Each AI node runs in a session managed by its selected provider. That session accumulates context — files read, tool calls made, conversation history. After investigating a complex codebase issue, that context can be thousands of tokens long, with lots of detail that's irrelevant to the next phase.
 
-`context: fresh` starts a fresh session for that node. The AI comes in without the baggage of previous nodes — just the task instructions and whatever artifacts it reads explicitly.
+A node with `context: fresh` starts a fresh session. The review lenses inside `archon-review` all use it. The AI comes in without the baggage of previous nodes — just the task instructions and whatever artifacts it reads explicitly.
 
 This is why artifacts matter so much. They're the answer to "how does node 5 know what node 1 found?" The answer is: it reads a file. Fresh context, explicit file handoff.
 
@@ -138,4 +133,4 @@ This is why artifacts matter so much. They're the answer to "how does node 5 kno
 
 ---
 
-Now you understand the system. In [Chapter 4: The Essential Workflows →](/book/essential-workflows/), we'll walk through all of Archon's built-in workflows so you know exactly which one to reach for and when.
+Now you understand the system. In [Chapter 4: The Essential Workflows →](/book/essential-workflows/), we'll walk through all of Archon's bundled workflows so you know exactly which one to reach for and when.

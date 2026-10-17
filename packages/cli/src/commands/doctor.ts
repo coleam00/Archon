@@ -1,3 +1,14 @@
+import {
+  installedProviders,
+  noDefaultProviderMessage,
+  MAINTAINED_PROVIDER_IDS,
+  isMaintainedProvider,
+  type ProviderRegistry,
+} from '@archon/provider-contract';
+import { getRegistration, providerRegistry } from '@archon/providers';
+import { PluginRemoteError } from '@archon/provider-contract/plugin';
+import { isProviderReceipt } from '@archon/plugin-manifest';
+import { readReceipts } from '@archon/plugin-manifest/store';
 /**
  * Doctor command - Verifies the local Archon setup.
  *
@@ -7,47 +18,31 @@
  */
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
-import { execFileAsync } from '@archon/git';
 import {
-  BUNDLED_IS_BINARY,
   getArchonHome,
   createLogger,
   getTelemetryStatus,
   canonicalizeProjectPath,
+  getPluginsPath,
+  BUNDLED_VERSION,
+  BUNDLED_IS_BINARY,
 } from '@archon/paths';
-import {
-  resolveCodexBinaryWithSource,
-  type CodexBinarySource,
-} from '@archon/providers/codex/binary-resolver';
-import {
-  resolveClaudeBinaryWithSource,
-  type ClaudeBinaryResolution,
-} from '@archon/providers/claude/binary-resolver';
-import {
-  readPiAuthValidity,
-  type PiAuthValidity,
-} from '@archon/providers/community/pi/auth-status';
+import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
-
-// Vendor-canonical credential id for Codex (since #1955 credentials are keyed
-// by vendor, not agent). A connected `openai` key signals Codex intent even
-// when it isn't the configured default assistant.
-const CODEX_CREDENTIAL_VENDOR = 'openai';
-
-// Env vars that indicate a Pi backend API key is configured. Keep in sync with
-// `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
-const PI_API_KEY_VARS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GEMINI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'GROQ_API_KEY',
-  'MISTRAL_API_KEY',
-  'XAI_API_KEY',
-  'CEREBRAS_API_KEY',
-  'HUGGINGFACE_API_KEY',
-] as const;
+import {
+  consumesStoredCredential,
+  unconsumedStoredCredentialReason,
+  type CredentialStatus,
+  type StoredCredentialKind,
+} from '@archon/provider-contract';
+import { forgeCommand } from './forge';
+import { loadCliEnv } from '../load-cli-env';
+import { resolveCliUserId } from '../utils/cli-user';
+import {
+  checkForgeAccess,
+  type ForgeProbe,
+} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
+import { forgeResult } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -68,10 +63,6 @@ export interface CheckResult {
 
 /**
  * Report whether the global and repository `.archon/config.yaml` actually load.
- *
- * Its own check rather than a signal folded into the binary checks: those two
- * degrade to env/autodetect when config load throws (#2263), which protects
- * binary resolution but would hide a config the rest of the CLI cannot read.
  */
 export async function checkConfigFiles(
   cwd: string = process.cwd(),
@@ -88,416 +79,356 @@ export async function checkConfigFiles(
   }
 }
 
+/**
+ * Warn when the configured default assistant is a deprecated provider. Skips
+ * when the config cannot load: Config files already reports that failure.
+ */
+export async function checkProviderDeprecation(
+  cwd: string = process.cwd(),
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
+): Promise<CheckResult> {
+  const label = 'Provider support';
+  let assistant: string | undefined;
+  try {
+    assistant = (await load(cwd)).assistant;
+  } catch {
+    return { label, status: 'skip', message: 'config did not load' };
+  }
+  if (assistant === undefined)
+    return { label, status: 'skip', message: 'no default provider configured' };
+  const notice = getRegistration(assistant).deprecationNotice;
+  return notice
+    ? { label, status: 'warn', message: notice }
+    : { label, status: 'pass', message: `${assistant} is supported` };
+}
+
 async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
   // Lazy import so doctor doesn't pull the full @archon/core graph for an
-  // unrelated check (matches defaultLoadClaudeBinaryDeps).
+  // unrelated check.
   const { loadConfig } = await import('@archon/core');
   return loadConfig(cwd);
 }
 
-export interface ClaudeBinaryDeps {
-  /** `assistants.claude.claudeBinaryPath` from the merged config, if configured. */
-  configBinaryPath?: string;
-}
-
-/**
- * Verify the Claude Code binary resolves and spawns.
- *
- * Delegates to the SAME resolver the runtime uses
- * (`resolveClaudeBinaryWithSource`) instead of reading `CLAUDE_BIN_PATH`
- * directly, and reports which tier produced the path (env / config /
- * autodetect). Reading only the env var made doctor report a hard FAIL on
- * setups that run fine, because `assistants.claude.claudeBinaryPath` is the
- * documented way to configure compiled builds — training users to ignore the
- * one tool meant to catch real environment breakage (#2263).
- */
-export async function checkClaudeBinary(
-  // Injected so tests can drive the binary-mode branch — `BUNDLED_IS_BINARY`
-  // is a static const re-export and cannot be spied at runtime. Kept (rather
-  // than inferred from a nullish resolve result like `checkCodexBinary` does)
-  // because Claude's resolver honors CLAUDE_BIN_PATH in dev mode too, so a
-  // truthy result is NOT proof of binary mode.
-  isBinary: boolean = BUNDLED_IS_BINARY,
-  loadDeps: () => Promise<ClaudeBinaryDeps> = defaultLoadClaudeBinaryDeps,
-  resolve: (
-    configPath?: string
-  ) => Promise<ClaudeBinaryResolution | undefined> = resolveClaudeBinaryWithSource
+export async function checkInstalledProviders(
+  registry: ProviderRegistry = providerRegistry,
+  loadVersions: () => Promise<ReadonlyMap<string, string>> = async () =>
+    new Map(
+      (await readReceipts(getPluginsPath()))
+        .filter(isProviderReceipt)
+        .map(receipt => [receipt.descriptor.id, receipt.descriptor.version])
+    )
 ): Promise<CheckResult> {
-  const label = 'Claude binary';
-  if (!isBinary) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
-  let deps: ClaudeBinaryDeps;
+  const label = 'Installed providers';
   try {
-    deps = await loadDeps();
-  } catch (err) {
-    // Config load can throw (e.g. malformed YAML) — degrade to env/autodetect
-    // rather than failing the whole check. Mirrors checkCodexBinary.
-    getLog().debug({ err }, 'doctor.claude_deps_load_failed');
-    deps = {};
-  }
-
-  let resolved: ClaudeBinaryResolution | undefined;
-  try {
-    resolved = await resolve(deps.configBinaryPath);
-  } catch (err) {
-    // Binary mode + whole chain empty → the resolver throws with install
-    // instructions. That message is the actionable one, so surface it verbatim.
-    return { label, status: 'fail', message: (err as Error).message };
-  }
-
-  // Defensive: the resolver only returns undefined outside binary mode, which
-  // the isBinary guard above already handled.
-  if (!resolved) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
-  try {
-    await execFileAsync(resolved.path, ['--version'], { timeout: 5000 });
+    const versions = await loadVersions();
+    const installed = installedProviders(registry);
+    const unavailable = [...new Set([...MAINTAINED_PROVIDER_IDS, ...versions.keys()])]
+      .map(id => registry.unavailable?.(id))
+      .filter((reason): reason is string => reason !== undefined);
+    const lines = installed.map(provider => {
+      const version =
+        !BUNDLED_IS_BINARY && isMaintainedProvider(provider.id)
+          ? BUNDLED_VERSION
+          : (versions.get(provider.id) ??
+            (provider.builtIn ? BUNDLED_VERSION : 'version not reported'));
+      return `${provider.id} (${version})`;
+    });
+    // Only deprecated bundled providers remain: they can still run when configured, so
+    // the missing selection is a warning rather than a failure.
+    const status =
+      registry.list().length === 0 || unavailable.length > 0
+        ? 'fail'
+        : installed.length > 0
+          ? 'pass'
+          : 'warn';
     return {
       label,
-      status: 'pass',
-      message: `${resolved.path} (via ${resolved.source}, spawns OK)`,
+      status,
+      message: [
+        installed.length > 0 ? lines.join(', ') : noDefaultProviderMessage(registry),
+        ...unavailable,
+        ...(installed.length > 0 && unavailable.length === 0
+          ? []
+          : [
+              'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
+            ]),
+      ].join('\n    '),
     };
-  } catch (err) {
+  } catch (error) {
     return {
       label,
       status: 'fail',
-      message: `${resolved.path} did not spawn: ${(err as Error).message}`,
+      message: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
-export async function defaultLoadClaudeBinaryDeps(
-  // Injected so the config-key mapping — the tier #2263 was actually about —
-  // can be asserted without mock.module(), which is process-global and would
-  // leak into every other test in this file's batch. Defaults to the real
-  // lazy import so the production path is the zero-argument call.
-  loadMergedConfig: (
-    cwd: string
-  ) => Promise<Pick<MergedConfig, 'assistants'>> = defaultLoadMergedConfig
-): Promise<ClaudeBinaryDeps> {
-  const config = await loadMergedConfig(process.cwd());
-  return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
+type ProviderSelection = Pick<MergedConfig, 'assistants'> &
+  Partial<Pick<MergedConfig, 'assistant'>>;
+
+/** The default assistant, or an `assistants.<id>` entry with settings in it. */
+function selectsProvider(config: ProviderSelection, id: string): boolean {
+  return config.assistant === id || Object.keys(config.assistants[id] ?? {}).length > 0;
 }
 
-export interface CodexBinaryDeps {
-  /** `assistants.codex.codexBinaryPath` from the merged config, if configured. */
-  configBinaryPath?: string;
-  /** True when the merged default assistant resolves to codex. */
-  isDefaultAssistant: boolean;
-  /** True when the CLI user has connected an OpenAI (Codex) credential. */
-  credentialConnected: boolean;
-}
-
-/**
- * Verify the Codex CLI binary resolves and spawns. Mirrors `checkClaudeBinary`,
- * but uses Codex's richer four-tier resolution (env → config → vendor →
- * autodetect) and reports which tier resolved it. Skips (never fails) when
- * Codex isn't the configured assistant anywhere and no OpenAI (Codex)
- * credential is connected, so Claude-only users aren't nagged about a binary
- * they will never use.
- */
-export async function checkCodexBinary(
-  env: NodeJS.ProcessEnv,
-  // Injected so tests can drive every branch without the dynamic @archon/core
-  // import or a real binary on disk.
-  loadDeps: (env: NodeJS.ProcessEnv) => Promise<CodexBinaryDeps> = defaultLoadCodexBinaryDeps,
-  resolve: (
-    configPath?: string
-  ) => Promise<
-    { path: string; source: CodexBinarySource } | undefined
-  > = resolveCodexBinaryWithSource
-): Promise<CheckResult> {
-  const label = 'Codex binary';
-
-  let deps: CodexBinaryDeps;
+export async function checkProviderDiagnostics(
+  id: string,
+  provider?: Pick<IAgentProvider, 'diagnose'>,
+  load: () => Promise<ProviderSelection> = () => defaultLoadMergedConfig(process.cwd()),
+  signal: AbortSignal = AbortSignal.timeout(20_000)
+): Promise<CheckResult[]> {
+  const label = `${id} diagnostics`;
   try {
-    deps = await loadDeps(env);
-  } catch (err) {
-    // Config load can throw (e.g. a typo'd DEFAULT_AI_ASSISTANT) — degrade to
-    // env-only signals rather than failing the whole check.
-    getLog().debug({ err }, 'doctor.codex_deps_load_failed');
-    deps = { isDefaultAssistant: false, credentialConnected: false };
-  }
-
-  const configured =
-    env.DEFAULT_AI_ASSISTANT === 'codex' ||
-    Boolean(env.CODEX_BIN_PATH) ||
-    deps.isDefaultAssistant ||
-    Boolean(deps.configBinaryPath) ||
-    deps.credentialConnected;
-
-  if (!configured) {
-    return {
-      label,
-      status: 'skip',
-      message: 'Codex not configured (not the default assistant, no OpenAI credential connected)',
-    };
-  }
-
-  let resolved: { path: string; source: CodexBinarySource } | undefined;
-  try {
-    resolved = await resolve(deps.configBinaryPath);
-  } catch (err) {
-    // Binary mode + unresolved → the resolver throws with install instructions.
-    return { label, status: 'fail', message: (err as Error).message };
-  }
-
-  // Dev mode: the resolver returns undefined and the SDK resolves via node_modules.
-  if (!resolved) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
-  try {
-    await execFileAsync(resolved.path, ['--version'], { timeout: 5000 });
-    return {
-      label,
-      status: 'pass',
-      message: `${resolved.path} (via ${resolved.source}, spawns OK)`,
-    };
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `${resolved.path} did not spawn: ${(err as Error).message}`,
-    };
-  }
-}
-
-async function defaultLoadCodexBinaryDeps(env: NodeJS.ProcessEnv): Promise<CodexBinaryDeps> {
-  // Lazy imports so doctor doesn't pull the full @archon/core graph for an
-  // unrelated check (matches defaultLoadDatabaseDeps / defaultLoadProviderDeps).
-  const { loadConfig, listUserProviderKeys } = await import('@archon/core');
-  const userDb = await import('@archon/core/db/users');
-  const config = await loadConfig(process.cwd());
-
-  let credentialConnected = false;
-  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
-  if (cliId) {
-    try {
-      const user = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-      const rows = await listUserProviderKeys(user.id);
-      credentialConnected = rows.some(r => r.provider === CODEX_CREDENTIAL_VENDOR);
-    } catch (err) {
-      // Credential lookup is best-effort — a DB hiccup shouldn't force the
-      // binary check to run or skip; treat as "no credential connected".
-      getLog().debug({ err }, 'doctor.codex_credential_lookup_failed');
+    let config: ProviderSelection | undefined;
+    if (!provider) {
+      const registration = getRegistration(id);
+      // A deprecated provider stays bundled whether or not anyone uses it, so its
+      // runtime is only worth checking for a user who selected or configured it.
+      // A config that fails to load selects nothing; the Config files check reports it.
+      if (registration.deprecationNotice) {
+        config = await load().catch(() => undefined);
+        if (!config || !selectsProvider(config, id)) return [];
+      }
+      // The factory, not getAgentProvider: a diagnostic is not a run, so it must not
+      // report the deprecation notice the Provider support check already shows.
+      provider = registration.factory();
     }
+    if (!provider.diagnose) return [{ label, status: 'skip', message: 'no diagnostics hook' }];
+    config ??= await load();
+    const diagnostics = await provider.diagnose({ assistantConfig: config.assistants[id], signal });
+    return diagnostics.checks.map(check => ({
+      label: `${id}: ${check.label}`,
+      status: check.status === 'ok' ? 'pass' : check.status,
+      message: `${check.message}${check.remedy ? ` Remedy: ${check.remedy}` : ''}`,
+    }));
+  } catch (error) {
+    if (error instanceof PluginRemoteError && error.code === -32601)
+      return [{ label, status: 'skip', message: 'no diagnostics hook' }];
+    return [
+      { label, status: 'fail', message: error instanceof Error ? error.message : String(error) },
+    ];
   }
-
-  return {
-    configBinaryPath: config.assistants.codex.codexBinaryPath,
-    isDefaultAssistant: config.assistant === 'codex',
-    credentialConnected,
-  };
 }
 
-export interface OpenCodeDeps {
-  /** True when the merged default assistant is opencode. */
-  isDefaultAssistant: boolean;
-  /** Cheap module-presence probe — resolves the SDK WITHOUT booting the server. */
-  probeRuntimeModule: () => Promise<boolean>;
+export async function checkGitHubApp(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  try {
+    const { loadGitHubAppConfig } = await import('@archon/core');
+    if (loadGitHubAppConfig(env)) {
+      return {
+        label: 'GitHub App',
+        status: 'pass',
+        message: 'App mode configured (local configuration valid; GitHub access not checked)',
+      };
+    }
+  } catch (error) {
+    return {
+      label: 'GitHub App',
+      status: 'fail',
+      message: error instanceof Error ? error.message : 'Invalid GitHub App configuration.',
+    };
+  }
+  return { label: 'GitHub App', status: 'skip', message: 'App mode not configured' };
 }
 
-/**
- * Report whether the embedded OpenCode runtime SDK is present. OpenCode's
- * runtime is heavyweight to start (spawns a child process and binds a port),
- * so doctor NEVER boots it — it only probes that the SDK module resolves. Skips
- * unless OpenCode is the configured assistant or `--full` is passed, matching
- * the lazy-start posture of `GET /api/providers/opencode/credentials`.
- */
-export async function checkOpenCode(
+async function runForgeCommand(
+  op: string,
+  data: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
-  full: boolean,
-  loadDeps: () => Promise<OpenCodeDeps> = defaultLoadOpenCodeDeps
+  trustedEnv: NodeJS.ProcessEnv
+): ReturnType<ForgeProbe> {
+  let response: unknown;
+  let credentialSource: string | undefined;
+  const exitCode = await forgeCommand(
+    op,
+    { data: JSON.stringify(data), trustedEnv },
+    {
+      env,
+      write: async value => {
+        response = value;
+      },
+    }
+  );
+  const value = forgeResult(op, response, exitCode, source => {
+    credentialSource = source;
+  });
+  return { value, credentialSource };
+}
+
+export async function checkSdlcForge(
+  env: NodeJS.ProcessEnv,
+  probe: ForgeProbe = (op, data) => runForgeCommand(op, data, env, trustedEnv),
+  trustedEnv: NodeJS.ProcessEnv = env
 ): Promise<CheckResult> {
-  const label = 'OpenCode runtime';
-
-  let deps: OpenCodeDeps | undefined;
-  let loadError: Error | undefined;
+  const label = 'SDLC forge';
   try {
-    deps = await loadDeps();
-  } catch (err) {
-    // Keep the load error — if the check turns out to be in scope we must
-    // report *this* failure, not a fabricated "entrypoint missing" verdict.
-    loadError = err as Error;
-    getLog().debug({ err }, 'doctor.opencode_deps_load_failed');
-  }
-
-  const configured = env.DEFAULT_AI_ASSISTANT === 'opencode' || (deps?.isDefaultAssistant ?? false);
-  if (!configured && !full) {
-    return {
-      label,
-      status: 'skip',
-      message: 'OpenCode not configured (pass --full to probe the runtime SDK)',
-    };
-  }
-
-  // In scope (configured or --full) but the probe deps never loaded — surface
-  // the real load failure instead of falsely blaming the SDK entrypoint below.
-  if (!deps) {
+    const { detail } = await checkForgeAccess(env, probe);
+    return { label, status: 'pass', message: detail };
+  } catch (error) {
     return {
       label,
       status: 'fail',
-      message: `runtime probe unavailable: ${loadError?.message ?? 'unknown error'}. Reinstall dependencies (bun install).`,
+      message: error instanceof Error ? error.message : String(error),
     };
   }
+}
 
-  let present: boolean;
+export interface AssistantLoginDeps {
+  assistant: string;
+  assistantConfig?: Parameters<IAgentProvider['checkCredential']>[0]['assistantConfig'];
+  model?: string;
+  /**
+   * The credential vendor the configured model uses; undefined when Archon config names no
+   * model or the model's provider has no credential vendor (a Pi models.json provider).
+   */
+  vendor?: string;
+  /** Vendors of the user's connected credentials that this assistant can use, as delivery names them. */
+  connectedVendors: readonly string[];
+  /** Why the connected credential for `vendor` cannot be used by this assistant, when one is connected. */
+  unconsumedConnectionReason?: string;
+  provider: Pick<IAgentProvider, 'checkCredential'>;
+}
+
+export async function checkAssistantLogin(
+  env: NodeJS.ProcessEnv = process.env,
+  loadDeps: (env: NodeJS.ProcessEnv) => Promise<AssistantLoginDeps> = defaultLoadAssistantLoginDeps
+): Promise<CheckResult> {
+  const label = 'Assistant login';
   try {
-    // Cheap probe only — resolves the SDK module without starting the server.
-    present = await deps.probeRuntimeModule();
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `runtime SDK not resolvable: ${(err as Error).message}. Reinstall dependencies (bun install).`,
-    };
-  }
-
-  if (present) {
-    return {
-      label,
-      status: 'pass',
-      message: 'embedded runtime SDK present (module resolves; server not started)',
-    };
-  }
-  return {
-    label,
-    status: 'fail',
-    message:
-      '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
-  };
-}
-
-async function defaultLoadOpenCodeDeps(): Promise<OpenCodeDeps> {
-  const { loadConfig } = await import('@archon/core');
-  const { probeOpencodeRuntimeModule } =
-    await import('@archon/providers/community/opencode/runtime');
-  const config = await loadConfig(process.cwd());
-  return {
-    isDefaultAssistant: config.assistant === 'opencode',
-    probeRuntimeModule: probeOpencodeRuntimeModule,
-  };
-}
-
-export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
-  const label = 'gh CLI';
-  // Skip for users without GitHub configured — gh auth is irrelevant
-  // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
-  if (!env.GITHUB_TOKEN && !env.GH_TOKEN) {
-    return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
-  }
-  try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    return { label, status: 'pass', message: 'authenticated' };
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `gh auth status failed: ${(err as Error).message}. Run \`gh auth login\`.`,
-    };
-  }
-}
-
-/**
- * Read the Pi credential store and report what the credential in it says
- * (#3274). A file on disk is not a usable credential — an OAuth grant that
- * expired months ago still has its file, and every Pi workflow on that install
- * failed while `doctor` reported pass.
- *
- * Wrapped so tests can spy on it by name without fighting ESM named-import
- * rebinding limitations.
- */
-export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthValidity {
-  return readPiAuthValidity(authJsonPath, { now });
-}
-
-/** Format an expiry instant for a doctor line, without leaking a credential. */
-function formatExpiry(expiresAt: number): string {
-  const date = new Date(expiresAt);
-  // A non-finite or out-of-range instant yields an Invalid Date, whose
-  // toISOString() throws — and this runs inside a doctor line, not a crash path.
-  if (Number.isNaN(date.getTime())) return 'an unknown date';
-  return date.toISOString().slice(0, 10);
-}
-
-export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
-  const label = 'Pi provider';
-  const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
-
-  // Skip when Pi isn't the default — shared keys like ANTHROPIC_API_KEY shouldn't
-  // trigger a pass for Claude-only users who happen to have them set.
-  if (!isDefault) {
-    return { label, status: 'skip', message: 'Pi not configured' };
-  }
-
-  // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
-  // or API key env vars; either path is sufficient.
-  const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  // No existence gate in front of the read. `existsSync` swallows every errno
-  // and answers `false`, so a store the current user cannot traverse (EACCES on
-  // the parent directory, ENOTDIR when a path component is a file) used to skip
-  // the validity read entirely and surface as generic missing auth. The reader
-  // already separates ENOENT (`missing`) from every other read failure
-  // (`unreadable`), so let it answer for both.
-  const validity = probePiAuthValidity(authJsonPath, Date.now());
-
-  // An expired *access* token is not a broken credential. `expires` is the
-  // access token's expiry; Pi refreshes it on the next use as long as the
-  // refresh token still works, and so does Archon's own OAuth mint path. So
-  // an install whose access token lapsed weeks ago still authenticates — and
-  // reporting fail here would be a false alarm on a healthy install, which is
-  // worse than the false pass this check replaced (#3274). Warn instead: name
-  // the provider and the date, and say what happens next.
-  //
-  // Only the grants that actually expired are named: the verdict is aggregate,
-  // but pointing at a still-usable provider sends the operator to renew a
-  // credential that does not need it.
-  if (validity.status === 'expired') {
-    const expired = validity.expiredProviders;
+    const deps = await loadDeps(env);
+    if (deps.vendor !== undefined && deps.connectedVendors.includes(deps.vendor)) {
+      return {
+        label,
+        status: 'pass',
+        message: `${deps.assistant}: uses the credential connected in Archon`,
+      };
+    }
+    const status = await deps.provider.checkCredential({
+      assistantConfig: deps.assistantConfig,
+      model: deps.model,
+      env: Object.fromEntries(
+        Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      ),
+      signal: AbortSignal.timeout(20_000),
+    });
+    // A run receives every connected credential, and the model picks the one it uses. With
+    // no model in Archon config (Pi falls back to its own default), doctor cannot tell
+    // whether a connected credential covers a missing native login, so it warns instead.
+    const connectedHint =
+      deps.model === undefined && deps.connectedVendors.length > 0
+        ? ` A run also receives your connected ${deps.connectedVendors.join(', ')} credential and uses it if its model is from that vendor; set a model in assistants.${deps.assistant} so doctor can tell.`
+        : undefined;
+    switch (status.state) {
+      case 'usable':
+        return { label, status: 'pass', message: `${deps.assistant}: usable` };
+      case 'not_checked':
+        // Nothing was verified, so this is not a pass.
+        return { label, status: 'skip', message: `${deps.assistant}: not checked` };
+      case 'check_failed':
+        return {
+          label,
+          status: 'warn',
+          message: `${deps.assistant}: could not be verified. ${status.evidence}`,
+        };
+      case 'unusable':
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: native login cannot be used. ${status.evidence}${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: cannot be used. ${status.evidence} Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
+      case 'not_connected':
+        if (deps.unconsumedConnectionReason) {
+          return {
+            label,
+            status: 'fail',
+            message: `${deps.assistant}: no native credential, and ${deps.unconsumedConnectionReason}`,
+          };
+        }
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: no native credential.${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: no native credential. Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
+    }
+  } catch (error) {
     return {
       label,
       status: 'warn',
-      message: `~/.pi/agent/auth.json holds an expired access token for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Pi refreshes it on the next use; re-run \`pi /login\` if the refresh token has also expired.`,
+      message: `could not check assistant login: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
 
-  // The file exists but says nothing usable. Reported on its own line: an
-  // unreadable store is not an expired credential, and conflating them sends
-  // the operator looking for a renewal that cannot help.
-  if (validity.status === 'unreadable') {
-    return {
-      label,
-      status: 'fail',
-      message:
-        '~/.pi/agent/auth.json could not be read or holds an unusable credential. Check that the path and permissions are correct, then re-run `pi /login` to rewrite it.',
-    };
+async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
+  const config = await defaultLoadMergedConfig(process.cwd());
+  if (config.assistant === undefined) throw new Error(noDefaultProviderMessage(providerRegistry));
+  const { normalizeCredentialVendor } = await import('@archon/providers');
+  const configuredModel = config.assistants[config.assistant]?.model;
+  const model = typeof configuredModel === 'string' ? configuredModel : undefined;
+  const registration = getRegistration(config.assistant);
+  const { credentials } = registration;
+  const usableVendors =
+    credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  const vendor = credentials.vendorFor(model);
+  let connectedVendors: string[] = [];
+  let unconsumedConnectionReason: string | undefined;
+  if (usableVendors.length > 0 && cliId) {
+    try {
+      const deps = await defaultLoadProviderDeps();
+      const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
+      const rows = (await deps.listUserProviderKeys(user.id)).map(row => ({
+        vendor: normalizeCredentialVendor(row.provider),
+        kind: row.kind,
+      }));
+      connectedVendors = [
+        ...new Set(
+          rows
+            .filter(row => consumesStoredCredential(credentials, row.vendor, row.kind))
+            .map(row => row.vendor)
+        ),
+      ];
+      const unconsumed = rows.find(
+        row => row.vendor === vendor && !connectedVendors.includes(row.vendor)
+      );
+      if (unconsumed) {
+        unconsumedConnectionReason = unconsumedStoredCredentialReason(
+          providerRegistry,
+          config.assistant,
+          unconsumed.vendor,
+          unconsumed.kind
+        );
+      }
+    } catch (err) {
+      // Best-effort, as in the Codex credential lookup: a failed lookup must not hide the
+      // native login check, which runs as if nothing were connected. The AI credentials
+      // check runs the same lookup and shows its error. The lookup reads only credential
+      // metadata, never key material, so its error is safe to log.
+      getLog().debug({ err }, 'doctor.assistant_login_credential_lookup_failed');
+    }
   }
-
-  // 'empty' must not claim a pass: the file is present but holds no
-  // credential, so `pi` has nothing to authenticate with. Falling through
-  // lets the env-var check below answer, and a Pi-default user with neither
-  // gets the failure instead of a green doctor.
-  if (validity.status === 'valid') {
-    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
-  }
-
-  // 'missing' and 'empty' both fall through to the env-var check below: no
-  // stored credential, so a configured API key is the answer.
-
-  const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
-  if (foundKey) {
-    return { label, status: 'pass', message: `${foundKey} is set` };
-  }
-
   return {
-    label,
-    status: 'fail',
-    message:
-      'Pi is configured as default but no auth found. Run `pi /login` or set an API key env var (e.g. ANTHROPIC_API_KEY).',
+    assistant: config.assistant,
+    assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
+    model,
+    vendor,
+    connectedVendors,
+    unconsumedConnectionReason,
+    // The factory, not getAgentProvider: a credential check is not a run, so it must not
+    // log the deprecation notice the Provider support check already shows.
+    provider: registration.factory(),
   };
 }
 
@@ -640,7 +571,8 @@ export async function checkFolderProject(
 export interface ProviderDeps {
   listUserProviderKeys: (
     userId: string
-  ) => Promise<{ provider: string; kind: string; label: string | null }[]>;
+  ) => Promise<{ provider: string; kind: StoredCredentialKind; label: string | null }[]>;
+  getStoredCredentialStatus: (userId: string, vendor: string) => Promise<CredentialStatus>;
   // `platform` is the literal 'cli' — this check resolves the CLI identity only,
   // and narrowing it keeps the real (platform-union-typed) db fn assignable here.
   findOrCreateUserByPlatformIdentity: (
@@ -650,11 +582,34 @@ export interface ProviderDeps {
   ) => Promise<{ id: string }>;
 }
 
+/** One line for a connected credential: its state, and what to do when it fails. */
+function describeStoredCredential(
+  row: { provider: string; kind: string },
+  status: CredentialStatus
+): string {
+  const name = `${row.provider} (${row.kind})`;
+  const reconnect =
+    row.kind === 'oauth' ? `archon ai login ${row.provider}` : `archon ai key set ${row.provider}`;
+  switch (status.state) {
+    case 'usable':
+      return `${name}: usable`;
+    case 'not_connected':
+      return `${name}: no longer connected`;
+    case 'not_checked':
+      return `${name}: not checked`;
+    case 'unusable':
+      return `${name}: cannot be used. Reconnect: ${reconnect}. Cause: ${status.evidence}`;
+    case 'check_failed':
+      return `${name}: could not be verified. If it persists, reconnect: ${reconnect}. Cause: ${status.evidence}`;
+  }
+}
+
 /**
- * Report how many AI-provider credentials the current CLI user has connected,
- * plus how to connect when none are. Skip (never fail) on any error — credential
- * status is informational, and a missing CLI identity or DB hiccup shouldn't make
- * `archon doctor` exit non-zero.
+ * Check every AI-provider credential the current CLI user connected, the way a run
+ * would use it: decrypt, and refresh an expired OAuth grant (saving any rotation).
+ * Fails when a credential cannot be used and warns when one could not be verified.
+ * Skips when there is no CLI identity, nothing is connected, or the database cannot
+ * be read, so a DB hiccup does not make `archon doctor` exit non-zero.
  */
 export async function checkConnectedProviders(
   env: NodeJS.ProcessEnv = process.env,
@@ -676,6 +631,7 @@ export async function checkConnectedProviders(
       message: `could not load credential module: ${(err as Error).message}`,
     };
   }
+  let checked: { row: { provider: string; kind: string }; status: CredentialStatus }[];
   try {
     const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
     const rows = await deps.listUserProviderKeys(user.id);
@@ -686,8 +642,12 @@ export async function checkConnectedProviders(
         message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
       };
     }
-    const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
-    return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
+    checked = await Promise.all(
+      rows.map(async row => ({
+        row,
+        status: await deps.getStoredCredentialStatus(user.id, row.provider),
+      }))
+    );
   } catch (err) {
     return {
       label,
@@ -695,14 +655,23 @@ export async function checkConnectedProviders(
       message: `could not read credentials: ${(err as Error).message}`,
     };
   }
+  const states = checked.map(c => c.status.state);
+  const status = states.includes('unusable')
+    ? 'fail'
+    : states.includes('check_failed')
+      ? 'warn'
+      : 'pass';
+  const lines = checked.map(c => `\n    ${describeStoredCredential(c.row, c.status)}`);
+  return { label, status, message: `${checked.length} connected${lines.join('')}` };
 }
 
 async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
   // Lazy imports for the same reason as defaultLoadDatabaseDeps.
-  const { listUserProviderKeys } = await import('@archon/core');
+  const { listUserProviderKeys, getStoredCredentialStatus } = await import('@archon/core');
   const userDb = await import('@archon/core/db/users');
   return {
     listUserProviderKeys,
+    getStoredCredentialStatus,
     findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
   };
 }
@@ -855,7 +824,7 @@ function skillTreeMatches(skillRoot: string, bundledFiles: Record<string, string
 }
 
 /**
- * Catch the v0.10.0 skill migration that `archon skill install` performs but
+ * Catch the v0.10.0 skill migration that `archon skill add` performs but
  * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
  * `archon-cli` replacement. Skip when this project has never installed skills.
  */
@@ -887,7 +856,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `retired skill root(s) still present. Run \`archon skill install .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
+      message: `retired skill root(s) still present. Run \`archon skill add .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
     };
   }
 
@@ -895,7 +864,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill install .\` to install the current skill in this project.`,
+      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill add .\` to install the current skill in this project.`,
     };
   }
 
@@ -903,8 +872,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'skip',
-      message:
-        'not installed (run `archon skill install .` if you use Claude Code or Codex skills)',
+      message: 'not installed (run `archon skill add .` if you use Claude Code or Codex skills)',
     };
   }
 
@@ -915,7 +883,7 @@ export async function checkArchonSkill(
       return {
         label,
         status: 'fail',
-        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill install .\` to update it.`,
+        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill add .\` to update it.`,
       };
     }
   }
@@ -929,13 +897,53 @@ function renderResult(r: CheckResult): string {
   return `${icon} ${r.label}: ${r.message}`;
 }
 
+async function checkWorkflowSdlcForge(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  try {
+    const cwd = process.cwd();
+    const config = await defaultLoadMergedConfig(cwd);
+    const { createCliWorkflowHost } = await import('../utils/workflow-host');
+    const { resolveCodebaseForPath } = await import(
+      '@archon/core/services/codebase-checkout-resolver'
+    );
+    const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
+    const host = await createCliWorkflowHost(true);
+    const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
+    let repositoryUrl: string | null = null;
+    if (!codebase && repoRoot) {
+      const { getDefaultRemote, getRemoteUrl, toRepoPath } = await import('@archon/git');
+      const { loadRepoConfig } = await import('@archon/core/config/config-loader');
+      const repoConfig = await loadRepoConfig(repoRoot);
+      const path = toRepoPath(repoRoot);
+      const remote = repoConfig.worktree?.remote?.trim() || (await getDefaultRemote(path));
+      if (remote) repositoryUrl = await getRemoteUrl(path, remote);
+    }
+    const cliId = resolveCliUserId(env);
+    const user = cliId
+      ? await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId)
+      : undefined;
+    const github = await resolveWorkflowGithubEnvironment(
+      host.deps,
+      codebase ?? { repository_url: repositoryUrl },
+      user?.id,
+      config
+    );
+    const workflowEnv = { ...env, ...github.envVars };
+    const cliEnv = { ...workflowEnv };
+    const trustedEnv = await loadCliEnv(cwd, { env: cliEnv, preserveGithubCredentials: true });
+    return checkSdlcForge(workflowEnv, (op, data) => runForgeCommand(op, data, cliEnv, trustedEnv));
+  } catch (error) {
+    return {
+      label: 'SDLC forge',
+      status: 'fail',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
-  checks?: (() => Promise<CheckResult>)[],
-  // `--full` opts the OpenCode runtime probe in even when OpenCode isn't the
-  // configured assistant. Does not boot the runtime — only widens the gate.
-  full = false
+  checks?: (() => Promise<CheckResult | CheckResult[]>)[]
 ): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
   getLog().info('doctor.run_started');
@@ -945,11 +953,12 @@ export async function doctorCommand(
     ? checks.map(fn => fn())
     : [
         checkConfigFiles(),
-        checkClaudeBinary(),
-        checkCodexBinary(env),
-        checkGhAuth(env),
-        checkPi(env),
-        checkOpenCode(env, full),
+        checkInstalledProviders(),
+        ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
+        checkGitHubApp(env),
+        checkWorkflowSdlcForge(env),
+        checkAssistantLogin(env),
+        checkProviderDeprecation(),
         checkDatabase(),
         checkFolderProject(),
         checkConnectedProviders(env),
@@ -965,6 +974,7 @@ export async function doctorCommand(
   const settled = await Promise.allSettled(promises);
 
   let failures = 0;
+  let warnings = 0;
   for (const s of settled) {
     if (s.status === 'rejected') {
       failures++;
@@ -973,13 +983,18 @@ export async function doctorCommand(
       getLog().error({ reason: s.reason }, 'doctor.check_threw_unexpectedly');
       continue;
     }
-    if (s.value.status === 'fail') failures++;
-    console.log(renderResult(s.value));
+    for (const result of Array.isArray(s.value) ? s.value : [s.value]) {
+      if (result.status === 'fail') failures++;
+      if (result.status === 'warn') warnings++;
+      console.log(renderResult(result));
+    }
   }
 
   console.log('');
   if (failures === 0) {
-    console.log('All checks passed.');
+    console.log(
+      warnings === 0 ? 'All checks passed.' : `No check failed; ${warnings} warning(s) above.`
+    );
     getLog().info('doctor.run_completed');
     return 0;
   }

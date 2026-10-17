@@ -8,7 +8,7 @@
  * `loopControlSchema` carries the fields both need (completion gate, iteration cap,
  * session reset, interactive gate). Each variant extends it with its body shape.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { isValidCommandName } from '../command-validation';
 
 /**

@@ -37,10 +37,14 @@
  * grace on `docker stop` can under-report. See SECURITY.md.
  */
 
-import type { OverlayChangeSummary, WriteBackApplySummary } from '@archon/providers/types';
+import type {
+  OverlayChangeSummary,
+  WriteBackApplySummary,
+} from '@archon/workflows/container-context';
 import { createLogger } from '@archon/paths';
 import type { DockerRunner } from './docker-exec';
 import { extractDockerError } from './docker-exec';
+import { IsolationFailure } from '../errors';
 
 const log = createLogger('isolation.overlay');
 
@@ -122,7 +126,10 @@ export async function summarizeOverlayChanges(
       target.hostRoot,
     ]));
   } catch (err) {
-    throw new Error(`Failed to inspect the overlay diff: ${extractDockerError(err)}`);
+    if (!(err instanceof IsolationFailure)) throw err;
+    throw new Error(`Failed to inspect the overlay diff: ${extractDockerError(err)}`, {
+      cause: err,
+    });
   }
 
   const added: string[] = [];
@@ -199,14 +206,22 @@ export async function applyOverlayChanges(
       target.hostRoot,
     ]));
   } catch (err) {
+    if (!(err instanceof IsolationFailure)) throw err;
     const detail = extractDockerError(err);
-    const partial = (err as { stdout?: string }).stdout ?? '';
-    const landed = parseRecords(partial).filter(
+    const processError = err.cause;
+    const partial =
+      processError instanceof Error &&
+      'stdout' in processError &&
+      typeof processError.stdout === 'string'
+        ? processError.stdout
+        : '';
+    const completed = parseRecords(partial).filter(
       r => r.tag === 'W' || r.tag === 'K' || r.tag === 'D'
     ).length;
     throw new Error(
-      `Write-back apply failed partway (${landed} path(s) already applied to the live ` +
-        `root — inspect and reconcile manually): ${detail}`
+      `Write-back apply failed partway (${completed} path(s) confirmed completed on the live ` +
+        `root; the failing path may already have changed; inspect and reconcile manually): ${detail}`,
+      { cause: err }
     );
   }
 

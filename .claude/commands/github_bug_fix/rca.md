@@ -139,11 +139,8 @@ Save analysis as: `.agents/rca/issue-$ARGUMENTS.md`
 2. [Test case 2 - no regression]
 3. [Test case 3 - edge cases]
 
-### Validation Commands
-bun run type-check
-bun run lint
-bun run test
-bun run validate
+### Validation
+The tests that cover the changed files, plus lint and type-check of the touched packages. CI is the full validation.
 
 ## Next Steps
 1. Review this RCA document

@@ -1,11 +1,12 @@
 {
   "name": "@archon/isolation",
-  "version": "0.10.1",
+  "version": "0.11.1",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -14,7 +15,8 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*"
+    "@archon/provider-contract": "workspace:*",
+    "@archon/workflows": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

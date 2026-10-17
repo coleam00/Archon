@@ -1,5 +1,7 @@
+// @archon-test-isolated
 /**
- * Integration test: getLiveRunOwningEnv against a REAL Postgres server.
+ * Integration tests: isolation environment reads and conditional adoption writes
+ * against a REAL Postgres server.
  *
  * The unit suite mocks the pg driver, so the Postgres dialect branch of this
  * SQL never executes there — yet it is shaped differently from the SQLite
@@ -13,12 +15,9 @@
  */
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
+import { randomUUID } from 'node:crypto';
 
-// The barrel is fully replaced (no partial merge), so re-export the constants
-// the real module graph needs: bundled-schema reads BUNDLED_IS_BINARY. The
-// '@archon/paths/bundled-build' subpath is a separate specifier and stays real.
 mock.module('@archon/paths', () => ({
-  BUNDLED_IS_BINARY: false,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -30,19 +29,21 @@ mock.module('@archon/paths', () => ({
 }));
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
-const SCRATCH_DB = 'archon_pg_parity_test';
+const SCRATCH_DB = `archon_pg_parity_${randomUUID().replaceAll('-', '')}`;
 
-describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () => {
+describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', () => {
   let admin: PgPool;
   let db: import('./adapters/postgres').PostgresAdapter;
   let create: typeof import('./isolation-environments').create;
+  let getById: typeof import('./isolation-environments').getById;
+  let updateMetadata: typeof import('./isolation-environments').updateMetadata;
   let getLiveRunOwningEnv: typeof import('./isolation-environments').getLiveRunOwningEnv;
+  let markWorktreeDestroyed: typeof import('./isolation-environments').markWorktreeDestroyed;
 
   beforeAll(async () => {
     const { Pool } = await import('pg');
     admin = new Pool({ connectionString: baseUrl });
-    // SCRATCH_DB is a compile-time constant, safe to inline as an identifier.
-    await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
+    // The generated name contains only a fixed prefix and hexadecimal UUID characters.
     await admin.query(`CREATE DATABASE "${SCRATCH_DB}"`);
     const scratchUrl = new URL(baseUrl!);
     scratchUrl.pathname = `/${SCRATCH_DB}`;
@@ -57,10 +58,13 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
       getDatabaseType: () => 'postgresql',
     }));
 
-    ({ create, getLiveRunOwningEnv } = await import('./isolation-environments'));
+    ({ create, getLiveRunOwningEnv, getById, updateMetadata, markWorktreeDestroyed } = await import(
+      './isolation-environments'
+    ));
   });
 
   afterAll(async () => {
+    if (db) await db.close();
     if (admin) {
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();
@@ -80,6 +84,65 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
       workflow_id: workflowId,
       working_path: '/tmp/parity',
       branch_name: 'parity-branch' as never,
+    });
+  }
+
+  test('legacy conditional adoption rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
+    const created = await createEnv('pg-legacy-adoption');
+    await db.query(
+      'UPDATE remote_agent_isolation_environments SET metadata = $1::jsonb WHERE id = $2',
+      [JSON.stringify({ label: 'legacy' }), created.id]
+    );
+    const observed = (await getById(created.id))!;
+    await updateMetadata(created.id, { label: 'replacement' });
+    const replacement = (await getById(created.id))!;
+    await expect(updateMetadata(created.id, { adopted: true }, observed)).rejects.toThrow(
+      'changed during adoption'
+    );
+    expect(await getById(created.id)).toEqual(replacement);
+    expect(replacement.metadata.adopted).toBeUndefined();
+    await updateMetadata(replacement.id, { adopted: true }, replacement);
+    expect((await getById(created.id))?.metadata).toEqual({ label: 'replacement', adopted: true });
+  });
+
+  test('legacy worktree retirement rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
+    const created = await createEnv('pg-legacy-retire');
+    await db.query(
+      'UPDATE remote_agent_isolation_environments SET metadata = $1::jsonb WHERE id = $2',
+      [JSON.stringify({ label: 'legacy' }), created.id]
+    );
+    const observed = (await getById(created.id))!;
+    await updateMetadata(created.id, { label: 'replacement' });
+    const replacement = (await getById(created.id))!;
+    await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+    expect(await getById(created.id)).toEqual(replacement);
+    await markWorktreeDestroyed(replacement);
+    expect((await getById(created.id))?.status).toBe('destroyed');
+  });
+
+  for (const legacy of [false, true]) {
+    test(`retirement of the observed registration is idempotent (legacy: ${legacy})`, async () => {
+      const created = await createEnv(`pg-idempotent-${legacy}`);
+      if (legacy)
+        await db.query(
+          "UPDATE remote_agent_isolation_environments SET metadata = '{}'::jsonb WHERE id = $1",
+          [created.id]
+        );
+      const observed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      const destroyed = (await getById(created.id))!;
+      await markWorktreeDestroyed(observed);
+      await markWorktreeDestroyed(destroyed);
+      expect(await getById(created.id)).toEqual(destroyed);
+      await expect(updateMetadata(created.id, { adopted: true }, destroyed)).rejects.toThrow(
+        'changed during adoption'
+      );
+      if (legacy) {
+        await updateMetadata(created.id, { replaced: true });
+        const replacement = await getById(created.id);
+        await expect(markWorktreeDestroyed(observed)).rejects.toThrow('changed during cleanup');
+        expect(await getById(created.id)).toEqual(replacement);
+      }
     });
   }
 
@@ -114,6 +177,7 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
     await seedRun(runId, conversationId, 'running');
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: runId, status: 'running' });
+    await expect(getLiveRunOwningEnv(env.id, undefined, runId)).resolves.toBeNull();
   });
 
   test('a paused run attached through run metadata (sub-run / container stamp) pins the env', async () => {
@@ -146,4 +210,64 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: runId, status: 'failed' });
   });
+
+  test('a failed run stops pinning once settled, or once inactive past the stale window', async () => {
+    const env = await createEnv('pg-failed-release');
+    const conversationId = '99999999-9999-4999-8999-999999999999';
+    const runId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    await seedConversation(conversationId, env.id);
+    await seedRun(runId, conversationId, 'failed');
+    const stale = { kind: 'stale', staleDays: 7 } as const;
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toBeNull();
+    await failedDaysAgo(runId, 1);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toEqual({
+      id: runId,
+      status: 'failed',
+    });
+    await failedDaysAgo(runId, 10);
+    await expect(getLiveRunOwningEnv(env.id, stale)).resolves.toBeNull();
+  });
+
+  test('an old paused run pins the env through every release', async () => {
+    const env = await createEnv('pg-paused-release');
+    const conversationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const runId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    await seedConversation(conversationId, env.id);
+    await seedRun(runId, conversationId, 'paused');
+    await db.query(
+      `UPDATE remote_agent_workflow_runs SET started_at = NOW() - INTERVAL '30 days' WHERE id = $1`,
+      [runId]
+    );
+    const paused = { id: runId, status: 'paused' };
+
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
+    await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(
+      paused
+    );
+  });
+
+  async function failedDaysAgo(id: string, days: number): Promise<void> {
+    await db.query(
+      `UPDATE remote_agent_workflow_runs SET completed_at = NOW() - ($1 || ' days')::INTERVAL WHERE id = $2`,
+      [days, id]
+    );
+  }
+
+  test.each(['pending', 'running', 'paused', 'failed'])(
+    'same-path %s run pins environment without a conversation link',
+    async status => {
+      const { randomUUID } = await import('node:crypto');
+      const env = await createEnv(`path-${status}`);
+      const conversation = randomUUID();
+      const run = randomUUID();
+      await seedConversation(conversation, null);
+      await seedRun(run, conversation, status);
+      await db.query(
+        'UPDATE remote_agent_workflow_runs SET codebase_id = $1, working_path = $2 WHERE id = $3',
+        [env.codebase_id, env.working_path, run]
+      );
+      await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
+    }
+  );
 });

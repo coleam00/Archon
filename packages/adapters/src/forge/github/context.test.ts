@@ -10,11 +10,10 @@
  * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
  * `$ARCHON_HOME`. `mock.module()` MERGES over the real module instead of
  * replacing it, so any export omitted from a factory below keeps its REAL
- * implementation. Two omissions made this "fully mocked" file open a real
- * SQLite database and write a real `config.yaml`; see the notes on the
- * `@archon/core/db/users` and `@archon/core/config/resolve-assistant` mocks.
- * To re-audit, run this file with `ARCHON_HOME` pointed at an empty temp dir
- * and assert nothing appears in it.
+ * implementation. The `@archon/core/db/users` mock below prevents a real
+ * SQLite database from being opened.
+ * The package-cwd test preload checks its own temporary ARCHON_HOME after each
+ * test (src/test/no-archon-home-writes.ts).
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { createHmac } from 'crypto';
@@ -40,7 +39,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const mockHandleMessage = mock<(typeof import('@archon/core'))['handleMessage']>(async () => {});
+const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(async () => {});
 
 const mockGetOrCreateConversation = mock(async () => ({
   id: 'conv-1',
@@ -105,7 +104,7 @@ mock.module('@archon/core/db/conversations', () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   updateCodebase: mock(async () => {}),
 }));
 
@@ -123,16 +122,6 @@ const mockFindOrCreateUserByPlatformIdentity = mock(async () => ({
 
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
-}));
-
-// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
-// createCodebase. Also a subpath import (`@archon/core/config/resolve-assistant`)
-// and also left real: it calls loadGlobalConfig(), which WRITES a default
-// ~/.archon/config.yaml when the file does not exist (#2305).
-const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
-
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mockResolveDefaultAssistant,
 }));
 
 mock.module('child_process', () => ({
@@ -305,6 +294,13 @@ describe('GitHubAdapter non-slash command context passing', () => {
     }
   });
 
+  test('an unresolved forge commenter remains unidentified', async () => {
+    mockFindOrCreateUserByPlatformIdentity.mockRejectedValueOnce(new Error('lookup unavailable'));
+    const payload = createIssueCommentPayload('@archon /workflow approve run-auth');
+    await adapter.handleWebhook(payload, signPayload(payload));
+    expect(mockHandleMessage.mock.calls[0][3]?.actor).toEqual({ kind: 'unidentified' });
+  });
+
   test('should set contextToAppend for issue_comment events on issues', async () => {
     const payload = createIssueCommentPayload('@archon help me with this issue', {
       issueNumber: 99,
@@ -314,6 +310,15 @@ describe('GitHubAdapter non-slash command context passing', () => {
     await adapter.handleWebhook(payload, signPayload(payload));
 
     expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    expect(mockHandleMessage.mock.calls[0][3]?.actor).toEqual({
+      kind: 'user',
+      userId: 'user-test-uuid',
+    });
+    expect(mockFindOrCreateUserByPlatformIdentity).toHaveBeenCalledWith(
+      'github',
+      'user123',
+      'user123'
+    );
     const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
     expect(contextArg).toBe(
       'GitHub Issue #99: "Bug in login flow"\nUse \'gh issue view 99\' for full details if needed.'

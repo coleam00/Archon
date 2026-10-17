@@ -1,0 +1,43 @@
+# Dry-run fixture: a live pass files one discovery, tracks one on an open issue with
+# evidence, and drops one. Nothing is asked, so the run ends without pausing. The
+# scripts are stubbed; .archon/scripts/__tests__/discoveries.test.ts runs them.
+facts:
+  path: decide
+  base: { branch: dev, sha: "stub-sha" }
+  policy_defaults: "/stub/policy"
+decide:
+  decisions:
+    - outcome: file
+      key: stub-new-defect
+      refs: ["run-a:review#0"]
+      title: "stub: a new defect"
+      body: "stub: the brief"
+      reason: "stub: real at the base, no issue covers it"
+    - outcome: track
+      key: stub-known-defect
+      refs: ["run-a:review#1"]
+      title: "stub: a known defect"
+      issue: { repo: { host: github.com, path: example/repo }, number: 3 }
+      comment: "stub: a new reproduction"
+      reason: "stub: issue 3 covers it"
+    - outcome: drop
+      key: stub-fixed-defect
+      refs: ["run-a:discoveries/implement.json#0"]
+      title: "stub: a fixed defect"
+      reason: "stub: fixed at the base"
+  summary: "stub: 3 records, one of each."
+outcome:
+  mode: live
+  summary: "stub: 3 records, one of each."
+  written:
+    - { key: stub-new-defect, outcome: file, url: "https://github.com/example/repo/issues/9" }
+    - { key: stub-known-defect, outcome: track, url: "https://github.com/example/repo/issues/3#issuecomment-1" }
+  dropped: [{ key: stub-fixed-defect, reason: "stub: fixed at the base" }]
+  asked: []
+  question: ""
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, decide, outcome]
+exec-code: true

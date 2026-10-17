@@ -95,7 +95,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   script: <inline code OR named identifier>   # required, non-empty
   runtime: bun | uv                            # required
   deps: ["httpx", "pydantic>=2"]               # optional, uv-only (see below)
-  timeout: 60000                               # optional ms, default 120000
+  timeout: 60000                               # optional ms; no timeout when omitted
   on_timeout: skip                             # optional; default is to fail
   depends_on: [upstream]                       # optional
   when: "$upstream.output != '[]'"             # optional (upstream is a bash/script node;
@@ -108,7 +108,8 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   trigger_rule: all_success                    # optional (default)
   retry:                                       # optional; same shape as bash/AI nodes
     max_attempts: 3
-    on_error: transient
+    on_error: all                              # a script exit is retried only under `all`;
+                                               #  `transient` retries only a timeout
 ```
 
 ### Fields
@@ -118,8 +119,8 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory (packaged workflows) or shared script directories (legacy workflows) |
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
-| `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
-| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
+| `timeout` | number (ms) | No | Milliseconds before Archon sends `SIGTERM` to the node. Omitted: no timeout, the node runs until it exits |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout`. See [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts) for what a timeout ends |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
@@ -129,7 +130,7 @@ work, and so does `output_format` — see
 `mcp`, `skills`, `agents`, `effort`, `maxBudgetUsd`, `systemPrompt`,
 `fallbackModel`, `betas`, `sandbox`) are accepted by the parser but emit a
 loader warning and are ignored at runtime — no AI is invoked. `idle_timeout` is also accepted but ignored: script nodes
-run as one-shot subprocesses, so use `timeout` (hard kill after N ms) instead.
+run as one-shot subprocesses, so use `timeout` instead.
 
 ## Inline vs Named Scripts
 
@@ -160,7 +161,7 @@ Packaged scripts can import modules from their pack's `.shared/` directory. Keep
 
 ### Share code within a pack
 
-Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules: its files are neither workflows nor named script targets. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules and `.md` documents: its files are neither workflows nor named script targets. Documents ship with the pack in every build, beside the modules, so a script can find one relative to its own location and hand its path to a prompt node through `with:`. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
 
 ```text
 my-pack/
@@ -472,9 +473,11 @@ Then reference it by name from any repo's workflow:
 - **Interactive prompts** — the script runs headlessly; any `stdin` read will
   see EOF immediately.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
-- **Cancelling mid-execution** — script subprocesses are killed on workflow
-  cancel, but there's no cooperative cancellation signal. Design scripts to
-  complete quickly or fail fast.
+- **Cancelling mid-execution** — there is no cooperative cancellation signal.
+  Cancelling the run ends a running script's process tree instead; see
+  [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts)
+  for what it reaches. Without a `timeout`, a script that hangs runs until it is
+  cancelled.
 
 ## See Also
 

@@ -1,23 +1,17 @@
-/**
- * The one place a `bun test` invocation is assembled, so the per-test budget has one owner.
- *
- * On Windows the budget is 20 s instead of Bun's 5 s default. This is an attributed
- * runner-floor residual, not headroom for slow tests: on the 4-vCPU `windows-latest` VM the
- * suite's several hundred child processes periodically saturate the CPUs and the OS disk
- * (sometimes together with Windows' own background maintenance), and any spawn issued in
- * such a second can take 5 to 15 s regardless of which test issued it. Fifty instrumented
- * runs found no per-test, per-package, disk-layout or service-level change that removes
- * the class; the attribution is on coleam00/Archon#3294. A test with its own explicit
- * budget keeps it: `--timeout` only sets the default.
- */
-export const WINDOWS_TEST_TIMEOUT_MS = 20_000;
+import { join } from 'node:path';
+import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 
-export function bunTestCommand(
-  selectors: readonly string[],
-  platform: NodeJS.Platform = process.platform
-): string[] {
-  const budget = platform === 'win32' ? ['--timeout', String(WINDOWS_TEST_TIMEOUT_MS)] : [];
-  return ['bun', 'test', ...budget, ...selectors];
+/** One transpiler cache for every test process, whatever home a test gives its child. */
+export const TEST_TRANSPILER_CACHE = join(
+  import.meta.dir,
+  '..',
+  'node_modules',
+  '.cache',
+  'bun-transpiler'
+);
+
+export function bunTestCommand(selectors: readonly string[]): string[] {
+  return ['bun', 'test', '--timeout', String(DEFAULT_TEST_TIMEOUT_MS), ...selectors];
 }
 
 /**
@@ -25,7 +19,19 @@ export function bunTestCommand(
  * starts a real CLI or engine with a temp `ARCHON_HOME` would otherwise mint a
  * fresh install id per run and report it as a real install. A test that covers
  * telemetry itself re-enables it by setting the variable in its own child env.
+ *
+ * Bun keeps its runtime transpiler cache under the home directory (`USERPROFILE` on
+ * Windows, `HOME` elsewhere), so a test that gives its child a scratch home would start
+ * that child cold and have it write a fresh cache into the scratch home. On windows-latest
+ * that is measurably slower per spawn and adds small-file writes to the OS disk that
+ * already saturates under the parallel suite (#3294). Pinning the path keeps every such
+ * child warm; a caller's own setting wins.
  */
 export function bunTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...env, ARCHON_TELEMETRY_DISABLED: env.ARCHON_TELEMETRY_DISABLED ?? '1' };
+  return {
+    ...env,
+    ARCHON_TELEMETRY_DISABLED: env.ARCHON_TELEMETRY_DISABLED ?? '1',
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH:
+      env.BUN_RUNTIME_TRANSPILER_CACHE_PATH ?? TEST_TRANSPILER_CACHE,
+  };
 }

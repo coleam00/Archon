@@ -27,6 +27,11 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_LENGTH = 2000;
 
 export class DiscordAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    canDetachProject: true as const,
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private client: Client;
   private streamingMode: 'stream' | 'batch';
   private token: string;
@@ -241,7 +246,7 @@ export class DiscordAdapter implements IPlatformAdapter {
       const content = this.stripBotMention(message);
       const threadName = this.generateThreadName(content);
 
-      getLog().info({ threadName, messageId: message.id }, 'discord.thread_creating');
+      getLog().info({ messageId: message.id }, 'discord.thread_creating');
 
       const thread = await message.startThread({
         name: threadName,
@@ -252,8 +257,7 @@ export class DiscordAdapter implements IPlatformAdapter {
       getLog().info({ threadId: thread.id }, 'discord.thread_created');
       return thread.id;
     } catch (error) {
-      const err = error as Error;
-      getLog().error({ err }, 'discord.thread_creation_failed');
+      getLog().error({ err: error, messageId: message.id }, 'discord.thread_creation_failed');
       // Fall back to channel ID if thread creation fails
       return message.channelId;
     }
@@ -301,9 +305,7 @@ export class DiscordAdapter implements IPlatformAdapter {
       // Authorization check - verify sender is in whitelist
       const userId = message.author.id;
       if (!isDiscordUserAuthorized(userId, this.allowedUserIds)) {
-        // Log unauthorized attempt (mask user ID for privacy)
-        const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
-        getLog().info({ maskedUserId: maskedId }, 'discord.unauthorized_message');
+        getLog().info('discord.unauthorized_message');
         return; // Silent rejection
       }
 
@@ -316,8 +318,8 @@ export class DiscordAdapter implements IPlatformAdapter {
     });
 
     // Log when ready
-    this.client.once(Events.ClientReady, readyClient => {
-      getLog().info({ tag: readyClient.user.tag }, 'discord.bot_logged_in');
+    this.client.once(Events.ClientReady, () => {
+      getLog().info('discord.bot_logged_in');
     });
 
     // Login with stored token

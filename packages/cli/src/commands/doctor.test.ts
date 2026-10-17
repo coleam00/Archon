@@ -1,29 +1,31 @@
 /**
  * Tests for `archon doctor` check functions.
  *
- * Uses spyOn for `@archon/git.execFileAsync` and `globalThis.fetch`.
- * `BUNDLED_IS_BINARY` is a static const re-export and cannot be spied at
- * runtime — `checkClaudeBinary` accepts it as an injectable parameter for
- * testability. Avoids `mock.module()` because it is process-global and
+ * Uses spies for subprocesses and fetch.
+ * Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
-import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
+import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
+import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
-import * as git from '@archon/git';
+import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
+import { REQUIRED_FORGE_OPERATIONS } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
-  checkClaudeBinary,
-  checkCodexBinary,
   checkConfigFiles,
-  checkOpenCode,
+  checkInstalledProviders,
+  checkProviderDiagnostics,
+  checkProviderDeprecation,
   checkDatabase,
   checkConnectedProviders,
-  checkGhAuth,
-  checkPi,
+  checkGitHubApp,
+  checkSdlcForge,
+  checkAssistantLogin,
+  type AssistantLoginDeps,
   checkWorkspaceWritable,
   checkBundledDefaults,
   checkSlack,
@@ -31,596 +33,499 @@ import {
   checkTelemetry,
   checkFolderProject,
   checkArchonSkill,
-  defaultLoadClaudeBinaryDeps,
   doctorCommand,
-  type ClaudeBinaryDeps,
-  type CodexBinaryDeps,
   type DatabaseDeps,
   type FolderProjectDeps,
-  type OpenCodeDeps,
+  type ProviderDeps,
 } from './doctor';
-import * as doctorModule from './doctor';
 import type { MergedConfig } from '@archon/core';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import {
+  clearRegistry,
+  getRegistration,
+  providerRegistry,
+  registerProvider,
+  setDeprecationReporter,
+} from '@archon/providers';
 
-describe('checkClaudeBinary', () => {
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+// doctor creates its logger on first use and keeps it; hand it one this file can observe.
+// Module scope, so the spy is in place before any test makes doctor log.
+const doctorLog = paths.createLogger('cli.doctor');
+const realCreateLogger = paths.createLogger;
+spyOn(paths, 'createLogger').mockImplementation(module =>
+  module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
+);
 
-  beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
-  });
-
-  afterEach(() => {
-    execSpy.mockRestore();
-  });
-
-  const noDeps = async (): Promise<ClaudeBinaryDeps> => ({});
-
-  it('returns skip when not in binary mode', async () => {
-    const result = await checkClaudeBinary(false);
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Claude binary');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns fail in binary mode when the whole resolution chain is empty', async () => {
-    const result = await checkClaudeBinary(true, noDeps, async () => {
-      throw new Error('Claude Code not found. Archon requires the Claude Code executable');
-    });
-    expect(result.status).toBe('fail');
-    // The resolver's install instructions are surfaced verbatim — they are the
-    // actionable message, unlike the old "CLAUDE_BIN_PATH is not set".
-    expect(result.message).toContain('Claude Code not found');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns pass in binary mode when binary spawns successfully', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
-      path: '/opt/claude',
-      source: 'env',
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/opt/claude');
-    expect(execSpy).toHaveBeenCalledWith('/opt/claude', ['--version'], expect.any(Object));
-  });
-
-  it('returns fail in binary mode when spawn throws', async () => {
-    execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
-      path: '/opt/claude',
-      source: 'env',
-    }));
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('did not spawn');
-    expect(result.message).toContain('ENOENT');
-  });
-
-  // #2263: doctor previously read only CLAUDE_BIN_PATH and hard-FAILed setups
-  // configured via assistants.claude.claudeBinaryPath — the documented fix for
-  // compiled builds — even though those setups run workflows fine.
-  it('passes when the binary comes from config rather than CLAUDE_BIN_PATH (#2263)', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    let sawConfigPath: string | undefined;
-    const result = await checkClaudeBinary(
-      true,
-      async () => ({ configBinaryPath: '/Users/me/bin/claude' }),
-      async configPath => {
-        sawConfigPath = configPath;
-        return { path: configPath as string, source: 'config' };
-      }
-    );
-
-    // The config path must actually reach the resolver, not be ignored.
-    expect(sawConfigPath).toBe('/Users/me/bin/claude');
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/Users/me/bin/claude');
-    // Which tier resolved it is surfaced so users can see what the runtime does.
-    expect(result.message).toContain('via config');
-    expect(result.message).not.toContain('CLAUDE_BIN_PATH is not set');
-  });
-
-  it('reports the autodetect tier when the native installer path resolves', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
-      path: '/home/me/.local/bin/claude',
-      source: 'autodetect',
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('via autodetect');
-  });
-
-  it('degrades to env/autodetect when config loading throws', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(
-      true,
-      async () => {
-        throw new Error('malformed config.yaml');
-      },
-      async configPath => {
-        expect(configPath).toBeUndefined();
-        return { path: '/opt/claude', source: 'env' };
-      }
-    );
-    // A broken config must not fail the binary check outright.
-    expect(result.status).toBe('pass');
-  });
-
-  // The tests above inject BOTH seams, so they only prove parameter plumbing
-  // inside checkClaudeBinary. The two below exercise the real
-  // defaultLoadClaudeBinaryDeps, which is where #2263 actually lived: reading
-  // the wrong config key type-checks and would otherwise ship green.
-  // The stub config deliberately carries a DIFFERENT value under
-  // assistants.codex.codexBinaryPath so a key mix-up fails loudly rather than
-  // resolving to the same string by accident.
-  const stubConfig = async (): Promise<Pick<MergedConfig, 'assistants'>> => ({
-    assistants: {
-      claude: { claudeBinaryPath: '/from/claude/config' },
-      codex: { codexBinaryPath: '/from/codex/config' },
+describe('gh credential-source reporting', () => {
+  it.each([
+    { host: 'github.com', env: { GH_TOKEN: 'first', GITHUB_TOKEN: 'second' }, source: 'GH_TOKEN' },
+    { host: 'tenant.ghe.com', env: { GITHUB_TOKEN: 'second' }, source: 'GITHUB_TOKEN' },
+    {
+      host: 'ghe.example.com',
+      env: { GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GH_ENTERPRISE_TOKEN',
     },
-  });
-
-  it('reads assistants.claude.claudeBinaryPath, not another assistant key (#2263)', async () => {
-    const deps = await defaultLoadClaudeBinaryDeps(stubConfig);
-    expect(deps.configBinaryPath).toBe('/from/claude/config');
-  });
-
-  it('routes the real deps loader through to the resolver (#2263 wiring guard)', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    let sawConfigPath: string | undefined;
-
-    const result = await checkClaudeBinary(
-      true,
-      // The real loader, not a fake — this is the link the bug broke.
-      () => defaultLoadClaudeBinaryDeps(stubConfig),
-      async configPath => {
-        sawConfigPath = configPath;
-        return { path: configPath as string, source: 'config' };
-      }
+    {
+      host: 'ghe.example.com',
+      env: { GITHUB_ENTERPRISE_TOKEN: 'second' },
+      source: 'GITHUB_ENTERPRISE_TOKEN',
+    },
+  ])('$host uses $source', async ({ host, env, source }) => {
+    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(
+      argv =>
+        ({
+          exitCode: 0,
+          stdout: Buffer.from(
+            (argv as string[])[0] === 'git'
+              ? `remote.origin.url https://${host}/example/repo.git`
+              : ''
+          ),
+          stderr: Buffer.from(''),
+        }) as ReturnType<typeof Bun.spawnSync>
     );
-
-    expect(sawConfigPath).toBe('/from/claude/config');
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('via config');
+    try {
+      const result = await checkSdlcForge(env);
+      expect(result.status).toBe('pass');
+      expect(result.message).toContain(`source: ${source}`);
+    } finally {
+      spawn.mockRestore();
+    }
   });
 });
 
-describe('checkCodexBinary', () => {
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+describe('selected forge diagnostics', () => {
+  const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
+    'names %s after checking capabilities and read access',
+    async credentialSource => {
+      const spawn = spyOn(Bun, 'spawnSync').mockReturnValue({
+        exitCode: 0,
+        stdout: Buffer.from('remote.origin.url https://github.com/coleam00/Archon.git'),
+        stderr: Buffer.from(''),
+      } as ReturnType<typeof Bun.spawnSync>);
+      const probe = mock(async (op: string) => ({
+        value: op === 'metadata' ? { capabilities: REQUIRED_FORGE_OPERATIONS } : null,
+        credentialSource: op === 'metadata' ? undefined : credentialSource,
+      }));
+      try {
+        const result = await checkSdlcForge({ ARCHON_SDLC_FORGE: 'forge' }, probe);
+        expect(result.status).toBe('pass');
+        expect(result.message).toContain(`source: ${credentialSource}`);
+        expect(probe.mock.calls.map(call => call[0])).toEqual(['metadata', 'pr.view']);
+        expect(probe).toHaveBeenLastCalledWith('pr.view', {
+          selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
+        });
+      } finally {
+        spawn.mockRestore();
+      }
+    }
+  );
+});
 
-  const notConfigured: CodexBinaryDeps = {
-    isDefaultAssistant: false,
-    credentialConnected: false,
-  };
-  const loadDeps = (deps: CodexBinaryDeps) => async () => deps;
-  const resolvesTo =
-    (path: string, source: 'env' | 'config' | 'vendor' | 'autodetect') => async () => ({
-      path,
-      source,
-    });
+describe('checkGitHubApp', () => {
+  let execSpy: ReturnType<typeof spyOn<typeof Bun, 'spawnSync'>>;
 
   beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
+    execSpy = spyOn(Bun, 'spawnSync');
   });
 
   afterEach(() => {
     execSpy.mockRestore();
   });
 
-  it('skips when Codex is not configured and no credential is connected', async () => {
-    const result = await checkCodexBinary({}, loadDeps(notConfigured), async () => undefined);
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Codex binary');
-    expect(result.message).toContain('not configured');
-    expect(execSpy).not.toHaveBeenCalled();
+  const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  it('validates App inline and file keys locally without gh or remote access', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doctor-app-'));
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected fetch'));
+    try {
+      const keyPath = join(root, 'app.pem');
+      writeFileSync(keyPath, privateKey);
+      for (const keyEnv of [
+        { GITHUB_APP_PRIVATE_KEY: privateKey.replaceAll('\n', '\\n') },
+        { GITHUB_APP_PRIVATE_KEY_PATH: keyPath },
+      ]) {
+        expect(await checkGitHubApp({ GITHUB_APP_ID: '123', ...keyEnv })).toEqual({
+          label: 'GitHub App',
+          status: 'pass',
+          message: 'App mode configured (local configuration valid; GitHub access not checked)',
+        });
+      }
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await removeTempTree(root);
+    }
   });
 
-  it('runs (dev-mode skip) when DEFAULT_AI_ASSISTANT=codex even if config load fails', async () => {
-    // loadDeps throwing must not suppress the check — env signal still counts.
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      async () => {
-        throw new Error('config blew up');
+  it('reports incomplete, invalid and conflicting App configuration without exposing secrets', async () => {
+    for (const env of [
+      { GITHUB_APP_ID: '123' },
+      { GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: 'invalid', GITHUB_APP_PRIVATE_KEY: privateKey },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: 'bad-private-key-secret' },
+      {
+        GITHUB_APP_ID: '123',
+        GITHUB_APP_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----',
       },
-      async () => undefined // resolver returns undefined → dev mode
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('runs when a config codexBinaryPath is set (configured signal)', async () => {
-    const result = await checkCodexBinary(
-      {},
-      loadDeps({ ...notConfigured, configBinaryPath: '/cfg/codex' }),
-      async () => undefined
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('runs when an OpenAI (Codex) credential is connected', async () => {
-    const result = await checkCodexBinary(
-      {},
-      loadDeps({ ...notConfigured, credentialConnected: true }),
-      async () => undefined
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('passes and reports the resolved source when the binary spawns', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      resolvesTo('/opt/codex', 'autodetect')
-    );
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/opt/codex');
-    expect(result.message).toContain('via autodetect');
-    expect(execSpy).toHaveBeenCalledWith('/opt/codex', ['--version'], expect.any(Object));
-  });
-
-  it('fails with install instructions when the resolver throws', async () => {
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      async () => {
-        throw new Error(
-          'Codex CLI binary not found. Install globally: npm install -g @openai/codex'
-        );
-      }
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('Codex CLI binary not found');
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: '/missing/archon-key.pem' },
+      { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey, GITHUB_TOKEN: 'pat-secret' },
+    ]) {
+      const result = await checkGitHubApp(env);
+      expect(result.label).toBe('GitHub App');
+      expect(result.status).toBe('fail');
+      expect(result.message).not.toContain(privateKey);
+      expect(result.message).not.toContain('pat-secret');
+      expect(result.message).not.toContain('bad-private-key-secret');
+    }
     expect(execSpy).not.toHaveBeenCalled();
   });
 
-  it('surfaces a stale-pin candidate hint verbatim', async () => {
-    const diagnostic =
-      'assistants.codex.codexBinaryPath is set to "/stale/codex" but the file does not exist.\n\n' +
-      'A Codex binary was found at /opt/codex.\n' +
-      'Update assistants.codex.codexBinaryPath to that path, or remove codexBinaryPath to let Archon detect it.';
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      async () => {
-        throw new Error(diagnostic);
-      }
-    );
-
-    expect(result).toEqual({ label: 'Codex binary', status: 'fail', message: diagnostic });
-    expect(execSpy).not.toHaveBeenCalled();
+  it('does not print a private key pasted into GITHUB_APP_PRIVATE_KEY_PATH', async () => {
+    const sentinel = 'sentinel-private-key-material';
+    const pastedKey = `-----BEGIN PRIVATE KEY-----\n${sentinel}\n-----END PRIVATE KEY-----`;
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: pastedKey }),
+        ])
+      ).toBe(1);
+      const printed = JSON.stringify([log.mock.calls, error.mock.calls]);
+      expect(printed).toContain('GITHUB_APP_PRIVATE_KEY_PATH');
+      expect(printed).not.toContain(sentinel);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
   });
 
-  it('fails when the resolved binary does not spawn', async () => {
-    execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkCodexBinary(
-      { CODEX_BIN_PATH: '/opt/codex' },
-      loadDeps(notConfigured),
-      resolvesTo('/opt/codex', 'env')
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('did not spawn');
-    expect(result.message).toContain('ENOENT');
+  it('renders App results and returns the corresponding doctor exit status', async () => {
+    const output = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(
+        await doctorCommand([
+          () => checkGitHubApp({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: privateKey }),
+        ])
+      ).toBe(0);
+      expect(JSON.stringify(output.mock.calls)).toContain('GitHub App');
+      expect(await doctorCommand([() => checkGitHubApp({ GITHUB_APP_ID: '123' })])).toBe(1);
+      expect(JSON.stringify(output.mock.calls)).not.toContain(privateKey);
+    } finally {
+      output.mockRestore();
+    }
   });
 });
 
-describe('checkOpenCode', () => {
-  const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
-    isDefaultAssistant: false,
-    probeRuntimeModule: async () => true,
-    ...over,
+describe('checkAssistantLogin', () => {
+  const config: MergedConfig = {
+    botName: 'test',
+    assistant: 'claude',
+    assistants: { claude: {}, codex: {}, pi: { model: 'anthropic/claude-sonnet-4-6' } },
+    streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
+    attentionNotices: [],
+    concurrency: { maxConversations: 1 },
+    workflows: { autoResumeOnQuotaReset: false },
+    commands: { autoLoad: false },
+    defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+  };
+
+  const deps = (
+    state: import('@archon/provider-contract').CredentialStatus
+  ): AssistantLoginDeps => ({
+    assistant: 'pi',
+    model: 'anthropic/claude-sonnet-4-6',
+    vendor: 'anthropic',
+    connectedVendors: [],
+    provider: { checkCredential: mock(async () => state) },
   });
 
-  it('skips when OpenCode is not configured and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => makeDeps());
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('OpenCode runtime');
-    expect(result.message).toContain('pass --full');
+  for (const [state, expected] of [
+    ['usable', 'pass'],
+    ['not_checked', 'skip'],
+    ['check_failed', 'warn'],
+    ['unusable', 'fail'],
+    ['not_connected', 'fail'],
+  ] as const) {
+    it(`maps ${state} to ${expected}`, async () => {
+      const fixture = deps(
+        state === 'unusable' || state === 'check_failed'
+          ? { state, source: 'native', evidence: 'runtime evidence' }
+          : { state, source: 'native' }
+      );
+      const result = await checkAssistantLogin(
+        { DEFAULT_AI_ASSISTANT: 'claude', TEST_KEY: 'secret' },
+        async () => fixture
+      );
+      expect(result.status).toBe(expected);
+      expect(result.message).toContain('pi:');
+      expect(fixture.provider.checkCredential).toHaveBeenCalledWith({
+        assistantConfig: fixture.assistantConfig,
+        model: fixture.model,
+        env: { DEFAULT_AI_ASSISTANT: 'claude', TEST_KEY: 'secret' },
+        signal: expect.any(AbortSignal),
+      });
+      if (state === 'check_failed' || state === 'unusable')
+        expect(result.message).toContain('runtime evidence');
+      if (state === 'not_checked') expect(result.message).toContain('not checked');
+    });
+  }
+
+  it('checks only the configured Claude assistant and reports not checked', async () => {
+    const { ClaudeProvider } = await import('@archon/providers/in-process');
+    const check = spyOn(ClaudeProvider.prototype, 'checkCredential');
+    try {
+      const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
+        assistant: 'claude',
+        connectedVendors: [],
+        provider: new ClaudeProvider(),
+      }));
+      expect(result).toMatchObject({ status: 'skip', message: 'claude: not checked' });
+      expect(check).toHaveBeenCalledTimes(1);
+    } finally {
+      check.mockRestore();
+    }
   });
 
-  it('passes when OpenCode is the configured assistant and the SDK resolves', async () => {
-    const result = await checkOpenCode({}, false, async () =>
-      makeDeps({ isDefaultAssistant: true })
+  it('loads the merged default assistant without consulting the Pi login', async () => {
+    const core = await import('@archon/core');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
     );
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('server not started');
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
+    const pi = spyOn(PiProvider.prototype, 'checkCredential');
+    try {
+      expect(await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' })).toMatchObject({
+        status: 'skip',
+        message: 'claude: not checked',
+      });
+      expect(load).toHaveBeenCalledWith(process.cwd());
+      expect(pi).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
+      pi.mockRestore();
+    }
   });
 
-  it('passes under --full even when OpenCode is not configured', async () => {
-    const result = await checkOpenCode({}, true, async () => makeDeps());
-    expect(result.status).toBe('pass');
-  });
-
-  it('runs when DEFAULT_AI_ASSISTANT=opencode', async () => {
-    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () =>
-      makeDeps()
+  it('checks a Pi key supplied only by merged assistant config', async () => {
+    const core = await import('@archon/core');
+    const { registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
     );
-    expect(result.status).toBe('pass');
-  });
-
-  it('never boots the runtime — only the cheap module probe is called', async () => {
-    let probeCalls = 0;
-    await checkOpenCode({}, true, async () =>
-      makeDeps({
-        probeRuntimeModule: async () => {
-          probeCalls += 1;
-          return true;
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const root = mkdtempSync(join(tmpdir(), 'doctor-pi-config-'));
+    const keys = [
+      'PI_CODING_AGENT_DIR',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+    ];
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    process.env.PI_CODING_AGENT_DIR = root;
+    writeFileSync(join(root, 'auth.json'), '{}');
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({
+      ...config,
+      assistant: 'pi',
+      assistants: {
+        ...config.assistants,
+        pi: {
+          model: 'anthropic/claude-sonnet-4-6',
+          env: { ANTHROPIC_API_KEY: 'config-only-key' },
         },
+      },
+    });
+    try {
+      expect(await checkAssistantLogin({})).toMatchObject({
+        status: 'pass',
+        message: 'pi: usable',
+      });
+    } finally {
+      load.mockRestore();
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+      await removeTempTree(root);
+    }
+  });
+
+  it("skips native login only for the configured model's connected vendor", async () => {
+    const core = await import('@archon/core');
+    const userDb = await import('@archon/core/db/users');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
+    const user = spyOn(userDb, 'findOrCreateUserByPlatformIdentity').mockResolvedValue({
+      id: 'cli-user',
+      display_name: null,
+      email: null,
+      role: 'member',
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const rows = spyOn(core, 'listUserProviderKeys');
+    const native = spyOn(PiProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'not_connected',
+      source: 'native',
+    });
+    try {
+      rows.mockResolvedValue([{ provider: 'openai', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'pass',
+        message: 'pi: uses the credential connected in Archon',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      // A pre-#1955 agent-keyed row is delivered as its vendor, so it counts as one.
+      rows.mockResolvedValue([{ provider: 'claude', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'pass',
+        message: 'pi: uses the credential connected in Archon',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      // Pi cannot use a connected Claude subscription, so doctor checks the native login
+      // and, finding none, points at the provider that can.
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'oauth', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toEqual({
+        label: 'Assistant login',
+        status: 'fail',
+        message:
+          'pi: no native credential, and the anthropic subscription connected in Archon runs on `provider: claude`, not on pi. Use `provider: claude`, or give pi its own anthropic API key.',
+      });
+      expect(native).toHaveBeenCalledTimes(2);
+      // With no model in Archon config, doctor cannot tell which connected vendor the run
+      // uses, so a missing native login is a warning that names the connected one.
+      load.mockResolvedValue({
+        ...config,
+        assistant: 'pi',
+        assistants: { ...config.assistants, pi: {} },
+      });
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'warn',
+        message: expect.stringContaining('anthropic'),
+      });
+      expect(native).toHaveBeenCalledTimes(3);
+      // A credential Pi cannot use does not soften a missing native login.
+      rows.mockResolvedValue([{ provider: 'not-a-pi-vendor', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
+      rows.mockResolvedValue([]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
+      // A failed credential lookup still runs the native check, as if nothing were connected.
+      const callsBefore = native.mock.calls.length;
+      rows.mockRejectedValue(new Error('database unreachable'));
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+        message:
+          'pi: no native credential. Log in through pi or connect a credential with `archon ai`.',
+      });
+      expect(native.mock.calls.length).toBe(callsBefore + 1);
+    } finally {
+      native.mockRestore();
+      rows.mockRestore();
+      user.mockRestore();
+      load.mockRestore();
+    }
+  });
+
+  it('logs the error when the connected-credential lookup fails', async () => {
+    const core = await import('@archon/core');
+    const userDb = await import('@archon/core/db/users');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
+      '@archon/providers/in-process'
+    );
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const lookupError = new Error('database unreachable');
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
+    const user = spyOn(userDb, 'findOrCreateUserByPlatformIdentity').mockRejectedValue(lookupError);
+    const native = spyOn(PiProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'not_connected',
+      source: 'native',
+    });
+    const debug = spyOn(doctorLog, 'debug');
+    try {
+      await checkAssistantLogin({ ARCHON_USER_ID: 'operator' });
+      expect(debug).toHaveBeenCalledWith(
+        { err: lookupError },
+        'doctor.assistant_login_credential_lookup_failed'
+      );
+    } finally {
+      debug.mockRestore();
+      native.mockRestore();
+      user.mockRestore();
+      load.mockRestore();
+    }
+  });
+
+  it('uses the connected credential without checking native login', async () => {
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      connectedVendors: ['anthropic'],
+    };
+    const result = await checkAssistantLogin({}, async () => fixture);
+    expect(result).toMatchObject({
+      status: 'pass',
+      message: 'pi: uses the credential connected in Archon',
+    });
+    expect(fixture.provider.checkCredential).not.toHaveBeenCalled();
+  });
+
+  it('warns on a dead native login when an unconfigured model may use a connected credential', async () => {
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      model: undefined,
+      vendor: undefined,
+      connectedVendors: ['anthropic', 'openai'],
+    };
+    expect(await checkAssistantLogin({}, async () => fixture)).toMatchObject({
+      status: 'warn',
+      message: expect.stringContaining('dead native login'),
+    });
+    expect((await checkAssistantLogin({}, async () => fixture)).message).toContain(
+      'anthropic, openai'
+    );
+  });
+
+  it('fails a dead native login for a configured model with no credential vendor', async () => {
+    // A Pi models.json provider: the model is set, so no connected credential can stand in.
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      model: 'my-gateway/model',
+      vendor: undefined,
+      connectedVendors: ['anthropic'],
+    };
+    expect(await checkAssistantLogin({}, async () => fixture)).toMatchObject({
+      status: 'fail',
+      message: expect.not.stringContaining('set a model'),
+    });
+  });
+
+  it('warns if the configured login could not be checked', async () => {
+    expect(
+      await checkAssistantLogin({}, async () => {
+        throw new Error('config unavailable');
       })
-    );
-    expect(probeCalls).toBe(1);
-  });
-
-  it('fails when the runtime SDK cannot be resolved', async () => {
-    const result = await checkOpenCode({}, true, async () =>
-      makeDeps({
-        probeRuntimeModule: async () => {
-          throw new Error('Cannot find module @opencode-ai/sdk');
-        },
-      })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('not resolvable');
-    expect(result.message).toContain('bun install');
-  });
-
-  it('fails when the SDK resolves but the entrypoint is missing', async () => {
-    const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntimeModule: async () => false })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('createOpencode');
-  });
-
-  it('skips gracefully when deps load fails and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => {
-      throw new Error('config load failed');
-    });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('surfaces the load error (not "entrypoint missing") when deps fail under --full', async () => {
-    const result = await checkOpenCode({}, true, async () => {
-      throw new Error('config load failed');
-    });
-    expect(result.status).toBe('fail');
-    // Must report the real load failure, not a fabricated SDK-entrypoint verdict.
-    expect(result.message).toContain('config load failed');
-    expect(result.message).not.toContain('createOpencode');
-  });
-
-  it('surfaces the load error when deps fail and OpenCode is the configured assistant', async () => {
-    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () => {
-      throw new Error('module import failed');
-    });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('module import failed');
-    expect(result.message).not.toContain('createOpencode');
-  });
-});
-
-describe('checkGhAuth', () => {
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
-
-  beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
-  });
-
-  afterEach(() => {
-    execSpy.mockRestore();
-  });
-
-  it('returns skip when no GitHub token is set', async () => {
-    const result = await checkGhAuth({});
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('GitHub not configured');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('runs gh auth check when only GH_TOKEN is set', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
-  });
-
-  it('returns pass when gh auth status succeeds', async () => {
-    execSpy.mockResolvedValue({ stdout: 'Logged in as @user', stderr: '' });
-    const result = await checkGhAuth({ GITHUB_TOKEN: 'ghp_x' });
-    expect(result.status).toBe('pass');
-    expect(execSpy).toHaveBeenCalledWith('gh', ['auth', 'status'], expect.any(Object));
-  });
-
-  it('returns fail when gh auth status throws', async () => {
-    execSpy.mockRejectedValue(new Error('not logged in'));
-    const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('not logged in');
-  });
-});
-
-describe('checkPi', () => {
-  // Spy on the exported `probePiAuthValidity` wrapper rather than reaching into
-  // 'fs'. Named imports from 'fs' cannot be intercepted by spying on the
-  // namespace object due to ESM rebinding — the wrapper pattern (same as
-  // `probeFileExists` in setup.ts) is the correct way to make this testable.
-  let piAuthReaderSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probePiAuthValidity'>> | null =
-    null;
-
-  afterEach(() => {
-    piAuthReaderSpy?.mockRestore();
-  });
-
-  it('returns skip when Pi is not configured', async () => {
-    const result = await checkPi({});
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Pi provider');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('returns pass when ~/.pi/agent/auth.json exists', async () => {
-    // The store has to hold a usable credential too — presence alone is no
-    // longer a pass (#3274), so this pins the "exists AND valid" path.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'valid',
-      providers: ['anthropic'],
-      expiredProviders: [],
-      expiresAt: Date.UTC(2027, 0, 1),
-    });
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('auth.json');
-  });
-
-  it('returns pass when a Pi API key env var is set', async () => {
-    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json,
-    // so a machine that has Pi set up takes the store branch instead of the
-    // env-var branch this test exists to cover.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'missing',
-    });
-
-    const result = await checkPi({
-      DEFAULT_AI_ASSISTANT: 'pi',
-      ANTHROPIC_API_KEY: 'sk-ant-test',
-    });
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('ANTHROPIC_API_KEY');
-  });
-
-  it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
-    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json
-    // and passes or fails by the machine it runs on.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'missing',
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('pi /login');
-  });
-
-  it('warns rather than fails when auth.json holds an expired access token (#3274)', async () => {
-    // `expires` is the access token's expiry, and Pi refreshes it on the next
-    // use while the refresh token works. A hard fail here is a false alarm on
-    // a healthy install — worse than the false pass this check replaced.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('anthropic');
-    expect(result.message).toContain('expired');
-  });
-
-  it('reports the expiry date rather than any credential value', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.message).toContain('2026');
-    expect(result.message).not.toContain('stored-access');
-    expect(result.message).not.toContain('stored-refresh');
-  });
-
-  it('names only the expired provider when the store also holds a usable one', async () => {
-    // Two grants, one dead since June and one good until next year. The verdict
-    // is aggregate, but the message must not send the operator to renew a
-    // credential that does not need it.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic', 'github-copilot'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('anthropic');
-    expect(result.message).not.toContain('github-copilot');
-  });
-
-  it('returns pass when auth.json holds a grant that is still valid', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'valid',
-      providers: ['anthropic'],
-      expiredProviders: [],
-      expiresAt: Date.UTC(2027, 0, 1),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('pass');
-  });
-
-  it('does not turn an unreadable store into an expired-credential failure', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'unreadable',
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    // The file exists but says nothing usable. That is not the same defect as
-    // an expired grant, and the message must not claim it is.
-    expect(result.message).not.toContain('expired');
-    expect(result.message).toContain('auth.json');
-  });
-
-  it('an empty store is not a pass on its own', async () => {
-    // `{}` on disk means the file is present but holds no credential, so `pi`
-    // has nothing to authenticate with. It must fall through to the env-var
-    // check rather than report a green doctor for a Pi-default user.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'empty',
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('pi /login');
-  });
-
-  it('an empty store still passes when an API key env var is set', async () => {
-    // The reason `empty` falls through instead of failing outright: the env-var
-    // path is a legitimate answer for the same store.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'empty',
-    });
-
-    const result = await checkPi({
-      DEFAULT_AI_ASSISTANT: 'pi',
-      ANTHROPIC_API_KEY: 'sk-ant-test',
-    });
-
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('ANTHROPIC_API_KEY');
-  });
-
-  it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
-    // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
-    // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
-    const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
-    const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
+    ).toMatchObject({ status: 'warn', message: expect.stringContaining('config unavailable') });
   });
 });
 
@@ -640,6 +545,29 @@ describe('checkConfigFiles', () => {
     });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('assistants.codex.modelReasoningEffort');
+  });
+});
+
+describe('checkProviderDeprecation', () => {
+  it('warns with the registry notice when the default assistant is deprecated', async () => {
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'copilot' }));
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('Copilot is deprecated');
+  });
+
+  it('passes when the default assistant carries no notice', async () => {
+    registerBuiltinProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'claude' }));
+    expect(result.status).toBe('pass');
+  });
+
+  it('skips when the config does not load, leaving the failure to Config files', async () => {
+    const result = await checkProviderDeprecation('/repo', async () => {
+      throw new Error('bad config');
+    });
+    expect(result.status).toBe('skip');
   });
 });
 
@@ -1075,7 +1003,7 @@ describe('checkArchonSkill', () => {
     const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('retired skill root');
-    expect(result.message).toContain('archon skill install');
+    expect(result.message).toContain('archon skill add');
   });
 
   it('fails when skills exist but archon-cli is missing', async () => {
@@ -1157,9 +1085,13 @@ describe('doctorCommand', () => {
     throw new Error(`${label} blew up`);
   };
 
+  const summary = (): string | undefined =>
+    logSpy.mock.calls.map(args => String(args[0] ?? '')).at(-1);
+
   it('returns 0 when every check passes', async () => {
     const exit = await doctorCommand([passing('A'), passing('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('All checks passed.');
   });
 
   it('returns 0 when checks are pass + skip (skip is not a failure)', async () => {
@@ -1195,6 +1127,7 @@ describe('doctorCommand', () => {
     // must still reach the operator rather than being swallowed.
     const exit = await doctorCommand([passing('A'), warning('B')]);
     expect(exit).toBe(0);
+    expect(summary()).toBe('No check failed; 1 warning(s) above.');
 
     const warnLine = logSpy.mock.calls
       .map(args => String(args[0] ?? ''))
@@ -1206,36 +1139,81 @@ describe('doctorCommand', () => {
 
 describe('checkConnectedProviders', () => {
   const mockUser = { id: 'user-1' };
+  type Status = Awaited<ReturnType<ProviderDeps['getStoredCredentialStatus']>>;
+
+  function depsWith(
+    rows: Awaited<ReturnType<ProviderDeps['listUserProviderKeys']>>,
+    statuses: Record<string, Status> = {}
+  ): () => Promise<ProviderDeps> {
+    return async () => ({
+      listUserProviderKeys: async () => rows,
+      getStoredCredentialStatus: async (_userId, vendor) =>
+        statuses[vendor] ?? { state: 'usable', source: 'archon' },
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    });
+  }
 
   it('returns skip when CLI identity is not resolvable', async () => {
-    const result = await checkConnectedProviders({}, async () => ({
-      listUserProviderKeys: async () => [],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+    const result = await checkConnectedProviders({}, depsWith([]));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('no CLI identity');
   });
 
   it('returns skip with a connect hint when no providers are connected', async () => {
-    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => [],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+    const result = await checkConnectedProviders({ USER: 'testuser' }, depsWith([]));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('archon ai login');
   });
 
-  it('returns pass with a count and vendor list when providers are connected', async () => {
-    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => [
+  it('passes with one line per credential when every credential is usable', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith([
         { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
         { provider: 'openrouter', kind: 'api_key', label: null },
-      ],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+      ])
+    );
     expect(result.status).toBe('pass');
-    expect(result.message).toContain('2 connected');
-    expect(result.message).toContain('anthropic');
+    expect(result.message).toBe(
+      '2 connected\n    anthropic (oauth): usable\n    openrouter (api_key): usable'
+    );
+  });
+
+  it('fails naming the vendor, its evidence and the reconnect command when one is unusable', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith(
+        [
+          { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+          { provider: 'openai', kind: 'oauth', label: null },
+        ],
+        {
+          openai: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'OpenAI token refresh failed (401): invalid_grant.',
+          },
+          anthropic: { state: 'check_failed', source: 'archon', evidence: 'network down.' },
+        }
+      )
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain(
+      'openai (oauth): cannot be used. Reconnect: archon ai login openai. Cause: OpenAI token refresh failed (401): invalid_grant.'
+    );
+  });
+
+  it('warns when a credential could not be verified', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith([{ provider: 'openrouter', kind: 'api_key', label: null }], {
+        openrouter: { state: 'check_failed', source: 'archon', evidence: 'Request timed out.' },
+      })
+    );
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain(
+      'openrouter (api_key): could not be verified. If it persists, reconnect: archon ai key set openrouter. Cause: Request timed out.'
+    );
   });
 
   it('returns skip (not fail) when loadDeps throws', async () => {
@@ -1248,12 +1226,210 @@ describe('checkConnectedProviders', () => {
 
   it('returns skip (not fail) when reading credentials throws', async () => {
     const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => {
+      ...(await depsWith([{ provider: 'openrouter', kind: 'api_key', label: null }])()),
+      getStoredCredentialStatus: async () => {
         throw new Error('db down');
       },
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
     }));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('db down');
   });
+});
+
+describe('provider diagnostics', () => {
+  it('no registered providers fails and names the add command', async () => {
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [] },
+      async () => new Map()
+    );
+    expect(check.status).toBe('fail');
+    expect(check.message).toContain(
+      'No providers installed. Run: archon provider add <claude|codex|pi>'
+    );
+    expect(check.message).toContain('it does not install that CLI.');
+    expect(await doctorCommand([async () => check])).toBe(1);
+  });
+
+  it('only deprecated bundled providers warns and names the add command', async () => {
+    const { registerOpencodeProvider } = await import('@archon/providers/community/opencode');
+    const { providerRegistry } = await import('@archon/providers');
+    registerOpencodeProvider();
+    const opencode = providerRegistry.get('opencode');
+    if (!opencode) throw new Error('OpenCode did not register');
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [opencode] },
+      async () => new Map()
+    );
+    expect(check).toEqual({
+      label: 'Installed providers',
+      status: 'warn',
+      message:
+        'No providers installed. Run: archon provider add <claude|codex|pi>\n    ' +
+        'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
+    });
+  });
+
+  it('maps provider statuses, preserves remedies, and forwards its configured defaults', async () => {
+    const diagnose = mock(async (_request: unknown) => ({
+      checks: [
+        { id: 'one', label: 'One', status: 'ok' as const, message: 'healthy' },
+        { id: 'two', label: 'Two', status: 'fail' as const, message: 'broken', remedy: 'repair' },
+        { id: 'three', label: 'Three', status: 'warn' as const, message: 'warning' },
+        { id: 'four', label: 'Four', status: 'skip' as const, message: 'skipped' },
+      ],
+    }));
+    const config = { assistants: { claude: {}, codex: {}, custom: { model: 'chosen' } } };
+    const checks = await checkProviderDiagnostics('custom', { diagnose }, async () => config);
+    expect(diagnose).toHaveBeenCalledWith({
+      assistantConfig: { model: 'chosen' },
+      signal: expect.any(AbortSignal),
+    });
+    expect(checks.map(check => check.status)).toEqual(['pass', 'fail', 'warn', 'skip']);
+    expect(checks[1].message).toBe('broken Remedy: repair');
+    const output = spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await doctorCommand([async () => checks])).toBe(1);
+      const rendered = output.mock.calls.flat().join('\n');
+      expect(rendered).toContain('✓ custom: One: healthy');
+      expect(rendered).toContain('✗ custom: Two: broken Remedy: repair');
+      expect(rendered).toContain('! custom: Three: warning');
+      expect(rendered).toContain('○ custom: Four: skipped');
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it('an unavailable diagnostic hook skips, while a hook failure fails with its evidence', async () => {
+    expect((await checkProviderDiagnostics('custom', {}))[0].status).toBe('skip');
+    const checks = await checkProviderDiagnostics(
+      'custom',
+      {
+        diagnose: async () => {
+          throw new Error('plugin failed');
+        },
+      },
+      async () => ({ assistants: { claude: {}, codex: {} } })
+    );
+    expect(checks).toEqual([
+      { label: 'custom diagnostics', status: 'fail', message: 'plugin failed' },
+    ]);
+  });
+});
+
+describe('bundled deprecated providers', () => {
+  const diagnose = mock(async () => ({
+    checks: [
+      {
+        id: 'runtime',
+        label: 'Runtime',
+        status: 'fail' as const,
+        message: 'old executable not found on PATH',
+      },
+    ],
+  }));
+  const reportDeprecation = mock((_provider: string, _notice: string) => undefined);
+
+  beforeEach(() => {
+    clearRegistry();
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const copilot = getRegistration('copilot');
+    registerProvider({
+      ...copilot,
+      id: 'old',
+      factory: () => Object.assign(copilot.factory(), { diagnose }),
+    });
+    setDeprecationReporter(reportDeprecation);
+    diagnose.mockClear();
+    reportDeprecation.mockClear();
+  });
+
+  afterEach(() => {
+    clearRegistry();
+  });
+
+  it('a fresh install neither diagnoses one nor reports its notice', async () => {
+    const checks = await checkProviderDiagnostics('old', undefined, async () => ({
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {}, old: {} },
+    }));
+    expect(checks).toEqual([]);
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(reportDeprecation).not.toHaveBeenCalled();
+  });
+
+  it.each(['old', 'copilot'])(
+    'a config that fails to load selects no deprecated provider (%s)',
+    async id => {
+      const checks = await checkProviderDiagnostics(id, undefined, async () => {
+        throw new Error('config.yaml: bad indentation');
+      });
+      expect(checks).toEqual([]);
+      expect(diagnose).not.toHaveBeenCalled();
+    }
+  );
+
+  const selections: {
+    selection: string;
+    config: Pick<MergedConfig, 'assistant' | 'assistants'>;
+  }[] = [
+    {
+      selection: 'selected as the default assistant',
+      config: { assistant: 'old', assistants: { claude: {}, codex: {} } },
+    },
+    {
+      selection: 'configured under assistants',
+      config: {
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {}, old: { model: 'chosen' } },
+      },
+    },
+  ];
+  it.each(selections)(
+    'a provider $selection still reports its missing runtime',
+    async ({ config }) => {
+      const checks = await checkProviderDiagnostics('old', undefined, async () => config);
+      expect(checks).toEqual([
+        { label: 'old: Runtime', status: 'fail', message: 'old executable not found on PATH' },
+      ]);
+      // Provider support shows the notice; a diagnostic is not a run and must not repeat it.
+      expect(reportDeprecation).not.toHaveBeenCalled();
+    }
+  );
+
+  it('the selected one shows its notice as readable text in Provider support', async () => {
+    const check = await checkProviderDeprecation('/repo', async () => ({ assistant: 'opencode' }));
+    expect(check).toEqual({
+      label: 'Provider support',
+      status: 'warn',
+      message: getRegistration('opencode').deprecationNotice ?? '',
+    });
+    expect(check.message).toStartWith('OpenCode is deprecated');
+  });
+
+  it('the installed line names only installed providers', async () => {
+    const check = await checkInstalledProviders(providerRegistry, async () => new Map());
+    expect(check.status).toBe('pass');
+    expect(check.message).toContain('claude');
+    expect(check.message).not.toMatch(/opencode|copilot|old/);
+  });
+});
+
+it('a diagnostic deadline fails with the caller evidence', async () => {
+  const abort = new AbortController();
+  abort.abort(new Error('diagnostic deadline'));
+  const checks = await checkProviderDiagnostics(
+    'custom',
+    {
+      diagnose: async ({ signal }) => {
+        signal.throwIfAborted();
+        return { checks: [] };
+      },
+    },
+    async () => ({ assistants: { claude: {}, codex: {} } }),
+    abort.signal
+  );
+  expect(checks).toEqual([
+    { label: 'custom diagnostics', status: 'fail', message: 'diagnostic deadline' },
+  ]);
 });

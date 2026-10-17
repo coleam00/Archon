@@ -30,8 +30,6 @@ export {
   type CommandResult,
   type WorkflowRequest,
   type IPlatformAdapter,
-  type IWebPlatformAdapter,
-  isWebAdapter,
   type MessageMetadata,
   type User,
   type UserIdentity,
@@ -76,11 +74,11 @@ export {
   createWorkflowStore,
   createWorkflowDeps,
   registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
 } from './workflows/store-adapter';
 
-// Per-child isolation resolver factory (#2121 slice 2, PR-A)
-export { createChildWorktreeResolver } from './workflows/child-isolation-resolver';
-export type { ChildWorktreeResolverConfig } from './workflows/child-isolation-resolver';
+// Per-child isolation resolver (#2121 slice 2, PR-A)
+export { createCodebaseChildResolver } from './workflows/child-isolation-resolver';
 
 // Workflow Events DB
 export * as workflowEventDb from './db/workflow-events';
@@ -111,7 +109,12 @@ export {
   registerRepository,
   registerFolder,
   type RegisterResult,
-} from './handlers/clone';
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
+  type RegistrationOptions,
+  type CloneOptions,
+  type ProjectBaseBranchInspection,
+} from './handlers/sql-registration';
 
 // =============================================================================
 // Config
@@ -167,7 +170,6 @@ export {
   canConnectToRunLiveOwner,
   RunLiveOwnerStopUnavailableError,
   RUN_LIVE_OWNER_IPC_TIMEOUT_MS,
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
 } from './services/run-live-owner';
 export type {
   RunLiveOwner,
@@ -175,18 +177,13 @@ export type {
   RunLiveOwnerStopLease,
   RunLiveOwnerWatch,
   RunLiveOwnerWatchEvent,
+  RunLiveOwnerWatchResult,
 } from './services/run-live-owner';
 
 // =============================================================================
 // State
 // =============================================================================
-export {
-  type TransitionTrigger,
-  shouldCreateNewSession,
-  shouldDeactivateSession,
-  detectPlanToExecuteTransition,
-  getTriggerForCommand,
-} from './state/session-transitions';
+export { type TransitionTrigger, getTriggerForCommand } from './state/session-transitions';
 
 // =============================================================================
 // Utils
@@ -212,6 +209,7 @@ export { getLinkedIssueNumbers } from './utils/github-graphql';
 export {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
+  loadGitHubAppConfig,
   installCredentialHelper,
   AppNotInstalledError,
   AppPrivateKeyError,
@@ -269,10 +267,8 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
-  OAuthCallbackPortBusyError,
   type ResolvedCredential,
   type DeliveryResult,
-  type DeliveryOptions,
   type OAuthCredentials,
   type VendorCatalogEntry,
   type AgentCredentialStatus,
@@ -288,8 +284,9 @@ export {
   listUserProviderKeys,
   deleteUserProviderKey,
   getDecryptedProviderCredential,
-  listDecryptedUserProviderCredentials,
+  getStoredCredentialStatus,
   type SaveUserProviderKeyParams,
+  type StoredCredential,
 } from './db/user-provider-key-store';
 export {
   getUserAiPrefs,
@@ -307,3 +304,15 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
+
+export type { RunActor } from './operations/run-authorization';
+
+export { authorizeRunAction, RunActionForbiddenError } from './operations/run-authorization';
+
+export { processProviderRegistration } from './providers/process-registration';
+
+export { loadProviderPlugins } from './providers/load-provider-plugins';
+
+export { registerHostProviders } from './providers/register-host-providers';
+
+export { generateTitleForUser } from './services/user-title-generator';

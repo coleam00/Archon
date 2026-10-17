@@ -7,19 +7,18 @@
  * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
  * `$ARCHON_HOME`. `mock.module()` MERGES over the real module rather than
  * replacing it, so every export a factory below omits keeps its REAL
- * implementation and quietly does real I/O. Three such gaps produced a real
- * `archon.db`, `config.yaml` and `bin/git-credential-archon`:
+ * implementation and quietly does real I/O. Two such gaps produced a real
+ * `archon.db` and `bin/git-credential-archon`:
  *
- *   - `resolveDefaultAssistant` (step 6, via getOrCreateCodebaseForRepo)
- *     → loadGlobalConfig() CREATES ~/.archon/config.yaml when absent
  *   - `installCredentialHelper` (step 8, App-mode clone)
  *     → writes the bundled helper script into ~/.archon/bin/
  *   - `handleMessage`           (step 13, orchestrator)
  *     → opens the real SQLite database and creates ~/.archon/workspaces/
  *
- * All three are stubbed below. To re-audit, run this file with `ARCHON_HOME`
- * pointed at an empty temp dir and assert nothing appears in it.
+ * Both are stubbed below. The package-cwd test preload checks its own
+ * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
+import { providerRegistry } from '@archon/providers';
 import {
   describe,
   test,
@@ -32,13 +31,16 @@ import {
   afterEach,
 } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { resolveGitHubTokenFromEnv, type Codebase } from '@archon/core';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, access, writeFile, readFile } from 'node:fs/promises';
+import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 import { parseWorkflow } from '@archon/workflows/loader';
-import { validateStructuredOutput } from '@archon/providers';
+import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import type { WorkflowEventSignalCandidate } from '@archon/core/db/workflows';
 
 // Mock logger to suppress noisy output during tests
@@ -56,6 +58,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -63,6 +66,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
 }));
 
 // Only mock what's needed for the adapter's direct functionality
@@ -98,7 +102,10 @@ mock.module('@archon/core/db/conversations', () => ({
   updateConversation: mockUpdateConversation,
 }));
 
-const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockUpdateCodebase = mock(async () => {});
+const mockFindCodebaseByRepoUrl = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
+);
 const mockCreateCodebase = mock(async () => ({
   id: 'codebase-test',
   name: 'testuser/testrepo',
@@ -107,8 +114,8 @@ const mockCreateCodebase = mock(async () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
-  updateCodebase: mock(async () => {}),
+  createManagedCodebase: mockCreateCodebase,
+  updateCodebase: mockUpdateCodebase,
   getCodebaseCommands: mock(async () => ({})),
   updateCodebaseCommands: mock(async () => {}),
 }));
@@ -129,23 +136,12 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
 
-// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
-// createCodebase. The real implementation reads the global config and, when
-// ~/.archon/config.yaml does not exist, WRITES a default one (see
-// createDefaultConfig in @archon/core/config/config-loader). Every test that
-// gets past self-filtering reaches it, so leaving it real meant this suite
-// created a config file in the developer's real ~/.archon (#2305).
-const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mockResolveDefaultAssistant,
-}));
-
 // Mock @archon/git for ensureRepoReady integration tests
-const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));
-const mockSyncRepository = mock<(typeof import('@archon/git'))['syncRepository']>(async () => ({
+const mockSyncRepository = mock<typeof import('@archon/git')['syncRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));
@@ -342,12 +338,19 @@ describe('GitHubAdapter', () => {
   let adapter: GitHubAdapter;
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockExecFile.mockClear();
     adapter = new GitHubAdapter(
       { kind: 'pat', token: 'fake-token-for-testing' },
       'fake-webhook-secret',
       mockLockManager
     );
+  });
+
+  test('initialization logs only operational configuration', () => {
+    expect(mockLogger.info).toHaveBeenCalledWith({ authMode: 'pat' }, 'github.adapter_initialized');
   });
 
   describe('streaming mode', () => {
@@ -362,6 +365,137 @@ describe('GitHubAdapter', () => {
     });
   });
 
+  describe('conversational webhook receipt', () => {
+    let originalAllowedUsers: string | undefined;
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      process.env.GITHUB_ALLOWED_USERS = 'user123';
+      adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      installOctokitStubs(adapter);
+      handleMessageSpy.mockClear();
+      mockAcquireLock.mockClear();
+      mockGetOrCreateConversation.mockClear();
+      mockLogger.debug.mockClear();
+      mockLogger.info.mockClear();
+      mockLogger.error.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers === undefined) delete process.env.GITHUB_ALLOWED_USERS;
+      else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+    });
+
+    async function receive(eventName: string, event: unknown): Promise<void> {
+      const body = JSON.stringify(event);
+      const signature =
+        'sha256=' + createHmac('sha256', 'fake-webhook-secret').update(body).digest('hex');
+      const handler = spyOn(adapter, 'handleWebhook');
+      try {
+        expect(await adapter.receiveWebhook(body, signature, 'delivery-1', eventName)).toBe(
+          'accepted'
+        );
+        expect(handler).toHaveBeenCalledTimes(1);
+        await handler.mock.results[0].value;
+      } finally {
+        handler.mockRestore();
+      }
+    }
+
+    test.each(['installation', 'installation_repositories', 'future_event'])(
+      'ignores %s without a repository',
+      async eventName => {
+        const event = {
+          action: 'created',
+          installation: { id: 123 },
+          repositories_added: [],
+          repositories_removed: [],
+          sender: { login: 'user123' },
+        };
+        await receive(eventName, event satisfies WebhookEvent);
+        expect(mockLogger.debug).toHaveBeenCalledWith(
+          { githubEvent: eventName },
+          'github.repositoryless_webhook_ignored'
+        );
+        expect(mockLogger.error).not.toHaveBeenCalled();
+        expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+        expect(mockAcquireLock).not.toHaveBeenCalled();
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    test('ignores a repository without an owner', async () => {
+      await receive('issue_comment', {
+        repository: { name: 'testrepo' },
+        sender: { login: 'user123' },
+      });
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { githubEvent: 'issue_comment' },
+        'github.repositoryless_webhook_ignored'
+      );
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects unauthorized senders before the repository check', async () => {
+      await receive('installation', { sender: { login: 'outsider' } });
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { platform: 'github' },
+        'github.unauthorized_webhook'
+      );
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects invalid signatures before parsing or checking repository shape', async () => {
+      expect(
+        await adapter.receiveWebhook('invalid json', 'sha256=invalid', 'id', 'installation')
+      ).toBe('invalid_signature');
+      expect(mockLogger.info).not.toHaveBeenCalled();
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('processes an ordinary issue comment', async () => {
+      await receive('issue_comment', {
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: { body: '@archon help', user: { login: 'user123' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      } satisfies WebhookEvent);
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+        'github',
+        'testuser/testrepo#42',
+        'codebase-test'
+      );
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+      expect(handleMessageSpy.mock.calls[0][1]).toBe('testuser/testrepo#42');
+      expect(handleMessageSpy.mock.calls[0][2]).toContain('[GitHub Issue Context]');
+      expect(handleMessageSpy.mock.calls[0][2]).toEndWith('help');
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+  });
+
   describe('check_run.completed workflow signal', () => {
     const wait = {
       owner: 'loop_group' as const,
@@ -372,6 +506,7 @@ describe('GitHubAdapter', () => {
       sessionProvider: null,
       kind: 'event' as const,
       event: 'checks.complete',
+      pauseId: 'check-occurrence',
       waitingSince: '2026-08-24T10:00:00.000Z',
       resumeAt: '2099-08-24T11:00:00.000Z',
     };
@@ -457,7 +592,11 @@ describe('GitHubAdapter', () => {
     });
 
     test('the adapter matcher accepts the bundled PR producer contract', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-pr'],
+        'archon-pr.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       // The publishing node owns the verified record; the agent before it only
       // prepares the intent, and an inbound event must never match on that.
@@ -719,6 +858,107 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+      const adapter = createSelfFilterAdapter();
+      const existing = {
+        id: 'bare-project',
+        name: 'local-api',
+        default_cwd: '/repos/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      };
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+      mockUpdateCodebase.mockClear();
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe('/repos/worktrees/old');
+      expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+      const adapter = createSelfFilterAdapter();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      });
+      // @ts-expect-error - exercise the private registration boundary
+      const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
+      expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+      expect(result.codebase.default_cwd).toBe(result.repoPath);
+      expect(mockUpdateCodebase).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'allocated' }),
+        { default_cwd: result.repoPath }
+      );
+    });
+
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = unclonedPath();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://github.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: null,
+        cwd: null,
+        isolation_env_id: null,
+      });
+      handleMessageSpy.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+
+      await adapter.handleWebhook(
+        createCommentPayload('@archon help', 'user123'),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://github.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+      });
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      try {
+        await adapter.handleWebhook(
+          createCommentPayload('@archon help', 'user123'),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-test', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
+      }
+    });
+
     test('attribution falls back to sender.login when comment.user is absent', async () => {
       const adapter = createSelfFilterAdapter();
       const payload = createCommentPayload('@archon help', undefined); // no comment.user
@@ -784,6 +1024,7 @@ describe('GitHubAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('github.ignoring_own_comment');
       // Bot's own comments should be silently dropped - no lock acquired, no processing
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -798,16 +1039,21 @@ describe('GitHubAdapter', () => {
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
-    test('should NOT filter comments from real users', async () => {
-      const adapter = createSelfFilterAdapter();
-      const payload = createCommentPayload('@archon please help', 'user123');
+    test.each(['please help', '/workflow run @alice'])(
+      'dispatches %s without logging command content',
+      async message => {
+        const adapter = createSelfFilterAdapter();
+        const payload = createCommentPayload(`@archon ${message}`, 'user123');
 
-      // handleWebhook progresses past self-filtering into DB/Octokit operations
-      await adapter.handleWebhook(payload, 'mock-signature');
+        // handleWebhook progresses past self-filtering into DB/Octokit operations
+        await adapter.handleWebhook(payload, 'mock-signature');
 
-      // Real user comments proceed to conversation creation (not self-filtered)
-      expect(mockGetOrCreateConversation).toHaveBeenCalled();
-    });
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('github.slash_command_processing');
+        // Real user comments proceed to conversation creation (not self-filtered)
+        expect(mockGetOrCreateConversation).toHaveBeenCalled();
+      }
+    );
 
     test('should ignore comments containing bot marker (works with user PAT)', async () => {
       const adapter = createSelfFilterAdapter();
@@ -819,6 +1065,7 @@ describe('GitHubAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('github.ignoring_marked_comment');
       // Marked comments should be silently dropped
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -971,7 +1218,8 @@ describe('GitHubAdapter', () => {
       await deliver(adapter, payload, 'guid-1-redelivery');
 
       expect(handleMessageSpy).not.toHaveBeenCalled();
-      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      expect(octokit.reposGet).toHaveBeenCalledTimes(1);
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ deliveryId: 'guid-1-redelivery' }),
         'github.duplicate_delivery_dropped'
@@ -1563,9 +1811,11 @@ describe('GitHubAdapter', () => {
         'fake-secret',
         mockLockManager
       );
-      mockCloneRepository.mockClear();
+      mockCloneRepository.mockReset();
+      mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
       mockSyncRepository.mockClear();
-      mockAddSafeDirectory.mockClear();
+      mockAddSafeDirectory.mockReset();
+      mockAddSafeDirectory.mockResolvedValue(undefined);
       mockLogger.error.mockClear();
       mockLogger.info.mockClear();
     });
@@ -1579,11 +1829,20 @@ describe('GitHubAdapter', () => {
       shouldSync: boolean
     ): Promise<void> {
       // @ts-expect-error - accessing private method for testing
-      return testAdapter.ensureRepoReady(owner, repo, defaultBranch, repoPath, shouldSync);
+      return testAdapter.ensureRepoReady(
+        owner,
+        repo,
+        defaultBranch,
+        { name: `${owner}/${repo}`, default_cwd: repoPath },
+        shouldSync
+      );
     }
 
     test('clones repository when directory does not exist', async () => {
-      mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
+        return { ok: true, value: undefined };
+      });
 
       await callEnsureRepoReady('owner', 'repo', 'main', '/nonexistent/path', false);
 
@@ -1594,11 +1853,161 @@ describe('GitHubAdapter', () => {
       expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
     });
 
+    test('readiness for a different repository completes while the first clone is held', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-clone-independent-'));
+      const firstPath = join(root, 'first', 'source');
+      const secondPath = join(root, 'second', 'source');
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      mockCloneRepository.mockImplementation(async (_url, target) => {
+        if (target === firstPath) {
+          entered.resolve();
+          await release.promise;
+        }
+        await mkdir(join(target, '.git'), { recursive: true });
+        return { ok: true, value: undefined };
+      });
+      const first = callEnsureRepoReady('owner', 'first', 'main', firstPath, false);
+      const pending = [first];
+      const deadline = Promise.withResolvers<void>();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await entered.promise;
+        const second = callEnsureRepoReady('owner', 'second', 'main', secondPath, false);
+        pending.push(second);
+        timer = setTimeout(() => {
+          deadline.reject(new Error('Second repository waited behind the held first clone'));
+        }, 2000);
+        await Promise.race([second, deadline.promise]);
+        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith(secondPath);
+        await access(join(secondPath, '.git'));
+        await expect(access(join(firstPath, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+        release.resolve();
+        await first;
+        await access(join(firstPath, '.git'));
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith(firstPath);
+      } finally {
+        clearTimeout(timer);
+        release.resolve();
+        await Promise.allSettled(pending);
+        await removeTempTree(root);
+      }
+    });
+
+    test.each([
+      {
+        GH_TOKEN: 'ghp_gh_clone_token',
+        GITHUB_TOKEN: 'ghp_github_clone_token',
+        expected: 'ghp_gh_clone_token',
+      },
+      { GH_TOKEN: 'ghp_gh_clone_token', GITHUB_TOKEN: undefined, expected: 'ghp_gh_clone_token' },
+      {
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: 'ghp_github_clone_token',
+        expected: 'ghp_github_clone_token',
+      },
+      { GH_TOKEN: '', GITHUB_TOKEN: 'ghp_github_clone_token', expected: 'ghp_github_clone_token' },
+      { GH_TOKEN: '', GITHUB_TOKEN: '', expected: undefined },
+    ])('PAT API and clone select GH_TOKEN before GITHUB_TOKEN: %j', async env => {
+      const savedTokens = {
+        GH_TOKEN: process.env.GH_TOKEN,
+        GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      };
+      const logOutput = captureStubLogOutput(mockLogger);
+      try {
+        for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+          if (env[key] === undefined) delete process.env[key];
+          else process.env[key] = env[key];
+        }
+        const token = resolveGitHubTokenFromEnv();
+        if (token) {
+          testAdapter = new GitHubAdapter({ kind: 'pat', token }, 'fake-secret', mockLockManager);
+          // @ts-expect-error - inspect the real private API client's selected credential
+          expect(await testAdapter.octokit.auth()).toMatchObject({ token: env.expected });
+        }
+        const repoPath = unclonedPath();
+        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+
+        expect(mockCloneRepository).toHaveBeenCalledWith(
+          'https://github.com/owner/repo.git',
+          repoPath,
+          env.expected
+            ? { credentials: { username: 'x-access-token', password: env.expected } }
+            : undefined
+        );
+        expect(logOutput.output()).not.toBe('');
+        expect(logOutput.output()).not.toContain('ghp_gh_clone_token');
+        expect(logOutput.output()).not.toContain('ghp_github_clone_token');
+      } finally {
+        logOutput.restore();
+        for (const key of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+          if (savedTokens[key] === undefined) delete process.env[key];
+          else process.env[key] = savedTokens[key];
+        }
+      }
+    });
+
+    test.each([false, true])(
+      'retries a failed clone with leftover git metadata: %s',
+      async hasGitMetadata => {
+        const root = await mkdtemp(join(tmpdir(), 'github-clone-retry-'));
+        const repoPath = join(root, 'source');
+        mockCloneRepository.mockImplementationOnce(async () => {
+          await mkdir(hasGitMetadata ? join(repoPath, '.git') : repoPath, { recursive: true });
+          await writeFile(join(repoPath, 'partial.txt'), 'incomplete checkout');
+          return {
+            ok: false,
+            error: { code: 'permission_denied', path: 'https://github.com/owner/repo.git' },
+          };
+        });
+
+        try {
+          await expect(
+            callEnsureRepoReady('owner', 'repo', 'main', repoPath, false)
+          ).rejects.toThrow('Authentication failed');
+          await expect(access(repoPath)).rejects.toMatchObject({ code: 'ENOENT' });
+          mockCloneRepository.mockImplementationOnce(async () => {
+            await mkdir(join(repoPath, '.git'), { recursive: true });
+            return { ok: true, value: undefined };
+          });
+
+          await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+          expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+          expect(mockSyncRepository).not.toHaveBeenCalled();
+          await access(join(repoPath, '.git'));
+
+          await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+          expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+          await access(join(repoPath, '.git'));
+        } finally {
+          await removeTempTree(root);
+        }
+      }
+    );
+
+    test('preserves pre-existing files when git refuses a nonempty clone target', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-clone-preserve-'));
+      const filePath = join(root, 'operator.txt');
+      await writeFile(filePath, 'keep this file');
+      mockCloneRepository.mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'unknown', message: 'destination already exists and is not empty' },
+      });
+      try {
+        await expect(callEnsureRepoReady('owner', 'repo', 'main', root, false)).rejects.toThrow(
+          'destination already exists'
+        );
+        expect(await readFile(filePath, 'utf8')).toBe('keep this file');
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+
     test('syncs repository when directory exists and shouldSync is true', async () => {
-      // Use a real temporary directory so access() succeeds
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({ ok: true, value: undefined });
 
@@ -1608,26 +2017,28 @@ describe('GitHubAdapter', () => {
         expect(mockSyncRepository).toHaveBeenCalledWith(tmpDir, 'main');
         expect(mockCloneRepository).not.toHaveBeenCalled();
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
 
-    test('skips sync when shouldSync is false and directory exists', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
-      const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+    test.each(['directory', 'file'])(
+      'preserves existing clone with .git %s when shouldSync is false',
+      async metadata => {
+        const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+        if (metadata === 'directory') await mkdir(join(tmpDir, '.git'));
+        else await writeFile(join(tmpDir, '.git'), 'gitdir: /external/git-directory');
 
-      try {
-        await callEnsureRepoReady('owner', 'repo', 'main', tmpDir, false);
+        try {
+          await callEnsureRepoReady('owner', 'repo', 'main', tmpDir, false);
 
-        expect(mockSyncRepository).not.toHaveBeenCalled();
-        expect(mockCloneRepository).not.toHaveBeenCalled();
-      } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+          expect(mockSyncRepository).not.toHaveBeenCalled();
+          expect(mockCloneRepository).not.toHaveBeenCalled();
+          await access(join(tmpDir, '.git'));
+        } finally {
+          await removeTempTree(tmpDir);
+        }
       }
-    });
+    );
 
     test('throws user-friendly error for not_a_repo clone error', async () => {
       mockCloneRepository.mockResolvedValue({
@@ -1652,9 +2063,8 @@ describe('GitHubAdapter', () => {
     });
 
     test('throws user-friendly error for sync branch_not_found', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({
         ok: false,
@@ -1666,15 +2076,13 @@ describe('GitHubAdapter', () => {
           "Branch 'main' not found"
         );
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
 
     test('throws for unknown sync error with message', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({
         ok: false,
@@ -1686,8 +2094,7 @@ describe('GitHubAdapter', () => {
           'Network timeout'
         );
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
   });
@@ -1986,16 +2393,22 @@ describe('GitHubAdapter', () => {
     test('clone path resolves installation token (not env GITHUB_TOKEN)', async () => {
       const savedEnv = process.env.GITHUB_TOKEN;
       try {
-        delete process.env.GITHUB_TOKEN;
+        process.env.GITHUB_TOKEN = 'ghp_unused_env_token';
         const { adapter, provider } = createAppModeAdapter();
         // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
+        await adapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: '/tmp/nonexistent-test' },
+          false
+        );
         expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
         expect(mockCloneRepository).toHaveBeenCalledTimes(1);
         expect(mockCloneRepository).toHaveBeenCalledWith(
           'https://github.com/owner/repo.git',
           '/tmp/nonexistent-test',
-          { credentials: { username: 'ghs_owner_token', password: '' } }
+          { credentials: { username: 'x-access-token', password: 'ghs_owner_token' } }
         );
         const [cloneUrl, clonePath] = mockCloneRepository.mock.calls[0] ?? [];
         expect(JSON.stringify([cloneUrl, clonePath])).not.toContain('ghs_owner_token');
@@ -2008,6 +2421,82 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    for (const mode of ['app', 'pat'] as const) {
+      test.each([false, true])(
+        `${mode} overlapping readiness preserves the checkout when the first clone fails: %s`,
+        async firstFails => {
+          const root = await mkdtemp(join(tmpdir(), 'github-clone-overlap-'));
+          const repoPath = join(root, 'source');
+          const makeAdapter = () =>
+            mode === 'app'
+              ? createAppModeAdapter().adapter
+              : new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, 'secret', mockLockManager);
+          const firstAdapter = makeAdapter();
+          const secondAdapter = makeAdapter();
+          const entered = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          mockCloneRepository.mockReset();
+          mockCloneRepository.mockImplementation(async (_url, target) => {
+            const attempt = mockCloneRepository.mock.calls.length;
+            if (attempt === 1) {
+              entered.resolve();
+              await release.promise;
+              if (firstFails) {
+                await mkdir(join(String(target), '.git'), { recursive: true });
+                await writeFile(join(String(target), 'partial.txt'), 'partial checkout');
+                return {
+                  ok: false,
+                  error: { code: 'permission_denied', path: String(target) },
+                };
+              }
+            }
+            if (await Bun.file(join(String(target), 'tracked.txt')).exists()) {
+              return {
+                ok: false,
+                error: { code: 'unknown', message: 'destination already exists and is not empty' },
+              };
+            }
+            await mkdir(join(String(target), '.git'), { recursive: true });
+            await writeFile(join(String(target), 'tracked.txt'), 'successful checkout');
+            return { ok: true, value: undefined };
+          });
+          const ready = (adapter: GitHubAdapter) => {
+            // @ts-expect-error - calling private method
+            return adapter.ensureRepoReady(
+              'owner',
+              'repo',
+              'main',
+              { name: 'owner/repo', default_cwd: repoPath },
+              false
+            );
+          };
+          const first = ready(firstAdapter);
+          await entered.promise;
+          const second = ready(secondAdapter);
+          const results = Promise.allSettled([first, second]);
+          try {
+            // Give the sibling webhook time to reach clone if readiness is unlocked.
+            await Bun.sleep(50);
+            expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+            release.resolve();
+            const [firstOutcome, secondOutcome] = await results;
+            expect(firstOutcome?.status).toBe(firstFails ? 'rejected' : 'fulfilled');
+            expect(secondOutcome?.status).toBe('fulfilled');
+            expect(mockCloneRepository).toHaveBeenCalledTimes(firstFails ? 2 : 1);
+            await access(join(repoPath, '.git'));
+            expect(await readFile(join(repoPath, 'tracked.txt'), 'utf8')).toBe(
+              'successful checkout'
+            );
+            expect(await Bun.file(join(repoPath, 'partial.txt')).exists()).toBe(false);
+          } finally {
+            release.resolve();
+            await results;
+            await removeTempTree(root);
+          }
+        }
+      );
+    }
+
     test('AppNotInstalledError on clone surfaces a clean message', async () => {
       const { AppNotInstalledError } = await import('@archon/core');
       const { adapter, provider } = createAppModeAdapter();
@@ -2015,48 +2504,76 @@ describe('GitHubAdapter', () => {
         throw new AppNotInstalledError(owner, repo, 'archon-test');
       });
       // @ts-expect-error - calling private method
-      const promise = adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/missing', false);
+      const promise = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/tmp/missing' },
+        false
+      );
       await expect(promise).rejects.toBeInstanceOf(AppNotInstalledError);
     });
 
     test('credential helper install is attempted after successful App-mode clone', async () => {
       const { adapter } = createAppModeAdapter();
       const clonePath = unclonedPath();
-      try {
-        // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
-      } catch {
-        // ensureRepoReady may throw inside addSafeDirectory on the bogus path;
-        // we only care that installCredentialHelper was reached.
-      }
-      // Control: prove the CLONE branch ran. Without it, a path that happens to
-      // exist would send ensureRepoReady down the sync branch and this test
-      // would report on a flow it never entered.
-      expect(mockCloneRepository).toHaveBeenCalled();
-      // Asserted on the function itself rather than through its `git config`
-      // side effect. The old proxy assertion required running the REAL
-      // installCredentialHelper, which writes the bundled helper script into
-      // $ARCHON_HOME/bin/ — a genuine write into the developer's ~/.archon from
-      // a unit test (#2305). What this test is actually about is the adapter's
-      // wiring: App-mode clone → install helper on the cloned path. The helper's
-      // own copy/chmod/git-config behaviour is covered directly by
-      // packages/core/src/github-auth/credential-helper-install.test.ts.
+      // @ts-expect-error - calling private method
+      await adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: clonePath },
+        false
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
       expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
 
-    test('App-mode setup fails when the credential helper cannot be registered', async () => {
-      installCredentialHelperSpy.mockImplementationOnce(async () => ({
-        kind: 'failed',
-        error: new Error('git config rejected the helper'),
-      }));
-      const { adapter } = createAppModeAdapter();
-
-      // @ts-expect-error - calling private method
-      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
-
-      await expect(setup).rejects.toThrow('git config rejected the helper');
-      expect(mockCloneRepository).toHaveBeenCalled();
-    });
+    test.each(['safe directory', 'credential helper'])(
+      'retries failed App %s setup without duplicate clones',
+      async failure => {
+        const root = await mkdtemp(join(tmpdir(), 'github-setup-retry-'));
+        const repoPath = join(root, 'source');
+        const { adapter } = createAppModeAdapter();
+        mockCloneRepository.mockImplementationOnce(async () => {
+          await mkdir(join(repoPath, '.git'), { recursive: true });
+          return { ok: true, value: undefined };
+        });
+        mockAddSafeDirectory.mockClear();
+        if (failure === 'safe directory') {
+          mockAddSafeDirectory.mockRejectedValueOnce(new Error('safe directory setup failed'));
+        } else {
+          installCredentialHelperSpy.mockImplementationOnce(async () => ({
+            kind: 'failed',
+            error: new Error('credential helper setup failed'),
+          }));
+        }
+        const ensureReady = () => {
+          // @ts-expect-error - calling private method
+          return adapter.ensureRepoReady(
+            'owner',
+            'repo',
+            'main',
+            { name: 'owner/repo', default_cwd: repoPath },
+            false
+          );
+        };
+        try {
+          await expect(ensureReady()).rejects.toThrow(`${failure} setup failed`);
+          if (failure === 'safe directory') expect(mockCloneRepository).not.toHaveBeenCalled();
+          else await access(join(repoPath, '.git'));
+          await ensureReady();
+          expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+          expect(mockAddSafeDirectory).toHaveBeenCalledTimes(2);
+          expect(installCredentialHelperSpy).toHaveBeenCalledTimes(
+            failure === 'safe directory' ? 1 : 2
+          );
+          await access(join(repoPath, '.git'));
+        } finally {
+          await removeTempTree(root);
+        }
+      }
+    );
 
     test('App-mode setup fails when the bundled credential helper is unavailable', async () => {
       installCredentialHelperSpy.mockImplementationOnce(async () => ({
@@ -2066,7 +2583,13 @@ describe('GitHubAdapter', () => {
       const { adapter } = createAppModeAdapter();
 
       // @ts-expect-error - calling private method
-      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+      const setup = adapter.ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: unclonedPath() },
+        false
+      );
 
       await expect(setup).rejects.toThrow('bundled credential helper unavailable');
       expect(mockCloneRepository).toHaveBeenCalled();
@@ -2081,7 +2604,13 @@ describe('GitHubAdapter', () => {
       );
       try {
         // @ts-expect-error - calling private method
-        await patAdapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+        await patAdapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: unclonedPath() },
+          false
+        );
       } catch {
         // Same bogus-path tolerance as the App-mode case above.
       }

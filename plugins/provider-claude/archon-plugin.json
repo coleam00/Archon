@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "provider",
+  "name": "provider-claude",
+  "description": "Archon maintained Claude provider.",
+  "executable": "archon-provider-claude"
+}

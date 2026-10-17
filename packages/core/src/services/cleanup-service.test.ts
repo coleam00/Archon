@@ -1,9 +1,12 @@
-import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
+// @archon-test-isolated
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
+import { mock, describe, test, expect, beforeEach, afterEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
+  IIsolationStore,
   IsolationEnvironmentRow,
 } from '@archon/isolation';
 import type { Codebase, Conversation, Session } from '../types';
@@ -15,6 +18,12 @@ import type * as ConversationDb from '../db/conversations';
 import type * as SessionDb from '../db/sessions';
 import type * as CodebaseDb from '../db/codebases';
 import type * as ConfigLoader from '../config/config-loader';
+
+const ageBasedPolicies = ['test', 'github', 'slack', 'cli', 'web', 'new-forge'].map(id => ({
+  id,
+  workspaceRetention: 'age-based' as const,
+}));
+beforeEach(() => setPlatformPolicies(ageBasedPolicies));
 
 const NO_PR: Isolation.PrLookup = { state: 'NONE' };
 const PR_HEAD_SHA = 'pr-head-sha';
@@ -96,19 +105,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+type EnvironmentWithCodebase = Awaited<
+  ReturnType<typeof IsolationEnvironmentDb.listAllActiveWithCodebase>
+>[number];
+
 function makeEnvironmentWithCodebase(
-  overrides: Partial<
-    IsolationEnvironmentRow & {
-      codebase_default_cwd: string;
-      codebase_repository_url: string | null;
-    }
-  > = {}
-): IsolationEnvironmentRow & {
-  codebase_default_cwd: string;
-  codebase_repository_url: string | null;
-} {
+  overrides: Partial<EnvironmentWithCodebase> = {}
+): EnvironmentWithCodebase {
   return {
     ...makeEnvironment(),
+    codebase_name: 'test-project',
     codebase_default_cwd: '/workspace/repo',
     codebase_repository_url: 'https://github.com/test/repo.git',
     ...overrides,
@@ -143,7 +149,7 @@ mock.module('@archon/paths', () => ({
 const mockExecFileAsync = mock<typeof Git.execFileAsync>(() =>
   Promise.resolve({ stdout: '', stderr: '' })
 );
-const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChanges>(() =>
+const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>(() =>
   Promise.resolve(false)
 );
 const mockWorktreeExists = mock<typeof Git.worktreeExists>(() => Promise.resolve(false));
@@ -161,9 +167,13 @@ const mockLocalBranchExists = mock<typeof Git.localBranchExists>(() => Promise.r
 const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>(() => Promise.resolve(null));
 // Default: the local branch tip is the PR's head commit (or behind it).
 const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>(() => Promise.resolve(true));
+const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>(() =>
+  Promise.resolve(0)
+);
 mock.module('@archon/git', () => ({
+  countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
   execFileAsync: mockExecFileAsync,
-  hasUncommittedChanges: mockHasUncommittedChanges,
+  hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
   isBranchMerged: mockIsBranchMerged,
@@ -193,7 +203,13 @@ mock.module('../isolation', () => ({
 }));
 const mockGetPrState = mock<typeof Isolation.getPrState>(() => Promise.resolve(NO_PR));
 const mockContainerDestroy = mock<ContainerBackend['destroy']>(() => Promise.resolve());
+const mockContainerOptions = mock(
+  (options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) => options
+);
 class MockContainerBackend {
+  constructor(options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) {
+    mockContainerOptions(options);
+  }
   destroy = mockContainerDestroy;
 }
 mock.module('@archon/isolation', () => ({
@@ -210,7 +226,9 @@ mock.module('@archon/isolation', () => ({
 const mockListAllActiveWithCodebase = mock<typeof IsolationEnvironmentDb.listAllActiveWithCodebase>(
   () => Promise.resolve([])
 );
-const mockUpdateStatus = mock<typeof IsolationEnvironmentDb.updateStatus>(() => Promise.resolve());
+const mockMarkWorktreeDestroyed = mock<typeof IsolationEnvironmentDb.markWorktreeDestroyed>(() =>
+  Promise.resolve()
+);
 const mockGetLiveRunOwningEnv = mock<typeof IsolationEnvironmentDb.getLiveRunOwningEnv>(() =>
   Promise.resolve(null)
 );
@@ -229,8 +247,10 @@ const mockListActiveContainerEnvironments = mock<
 >(() => Promise.resolve([]));
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  updateStatus: mockUpdateStatus,
+  updateStatus: mock(() => Promise.resolve()),
+  markWorktreeDestroyed: mockMarkWorktreeDestroyed,
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
+  isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
   listByCodebase: mockListByCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
@@ -287,15 +307,47 @@ import {
   runScheduledCleanup,
   startCleanupScheduler,
   stopCleanupScheduler,
-  isSchedulerRunning,
   getWorktreeStatusBreakdown,
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
   removeEnvironment,
   onConversationClosed,
   cleanupContainerEnvironments,
+  reclaimContainerEnv,
   SESSION_RETENTION_DAYS,
+  type RemoveEnvironmentResult,
 } from './cleanup-service';
+
+describe('reclaimContainerEnv', () => {
+  test('uses the supplied isolation store and preserves destroy failures', async () => {
+    const store: IIsolationStore = {
+      getById: async () => null,
+      findActiveByWorkflow: async () => null,
+      listActive: async () => [],
+      create: async () => {
+        throw new Error('Unexpected create');
+      },
+      updateStatus: async () => {},
+      markWorktreeDestroyed: async () => {},
+      updateMetadata: async () => undefined,
+      countActiveByCodebase: async () => 0,
+    };
+    await reclaimContainerEnv('supplied-env', store);
+    expect(mockContainerOptions.mock.calls.at(-1)?.[0].store).toBe(store);
+    expect(mockContainerDestroy).toHaveBeenLastCalledWith('supplied-env');
+    const unknownStore = {
+      ...store,
+      getById: async () => makeContainerEnvironment({ created_by_platform: 'removed-chat' }),
+    };
+    const destroys = mockContainerDestroy.mock.calls.length;
+    await expect(reclaimContainerEnv('supplied-env', unknownStore)).rejects.toThrow(
+      "platform 'removed-chat' is not registered"
+    );
+    expect(mockContainerDestroy.mock.calls.length).toBe(destroys);
+    mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
+    await expect(reclaimContainerEnv('supplied-env', store)).rejects.toThrow('Docker unavailable');
+  });
+});
 
 describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () => {
   const oldRow = makeContainerEnvironment({
@@ -353,6 +405,34 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
     expect(mockContainerDestroy).toHaveBeenCalledTimes(1);
     expect(report.removed).toEqual(['env-1']);
   });
+
+  test('reports a failed destroy instead of claiming removal', async () => {
+    mockListActiveContainerEnvironments.mockResolvedValueOnce([oldRow]);
+    mockContainerDestroy.mockRejectedValueOnce(new Error('status write failed'));
+
+    expect(await cleanupContainerEnvironments(7)).toEqual({
+      removed: [],
+      skipped: [],
+      errors: [{ id: oldRow.id, error: 'status write failed' }],
+    });
+  });
+
+  test('keeps an old container whose registered platform retains workspaces', async () => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'matrix-chat', workspaceRetention: 'retain' }]);
+    mockListActiveContainerEnvironments.mockResolvedValueOnce([
+      { ...oldRow, created_by_platform: 'matrix-chat' },
+    ]);
+
+    const report = await cleanupContainerEnvironments(7);
+
+    expect(report).toEqual({
+      removed: [],
+      skipped: [{ id: oldRow.id, reason: "platform 'matrix-chat' retains workspaces" }],
+      errors: [],
+    });
+    expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+  });
 });
 
 describe('cleanup-service', () => {
@@ -364,7 +444,7 @@ describe('cleanup-service', () => {
     mockIsBranchMerged.mockClear();
     mockGetLastCommitDate.mockClear();
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockLoadRepoConfig.mockClear();
@@ -378,6 +458,14 @@ describe('cleanup-service', () => {
   });
 
   describe('removeEnvironment', () => {
+    test('refuses container removal even with force', async () => {
+      mockGetById.mockResolvedValueOnce(makeEnvironment({ provider: 'container' }));
+      const result = await removeEnvironment('env-1', { force: true });
+      expect(result.skippedReason).toContain('not a worktree');
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    });
+
     test('calls destroy with canonicalRepoPath even when directory is missing', async () => {
       const envId = 'env-missing-dir';
 
@@ -393,7 +481,7 @@ describe('cleanup-service', () => {
           status: 'active',
           created_at: new Date(),
           created_by_platform: 'github',
-          metadata: {},
+          metadata: { worktree_branch_created: true },
         })
       );
 
@@ -417,13 +505,15 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
       });
       // Should mark as destroyed
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
       // Should return success result
       expect(result.worktreeRemoved).toBe(true);
       expect(result.skippedReason).toBeUndefined();
     });
 
-    test('handles git worktree remove failure for missing path', async () => {
+    test('retains the active record when provider failure merely claims a missing path', async () => {
       const envId = 'env-git-fail';
 
       mockGetById.mockResolvedValueOnce(
@@ -461,10 +551,8 @@ describe('cleanup-service', () => {
         new Error("fatal: cannot change to '/path/exists/but/git/fails': No such file or directory")
       );
 
-      await removeEnvironment(envId);
-
-      // Should mark as destroyed despite provider.destroy failure
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      await expect(removeEnvironment(envId)).rejects.toThrow('No such file or directory');
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
 
     test('logs warnings from partial destroy and still marks as destroyed', async () => {
@@ -508,7 +596,9 @@ describe('cleanup-service', () => {
       await removeEnvironment(envId);
 
       // Should still mark as destroyed despite partial cleanup
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('passes deleteRemoteBranch to provider.destroy when specified', async () => {
@@ -549,7 +639,9 @@ describe('cleanup-service', () => {
         deleteRemoteBranch: true,
         remote: 'origin',
       });
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('passes configured worktree.remote to provider.destroy for remote branch deletion', async () => {
@@ -603,7 +695,7 @@ describe('cleanup-service', () => {
           status: 'active',
           created_at: new Date(),
           created_by_platform: 'github',
-          metadata: {},
+          metadata: { worktree_branch_created: true },
         })
       );
 
@@ -625,6 +717,41 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
         deleteRemoteBranch: undefined,
       });
+    });
+
+    test.each([
+      {
+        label: 'says the environment did not create it',
+        metadata: { worktree_branch_created: false },
+      },
+      { label: 'predates the branch-created key', metadata: {} },
+    ])('keeps the branch when the record $label', async ({ metadata }) => {
+      const envId = 'env-existing-branch';
+
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: envId,
+          codebase_id: 'codebase-123',
+          working_path: '/workspace/worktrees/operator-branch',
+          branch_name: 'operator-branch',
+          status: 'active',
+          metadata,
+        })
+      );
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({ id: 'codebase-123', name: 'test-repo', default_cwd: '/workspace/repo' })
+      );
+
+      await removeEnvironment(envId);
+
+      expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/operator-branch', {
+        force: undefined,
+        canonicalRepoPath: '/workspace/repo',
+        deleteRemoteBranch: undefined,
+      });
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: envId })
+      );
     });
 
     test('returns skippedReason when worktree has uncommitted changes without force', async () => {
@@ -663,12 +790,51 @@ describe('cleanup-service', () => {
 
       // Should NOT call destroy or mark as destroyed
       expect(mockDestroy).not.toHaveBeenCalled();
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       // Should return skipped result
       expect(result.worktreeRemoved).toBe(false);
       expect(result.branchDeleted).toBe(false);
       expect(result.skippedReason).toBe('has uncommitted changes');
     });
+
+    test('a failed removal status query propagates without destroying or marking dirty', async () => {
+      mockGetById.mockResolvedValueOnce(makeEnvironment());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockWorktreeExists.mockResolvedValue(true);
+      const failure = new Error('status unavailable');
+      mockHasUncommittedChanges.mockRejectedValueOnce(failure);
+
+      await expect(removeEnvironment('env-1')).rejects.toBe(failure);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    });
+
+    test('skippedReason is a closed vocabulary callers can branch on', () => {
+      // Callers decide cleanup outcomes by comparing reasons, so an unlisted
+      // reason must fail type-check instead of silently missing those branches.
+      // @ts-expect-error -- not a reason removeEnvironment produces
+      const unknown: RemoveEnvironmentResult['skippedReason'] = 'already removed';
+      expect(unknown).toBeDefined();
+    });
+
+    test.each(['worktreeRemoved', 'directoryClean'] as const)(
+      'incomplete %s retains the active isolation record',
+      async field => {
+        mockGetById.mockResolvedValueOnce(makeEnvironment());
+        mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+        mockDestroy.mockResolvedValueOnce({
+          worktreeRemoved: true,
+          directoryClean: true,
+          branchDeleted: null,
+          remoteBranchDeleted: null,
+          warnings: [],
+          [field]: false,
+        });
+        const result = await removeEnvironment('env-1');
+        expect(result.skippedReason).toContain('filesystem removal incomplete');
+        expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+      }
+    );
 
     test('returns warnings from partial destroy', async () => {
       const envId = 'env-partial';
@@ -757,13 +923,14 @@ describe('cleanup-service', () => {
       await expect(removeEnvironment(envId)).rejects.toThrow('local modifications');
 
       // Should NOT mark as destroyed
-      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     });
   });
 });
 
 describe('runScheduledCleanup', () => {
   beforeEach(() => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -772,7 +939,7 @@ describe('runScheduledCleanup', () => {
     mockGetLastCommitDate.mockClear();
     mockDestroy.mockClear();
     mockListAllActiveWithCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
@@ -795,6 +962,23 @@ describe('runScheduledCleanup', () => {
     mockLoadRepoConfig.mockResolvedValue({});
   });
 
+  test.each([false, true])('skips container branch checks (path exists: %s)', async pathExists => {
+    mockWorktreeExists.mockResolvedValue(pathExists);
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        ...makeEnvironment({ provider: 'container', branch_name: '' }),
+        codebase_name: 'test',
+        codebase_repository_url: null,
+        codebase_default_cwd: '/workspace/repo',
+      },
+    ]);
+    await runScheduledCleanup();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+
   test('returns empty report when no environments exist', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
 
@@ -805,102 +989,122 @@ describe('runScheduledCleanup', () => {
     expect(report.errors).toHaveLength(0);
   });
 
-  test('marks missing paths as destroyed and cleans up branch', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironmentWithCodebase({
-        id: 'env-123',
-        working_path: '/nonexistent/path',
-        branch_name: 'issue-42',
-        status: 'active',
-        created_by_platform: 'github',
-        created_at: new Date(),
-        codebase_default_cwd: '/workspace/repo',
-        codebase_id: 'codebase-1',
-        workflow_type: 'issue',
-        workflow_id: '42',
-        provider: 'worktree',
-        metadata: {},
-      }),
-    ]);
-    // worktreeExists returns false for both calls (runScheduledCleanup + removeEnvironment)
-    // (already default)
-    // removeEnvironment: getById returns the env
-    mockGetById.mockResolvedValueOnce(
-      makeEnvironment({
-        id: 'env-123',
-        codebase_id: 'codebase-1',
-        working_path: '/nonexistent/path',
-        branch_name: 'issue-42',
-        status: 'active',
-      })
-    );
-    // removeEnvironment: getCodebase for canonical repo path
-    mockGetCodebase.mockResolvedValueOnce(
-      makeCodebase({
-        id: 'codebase-1',
-        name: 'test-repo',
-        default_cwd: '/workspace/repo',
-      })
-    );
+  test.each(['github', 'matrix-chat'])(
+    'marks missing paths as destroyed and cleans up branch (%s)',
+    async platformId => {
+      setPlatformPolicies([
+        ...ageBasedPolicies,
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        makeEnvironmentWithCodebase({
+          id: 'env-123',
+          working_path: '/nonexistent/path',
+          branch_name: 'issue-42',
+          status: 'active',
+          created_by_platform: platformId,
+          created_at: new Date(),
+          codebase_name: 'test-project',
+          codebase_default_cwd: '/workspace/repo',
+          codebase_id: 'codebase-1',
+          workflow_type: 'issue',
+          workflow_id: '42',
+          provider: 'worktree',
+          metadata: {},
+        }),
+      ]);
+      // worktreeExists returns false for both calls (runScheduledCleanup + removeEnvironment)
+      // (already default)
+      // removeEnvironment: getById returns the env
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: 'env-123',
+          codebase_id: 'codebase-1',
+          working_path: '/nonexistent/path',
+          branch_name: 'issue-42',
+          status: 'active',
 
-    const report = await runScheduledCleanup();
+          metadata: { worktree_branch_created: true },
+        })
+      );
+      // removeEnvironment: getCodebase for canonical repo path
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          id: 'codebase-1',
+          name: 'test-repo',
+          default_cwd: '/workspace/repo',
+        })
+      );
 
-    expect(report.removed).toContain('env-123 (path missing)');
-    // Should call destroy to clean up the branch
-    expect(mockDestroy).toHaveBeenCalledWith('/nonexistent/path', {
-      force: false,
-      branchName: 'issue-42',
-      canonicalRepoPath: '/workspace/repo',
-    });
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-123', 'destroyed');
-  });
+      const report = await runScheduledCleanup();
 
-  test('removes merged branches without uncommitted changes', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironmentWithCodebase({
-        id: 'env-456',
-        working_path: '/workspace/repo/worktrees/pr-99',
-        branch_name: 'pr-99',
-        status: 'active',
-        created_by_platform: 'github',
-        created_at: new Date(),
-        codebase_default_cwd: '/workspace/repo',
-        codebase_id: 'codebase-1',
-        workflow_type: 'pr',
-        workflow_id: '99',
-        provider: 'worktree',
-        metadata: {},
-      }),
-    ]);
-    // worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValue(true);
-    // getDefaultBranch returns 'main' (default)
-    // isBranchMerged returns true
-    mockIsBranchMerged.mockResolvedValueOnce(true);
-    // hasUncommittedChanges returns false (default)
-    // No conversations using it
-    // For removeEnvironment: getById returns the env
-    mockGetById.mockResolvedValueOnce(
-      makeEnvironment({
-        id: 'env-456',
-        codebase_id: 'codebase-1',
-        working_path: '/workspace/repo/worktrees/pr-99',
-        status: 'active',
-      })
-    );
-    // removeEnvironment: getCodebase for canonical repo path
-    mockGetCodebase.mockResolvedValueOnce(
-      makeCodebase({
-        id: 'codebase-1',
-        name: 'test-repo',
-        default_cwd: '/workspace/repo',
-      })
-    );
+      expect(report.removed).toContain('env-123 (path missing)');
+      // Should call destroy to clean up the branch
+      expect(mockDestroy).toHaveBeenCalledWith('/nonexistent/path', {
+        force: false,
+        branchName: 'issue-42',
+        canonicalRepoPath: '/workspace/repo',
+      });
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-123' })
+      );
+    }
+  );
 
-    const report = await runScheduledCleanup();
+  test.each(['github', 'matrix-chat'])(
+    'removes merged branches without uncommitted changes (%s)',
+    async platformId => {
+      setPlatformPolicies([
+        ...ageBasedPolicies,
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        makeEnvironmentWithCodebase({
+          id: 'env-456',
+          working_path: '/workspace/repo/worktrees/pr-99',
+          branch_name: 'pr-99',
+          status: 'active',
+          created_by_platform: platformId,
+          created_at: new Date(),
+          codebase_name: 'test-project',
+          codebase_default_cwd: '/workspace/repo',
+          codebase_id: 'codebase-1',
+          workflow_type: 'pr',
+          workflow_id: '99',
+          provider: 'worktree',
+          metadata: {},
+        }),
+      ]);
+      // worktreeExists returns true (path exists)
+      mockWorktreeExists.mockResolvedValue(true);
+      // getDefaultBranch returns 'main' (default)
+      // isBranchMerged returns true
+      mockIsBranchMerged.mockResolvedValueOnce(true);
+      // hasUncommittedChanges returns false (default)
+      // No conversations using it
+      // For removeEnvironment: getById returns the env
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: 'env-456',
+          codebase_id: 'codebase-1',
+          working_path: '/workspace/repo/worktrees/pr-99',
+          status: 'active',
+        })
+      );
+      // removeEnvironment: getCodebase for canonical repo path
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          id: 'codebase-1',
+          name: 'test-repo',
+          default_cwd: '/workspace/repo',
+        })
+      );
 
-    expect(report.removed).toContain('env-456 (merged)');
-  });
+      const report = await runScheduledCleanup();
+
+      expect(report.removed).toContain('env-456 (merged)');
+    }
+  );
 
   test('passes deleteRemoteBranch: true for merged branches in scheduled cleanup', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
@@ -911,6 +1115,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'pr',
@@ -966,6 +1171,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -974,12 +1180,10 @@ describe('runScheduledCleanup', () => {
         metadata: {},
       }),
     ]);
-    // worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
+    mockWorktreeExists.mockResolvedValue(true);
     // getDefaultBranch returns 'main' (default)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
-    // Has uncommitted changes
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const report = await runScheduledCleanup();
@@ -991,6 +1195,20 @@ describe('runScheduledCleanup', () => {
     expect(report.removed).toHaveLength(0);
   });
 
+  test('reports a status failure as an error rather than a dirty skip', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeEnvironmentWithCodebase()]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockIsBranchMerged.mockResolvedValueOnce(true);
+    mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
+
+    const report = await runScheduledCleanup();
+
+    expect(report.errors).toEqual([{ id: 'env-1', error: 'status unavailable' }]);
+    expect(report.skipped).toEqual([]);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+
   test('skips merged branches with a live owning run and a live-run reason', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
       makeEnvironmentWithCodebase({
@@ -1000,6 +1218,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1031,6 +1250,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days old
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1052,7 +1272,7 @@ describe('runScheduledCleanup', () => {
       reason: 'stale but run run-live is running',
     });
     expect(report.removed).toHaveLength(0);
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   test('skips path-missing environments owned by a live run', async () => {
@@ -1064,6 +1284,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1083,18 +1304,19 @@ describe('runScheduledCleanup', () => {
     });
     expect(report.removed).toHaveLength(0);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
-  test('skips telegram environments', async () => {
+  test('skips environments with a retain policy', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
       makeEnvironmentWithCodebase({
-        id: 'env-telegram',
+        id: 'env-retain-test',
         working_path: '/workspace/repo/worktrees/thread-abc',
         branch_name: 'thread-abc',
         status: 'active',
-        created_by_platform: 'telegram',
+        created_by_platform: 'retain-test',
         created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days ago
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'thread',
@@ -1110,8 +1332,51 @@ describe('runScheduledCleanup', () => {
 
     const report = await runScheduledCleanup();
 
-    // Should not be in removed (Telegram is persistent)
+    // Age alone does not remove retained environments.
     expect(report.removed).toHaveLength(0);
+  });
+
+  test('scheduled cleanup retains a declared adapter and removes an age-based control', async () => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'matrix-chat', workspaceRetention: 'retain' }]);
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const retained = makeEnvironmentWithCodebase({
+      id: 'retained',
+      created_by_platform: 'matrix-chat',
+      created_at: old,
+    });
+    const ageBased = makeEnvironmentWithCodebase({
+      id: 'age-based',
+      created_by_platform: 'new-forge',
+      created_at: old,
+    });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([retained, ageBased]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetById.mockResolvedValue(ageBased);
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['age-based (stale)']);
+    expect(report.errors).toEqual([]);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledTimes(1);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'age-based' })
+    );
+  });
+
+  test('scheduled cleanup without configured platform policies fails and deletes nothing', async () => {
+    clearPlatformPolicies();
+    const env = makeEnvironmentWithCodebase({
+      created_by_platform: 'telegram',
+      created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+    mockListAllActiveWithCodebase.mockResolvedValue([env]);
+    mockGetById.mockResolvedValue(env);
+    try {
+      await expect(runScheduledCleanup()).rejects.toThrow('Platform policies are not configured');
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+      expect(mockDeleteOldSessions).not.toHaveBeenCalled();
+    } finally {
+      mockListAllActiveWithCodebase.mockResolvedValue([]);
+    }
   });
 
   test('continues processing after error on one environment', async () => {
@@ -1123,6 +1388,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1137,6 +1403,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'pr',
@@ -1230,6 +1497,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1461,7 +1729,7 @@ describe('runScheduledCleanup', () => {
       reason: 'PR is open (active review)',
     });
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   // A PR lookup that fails is reported as 'NONE' by getPrState, never 'MERGED'.
@@ -1504,7 +1772,7 @@ describe('runScheduledCleanup', () => {
     });
     expect(report.removed).toHaveLength(0);
     expect(mockDestroy).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
   // An open PR is active work. Age must not decide it, and the operator needs to see why
@@ -1582,14 +1850,117 @@ describe('runScheduledCleanup', () => {
   });
 });
 
-describe('SESSION_RETENTION_DAYS', () => {
-  test('exports configuration constant', () => {
-    expect(typeof SESSION_RETENTION_DAYS).toBe('number');
-    expect(SESSION_RETENTION_DAYS).toBeGreaterThan(0);
+describe('cleanup environment configuration', () => {
+  const variables = [
+    'STALE_THRESHOLD_DAYS',
+    'CLEANUP_INTERVAL_HOURS',
+    'SESSION_RETENTION_DAYS',
+  ] as const;
+  let savedEnv: NodeJS.ProcessEnv;
+  let importId = 0;
+
+  function loadCleanupService(): Promise<typeof import('./cleanup-service')> {
+    return import(`./cleanup-service.ts?configuration-test=${importId++}`);
+  }
+
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    for (const name of variables) delete process.env[name];
   });
 
-  test('has default value of 30', () => {
-    expect(SESSION_RETENTION_DAYS).toBe(30);
+  afterEach(() => {
+    for (const name of variables) {
+      const value = savedEnv[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  for (const name of variables) {
+    test.each([
+      'abc',
+      '0',
+      '-1',
+      '1.5',
+      '',
+      ' ',
+      '12days',
+      'Infinity',
+      '9007199254740993',
+      '0.99999999999999999',
+      '1.0000000000000001',
+    ])(`${name} rejects %j during module initialization`, async value => {
+      process.env[name] = value;
+      await expect(loadCleanupService()).rejects.toThrow(
+        `${name} must be a positive integer; received ${JSON.stringify(value)}`
+      );
+    });
+  }
+
+  test('rejects an interval beyond the runtime timer limit at startup', async () => {
+    process.env.CLEANUP_INTERVAL_HOURS = '597';
+    await expect(loadCleanupService()).rejects.toThrow(
+      'CLEANUP_INTERVAL_HOURS must be a positive integer; received "597"'
+    );
+  });
+
+  test('preserves a 20-day worktree with a configured 21-day stale threshold', async () => {
+    process.env.STALE_THRESHOLD_DAYS = '21';
+    const service = await loadCleanupService();
+    const env = makeEnvironmentWithAge({
+      branch_name: 'twenty-day-branch',
+      created_by_platform: 'slack',
+      days_since_activity: 20,
+    });
+    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockGetById.mockResolvedValue(env);
+    mockGetCodebase.mockResolvedValue(makeCodebase());
+    mockWorktreeExists.mockResolvedValue(true);
+    mockDestroy.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
+
+    try {
+      const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
+
+      expect(result).toEqual({ removed: [], skipped: [], releasedFailedRuns: [] });
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    } finally {
+      mockGetById.mockResolvedValue(null);
+      mockGetCodebase.mockResolvedValue(null);
+      mockWorktreeExists.mockResolvedValue(false);
+    }
+  });
+
+  test.each([
+    { values: undefined, staleDays: 14, intervalHours: 6, retentionDays: 30 },
+    { values: ['1', '2', '3'], staleDays: 1, intervalHours: 2, retentionDays: 3 },
+    { values: ['21', '12', '60'], staleDays: 21, intervalHours: 12, retentionDays: 60 },
+    { values: ['14', '596', '30'], staleDays: 14, intervalHours: 596, retentionDays: 30 },
+  ])('uses defaults or configured positive integers: %j', async configuration => {
+    for (const [index, name] of variables.entries()) {
+      const value = configuration.values?.[index];
+      if (value !== undefined) process.env[name] = value;
+    }
+    const service = await loadCleanupService();
+    for (const name of variables) process.env[name] = 'abc';
+    expect(service.STALE_THRESHOLD_DAYS).toBe(configuration.staleDays);
+    expect(service.SESSION_RETENTION_DAYS).toBe(configuration.retentionDays);
+
+    mockListAllActiveWithCodebase.mockResolvedValue([]);
+    mockDeleteOldSessions.mockClear();
+    await service.runScheduledCleanup();
+    expect(mockDeleteOldSessions).toHaveBeenCalledWith(configuration.retentionDays);
+    const interval = spyOn(globalThis, 'setInterval');
+    try {
+      service.startCleanupScheduler();
+      expect(interval.mock.calls.at(-1)?.[1]).toBe(configuration.intervalHours * 60 * 60 * 1000);
+    } finally {
+      service.stopCleanupScheduler();
+      interval.mockRestore();
+    }
   });
 });
 
@@ -1604,24 +1975,10 @@ describe('scheduler lifecycle', () => {
     stopCleanupScheduler(); // Clean up after tests
   });
 
-  test('starts and stops scheduler', () => {
-    expect(isSchedulerRunning()).toBe(false);
-
-    startCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(true);
-
-    stopCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(false);
-  });
-
-  test('prevents multiple scheduler instances', () => {
-    startCleanupScheduler();
-    startCleanupScheduler(); // Should warn but not create second
-
-    expect(isSchedulerRunning()).toBe(true);
-
-    stopCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(false);
+  test('refuses to start without configured platform policies', () => {
+    clearPlatformPolicies();
+    expect(() => startCleanupScheduler()).toThrow('Platform policies are not configured');
+    expect(mockListAllActiveWithCodebase).not.toHaveBeenCalled();
   });
 });
 
@@ -1631,6 +1988,7 @@ describe('scheduler lifecycle', () => {
 
 describe('getWorktreeStatusBreakdown', () => {
   beforeEach(() => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
@@ -1672,8 +2030,8 @@ describe('getWorktreeStatusBreakdown', () => {
       }),
       makeEnvironmentWithAge({
         id: 'env-4',
-        branch_name: 'telegram-branch',
-        created_by_platform: 'telegram',
+        branch_name: 'retain-test-branch',
+        created_by_platform: 'retain-test',
         days_since_activity: 60,
         working_path: '/path4',
         status: 'active',
@@ -1692,8 +2050,8 @@ describe('getWorktreeStatusBreakdown', () => {
     // No worktree.remote configured — default-branch detection gets
     // 'origin' (the remote default).
     expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'origin');
-    expect(breakdown.stale).toBe(1); // env-2 is stale (30 days), env-4 is Telegram so not counted as stale
-    expect(breakdown.active).toBe(2); // env-3 active, env-4 Telegram (counted as active, not stale)
+    expect(breakdown.stale).toBe(1); // env-2 is stale (30 days), env-4 is retained so not counted as stale
+    expect(breakdown.active).toBe(2); // env-3 active, env-4 retained (counted as active, not stale)
     // Verify the remote-qualified ref is threaded through to isBranchMerged.
     expect(mockIsBranchMerged).toHaveBeenCalledWith(
       '/workspace/repo',
@@ -1702,26 +2060,34 @@ describe('getWorktreeStatusBreakdown', () => {
     );
   });
 
-  test('excludes telegram from stale count', async () => {
-    mockListByCodebaseWithAge.mockResolvedValueOnce([
-      makeEnvironmentWithAge({
-        id: 'env-telegram',
-        branch_name: 'telegram-branch',
-        created_by_platform: 'telegram',
-        days_since_activity: 100,
-        working_path: '/path',
-        status: 'active',
-      }),
-    ]);
+  test.each(['retain-test', 'matrix-chat'])(
+    'excludes retain-policy environments from stale count (%s)',
+    async platformId => {
+      setPlatformPolicies([
+        ...ageBasedPolicies,
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({
+          id: 'env-retain-test',
+          branch_name: 'retain-test-branch',
+          created_by_platform: platformId,
+          days_since_activity: 100,
+          working_path: '/path',
+          status: 'active',
+        }),
+      ]);
 
-    // getDefaultBranch returns 'main' (default from beforeEach)
-    // isBranchMerged returns false (default from beforeEach)
+      // getDefaultBranch returns 'main' (default from beforeEach)
+      // isBranchMerged returns false (default from beforeEach)
 
-    const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
-    expect(breakdown.stale).toBe(0);
-    expect(breakdown.active).toBe(1);
-  });
+      expect(breakdown.stale).toBe(0);
+      expect(breakdown.active).toBe(1);
+    }
+  );
 
   test('returns empty breakdown for empty codebase', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([]);
@@ -1811,7 +2177,7 @@ describe('cleanupMergedWorktrees', () => {
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
@@ -1827,6 +2193,32 @@ describe('cleanupMergedWorktrees', () => {
     mockIsRevCoveredBy.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
+  });
+
+  test('continues merged cleanup when the settled owner query fails for one environment', async () => {
+    const envs = ['before', 'broken', 'after'].map(name =>
+      makeEnvironment({
+        id: `env-${name}`,
+        branch_name: name,
+        working_path: `/workspace/repo/worktrees/${name}`,
+        status: 'active',
+      })
+    );
+    mockListByCodebase.mockResolvedValueOnce(envs);
+    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetLiveRunOwningEnv
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'failed-run', status: 'failed' })
+      .mockRejectedValueOnce(new Error('settled owner query failed'));
+    mockGetById.mockResolvedValueOnce(envs[0]).mockResolvedValueOnce(envs[2]);
+
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    expect(result.removed).toEqual(['before', 'after']);
+    expect(result.skipped).toEqual([
+      { branchName: 'broken', reason: 'settled owner query failed' },
+    ]);
+    expect(result.releasedFailedRuns).toEqual([]);
   });
 
   test('removes merged branches without uncommitted changes', async () => {
@@ -1852,9 +2244,8 @@ describe('cleanupMergedWorktrees', () => {
         status: 'active',
       })
     );
-    // removeEnvironment: worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
-    // removeEnvironment: hasUncommittedChanges returns false (default)
+    mockWorktreeExists.mockResolvedValue(true);
+    // removeEnvironment: hasUncommittedChangesStrict returns false (default)
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
@@ -1958,7 +2349,7 @@ describe('cleanupMergedWorktrees', () => {
     // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
     // isBranchMerged returns true
     mockIsBranchMerged.mockResolvedValueOnce(true);
-    // Has uncommitted changes
+    mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
@@ -2411,6 +2802,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/foo',
         working_path: '/workspace/.archon/worktrees/feature-foo',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/myrepo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2447,6 +2839,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/baz',
         working_path: '/workspace/.archon/worktrees/feature-baz',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2480,6 +2873,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/bar',
         working_path: '/workspace/.archon/worktrees/feature-bar',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/mainrepo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2512,6 +2906,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/qux',
         working_path: '/workspace/.archon/worktrees/feature-qux',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo3',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2538,7 +2933,7 @@ describe('onConversationClosed', () => {
   beforeEach(() => {
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2550,6 +2945,38 @@ describe('onConversationClosed', () => {
     // Reset defaults
     mockWorktreeExists.mockResolvedValue(false);
     mockHasUncommittedChanges.mockResolvedValue(false);
+  });
+
+  test('keeps an uninstalled platform workspace and its conversation reference', async () => {
+    setPlatformPolicies([
+      ...ageBasedPolicies,
+      { id: 'removed-chat', workspaceRetention: 'retain' },
+    ]);
+    setPlatformPolicies(ageBasedPolicies);
+    mockLogger.warn.mockClear();
+    mockContainerDestroy.mockClear();
+    const env = makeEnvironment({ created_by_platform: 'removed-chat' });
+    mockGetConversationByPlatformId.mockResolvedValueOnce(
+      makeConversation({ isolation_env_id: env.id, cwd: env.working_path })
+    );
+    mockGetActiveSession.mockResolvedValueOnce(null);
+    mockGetById.mockResolvedValueOnce(env);
+
+    await onConversationClosed('removed-chat', 'thread-1', { merged: true });
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      {
+        envId: env.id,
+        reason:
+          "platform 'removed-chat' is not registered; workspace kept (plugin may have been removed)",
+      },
+      'cleanup_skipped'
+    );
   });
 
   test('deactivates session with conversation-closed reason', async () => {
@@ -2695,6 +3122,8 @@ describe('onConversationClosed', () => {
         working_path: '/workspace/worktrees/pr-101',
         branch_name: 'feature-y',
         status: 'active',
+
+        metadata: { worktree_branch_created: true },
       })
     );
 
@@ -2821,6 +3250,7 @@ describe('onConversationClosed', () => {
 
 describe('cleanupStaleWorktrees', () => {
   beforeEach(() => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2829,7 +3259,7 @@ describe('cleanupStaleWorktrees', () => {
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
-    mockUpdateStatus.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
@@ -2857,32 +3287,39 @@ describe('cleanupStaleWorktrees', () => {
         status: 'active',
       })
     );
-    // removeEnvironment: worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValueOnce(true);
-    // removeEnvironment: hasUncommittedChanges returns false (default)
+    mockWorktreeExists.mockResolvedValue(true);
+    // removeEnvironment: hasUncommittedChangesStrict returns false (default)
 
     const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
 
     expect(result.removed).toContain('stale-branch');
   });
 
-  test('skips telegram worktrees even if old', async () => {
-    mockListByCodebaseWithAge.mockResolvedValueOnce([
-      makeEnvironmentWithAge({
-        id: 'env-telegram',
-        branch_name: 'telegram-branch',
-        working_path: '/workspace/repo/worktrees/telegram-branch',
-        created_by_platform: 'telegram',
-        days_since_activity: 100,
-        status: 'active',
-      }),
-    ]);
+  test.each(['retain-test', 'matrix-chat'])(
+    'skips retain-policy worktrees even if old (%s)',
+    async platformId => {
+      setPlatformPolicies([
+        ...ageBasedPolicies,
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({
+          id: 'env-retain-test',
+          branch_name: 'retain-test-branch',
+          working_path: '/workspace/repo/worktrees/retain-test-branch',
+          created_by_platform: platformId,
+          days_since_activity: 100,
+          status: 'active',
+        }),
+      ]);
 
-    const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+      const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
 
-    expect(result.removed).toHaveLength(0);
-    expect(result.skipped).toHaveLength(0);
-  });
+      expect(result.removed).toHaveLength(0);
+      expect(result.skipped).toHaveLength(0);
+    }
+  );
 
   test('skips worktrees that are not stale', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([
@@ -2914,7 +3351,7 @@ describe('cleanupStaleWorktrees', () => {
       }),
     ]);
 
-    // Has uncommitted changes
+    mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
@@ -2949,5 +3386,381 @@ describe('cleanupStaleWorktrees', () => {
       reason: 'run run-live is paused',
     });
     expect(mockGetById).not.toHaveBeenCalled();
+  });
+});
+
+describe('cleanup after a chat plugin is removed', () => {
+  const platform = 'removed-chat';
+  const reason =
+    "platform 'removed-chat' is not registered; workspace kept (plugin may have been removed)";
+  beforeEach(() => {
+    setPlatformPolicies([{ id: platform, workspaceRetention: 'retain' }]);
+    setPlatformPolicies(ageBasedPolicies);
+    mockDestroy.mockClear();
+    mockContainerDestroy.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
+    mockWorktreeExists.mockReset();
+    mockIsBranchMerged.mockReset();
+    mockIsBranchMerged.mockResolvedValue(true);
+    mockListAllActiveWithCodebase.mockReset();
+    mockGetLiveRunOwningEnv.mockReset();
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+  });
+
+  test.each([true, false])(
+    'scheduled cleanup keeps unknown workspaces even when path exists=%s',
+    async exists => {
+      mockWorktreeExists.mockResolvedValue(exists);
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        makeEnvironmentWithCodebase({ created_by_platform: platform, created_at: new Date(0) }),
+      ]);
+      const report = await runScheduledCleanup();
+      expect(report.skipped).toEqual([{ id: 'env-1', reason }]);
+      expect(report.removed).toEqual([]);
+      expect(report.errors).toEqual([]);
+      expect(mockWorktreeExists).not.toHaveBeenCalled();
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    }
+  );
+
+  test('stale and merged sweeps report unknown workspaces and the breakdown keeps them active', async () => {
+    const env = makeEnvironmentWithAge({ created_by_platform: platform, days_since_activity: 100 });
+    mockListByCodebaseWithAge.mockResolvedValue([env]);
+    mockListByCodebase.mockResolvedValueOnce([env]);
+    mockLoadRepoConfig.mockResolvedValue({});
+    mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
+    const stale = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+    const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+    expect(stale).toEqual({
+      removed: [],
+      skipped: [{ branchName: env.branch_name, reason }],
+      releasedFailedRuns: [],
+    });
+    expect(merged.skipped).toEqual(stale.skipped);
+    expect(merged.removed).toEqual([]);
+    expect(breakdown.stale).toBe(0);
+    expect(breakdown.merged).toBe(0);
+    expect(breakdown.activeEnvs).toEqual([{ id: env.id, branchName: env.branch_name, reason }]);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+
+  test('container reaping reports unknown platforms without destroying them', async () => {
+    mockListActiveContainerEnvironments.mockResolvedValueOnce([
+      makeContainerEnvironment({ created_by_platform: platform, days_since_created: 100 }),
+    ]);
+    const report = await cleanupContainerEnvironments();
+    expect(report.skipped).toEqual([{ id: 'env-1', reason }]);
+    expect(report.removed).toEqual([]);
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+  });
+
+  test('explicit environment removal reports an unknown platform', async () => {
+    mockGetById.mockResolvedValueOnce(makeEnvironment({ created_by_platform: platform }));
+    expect((await removeEnvironment('env-1')).skippedReason).toBe(reason);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+
+  test.each(['web', 'cli', null])(
+    'registered surface %s still ages out (including legacy null)',
+    async platformId => {
+      const env = makeEnvironmentWithAge({
+        created_by_platform: platformId,
+        days_since_activity: 100,
+      });
+      mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+      mockGetById.mockResolvedValueOnce(env);
+      mockWorktreeExists.mockResolvedValue(false);
+      mockHasUncommittedChanges.mockResolvedValue(false);
+      const report = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+      expect(report.removed).toEqual([env.branch_name]);
+      expect(report.skipped).toEqual([]);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: env.id })
+      );
+    }
+  );
+});
+
+describe('worktree cleanup provider ownership', () => {
+  test('merged, stale, and status checks exclude containers before checking branches', async () => {
+    const env = makeEnvironment({ provider: 'container', branch_name: '' });
+    mockListByCodebase.mockResolvedValue([env]);
+    mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
+    mockGetPrState.mockClear();
+    mockWorktreeExists.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
+    mockDestroy.mockClear();
+    expect((await cleanupMergedWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await cleanupStaleWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await getWorktreeStatusBreakdown('cb', '/repo')).total).toBe(0);
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+});
+
+// A failed run locks its environment until a sweep settles its outcome (#4090). The
+// lock query is mocked in call order: first without a release (who claims the env),
+// then with one (who still claims it once the sweep's settlement is applied).
+describe('failed-run lock release', () => {
+  const FAILED_RUN = { id: 'run-failed-1234', status: 'failed' };
+
+  beforeEach(() => {
+    mockGetLiveRunOwningEnv.mockReset();
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockCountCommitsMissingFromRemotes.mockReset();
+    mockCountCommitsMissingFromRemotes.mockResolvedValue(0);
+    mockWorktreeExists.mockReset();
+    mockWorktreeExists.mockResolvedValue(true);
+    mockHasUncommittedChanges.mockReset();
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockIsBranchMerged.mockReset();
+    mockIsBranchMerged.mockResolvedValue(false);
+    mockIsPatchEquivalent.mockReset();
+    mockIsPatchEquivalent.mockResolvedValue(false);
+    mockLocalBranchExists.mockReset();
+    mockLocalBranchExists.mockResolvedValue(true);
+    mockIsRevCoveredBy.mockReset();
+    mockIsRevCoveredBy.mockResolvedValue(true);
+    mockGetPrState.mockReset();
+    mockGetPrState.mockResolvedValue(NO_PR);
+    mockGetLastCommitDate.mockReset();
+    mockGetLastCommitDate.mockResolvedValue(null);
+    mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
+    mockLoadRepoConfig.mockResolvedValue({});
+    mockGetById.mockReset();
+    mockGetById.mockImplementation(id => Promise.resolve(makeEnvironment({ id })));
+    mockDestroy.mockClear();
+    mockMarkWorktreeDestroyed.mockClear();
+  });
+
+  function releasedByTheSweep(): void {
+    mockGetLiveRunOwningEnv.mockResolvedValueOnce(FAILED_RUN).mockResolvedValueOnce(null);
+  }
+
+  const staleEnv = (): EnvironmentWithCodebase =>
+    makeEnvironmentWithCodebase({
+      id: 'env-stale-failed',
+      branch_name: 'stale-failed',
+      created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+
+  test.each([
+    ['MERGED', {}, 'merged'],
+    ['CLOSED', { includeClosed: true }, 'PR closed'],
+  ] as const)(
+    '--merged removes a failed run whose PR is %s and reports the release',
+    async (prState, options, reason) => {
+      mockListByCodebase.mockResolvedValueOnce([makeEnvironment({ branch_name: 'settled' })]);
+      mockGetPrState.mockResolvedValue(prAt(prState));
+      releasedByTheSweep();
+
+      const result = await cleanupMergedWorktrees('codebase-123', '/workspace/repo', options);
+
+      expect(result.removed).toEqual(['settled']);
+      expect(result.releasedFailedRuns).toEqual([
+        { branchName: 'settled', runId: FAILED_RUN.id, reason },
+      ]);
+      expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-1', { kind: 'settled' });
+      expect(mockCountCommitsMissingFromRemotes).not.toHaveBeenCalled();
+    }
+  );
+
+  test('the stale sweep removes a failed run inactive past the window with nothing unpushed', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    releasedByTheSweep();
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual(['env-stale-failed (stale)']);
+    expect(report.releasedFailedRuns).toEqual([
+      { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+    ]);
+    expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-stale-failed', {
+      kind: 'stale',
+      staleDays: 14,
+    });
+    expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/worktrees/task-1', [
+      'HEAD',
+      'refs/heads/stale-failed',
+    ]);
+  });
+
+  test('the stale sweep keeps a released failed run whose commits are on no remote', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    releasedByTheSweep();
+    mockCountCommitsMissingFromRemotes.mockResolvedValueOnce(2);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual([]);
+    expect(report.releasedFailedRuns).toEqual([]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but failed run run-fail has 2 unpushed commit(s)',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('the stale sweep keeps an environment no run owns whose commits are on no remote', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockCountCommitsMissingFromRemotes.mockResolvedValueOnce(3);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual([]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason:
+        'stale but 3 unpushed commit(s); remove it explicitly with archon complete stale-failed --force',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  // The count mock answers only for the revs that shape should ask about, so a sweep
+  // that skipped the worktree-gone or branch-gone shape would see 0 and remove the env.
+  test.each([
+    ['worktree is gone', false, true, '/workspace/repo', ['refs/heads/stale-failed']],
+    ['branch is gone', true, false, '/workspace/worktrees/task-1', ['HEAD']],
+  ] as const)(
+    'the stale sweep keeps unpushed commits when the %s',
+    async (_shape, worktreeLeft, branchLeft, countPath, countRevs) => {
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({ branch_name: 'stale-failed', days_since_activity: 30 }),
+      ]);
+      mockWorktreeExists.mockResolvedValue(worktreeLeft);
+      mockLocalBranchExists.mockResolvedValue(branchLeft);
+      releasedByTheSweep();
+      mockCountCommitsMissingFromRemotes.mockImplementation((path, revs) =>
+        Promise.resolve(path === countPath && Bun.deepEquals(revs, countRevs) ? 1 : 0)
+      );
+
+      const result = await cleanupStaleWorktrees('codebase-123', '/workspace/repo');
+
+      expect(result.skipped).toEqual([
+        { branchName: 'stale-failed', reason: 'failed run run-fail has 1 unpushed commit(s)' },
+      ]);
+      expect(result.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each([
+    ['its branch is left', true, ['refs/heads/stale-failed']],
+    ['its branch is gone too', false, []],
+  ] as const)(
+    'the scheduled sweep releases a failed run whose worktree is gone once it is stale and %s',
+    async (_shape, branchLeft, countRevs) => {
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+      mockWorktreeExists.mockResolvedValue(false);
+      mockLocalBranchExists.mockResolvedValue(branchLeft);
+      mockGetLiveRunOwningEnv
+        .mockResolvedValueOnce(FAILED_RUN)
+        .mockResolvedValueOnce(FAILED_RUN)
+        .mockResolvedValueOnce(null);
+
+      const report = await runScheduledCleanup();
+
+      expect(report.removed).toEqual(['env-stale-failed (stale)']);
+      expect(report.releasedFailedRuns).toEqual([
+        { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+      ]);
+      expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/repo', countRevs);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-stale-failed' })
+      );
+    }
+  );
+
+  test.each([
+    ['its PR is open', prAt('OPEN'), 'PR is open (active review)'],
+    [
+      'its PR lookup failed',
+      { state: 'UNAVAILABLE' } as const,
+      'PR state lookup failed — merge state unverifiable',
+    ],
+  ] as const)(
+    'the scheduled sweep keeps a stale failed run whose worktree and branch are gone while %s',
+    async (_shape, pr, reason) => {
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+      mockWorktreeExists.mockResolvedValue(false);
+      mockLocalBranchExists.mockResolvedValue(false);
+      mockGetPrState.mockResolvedValue(pr);
+      mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+      const report = await runScheduledCleanup();
+
+      expect(report.skipped).toEqual([{ id: 'env-stale-failed', reason }]);
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    }
+  );
+
+  test('the scheduled sweep keeps a failed run whose worktree is gone while inside the window', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockWorktreeExists.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-fail is failed',
+    });
+    expect(report.removed).toEqual([]);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+  });
+
+  test('the stale sweep keeps a failed run still inside the window', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-fail is failed',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('a paused run keeps its environment on every sweep, whatever its age', async () => {
+    const paused = { id: 'run-paused-1234', status: 'paused' };
+    mockGetLiveRunOwningEnv.mockResolvedValue(paused);
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockListByCodebase.mockResolvedValueOnce([makeEnvironment({ branch_name: 'paused' })]);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+
+    const merged = await cleanupMergedWorktrees('codebase-123', '/workspace/repo');
+    mockGetPrState.mockResolvedValue(NO_PR);
+    const report = await runScheduledCleanup();
+
+    expect(merged.skipped).toEqual([{ branchName: 'paused', reason: 'run run-paus is paused' }]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-paus is paused',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('the chat stale sweep removes a released failed run and reports it', async () => {
+    mockListByCodebaseWithAge.mockResolvedValueOnce([
+      makeEnvironmentWithAge({ branch_name: 'stale-failed', days_since_activity: 30 }),
+    ]);
+    releasedByTheSweep();
+
+    const result = await cleanupStaleWorktrees('codebase-123', '/workspace/repo');
+
+    expect(result.removed).toEqual(['stale-failed']);
+    expect(result.releasedFailedRuns).toEqual([
+      { branchName: 'stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+    ]);
   });
 });

@@ -16,6 +16,7 @@ import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
+import { UserPrefsLoadFailed, userScopeStatus } from './ScopeToggle';
 
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
 
@@ -31,7 +32,7 @@ function seedForm(config: SafeConfig, providers: ProviderInfo[]): AssistantConfi
   for (const p of providers) models[p.id] = readStr(config.assistants[p.id], 'model');
   const codex = config.assistants.codex;
   return {
-    assistant: config.assistant,
+    assistant: config.assistant ?? '',
     models,
     modelReasoningEffort: readStr(codex, 'modelReasoningEffort'),
     webSearchMode: readStr(codex, 'webSearchMode'),
@@ -51,8 +52,8 @@ export function AssistantConfigPanel(): ReactElement {
   const { data: config, error: configError } = useEntity(K.config, skill.getConfig);
   const { data: providers, error: providersError } = useEntity(K.providers, skill.listProviders);
   // Per-user default assistant (Phase 3): a "Just me" select that overrides the
-  // install default for runs/chats this user starts. Hidden when the per-user
-  // prefs read fails (no web identity — solo-PAT or logged out).
+  // install default for runs/chats this user starts. Hidden on a 401 (no web
+  // identity — solo-PAT or logged out); any other prefs read failure is shown.
   const { data: userPrefs, error: userPrefsError } = useEntity<UserAiPrefs>(
     K.userAiPrefs,
     skill.getUserAiPrefs
@@ -65,7 +66,7 @@ export function AssistantConfigPanel(): ReactElement {
     skill.listProviderKeys
   );
   const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
-  const userScopeAvailable = userPrefsError === undefined;
+  const userScope = userScopeStatus(userPrefsError);
   const [savingUserDefault, setSavingUserDefault] = useState(false);
   const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
 
@@ -178,6 +179,11 @@ export function AssistantConfigPanel(): ReactElement {
             }}
             className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
           >
+            {form.assistant === '' && (
+              <option value="" disabled>
+                Select a default provider
+              </option>
+            )}
             {providers.map(p => (
               <option key={p.id} value={p.id}>
                 {p.displayName}
@@ -185,24 +191,31 @@ export function AssistantConfigPanel(): ReactElement {
             ))}
           </select>
         </SelectShell>
-        <ModelPickerField
-          // Re-key per agent so picker-internal state never bleeds across a switch.
-          key={form.assistant}
-          agentId={form.assistant}
-          value={form.models[form.assistant] ?? ''}
-          onChange={v => {
-            setModel(form.assistant, v);
-          }}
-          placeholder="model — blank = tier default"
-          selectEmptyLabel="tier default"
-          ariaLabel="Install default chat model"
-          className="min-w-[160px] flex-1"
-          agents={keyData?.agents}
-          piModels={piModels}
-        />
+        {form.assistant !== '' && (
+          <ModelPickerField
+            // Re-key per agent so picker-internal state never bleeds across a switch.
+            key={form.assistant}
+            agentId={form.assistant}
+            value={form.models[form.assistant] ?? ''}
+            onChange={v => {
+              setModel(form.assistant, v);
+            }}
+            placeholder="model — blank = tier default"
+            selectEmptyLabel="tier default"
+            ariaLabel="Install default chat model"
+            className="min-w-[160px] flex-1"
+            agents={keyData?.agents}
+            piModels={piModels}
+          />
+        )}
       </label>
 
-      {userScopeAvailable && userDraft !== null ? (
+      {userScope.kind === 'load-failed' ? (
+        <div className="mb-5">
+          <UserPrefsLoadFailed error={userScope.error} />
+        </div>
+      ) : null}
+      {userScope.kind === 'available' && userDraft !== null ? (
         <div className="mb-5 flex flex-wrap items-center gap-[18px]">
           <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
             Chat runs on{' '}

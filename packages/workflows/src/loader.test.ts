@@ -1,5 +1,6 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, mkdtemp, writeFile, rm, readdir, readFile } from 'fs/promises';
+import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 
@@ -30,12 +31,16 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry, type ProviderDefaults } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 
-import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import {
+  discoverWorkflows as discoverWorkflowsWithProviders,
+  discoverWorkflowsWithConfig,
+} from './workflow-discovery';
 import {
   isExecNode,
   isHaltNode,
@@ -45,16 +50,37 @@ import {
   isWorkflowNode,
   isIncludeDirective,
 } from './schemas';
-import { parseWorkflow, type ParseResult } from './loader';
-import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
+import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from './loader';
+import { evaluateCondition } from './condition-evaluator';
+import {
+  readHomeMcpDirectory,
+  COMPILED_LOOP_COMMAND,
+  type LoopWithCompiledCommand,
+} from './compiled-command';
 import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
-import { readBundleIndex } from './defaults/bundle-inventory';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
+import { validateWorkflowResources } from './validator';
+import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
+
+function discoverWorkflows(
+  cwd: string | null,
+  options: Omit<Parameters<typeof discoverWorkflowsWithProviders>[1], 'providers'> = {}
+) {
+  return discoverWorkflowsWithProviders(cwd, { ...options, providers: providerRegistry });
+}
+
+function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
+  return parseWorkflowWithProviders(content, filename, providerRegistry, configuredEnvNames);
+}
 
 /** The inline prompt text of an agent node, or undefined for any other kind
  * (formerly the bare `'prompt' in node ? node.prompt : ...` idiom, #2486). */
@@ -110,6 +136,23 @@ function parseWorkflowYaml(
   return { workflow: result.workflow, warnings: result.warnings };
 }
 
+describe('workflow YAML line endings', () => {
+  it.each(['"', "'"])('folds multiline %s-quoted prompts identically for LF and CRLF', quote => {
+    const lf = `name: line-endings
+description: Quoted multiline scalar
+nodes:
+  - id: read
+    prompt: ${quote}first line
+      second line${quote}
+`;
+    const { workflow: lfWorkflow } = parseWorkflowYaml(lf);
+    const { workflow: crlfWorkflow } = parseWorkflowYaml(lf.replaceAll('\n', '\r\n'));
+
+    expect(inlinePrompt(lfWorkflow.nodes[0])).toBe('first line second line');
+    expect(crlfWorkflow).toEqual(lfWorkflow);
+  });
+});
+
 describe('Workflow Loader', () => {
   let testDir: string;
   const originalArchonHome = process.env.ARCHON_HOME;
@@ -142,6 +185,114 @@ describe('Workflow Loader', () => {
     } else {
       process.env.ARCHON_DOCKER = originalArchonDocker;
     }
+  });
+
+  describe('MCP declaration provenance', () => {
+    it.each(['', 'nested', 'pack/flow'])(
+      'keeps the actual home YAML directory: %s',
+      async subdir => {
+        const yamlDir = join(testDir, 'home', 'workflows', subdir);
+        await mkdir(yamlDir, { recursive: true });
+        await writeFile(
+          join(yamlDir, 'home.yaml'),
+          `name: portable
+description: Home MCP
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+        );
+        await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
+        const catalog = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(catalog.errors).toEqual([]);
+        const entry = catalog.workflows.find(e => e.source === 'global');
+        if (!entry) throw new Error('Missing home workflow');
+        expect(readHomeMcpDirectory(entry.workflow.nodes[0])).toBe(yamlDir);
+        expect(
+          (await validateWorkflowResources(entry.workflow, testDir, providerRegistry)).filter(
+            i => i.field === 'mcp'
+          )
+        ).toEqual([]);
+      }
+    );
+
+    it('preserves declaration ownership across mixed scopes, nested includes and loop bodies', async () => {
+      const homeDir = join(testDir, 'home', 'workflows', 'nested');
+      const projectDir = join(testDir, '.archon', 'workflows');
+      await mkdir(homeDir, { recursive: true });
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(homeDir, 'home.yaml'),
+        `name: home-block
+description: Home declaration
+nodes:
+  - id: group
+    loop_group:
+      until: done
+      max_iterations: 1
+      nodes:
+        - id: check
+          prompt: Check
+          mcp: servers.json
+`
+      );
+      await writeFile(
+        join(projectDir, 'project.yaml'),
+        `name: project-block
+description: Project declaration
+nodes:
+  - id: check
+    prompt: Check
+    mcp: servers.json
+`
+      );
+      await writeFile(
+        join(testDir, 'home', 'workflows', 'middle.yaml'),
+        `name: middle
+description: Mixed includes
+nodes:
+  - id: home
+    include: home-block
+  - id: project
+    include: project-block
+`
+      );
+      await writeFile(
+        join(projectDir, 'parent.yaml'),
+        `name: parent
+description: Second level
+nodes:
+  - id: outer
+    include: middle
+`
+      );
+      await writeFile(join(homeDir, 'servers.json'), '{"home":{}}');
+      const catalog = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(catalog.errors).toEqual([]);
+      const parent = catalog.workflows.find(e => e.workflow.name === 'parent')?.workflow;
+      if (!parent) throw new Error('Missing parent');
+      const group = parent.nodes.find(n => n.id === 'outer__home__group');
+      const project = parent.nodes.find(n => n.id === 'outer__project__check');
+      if (!group || isIncludeDirective(group) || !isLoopGroupNode(group) || !project)
+        throw new Error('Missing composed nodes');
+      expect(readHomeMcpDirectory(project)).toBeUndefined();
+      expect(readHomeMcpDirectory(group.loop_group.nodes[0])).toBe(homeDir);
+      for (const clone of [
+        mapNodeTemplateSlots(group, slot => slot.value),
+        mapNodeTemplateValueSlots(group, slot => slot.value),
+      ]) {
+        if (!isLoopGroupNode(clone)) throw new Error('Lost group');
+        expect(readHomeMcpDirectory(clone.loop_group.nodes[0])).toBe(homeDir);
+      }
+      const issues = (await validateWorkflowResources(parent, testDir, providerRegistry)).filter(
+        i => i.field === 'mcp'
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0].nodeId).toBe('outer__project__check');
+      expect(issues[0].message).toContain(join(testDir, 'servers.json'));
+      expect(issues[0].message).not.toContain(homeDir);
+    });
   });
 
   describe('packaged workflow folders (#2527)', () => {
@@ -448,34 +599,21 @@ describe('Workflow Loader', () => {
   });
 
   describe('parseWorkflow (via discoverWorkflows)', () => {
-    it('should parse interactive: true when present', async () => {
-      const yaml = `name: test\ndescription: test\ninteractive: true\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-    });
-
-    it('should omit interactive field when not present', async () => {
-      const yaml = `name: test\ndescription: test\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBeUndefined();
-    });
-
-    it('should preserve interactive: false when explicitly set', async () => {
-      const yaml = `name: test\ndescription: test\ninteractive: false\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBe(false);
-    });
-
-    it('should treat non-boolean interactive value as undefined', async () => {
-      // YAML string "yes" is not a boolean — should be dropped
-      const yaml = `name: test\ndescription: test\ninteractive: "yes"\nnodes:\n  - id: n\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'test.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows[0].workflow.interactive).toBeUndefined();
-    });
+    it.each(['true', 'false', '"yes"'])(
+      'loads workflow-level interactive: %s with a deprecation warning and drops it',
+      async value => {
+        const yaml = `name: test\ndescription: test\ninteractive: ${value}\nnodes:\n  - id: n\n    prompt: p\n`;
+        await writeWorkflowFile(testDir, 'test.yaml', yaml);
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect('interactive' in result.workflows[0].workflow).toBe(false);
+        expect(result.workflows[0].parseWarnings).toEqual([
+          "Workflow 'test': workflow-level 'interactive:' is deprecated and has no effect. " +
+            'Any workflow can start in the foreground, in the background or from a trigger; a ' +
+            'pause waits in the attention queue until it is answered. Remove the line.',
+        ]);
+      }
+    );
 
     it('should parse worktree.enabled: false', async () => {
       const yaml = `name: triage\ndescription: read-only\nworktree:\n  enabled: false\nnodes:\n  - id: n\n    prompt: p\n`;
@@ -554,6 +692,118 @@ describe('Workflow Loader', () => {
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
       expect(result.errors[0].error).toContain('required: boolean');
+    });
+
+    describe('run budget (#2814)', () => {
+      const budgeted = (nodes: string, budget = 'budget:\n  max_spend_usd: 2.5\n'): string =>
+        `name: budgeted\ndescription: d\n${budget}nodes:\n${nodes}`;
+
+      it('parses a budget declaring either ceiling or both', () => {
+        for (const [yaml, expected] of [
+          ['budget:\n  max_work_units: 3\n', { max_work_units: 3 }],
+          ['budget:\n  max_spend_usd: 2.5\n', { max_spend_usd: 2.5 }],
+          [
+            'budget:\n  max_work_units: 3\n  max_spend_usd: 2.5\n',
+            { max_work_units: 3, max_spend_usd: 2.5 },
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error).toBeNull();
+          expect(result.workflow?.budget).toEqual(expected);
+        }
+      });
+
+      it('rejects a malformed budget instead of running without a ceiling', () => {
+        for (const yaml of [
+          'budget: {}\n',
+          'budget:\n  max_spend_usd: 0\n',
+          'budget:\n  max_work_units: 1.5\n',
+          'budget:\n  max_spend: 5\n',
+          'budget:\n  max_work_units: 3\n  max_spend: 5\n',
+          'budget: lots\n',
+        ]) {
+          const result = parseWorkflow(budgeted('  - id: n\n    prompt: p\n', yaml), 'b.yaml');
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain('Invalid budget');
+        }
+      });
+
+      it('rejects loops, workflow: children and fan-out under a budget', () => {
+        for (const [nodeYaml, kind] of [
+          ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+          [
+            '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+            'loop_group',
+          ],
+          ['    workflow: child', 'workflow'],
+          ['    workflow: child\n    fan_out:\n      items: \'["a"]\'\n      as: item', 'workflow'],
+          [
+            '    include: block\n    fan_out:\n      items: \'["a"]\'\n      as: item',
+            'include with fan_out',
+          ],
+        ] as const) {
+          const result = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`), `${kind}.yaml`);
+          expect(result.error?.errorType).toBe('validation_error');
+          expect(result.error?.error).toContain(`node 'x' is a ${kind} node`);
+          // The same shape without a budget is not refused for this reason.
+          const unbudgeted = parseWorkflow(budgeted(`  - id: x\n${nodeYaml}\n`, ''), 'u.yaml');
+          expect(unbudgeted.error?.error ?? '').not.toContain('budget');
+        }
+      });
+
+      it('rejects a loop that reaches a budgeted workflow through include:', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'looping-block.yaml',
+          'name: looping-block\ndescription: block\nnodes:\n  - id: spin\n    loop:\n      until: done\n      max_iterations: 2\n      prompt: p\n'
+        );
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-parent.yaml',
+          budgeted('  - id: blk\n    include: looping-block\n')
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        const err = result.errors.find(e => e.filename === 'budgeted-parent.yaml');
+        expect(err?.error).toContain("node 'blk__spin' is a loop node");
+        expect(result.workflows.some(w => w.workflow.name === 'looping-block')).toBe(true);
+      });
+
+      it('loads a budgeted workflow of ordinary nodes, gates, waits and halts', async () => {
+        await writeWorkflowFile(
+          testDir,
+          'budgeted-ordinary.yaml',
+          budgeted(
+            [
+              '  - id: plan',
+              '    prompt: p',
+              '  - id: check',
+              '    bash: echo ok',
+              '    depends_on: [plan]',
+              '  - id: tool',
+              '    script: console.log(1)',
+              '    runtime: bun',
+              '    depends_on: [plan]',
+              '  - id: review',
+              '    approval:',
+              '      message: ok?',
+              '      on_reject:',
+              '        prompt: fix it',
+              '    depends_on: [check, tool]',
+              '  - id: pause',
+              '    wait:',
+              '      duration_ms: 1000',
+              '    depends_on: [review]',
+              '  - id: stop',
+              '    cancel: done',
+              '    depends_on: [pause]',
+              '',
+            ].join('\n')
+          )
+        );
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        expect(result.workflows[0].workflow.budget).toEqual({ max_spend_usd: 2.5 });
+      });
     });
 
     it('should omit container block when not present', async () => {
@@ -827,7 +1077,7 @@ nodes:
       expect(result.workflows).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
-      expect(result.errors[0].error).toContain("Unknown provider 'claud'");
+      expect(result.errors[0].error).toContain("Unknown provider: 'claud'");
     });
 
     it('should accept any model string with a known provider (SDK validates at run time)', () => {
@@ -1415,8 +1665,8 @@ nodes:
       // Should load the real archon-* prefixed app defaults
       expect(workflows.length).toBeGreaterThanOrEqual(1);
       // Check for at least one of the known app defaults
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
-      expect(archonAssist).toBeDefined();
+      const archonReview = workflows.find(w => w.name === 'archon-review');
+      expect(archonReview).toBeDefined();
     });
 
     it('should override app defaults with repo workflows of same filename', async () => {
@@ -1424,25 +1674,25 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: my-custom-assist
-description: My custom assist (overrides archon-assist)
+description: My custom assist (overrides archon-review)
 nodes:
   - id: custom
     command: custom-command
 `;
       // Use exact same filename as app default to override
-      await writeFile(join(repoWorkflowDir, 'archon-assist.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have the repo version, not the app default
       const assistWorkflow = workflows.find(
-        w => w.name === 'my-custom-assist' || w.name === 'archon-assist'
+        w => w.name === 'my-custom-assist' || w.name === 'archon-review'
       );
       expect(assistWorkflow).toBeDefined();
       // Repo version should win (has custom name)
       expect(assistWorkflow?.name).toBe('my-custom-assist');
-      expect(assistWorkflow?.description).toBe('My custom assist (overrides archon-assist)');
+      expect(assistWorkflow?.description).toBe('My custom assist (overrides archon-review)');
     });
 
     it('should skip app defaults when loadDefaults is false', async () => {
@@ -1470,9 +1720,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both app defaults and repo workflows
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
+      const archonReview = workflows.find(w => w.name === 'archon-review');
       const customWorkflow = workflows.find(w => w.name === 'my-custom-workflow');
-      expect(archonAssist).toBeDefined();
+      expect(archonReview).toBeDefined();
       expect(customWorkflow).toBeDefined();
     });
   });
@@ -1698,13 +1948,89 @@ nodes:
   });
 
   describe('discoverWorkflowsWithConfig', () => {
+    it("treats config.yaml's env: as supplied, suppressing the unbound-env-read warning", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const mockLoadConfig = mock(async () => ({
+        envVars: { NAME: 'value' },
+      }));
+
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
+
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
+    it("still treats config.yaml's env: as supplied once discovery runs from a frozen capture", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const { captureWorkflowSource, capturedSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
+        await import('./workflow-source');
+      const capture = await captureWorkflowSource({
+        sourceRoot: testDir,
+        captureRoot: join(testDir, 'home', 'staged-source', 'run-1'),
+        sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, env_var_names: ['NAME'] },
+      });
+      // A run that already froze its source never calls loadConfig again (see
+      // discoverWorkflowsWithConfig) — proving this stays unbound-env-clean without it is
+      // what distinguishes this test from the live-config one above.
+      const loadConfigShouldNotRun = mock(async () => {
+        throw new Error('loadConfig must not run once a frozen source config is already known');
+      });
+
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        loadConfigShouldNotRun,
+        providerRegistry,
+        capturedSourceRoots(capture.anchor)
+      );
+
+      expect(loadConfigShouldNotRun).not.toHaveBeenCalled();
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
     it('should pass loadDefaults from config to discoverWorkflows', async () => {
       const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
       const mockLoadConfig = mock(async () => ({
         defaults: { loadDefaultWorkflows: false },
       }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With loadDefaults: false, no archon-* defaults should appear
       const archonWorkflow = result.workflows.find(w => w.workflow.name.startsWith('archon-'));
@@ -1718,16 +2044,17 @@ nodes:
         throw new Error('Config not found');
       });
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With config failure, defaults to true, so archon-* should appear
-      const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-assist');
+      const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-review');
       expect(archonWorkflow).toBeDefined();
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
-      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } =
-        await import('./workflow-discovery');
+      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } = await import(
+        './workflow-discovery'
+      );
       resetLegacyHomeWarningForTests();
 
       const homeDir = join(
@@ -1750,7 +2077,7 @@ nodes:
           defaults: { loadDefaultWorkflows: false },
         }));
 
-        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
         const entry = result.workflows.find(w => w.workflow.name === 'home-only');
         expect(entry).toBeDefined();
         expect(entry?.source).toBe('global');
@@ -1791,8 +2118,8 @@ nodes:
       // Should load bundled workflows
       expect(workflows.length).toBeGreaterThanOrEqual(1);
       // Check that known bundled workflows are loaded
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
-      expect(archonAssist).toBeDefined();
+      const archonReview = workflows.find(w => w.name === 'archon-review');
+      expect(archonReview).toBeDefined();
       expect(workflows.some(w => w.name === 'archon-stabilize')).toBe(false);
     });
 
@@ -1816,19 +2143,19 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: custom-assist-override
-description: Custom override of archon-assist
+description: Custom override of archon-review
 nodes:
   - id: custom
     command: custom
 `;
-      await writeFile(join(repoWorkflowDir, 'archon-assist.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Repo workflow should override bundled default
       const assistWorkflow = workflows.find(
-        w => w.name === 'custom-assist-override' || w.name === 'archon-assist'
+        w => w.name === 'custom-assist-override' || w.name === 'archon-review'
       );
       expect(assistWorkflow).toBeDefined();
       expect(assistWorkflow?.name).toBe('custom-assist-override');
@@ -1853,9 +2180,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both bundled and repo workflows
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
+      const archonReview = workflows.find(w => w.name === 'archon-review');
       const repoWorkflow = workflows.find(w => w.name === 'my-repo-workflow');
-      expect(archonAssist).toBeDefined();
+      expect(archonReview).toBeDefined();
       expect(repoWorkflow).toBeDefined();
     });
   });
@@ -2752,6 +3079,83 @@ nodes:
   });
 
   describe('DAG output ref validation', () => {
+    it('accepts nested output paths in approval messages before execution', () => {
+      const result = parseWorkflow(
+        `
+name: nested-approval-output
+description: Nested structured output in a gate
+nodes:
+  - id: review
+    prompt: Review the proposal
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: { type: string }
+            text: { type: string }
+          required: [action, text]
+      required: [proposal]
+  - id: gate
+    approval:
+      message: |
+        Proposed: $review.output.proposal.action
+        $review.output.proposal.text
+    depends_on: [review]
+`,
+        'nested-approval-output.yaml'
+      );
+
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
+    });
+
+    it('accepts nested canonical output paths in when conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-when-output
+description: Nested structured output in a condition
+nodes:
+  - id: review
+    bash: echo review
+  - id: apply
+    bash: echo apply
+    depends_on: [review]
+    when: "$review.output.proposal.action == 'add'"
+`,
+        'nested-when-output.yaml'
+      );
+
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
+    });
+
+    it('accepts nested prior-iteration output paths in loop-group conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-loop-prev-output
+description: Nested structured output from a prior iteration
+nodes:
+  - id: refine
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+        - id: guarded
+          bash: echo guarded
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output.proposal.action == 'add'"
+`,
+        'nested-loop-prev-output.yaml'
+      );
+
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
+    });
+
     it('should reject a workflow where when: references an unknown node output', async () => {
       await writeWorkflowFile(
         testDir,
@@ -3712,7 +4116,7 @@ nodes:
       expect(error?.error).toContain('compares the whole output of AI node');
     });
 
-    it('leaves an unparseable when: to the executor rather than guessing at load', async () => {
+    it('rejects an unparseable when: during discovery', async () => {
       const result = await loadYaml(
         'unparseable-when.yaml',
         `
@@ -3727,8 +4131,10 @@ nodes:
     when: "$analyze.output = 'BUG'"
 `
       );
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Node 'decide' field 'when'");
+      expect(result.errors[0].error).toContain('unsupported condition syntax');
+      expect(result.workflows).toHaveLength(0);
     });
   });
 
@@ -3808,6 +4214,31 @@ nodes:
         delay_ms: 4000,
         on_error: 'transient',
       });
+    });
+
+    it('loads zero-delay retry config on a loop without warnings', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'retry-loop.yaml',
+        `
+name: retry-loop
+description: Loop iteration retry
+nodes:
+  - id: work
+    retry:
+      max_attempts: 1
+      delay_ms: 0
+    loop:
+      prompt: Work
+      until_bash: "true"
+      max_iterations: 2
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes[0].retry).toEqual({ max_attempts: 1, delay_ms: 0 });
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
     it('should reject retry with missing max_attempts', async () => {
@@ -4180,7 +4611,6 @@ nodes:
         `
 name: valid-interactive
 description: Valid interactive loop
-interactive: true
 nodes:
   - id: my-loop
     loop:
@@ -4209,7 +4639,6 @@ nodes:
         `
 name: bad-interactive
 description: Missing gate_message
-interactive: true
 nodes:
   - id: my-loop
     loop:
@@ -4223,41 +4652,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('gate_message');
-    });
-
-    it('should infer interactive: true (with a warning) when an interactive loop node is in an undeclared workflow (#2707 step 2 / #2736)', async () => {
-      // Grace period (#2736/#2738): this used to be a hard load error. It now loads
-      // successfully with `interactive` coerced to `true`, so #1991's background-dispatch
-      // refusal still protects the run even though the author never declared the class.
-
-      await writeWorkflowFile(
-        testDir,
-        'warn-test.yaml',
-        `
-name: warn-test
-description: Non-interactive workflow with interactive loop
-nodes:
-  - id: my-loop
-    loop:
-      prompt: Iterate.
-      until: DONE
-      max_iterations: 5
-      interactive: true
-      gate_message: Review.
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-      // Also carries the pre-existing "node-level loop interactive: is deprecated"
-      // warning (#2707 step 3) for this same node — unrelated to this check, so
-      // find the class-placement warning by content rather than asserting length.
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const classWarning = pw.find(w => w.includes("Node 'my-loop' is a pause node"));
-      expect(classWarning).toBeDefined();
-      expect(classWarning).toContain('has been applied for this run only');
     });
 
     // -----------------------------------------------------------------------
@@ -4436,7 +4830,6 @@ nodes:
         `
 name: signal-completes
 description: Interactive loop that completes autonomously on the signal
-interactive: true
 nodes:
   - id: validate
     loop:
@@ -4536,32 +4929,30 @@ nodes:
       expect(result.errors[0].error).toContain('unknown node');
     });
 
-    // --- gate placement inside a loop_group body (#2707 step 3) -------------------
-    // Guidance only (parseWarnings), not a load error — a mid-body/co-terminal gate
-    // predates this pattern (e.g. via the legacy `on_reject` mechanism) and must keep
-    // loading; see the '#2707 step 1 gate/loop deprecation warnings' describe block
-    // below for the equivalent warning-content assertions.
+    // --- pause placement inside a loop_group body (#2707 step 3, #4043) -----------
+    // A gate or wait pauses the loop only as the body's sole terminal sink; anywhere
+    // else it is a load error.
 
-    it('should accept the canonical Design A gate-terminated loop_group, with no warning', async () => {
+    it('should accept an attention-terminated loop_group whose completion reads the answer, with no warning', async () => {
       await writeWorkflowFile(
         testDir,
-        'loop-group-gate-terminal.yaml',
+        'loop-group-attention-terminal.yaml',
         `
-name: loop-group-gate-terminal
-description: A gate as the body's sole terminal sink, completion reading its decision
-interactive: true
+name: loop-group-attention-terminal
+description: An attention wait as the body's sole terminal sink, completion reading its decision
 nodes:
   - id: grp
     loop_group:
-      until_bash: '[ "$check.output.decision" = "approve" ]'
+      until_bash: 'decision=$check.output.decision; [ "$decision" = "approve" ]'
       max_iterations: 3
       nodes:
         - id: work
-          prompt: "do work"
+          prompt: "do work. Feedback: $LOOP_PREV.check.output.text"
         - id: check
           depends_on: [work]
-          approval:
-            message: "Continue?"
+          wait:
+            attention: "Continue?"
+            form: approval
 `
       );
 
@@ -4571,14 +4962,46 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it("warns when a gate-terminated loop_group's until_bash does not reference the gate", async () => {
+    it('does not ask until_bash to read a terminal pause that its own when: can skip', async () => {
       await writeWorkflowFile(
         testDir,
-        'loop-group-gate-completion-not-referenced.yaml',
+        'loop-group-conditional-attention.yaml',
         `
-name: loop-group-gate-completion-not-referenced
-description: A gate-terminated body whose completion channel ignores the gate
-interactive: true
+name: loop-group-conditional-attention
+description: Ask only when blocked
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: test $work.output != blocked
+      max_iterations: 3
+      nodes:
+        - id: work
+          bash: "printf done"
+        - id: ask
+          depends_on: [work]
+          when: "$work.output == 'blocked'"
+          wait:
+            attention: "Unblock?"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
+    it.each([
+      ['an attention wait', 'wait:\n            attention: "Continue?"'],
+      ['a legacy gate', 'approval:\n            message: "Continue?"'],
+    ])(
+      "warns when until_bash does not reference the loop_group's terminal %s",
+      async (_, pause) => {
+        await writeWorkflowFile(
+          testDir,
+          'loop-group-pause-completion-not-referenced.yaml',
+          `
+name: loop-group-pause-completion-not-referenced
+description: A pause-terminated body whose completion channel ignores the answer
 nodes:
   - id: grp
     loop_group:
@@ -4589,66 +5012,32 @@ nodes:
           prompt: "do work"
         - id: check
           depends_on: [work]
-          approval:
-            message: "Continue?"
+          ${pause}
 `
-      );
+        );
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('does not reference');
-      expect(pw[0]).toContain('$check.output');
-    });
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toHaveLength(0);
+        const pw = (result.workflows[0].parseWarnings ?? []).filter(w =>
+          w.includes('does not reference')
+        );
+        expect(pw).toHaveLength(1);
+        expect(pw[0]).toContain("Node 'check'");
+        expect(pw[0]).toContain('$check.output');
+      }
+    );
 
-    it('does NOT warn about completion-not-referenced when the gate is not the terminal sink (avoids piling on)', async () => {
-      await writeWorkflowFile(
-        testDir,
-        'loop-group-gate-mid-body-no-pileup.yaml',
-        `
-name: loop-group-gate-mid-body-no-pileup
-description: A non-terminal gate — only the placement warning should fire
-interactive: true
-nodes:
-  - id: grp
-    loop_group:
-      until_bash: "exit 0"
-      max_iterations: 3
-      nodes:
-        - id: check
-          approval:
-            message: "Continue?"
-        - id: after
-          depends_on: [check]
-          prompt: "do more work"
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain('terminal sink');
-      expect(pw.some(w => w.includes('does not reference'))).toBe(false);
-    });
-
-    it('checks EVERY gate in a body, not just the first (review fix)', async () => {
-      // 'first-gate' is not terminal (has a dependent, 'work'). 'second-gate' IS
-      // the body's true terminal sink, but until_bash never references it. Before
-      // the fix, `.find()` stopped at 'first-gate' and 'second-gate' was never
-      // checked at all — its completion-not-referenced footgun went undetected.
+    it('rejects a mid-body gate even when a later gate is the sole terminal sink', async () => {
       await writeWorkflowFile(
         testDir,
         'loop-group-multiple-gates.yaml',
         `
 name: loop-group-multiple-gates
-description: Two gates in one body — each needs its own verdict
-interactive: true
+description: Two gates in one body — only the last can pause the loop
 nodes:
   - id: grp
     loop_group:
-      until_bash: "exit 0"
+      until_bash: '[ "$second-gate.output.decision" = "approve" ]'
       max_iterations: 3
       nodes:
         - id: first-gate
@@ -4665,14 +5054,10 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(2);
-      expect(pw.some(w => w.includes("Node 'first-gate'") && w.includes('terminal sink'))).toBe(
-        true
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors[0].error).toContain(
+        "loop_group 'grp' body: approval node 'first-gate' must be the body's sole terminal sink"
       );
-      expect(
-        pw.some(w => w.includes("Node 'second-gate'") && w.includes('does not reference'))
-      ).toBe(true);
     });
 
     it("counts an include: directive's own depends_on when computing terminal-sink status (review fix)", async () => {
@@ -4690,15 +5075,13 @@ nodes:
       // 'check' has a dependent — the included 'review' node — so it is NOT the
       // body's terminal sink. Before the fix, an include directive's own
       // depends_on was excluded from the dependency set, so 'check' was silently
-      // misclassified as terminal (no warning at all, and a factually wrong
-      // "sole terminal sink" verdict).
+      // misclassified as terminal.
       await writeWorkflowFile(
         testDir,
         'loop-group-gate-include-dependent.yaml',
         `
 name: loop-group-gate-include-dependent
 description: A downstream include node depends on the gate
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4715,13 +5098,8 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // 'block.yaml' is itself a discoverable workflow, so it's also in
-      // result.workflows — select by name rather than assuming index 0.
-      const target = result.workflows.find(
-        w => w.workflow.name === 'loop-group-gate-include-dependent'
-      );
-      const pw = target?.parseWarnings ?? [];
-      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+      const err = result.errors.find(e => e.filename === 'loop-group-gate-include-dependent.yaml');
+      expect(err?.error).toContain("approval node 'check' must be the body's sole terminal sink");
     });
 
     it('counts an include: directive as a co-terminal sink (review fix)', async () => {
@@ -4746,7 +5124,6 @@ nodes:
         `
 name: loop-group-gate-include-co-terminal
 description: An independent include node is a second terminal sink
-interactive: true
 nodes:
   - id: grp
     loop_group:
@@ -4762,13 +5139,10 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // 'block.yaml' is itself a discoverable workflow, so it's also in
-      // result.workflows — select by name rather than assuming index 0.
-      const target = result.workflows.find(
-        w => w.workflow.name === 'loop-group-gate-include-co-terminal'
+      const err = result.errors.find(
+        e => e.filename === 'loop-group-gate-include-co-terminal.yaml'
       );
-      const pw = target?.parseWarnings ?? [];
-      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+      expect(err?.error).toContain("approval node 'check' must be the body's sole terminal sink");
     });
 
     it('should accept a well-formed loop_group', async () => {
@@ -4922,122 +5296,168 @@ nodes:
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0].error).toContain('shadows a node id in the enclosing DAG');
     });
-
-    it('should infer interactive: true (with a warning) when an interactive loop_group is in an undeclared workflow (#2707 step 2 / #2736)', async () => {
-      // Grace period (#2736/#2738) — see the loop: sibling test above.
-
-      await writeWorkflowFile(
-        testDir,
-        'loop-group-gate-warn.yaml',
-        `
-name: loop-group-gate-warn
-description: Interactive loop_group without workflow-level interactive
-nodes:
-  - id: grp
-    loop_group:
-      until: DONE
-      max_iterations: 3
-      interactive: true
-      gate_message: "Review this iteration"
-      nodes:
-        - id: work
-          prompt: "do work"
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
-      // Also carries the pre-existing "node-level loop interactive: is deprecated"
-      // warning (#2707 step 3) for this same node — find by content, not length.
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const classWarning = pw.find(w => w.includes("Node 'grp' is a pause node"));
-      expect(classWarning).toBeDefined();
-    });
   });
 
-  // A gate-authoring leaf block (a workflow whose only purpose is to be composed via
-  // `include:`, but which directly authors its own native gate) is now covered by the
-  // grace-period inference like any other workflow (#2736/#2738) — it loads with a
-  // warning and `interactive: true` inferred, rather than failing outright, so a
-  // composer of it succeeds too instead of seeing a cascaded failure. Exercised through
-  // the REAL discovery pipeline (discoverWorkflows -> parseWorkflow per file ->
-  // expandWorkflowIncludes), not expandWorkflowIncludes called directly on hand-built
-  // WorkflowDefinition objects — that bypass never reaches parseWorkflow's class check.
-  describe('workflow-class placement — leaf gate-authoring block composed via include: (#2707 step 2 / #2736)', () => {
-    async function writeAndDiscover(files: Record<string, string>) {
-      for (const [filename, content] of Object.entries(files)) {
-        await writeWorkflowFile(testDir, filename, content);
+  describe('single conditional dependency trigger rule warning (#3783)', () => {
+    const CONDITIONAL_JOIN = 'needs a successful dependency';
+
+    it.each([
+      {
+        label: 'its only dependency is conditional',
+        deps: ['a'],
+        rule: 'none_failed_min_one_success',
+        warns: true,
+      },
+      {
+        label: 'its only dependency is unconditional',
+        deps: ['c'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it joins conditional branches',
+        deps: ['a', 'b'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it joins conditional and unconditional nodes',
+        deps: ['a', 'c'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it uses all_done after a conditional node',
+        deps: ['a'],
+        rule: 'all_done',
+        warns: false,
+      },
+    ])('warns=$warns when $label', ({ deps, rule, warns }) => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-join
+description: Conditional join warning
+inputs:
+  run: {}
+nodes:
+  - id: a
+    bash: echo a
+    when: "$INPUTS.run == true"
+  - id: b
+    bash: echo b
+    when: "$INPUTS.run != true"
+  - id: c
+    bash: echo c
+  - id: join
+    bash: echo joined
+    depends_on: ${JSON.stringify(deps)}
+    trigger_rule: ${rule}
+`);
+      const advisories = warnings.filter(w => w.includes(CONDITIONAL_JOIN));
+      expect(advisories).toHaveLength(warns ? 1 : 0);
+      if (warns) {
+        expect(advisories[0]).toContain("Node 'join'");
+        expect(advisories[0]).toContain("'a'");
+        expect(advisories[0]).toContain('all_done');
+        expect(advisories[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
       }
-      return discoverWorkflows(testDir, { loadDefaults: false });
-    }
-
-    it('a leaf block with a native gate and no interactive: true loads on its own with interactive inferred', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.interactive).toBe(true);
     });
 
-    it('a composer of that leaf block also succeeds — the inference propagates through include: composition', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-        'top.yaml': `
-name: top
-description: composes the review gate
-interactive: true
+    it('warns when the only dependency is a conditional include', () => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-include-join
+description: Join after a conditional block
+inputs:
+  run: {}
 nodes:
   - id: inc
-    include: gate-blk
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      const names = result.workflows.map(w => w.workflow.name).sort();
-      expect(names).toEqual(['gate-blk', 'top']);
+    include: block
+    when: "$INPUTS.run == true"
+  - id: join
+    depends_on: [inc]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`);
+      expect(warnings.filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([
+        expect.stringContaining("Node 'join'"),
+      ]);
     });
 
-    it('once the leaf block also declares interactive: true, both it and its composer load correctly with no warning', async () => {
-      const result = await writeAndDiscover({
-        'gate-blk.yaml': `
-name: gate-blk
-description: reusable review gate, composed by other workflows
-interactive: true
+    it('warns inside a loop_group body', () => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-loop-join
+description: Conditional join inside a loop
+inputs:
+  run: {}
 nodes:
-  - id: gate
-    approval:
-      message: "Review?"
-`,
-        'top.yaml': `
-name: top
-description: composes the review gate
-interactive: true
+  - id: group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 1
+      nodes:
+        - id: optional
+          bash: echo optional
+          when: "$INPUTS.run == true"
+        - id: join
+          depends_on: [optional]
+          trigger_rule: none_failed_min_one_success
+          bash: echo joined
+`);
+      expect(warnings.filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([
+        expect.stringContaining("Node 'join'"),
+      ]);
+    });
+
+    it('does not warn inside a block that a conditional include skips as a whole', async () => {
+      // Expansion copies the include's `when` onto the block's entry node, so judging the
+      // expanded graph would flag `inc__join` even though the whole block skipping is the intent.
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `name: block
+description: Unconditional reusable join
+nodes:
+  - id: up
+    bash: echo up
+  - id: join
+    depends_on: [up]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'top.yaml',
+        `name: top
+description: Conditional composition
+inputs:
+  run: {}
 nodes:
   - id: inc
-    include: gate-blk
-`,
-      });
-      expect(result.errors).toHaveLength(0);
-      const names = result.workflows.map(w => w.workflow.name).sort();
-      expect(names).toEqual(['gate-blk', 'top']);
-      for (const w of result.workflows) {
-        expect(w.parseWarnings ?? []).toEqual([]);
+    include: block
+    when: "$INPUTS.run == true"
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(2);
+      for (const { parseWarnings } of result.workflows) {
+        expect((parseWarnings ?? []).filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([]);
+      }
+    });
+
+    it('bundled workflows carry no conditional-join warnings', async () => {
+      const binaryBuild = spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(true);
+      try {
+        const discovered = await discoverWorkflows(testDir, { loadDefaults: true });
+        expect(discovered.errors).toEqual([]);
+        expect(discovered.workflows.length).toBe(
+          Object.keys(bundledDefaults.BUNDLED_WORKFLOWS).length
+        );
+        const warned = discovered.workflows.flatMap(({ workflow, parseWarnings }) =>
+          (parseWarnings ?? [])
+            .filter(w => w.includes(CONDITIONAL_JOIN))
+            .map(w => `${workflow.name}: ${w}`)
+        );
+        expect(warned).toEqual([]);
+      } finally {
+        binaryBuild.mockRestore();
       }
     });
   });
@@ -5050,7 +5470,8 @@ nodes:
       mockLogger.warn.mockClear();
       const yaml = `
 name: parse-warnings
-description: Non-interactive workflow with a native gate, a legacy loop, and a typo
+description: Deprecated interactive declaration, a legacy gate, a legacy loop, and a typo
+interactive: true
 nodes:
   - id: gate
     approval:
@@ -5067,8 +5488,7 @@ nodes:
       for (let parse = 0; parse < 2; parse++) {
         const result = parseWorkflow(yaml, 'parse-warnings.yaml');
         expect(result.error).toBeNull();
-        expect(result.workflow?.interactive).toBe(true);
-        expect(result.warnings).toHaveLength(3);
+        expect(result.warnings).toHaveLength(4);
       }
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -5853,7 +6273,7 @@ nodes:
       expect(result.workflows.some(w => w.workflow.name === 'mc-parent')).toBe(false);
     });
 
-    it("points misplaced composed fan-out 'mutates_checkout' to the included workflow", async () => {
+    it("rejects a node-level 'mutates_checkout' on a composed fan-out", async () => {
       await writeWorkflowFile(
         testDir,
         'mc-fan-block.yaml',
@@ -5867,7 +6287,7 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const err = result.errors.find(e => e.filename === 'mc-fan-parent.yaml');
-      expect(err?.error).toContain('root of the included workflow');
+      expect(err?.error).toContain('share its checkout');
       expect(err?.error).toContain('fan_out.max_parallel: 1');
     });
 
@@ -5880,7 +6300,6 @@ name: gated-block
 description: A block whose node config travels but whose run config cannot
 provider: claude
 requires: [github]
-interactive: true
 worktree:
   enabled: true
 nodes:
@@ -5920,7 +6339,6 @@ nodes:
       expect(payload.include).toBe('sub');
       // Run-owned: whoever starts the run decides these, so the composed file's
       // values cannot apply and the author gets told.
-      expect(payload.droppedFields).toContain('interactive');
       expect(payload.droppedFields).toContain('worktree');
       // Node-affecting: `provider` travelled onto the block's own nodes (#1764), so
       // reporting it as dropped would now be a lie.
@@ -6012,7 +6430,7 @@ nodes:
       expect(payload.webSearchModeNote).toContain('no per-node form');
     });
 
-    it('consumes target mutates_checkout for composed fan-out instead of warning it was dropped', async () => {
+    it('warns that a composed fan-out drops the block mutates_checkout, like any include', async () => {
       await writeWorkflowFile(
         testDir,
         'read-only-block.yaml',
@@ -6031,7 +6449,9 @@ nodes:
           c[1] === 'include.workflow_level_fields_dropped' &&
           (c[0] as { include?: string }).include === 'fan'
       );
-      expect(call).toBeUndefined();
+      expect((call?.[0] as { droppedFields?: string[] } | undefined)?.droppedFields).toContain(
+        'mutates_checkout'
+      );
     });
 
     it('does not warn that an included block dropped its deprecated: notice', async () => {
@@ -6171,11 +6591,14 @@ nodes:
 `
       );
 
-      const result = await discoverWorkflowsWithConfig(testDir, () =>
-        Promise.resolve({
-          defaults: { loadDefaultWorkflows: false },
-          commands: { folder: 'my-cmds' },
-        })
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        () =>
+          Promise.resolve({
+            defaults: { loadDefaultWorkflows: false },
+            commands: { folder: 'my-cmds' },
+          }),
+        providerRegistry
       );
       expect(result.errors.filter(error => error.filename === 'cc-parent.yaml')).toHaveLength(0);
       const parent = result.workflows.find(
@@ -6397,7 +6820,7 @@ nodes:
       // project context — running loadConfig with no cwd would silently apply
       // home-dir or working-dir defaults to a request that has neither.
       const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
-      await discoverWorkflowsWithConfig(null, mockLoadConfig);
+      await discoverWorkflowsWithConfig(null, mockLoadConfig, providerRegistry);
       expect(mockLoadConfig).not.toHaveBeenCalled();
     });
   });
@@ -6511,7 +6934,7 @@ nodes:
 `);
 
       expect(result.error?.error).toContain("loop_group 'group' body: Node 'shared'");
-      expect(result.error?.error).toContain('context.resume is not supported');
+      expect(result.error?.error).toContain('pre-loop-node-id');
       expect(result.error?.error).toContain('depends_on');
     });
   });
@@ -6619,7 +7042,92 @@ nodes:
       expect(sibling.error?.error).toContain('not an upstream dependency');
     });
 
-    it('rejects named resume inside a loop_group body', () => {
+    it('accepts a named pre-loop owner and rejects unordered and non-session sources', () => {
+      const workflow = (source: string, dependencies = '[source]') => `
+name: owners
+description: owners
+nodes:
+  - id: source
+    ${source}
+  - id: corrections
+    depends_on: ${dependencies}
+    loop_group:
+      until_bash: 'test $review.output.done = true'
+      max_iterations: 3
+      nodes:
+        - id: owner
+          prompt: correct
+          context: { resume: source }
+        - id: review
+          prompt: review
+          context: fresh
+          depends_on: [owner]
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+            required: [done]
+`;
+      expect(parseAddressable(workflow('prompt: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('command: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('prompt: implement', '[]')).error?.error).toContain(
+        'upstream dependency'
+      );
+      expect(parseAddressable(workflow('bash: echo ready')).error?.error).toContain(
+        'not a session-producing'
+      );
+      expect(
+        parseAddressable(
+          workflow('prompt: implement\n    provider: claude').replace(
+            'prompt: correct',
+            'prompt: correct\n          provider: codex'
+          )
+        ).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('proves nested ancestry at each enclosing group entry with provider defaults', () => {
+      const yaml = `
+name: nested-owner
+description: nested owner
+provider: claude
+nodes:
+  - id: source
+    loop: { prompt: implement, until: DONE, max_iterations: 1 }
+  - id: outer
+    depends_on: [source]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: local
+          prompt: local
+        - id: inner
+          depends_on: [local]
+          loop_group:
+            until_bash: exit 0
+            max_iterations: 2
+            nodes:
+              - id: owner
+                prompt: owner
+                context: { resume: local }
+              - id: ancestor-owner
+                prompt: owner
+                context: { resume: source }
+`;
+      expect(parseAddressable(yaml).error).toBeNull();
+      expect(
+        parseAddressable(yaml.replace('depends_on: [local]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('depends_on: [source]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('id: outer', 'id: outer\n    provider: codex')).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('rejects named resume from the same loop_group body', () => {
       const result = parseAddressable(`
 name: nested
 description: nested
@@ -6636,7 +7144,7 @@ nodes:
           depends_on: [source]
           context: { resume: source }
 `);
-      expect(result.error?.error).toContain('inside a loop_group body');
+      expect(result.error?.error).toContain('inside the same loop_group body');
     });
 
     it('rejects statically mismatched and fork-incapable providers', () => {
@@ -6656,10 +7164,12 @@ nodes:
       expect(mismatch.error?.error).toContain("source 'source' uses provider 'claude'");
       expect(mismatch.error?.error).toContain("consumer uses 'codex'");
 
-      const incapable = parseAddressable(`
+      registerCommunityProviders();
+      try {
+        const incapable = parseAddressable(`
 name: incapable
 description: incapable
-provider: codex
+provider: copilot
 nodes:
   - id: source
     prompt: source
@@ -6668,7 +7178,11 @@ nodes:
     depends_on: [source]
     context: { resume: source }
 `);
-      expect(incapable.error?.error).toContain("provider 'codex' does not support sessionFork");
+        expect(incapable.error?.error).toContain("provider 'copilot' does not support sessionFork");
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
     });
 
     it('defers implicit provider resolution to runtime', () => {
@@ -6757,13 +7271,15 @@ nodes:
         id: 'no-resume-skip-test',
         displayName: 'No Resume Skip Test',
         builtIn: false,
-        credentials: { kind: 'static', specs: [] },
+        credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
           skills: false,
+          plugins: false,
           agents: false,
           toolRestrictions: false,
           structuredOutput: false,
@@ -6779,12 +7295,18 @@ nodes:
           requiresAllPropertiesRequired: false,
         },
         factory: () => ({
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
           getType: () => 'no-resume-skip-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
             skills: false,
+            plugins: false,
             agents: false,
             toolRestrictions: false,
             structuredOutput: false,
@@ -6799,7 +7321,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },
@@ -6819,6 +7340,29 @@ nodes:
       }
     });
 
+    it('warns, and still loads, when the provider cannot fork the persisted session', () => {
+      registerCommunityProviders();
+      try {
+        const copilot = parseWorkflow(
+          `name: t\ndescription: t\nprovider: copilot\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+          't.yaml'
+        );
+        expect(copilot.error).toBeNull();
+        expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+          expect.stringContaining("Node 'planner'"),
+        ]);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
+
+      const claude = parseWorkflow(
+        `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+        't.yaml'
+      );
+      expect(claude.warnings?.some(w => w.includes('cannot fork a session'))).toBe(false);
+    });
+
     it('rejects persist_session: true on a provider without sessionResume', async () => {
       // Register an ephemeral provider with sessionResume: false to drive the capability gate.
       // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
@@ -6827,13 +7371,15 @@ nodes:
         id: 'no-resume-test',
         displayName: 'No Resume Test',
         builtIn: false,
-        credentials: { kind: 'static', specs: [] },
+        credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
           skills: false,
+          plugins: false,
           agents: false,
           toolRestrictions: false,
           structuredOutput: false,
@@ -6849,12 +7395,18 @@ nodes:
           requiresAllPropertiesRequired: false,
         },
         factory: () => ({
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
           getType: () => 'no-resume-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
             skills: false,
+            plugins: false,
             agents: false,
             toolRestrictions: false,
             structuredOutput: false,
@@ -6869,7 +7421,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },
@@ -6925,12 +7476,9 @@ nodes:
       const pw = result.workflows[0].parseWarnings ?? [];
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("'interactive'");
-      // The hint must name BOTH loop fields: the executor gates on
-      // `loop.interactive && loop.gate_message`, so an author who follows a
-      // gate_message-only hint gets a loop with a message and no gate.
-      expect(pw[0]).toContain('loop.interactive: true');
-      expect(pw[0]).toContain('gate_message');
-      expect(pw[0]).toContain('approval:');
+      // The hint names the attention wait, never a deprecated channel.
+      expect(pw[0]).toContain('wait: { attention: <message> }');
+      expect(pw[0]).not.toContain('approval:');
     });
 
     it('should warn when the workflow itself has an unknown key', async () => {
@@ -7021,23 +7569,22 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
         '      message: ok?',
         '      capture_reponse: true', // typo for capture_response
       ]);
-      expect(pw.length).toBe(1);
-      expect(pw[0]).toContain("Node 'gate'");
-      expect(pw[0]).toContain("unknown key 'approval.capture_reponse'");
+      const unknownKeyWarnings = pw.filter(w => w.includes('unknown key'));
+      expect(unknownKeyWarnings.length).toBe(1);
+      expect(unknownKeyWarnings[0]).toContain("Node 'gate'");
+      expect(unknownKeyWarnings[0]).toContain("unknown key 'approval.capture_reponse'");
     });
 
     it('should warn on an unknown key inside approval.on_reject (two levels down)', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -7046,12 +7593,12 @@ nodes:
         '        prompt: try again',
         '        max_retries: 2', // real field is max_attempts
       ]);
-      // Also carries the #2707 step-1 on_reject deprecation warning now — the
-      // unknown-key warning under test is asserted independently of it.
+      // Also carries the on_reject deprecation warning — the unknown-key warning
+      // under test is asserted independently of it.
       const unknownKeyWarnings = pw.filter(w => w.includes('unknown key'));
       expect(unknownKeyWarnings.length).toBe(1);
       expect(unknownKeyWarnings[0]).toContain("unknown key 'approval.on_reject.max_retries'");
-      expect(pw.some(w => w.includes("'approval.on_reject' is deprecated"))).toBe(true);
+      expect(pw.some(w => w.includes("'approval.on_reject' and '$REJECTION_REASON'"))).toBe(true);
     });
 
     it('should warn on an unknown key inside retry:', async () => {
@@ -7149,7 +7696,7 @@ nodes:
       expect(pw[0]).toContain("Node 'refine' → loop_group node 'check'");
       expect(pw[0]).toContain("unknown key 'interactive'");
       // The body node gets the same actionable guidance as a top-level node.
-      expect(pw[0]).toContain('loop.interactive: true');
+      expect(pw[0]).toContain('wait: { attention: <message> }');
     });
 
     it('should warn on an unknown key inside the loop_group control block', async () => {
@@ -7190,7 +7737,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'worktree:',
         '  enabled: true',
         'nodes:',
@@ -7216,17 +7762,16 @@ nodes:
         '        max_attempts: 2',
       ]);
       // Every key used here IS valid — none should trip the unknown-key check
-      // this describe block covers. `loop.interactive`/`on_reject`/the prose
-      // `until:` channel are also deliberately deprecated (#2707 steps 1 and 3),
-      // so this fixture now legitimately produces THOSE warnings too — asserted
-      // separately below, not conflated with "unknown key" false positives.
-      // `capture_response` combined with `on_reject` (no `decisions:` authored)
-      // is still fully functional (R4 fix), so it does NOT warn here.
+      // this describe block covers. The interactive loop, `on_reject`,
+      // `capture_response` and the prose `until:` channel are deliberately
+      // deprecated, so this fixture legitimately produces THOSE warnings too,
+      // asserted in their own describe block below.
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
-        "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
-        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test $body-node.output.field = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
-        "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
+        expect.stringContaining("Node 'refine': the prose 'loop_group.until' completion signal"),
+        expect.stringContaining("Node 'refine': loop 'interactive:'"),
+        expect.stringContaining("Node 'gate': 'approval.on_reject'"),
+        expect.stringContaining("Node 'gate': 'approval.capture_response'"),
       ]);
     });
 
@@ -7244,109 +7789,6 @@ nodes:
         '          type: string',
       ]);
       expect(pw).toEqual([]);
-    });
-  });
-
-  describe('defaults/legacy discovery (#2781)', () => {
-    /** A temp project whose bundled root carries a legacy deprecation-window default. */
-    const setupLegacyProject = async (): Promise<string> => {
-      const tmp = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
-      const defaultsDir = join(tmp, 'bundled', 'defaults', 'legacy');
-      await mkdir(defaultsDir, { recursive: true });
-      for (const pack of await readBundleIndex()) {
-        await mkdir(join(tmp, 'bundled', pack), { recursive: true });
-      }
-      await mkdir(join(tmp, 'bundled-commands', 'defaults'), { recursive: true });
-      await writeFile(
-        join(defaultsDir, 'legacy-wf.yaml'),
-        [
-          'name: legacy-wf',
-          'description: legacy default',
-          'deprecated:',
-          '  message: Switch to the sdlc pack instead.',
-          'nodes:',
-          '  - id: n',
-          '    command: archon-parse-user-request', // plain ref against bundled commands/defaults',
-        ].join('\n')
-      );
-      return tmp;
-    };
-
-    const rootsFor = (tmp: string): WorkflowSourceRoots => {
-      const roots = liveSourceRoots(tmp);
-      return {
-        ...roots,
-        bundledWorkflows: join(tmp, 'bundled'),
-        bundledCommands: join(tmp, 'bundled-commands', 'defaults'),
-        globalWorkflows: join(tmp, '.empty-global'),
-      };
-    };
-
-    it('loads a legacy default as bundled with unqualified command refs and the marker', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-        const entry = result.workflows.find(w => w.workflow.name === 'legacy-wf');
-        expect(entry).toBeDefined();
-        expect(entry!.source).toBe('bundled');
-        expect(entry!.workflow.deprecated?.message).toBe('Switch to the sdlc pack instead.');
-        // Flat loading must NOT qualify resource refs (that happens only for
-        // packaged packs) — the plain name still resolves against the shared
-        // `.archon/commands/defaults/` + BUNDLED_COMMANDS tiers.
-        expect(JSON.stringify(entry!.workflow)).not.toContain('__archon_pack__');
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
-    });
-
-    it('packaged scanning of the workflows root produces no error for defaults/legacy', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        // Without the reserved-name guard, loadPackagedWorkflowsFromDir reads
-        // `defaults/legacy` as pack/workflow and fails "must contain exactly
-        // one .yaml" on every discovery pass.
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
-    });
-
-    it('a project copy with the same filename overrides and clears the notice', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        const projectWfDir = join(tmp, '.archon', 'workflows');
-        await mkdir(projectWfDir, { recursive: true });
-        // The copy a user makes to keep the workflow after removal: same
-        // filename, marker stripped — discovery pins by filename and wins.
-        await writeFile(
-          join(projectWfDir, 'legacy-wf.yaml'),
-          [
-            'name: legacy-wf',
-            'description: user copy',
-            'nodes:',
-            '  - id: n',
-            '    command: archon-parse-user-request',
-          ].join('\n')
-        );
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-        const entry = result.workflows.find(w => w.workflow.name === 'legacy-wf');
-        expect(entry).toBeDefined();
-        // Content override is what matters: the user's copy — without the
-        // marker — wins by filename, so the notice disappears.
-        expect(entry!.workflow.description).toBe('user copy');
-        expect(entry!.workflow.deprecated).toBeUndefined();
-        // Known discovery quirk (not new here): a same-filename project file
-        // matching a bundled default keeps the 'bundled' SOURCE LABEL because
-        // the repo-scope scanner cannot distinguish "re-discovering the app's
-        // own defaults" from "an intentional override". Content overrode above,
-        // so only the label, not behavior, rides on this.
-        expect(['bundled', 'project']).toContain(entry!.source);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
     });
   });
 
@@ -7530,27 +7972,15 @@ nodes:
      * both a looser unit and heavy enough to starve the other package test
      * processes running in parallel (`bun --filter '*' --parallel test`). It
      * measurably did: on a 2-core Windows CI runner it pushed an unrelated
-     * SQLite test from 250 ms past Bun's 5000 ms per-test timeout.
+     * SQLite test from 250 ms past the 5000 ms per-test timeout Windows then had.
      */
     const KNOWN_BAD = new Set([
       // `agent:` at workflow and node level — a real bug, silently dropped since
       // April. Remove from this list when the file is fixed.
       'e2e-opencode-smoke',
-      // #2707 step 1: these bundled workflows use the deprecated legacy
-      // approval.on_reject/capture_response mechanism and (for archon-piv-loop)
-      // node-level loop interactive:. They still run unmodified (grow-then-
-      // deprecate) — the warning is expected here, not a false positive.
-      // Remove from this list once #2123's defaults rewrite migrates them.
-      'archon-interactive-prd',
-      'archon-piv-loop',
-      // #2707 step 3: these bundled workflows declare the now-deprecated prose
-      // 'until:' completion channel on a loop/loop_group — still fully
-      // functional (grow-then-deprecate); the warning is expected, not a false
-      // positive. Remove from this list once #2123's defaults rewrite migrates
-      // them to 'until_bash'/'until_field'.
-      'archon-adversarial-dev',
-      'archon-test-loop-dag',
-      'archon-ralph-dag',
+      // #2707 step 3: declares the now-deprecated prose 'until:' completion
+      // channel on a loop — still fully functional (grow-then-deprecate); the
+      // warning is expected, not a false positive.
       't1-fix-issue',
     ]);
 
@@ -7583,7 +8013,7 @@ nodes:
     });
   });
 
-  describe('#2707 step 1 gate/loop deprecation warnings', () => {
+  describe('legacy pause and loop deprecation warnings', () => {
     /** Write a single workflow and return its parse warnings. */
     const warningsFor = async (lines: string[]): Promise<string[]> => {
       await writeWorkflowFile(testDir, 'test.yaml', lines.join('\n'));
@@ -7591,97 +8021,226 @@ nodes:
       expect(result.workflows.length).toBe(1);
       return [...(result.workflows[0].parseWarnings ?? [])];
     };
+    const loadErrorFor = async (lines: string[]): Promise<string | undefined> => {
+      await writeWorkflowFile(testDir, 'test.yaml', lines.join('\n'));
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      return result.errors[0]?.error;
+    };
 
-    it('warns on approval.capture_response combined with explicitly authored decisions (R4 fix — only truly ignored there)', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'interactive: true',
-        'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      capture_response: true',
-        '      decisions:',
-        '        - id: approve',
-        '        - id: reject',
-      ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'gate': 'approval.capture_response' is deprecated");
+    // Each legacy answerable pause warns once per file, naming its attention-form
+    // replacement (#4042). The runtime is unchanged, so every shape still loads.
+    it.each([
+      [
+        'a plain approval gate',
+        ['  - id: gate', '    approval:', '      message: ok?'],
+        [
+          "Node 'gate': 'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting should end the run. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.decisions',
+        [
+          '  - id: gate',
+          '    approval:',
+          '      message: ok?',
+          '      decisions:',
+          '        - id: approve',
+          '        - id: needs-work',
+        ],
+        [
+          "Node 'gate': 'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, options: <the same decisions> }' instead; the output is the same {decision, text}. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.capture_response',
+        ['  - id: gate', '    approval:', '      message: ok?', '      capture_response: false'],
+        [
+          expect.stringContaining("Node 'gate': 'approval:' is deprecated."),
+          "Node 'gate': 'approval.capture_response' is deprecated. An attention wait always records the answer; the next node reads '$<id>.output.text'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'approval.on_reject',
+        [
+          '  - id: gate',
+          '    approval:',
+          '      message: ok?',
+          '      on_reject:',
+          '        prompt: fix it',
+        ],
+        [
+          "Node 'gate': 'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat the rework, write a 'loop_group' whose body ends in the wait; the rework node comes first and reads '$LOOP_PREV.<id>.output.text'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'an interactive loop',
+        [
+          '  - id: iterate',
+          '    loop:',
+          '      prompt: work',
+          '      until_bash: "exit 0"',
+          '      max_iterations: 5',
+          '      interactive: true',
+          '      gate_message: continue?',
+        ],
+        [
+          "Node 'iterate': loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
+        ],
+      ],
+      [
+        'an interactive loop_group',
+        [
+          '  - id: iterate',
+          '    loop_group:',
+          '      until_bash: "exit 0"',
+          '      max_iterations: 5',
+          '      interactive: true',
+          '      gate_message: continue?',
+          '      nodes:',
+          '        - id: work',
+          '          prompt: work',
+        ],
+        [expect.stringContaining("Node 'iterate': loop 'interactive:' with 'gate_message'")],
+      ],
+    ])('warns on %s with its attention-form replacement', async (_, nodeLines, expected) => {
+      const pw = await warningsFor(['name: test', 'description: test', 'nodes:', ...nodeLines]);
+      expect(pw).toEqual(expected);
     });
 
-    it('does NOT warn on approval.capture_response without decisions: authored — still fully functional (R4 fix)', async () => {
+    it('warns once per file per shape, naming every node that uses it, loop_group bodies included', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
-        '  - id: gate',
+        '  - id: first',
         '    approval:',
         '      message: ok?',
-        '      capture_response: true',
+        '  - id: grp',
+        '    depends_on: [first]',
+        '    loop_group:',
+        '      until_bash: \'decision=$second.output.decision; test "$decision" = approve\'',
+        '      max_iterations: 2',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: work',
+        '        - id: second',
+        '          depends_on: [work]',
+        '          approval:',
+        '            message: again?',
+      ]);
+      expect(pw).toEqual([
+        expect.stringContaining("Nodes 'first', 'second': 'approval:' is deprecated."),
+      ]);
+    });
+
+    it("the on_reject replacement repeats rework by reading $LOOP_PREV, keeping the wait as the body's sink", async () => {
+      const groupLines = (bodyLines: string[]): string[] => [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until_bash: \'decision=$review.output.decision; test "$decision" = approve\'',
+        '      max_iterations: 3',
+        '      nodes:',
+        ...bodyLines,
+      ];
+      const pw = await warningsFor(
+        groupLines([
+          '        - id: rework',
+          '          prompt: "Revise. Feedback, if any: $LOOP_PREV.review.output.text"',
+          '        - id: review',
+          '          depends_on: [rework]',
+          '          wait: { attention: ok?, form: approval }',
+        ])
+      );
+      expect(pw).toEqual([]);
+
+      // A rework node after the wait, as a one-shot replacement writes it, cannot repeat.
+      const error = await loadErrorFor(
+        groupLines([
+          '        - id: review',
+          '          wait: { attention: ok?, form: approval }',
+          '        - id: rework',
+          '          depends_on: [review]',
+          '          when: "$review.output.decision == \'reject\'"',
+          '          prompt: "Revise: $review.output.text"',
+        ])
+      );
+      expect(error).toContain("wait node 'review' must be the body's sole terminal sink");
+    });
+
+    it('does not warn on attention waits, the replacement', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: ask',
+        '    wait:',
+        '      attention: Which base?',
+        '      form: select',
+        '      options:',
+        '        - id: use-main',
+        '        - id: use-dev',
+        '  - id: stop',
+        '    depends_on: [ask]',
+        '    when: "$ask.output.decision == \'use-dev\'"',
+        '    cancel: not supported yet',
       ]);
       expect(pw).toEqual([]);
     });
 
-    it('warns on approval.on_reject', async () => {
+    it('does not warn about nested group pauses when an enclosing group owns a named session', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      on_reject:',
-        '        prompt: fix it',
+        '  - id: source',
+        '    prompt: Start the owner session',
+        '  - id: outer',
+        '    depends_on: [source]',
+        '    loop_group:',
+        '      until_bash: "exit 1"',
+        '      max_iterations: 2',
+        '      nodes:',
+        '        - id: owner',
+        '          prompt: Continue',
+        '          context: { resume: source }',
+        '        - id: middle',
+        '          depends_on: [owner]',
+        '          loop_group:',
+        '            until_bash: "exit 1"',
+        '            max_iterations: 2',
+        '            nodes:',
+        '              - id: inner',
+        '                loop_group:',
+        '                  until_bash: "exit 1"',
+        '                  max_iterations: 2',
+        '                  interactive: true',
+        '                  gate_message: Review',
+        '                  nodes:',
+        '                    - id: work',
+        '                      prompt: Work',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'gate': 'approval.on_reject' is deprecated");
+      expect(pw.some(w => w.includes('#2753'))).toBe(false);
     });
 
-    it('warns on node-level loop.interactive', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'interactive: true',
-        'nodes:',
-        '  - id: iterate',
-        '    loop:',
-        '      prompt: work',
-        '      until_bash: "exit 0"',
-        '      max_iterations: 5',
-        '      interactive: true',
-        '      gate_message: continue?',
-      ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'iterate': node-level loop 'interactive:' is deprecated");
-    });
-
-    it('warns on a gate/interactive loop_group nested inside a loop_group body', async () => {
+    it('warns on an interactive loop nested inside a loop_group body', async () => {
       // Exercises the recursion into loop_group.nodes — the outer group's own
-      // body-terminal sink is 'inner-loop' (a plain interactive `loop:` node,
-      // since 'inner-gate' has a dependent and so is NOT the sole terminal
-      // sink). That makes four warnings: the two deprecation notices on
-      // 'inner-gate'/'inner-loop', the terminal-sink placement warning on
-      // 'inner-gate', and — #2753 — 'outer' itself, whose only escalatable
-      // sink is an interactive loop and therefore can't stop on a pause inside
-      // it.
+      // body-terminal sink is 'inner-loop' (a plain interactive `loop:` node).
+      // That makes two warnings: the deprecation notice on 'inner-loop', and —
+      // #2753 — 'outer' itself, whose only escalatable sink is an interactive
+      // loop and therefore can't stop on a pause inside it.
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
         '      until_bash: "exit 0"',
         '      max_iterations: 2',
         '      nodes:',
-        '        - id: inner-gate',
-        '          approval:',
-        '            message: ok?',
-        '            on_reject:',
-        '              prompt: fix it',
         '        - id: inner-loop',
         '          loop:',
         '            prompt: work',
@@ -7689,14 +8248,9 @@ nodes:
         '            max_iterations: 5',
         '            interactive: true',
         '            gate_message: continue?',
-        '          depends_on: [inner-gate]',
       ]);
-      expect(pw).toHaveLength(4);
-      expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('on_reject'))).toBe(true);
+      expect(pw).toHaveLength(2);
       expect(pw.some(w => w.includes("Node 'inner-loop'") && w.includes('interactive'))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('terminal sink'))).toBe(
-        true
-      );
       expect(
         pw.some(w => w.includes("Node 'outer'") && w.includes('inner-loop') && w.includes('#2753'))
       ).toBe(true);
@@ -7706,7 +8260,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
@@ -7722,17 +8275,16 @@ nodes:
         '                approval:',
         '                  message: ok?',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'outer'");
-      expect(pw[0]).toContain("'inner'");
-      expect(pw[0]).toContain('#2753');
+      const escalation = pw.filter(w => w.includes('#2753'));
+      expect(escalation).toHaveLength(1);
+      expect(escalation[0]).toContain("Node 'outer'");
+      expect(escalation[0]).toContain("'inner'");
     });
 
     it('warns at every level of a 3-deep nested loop_group chain (#2753)', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grandparent',
         '    loop_group:',
@@ -7753,17 +8305,18 @@ nodes:
         '                      approval:',
         '                        message: ok?',
       ]);
-      expect(pw).toHaveLength(2);
-      expect(pw.every(w => w.includes('#2753'))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'grandparent'") && w.includes("'middle'"))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'middle'") && w.includes("'inner'"))).toBe(true);
+      const escalation = pw.filter(w => w.includes('#2753'));
+      expect(escalation).toHaveLength(2);
+      expect(escalation.some(w => w.includes("Node 'grandparent'") && w.includes("'middle'"))).toBe(
+        true
+      );
+      expect(escalation.some(w => w.includes("Node 'middle'") && w.includes("'inner'"))).toBe(true);
     });
 
     it('does not warn when a nested loop_group has nothing interactive to escalate (#2753)', async () => {
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: outer',
         '    loop_group:',
@@ -7804,7 +8357,6 @@ nodes:
           [
             'name: parent',
             'description: composes a review block',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -7820,7 +8372,6 @@ nodes:
           [
             'name: review-block',
             'description: reusable interactive review',
-            'interactive: true',
             'nodes:',
             '  - id: iterate',
             '    loop_group:',
@@ -7839,12 +8390,13 @@ nodes:
         expect(pw[0]).toContain('#2753');
       });
 
-      it("warns when an included gate is not the expanded body's sole terminal sink", async () => {
-        const pw = await parentWarningsFor(
+      it("rejects an included gate that is not the expanded body's sole terminal sink", async () => {
+        await writeWorkflowFile(
+          testDir,
+          'parent.yaml',
           [
             'name: parent',
             'description: composes a gate block mid-body',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -7856,20 +8408,25 @@ nodes:
             '        - id: after',
             '          depends_on: [review]',
             '          bash: "echo more work"',
-          ],
+          ].join('\n')
+        );
+        await writeWorkflowFile(
+          testDir,
+          'block.yaml',
           [
             'name: gate-block',
             'description: reusable approval',
-            'interactive: true',
             'nodes:',
             '  - id: check',
             '    approval:',
             '      message: ok?',
-          ]
+          ].join('\n')
         );
-        expect(pw).toHaveLength(1);
-        expect(pw[0]).toContain("Node 'review__check'");
-        expect(pw[0]).toContain('terminal sink');
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.workflows.some(w => w.workflow.name === 'parent')).toBe(false);
+        expect(result.errors.find(e => e.filename === 'parent.yaml')?.error).toContain(
+          "approval node 'review__check' must be the body's sole terminal sink"
+        );
       });
 
       it("accepts a composed gate sink whose decision the group's until_bash reads", async () => {
@@ -7880,7 +8437,6 @@ nodes:
           [
             'name: parent',
             'description: composes an approval as the loop sink',
-            'interactive: true',
             'nodes:',
             '  - id: outer',
             '    loop_group:',
@@ -7896,7 +8452,6 @@ nodes:
           [
             'name: gate-block',
             'description: reusable approval',
-            'interactive: true',
             'nodes:',
             '  - id: check',
             '    approval:',
@@ -7935,11 +8490,10 @@ nodes:
       });
     });
 
-    it('warns on a gate node with a dependent inside a loop_group body (not a terminal sink)', async () => {
-      const pw = await warningsFor([
+    it('rejects a gate node with a dependent inside a loop_group body', async () => {
+      const err = await loadErrorFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grp',
         '    loop_group:',
@@ -7953,16 +8507,15 @@ nodes:
         '          depends_on: [check]',
         '          prompt: do more work',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('terminal sink');
+      expect(err).toContain(
+        "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
+      );
     });
 
-    it('warns on a gate node sharing terminal-sink status with another body node', async () => {
-      const pw = await warningsFor([
+    it('rejects a gate node sharing terminal-sink status with another body node', async () => {
+      const err = await loadErrorFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: grp',
         '    loop_group:',
@@ -7975,9 +8528,9 @@ nodes:
         '        - id: also-terminal',
         '          prompt: an independent branch',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('terminal sink');
+      expect(err).toContain(
+        "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
+      );
     });
 
     it('warns on the prose until: channel on a loop node', async () => {
@@ -8050,7 +8603,6 @@ nodes:
       const pw = await warningsFor([
         'name: test',
         'description: test',
-        'interactive: true',
         'nodes:',
         '  - id: gate',
         '    approval:',
@@ -8061,23 +8613,6 @@ nodes:
         '          lable: Needs work', // typo for 'label'
       ]);
       expect(pw.some(w => w.includes("unknown key 'approval.decisions.1.lable'"))).toBe(true);
-    });
-
-    it('produces no deprecation warnings for a new-mode gate with no deprecated fields', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'interactive: true',
-        'nodes:',
-        '  - id: gate',
-        '    approval:',
-        '      message: ok?',
-        '      decisions:',
-        '        - id: approve',
-        '        - id: reject',
-        '          label: Needs work',
-      ]);
-      expect(pw).toEqual([]);
     });
   });
 });
@@ -8506,7 +9041,6 @@ describe('workflow-level field parity (#2457)', () => {
       present: w => w.effort === 'high' && w.modelReasoningEffort === undefined,
     },
     webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
-    interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
     effort: { yaml: 'effort: high', present: w => w.effort === 'high' },
     fallbackModel: {
       yaml: 'fallbackModel: haiku',
@@ -8522,6 +9056,10 @@ describe('workflow-level field parity (#2457)', () => {
     evidence_policy: {
       yaml: 'evidence_policy:\n  required: true',
       present: w => w.evidence_policy?.required === true,
+    },
+    budget: {
+      yaml: 'budget:\n  max_work_units: 3',
+      present: w => w.budget?.max_work_units === 3,
     },
     mutates_checkout: {
       yaml: 'mutates_checkout: false',
@@ -8739,7 +9277,9 @@ nodes:
 `,
       'bind-bad-from.yaml'
     );
-    expect(badFrom.error?.error).toContain("'from' must be exactly one whole");
+    expect(badFrom.error?.error).toContain(
+      "'from' must be exactly one whole '$node.output[.a.b]' reference"
+    );
 
     const notUpstream = parseWorkflow(
       `
@@ -9071,5 +9611,482 @@ nodes:
       'checkout-binding-child.yaml'
     );
     expect(result.error?.error).toContain('a workflow: node cannot pass to its child run');
+  });
+});
+
+describe('strict nested path validation', () => {
+  const workflow = (reference: string, field = 'message'): string => `
+name: nested-contract
+description: nested access
+nodes:
+  - id: review
+    bash: echo json
+    output_format:
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: {type: string}
+            items: {type: array, items: {type: object, properties: {value: {type: string}}}}
+  - id: read
+    depends_on: [review]
+    ${field === 'when' ? `bash: echo read\n    when: "${reference} == 'add'"` : `approval: {message: "${reference}"}`}
+`;
+  for (const [path, segment] of [
+    ['typo', 'typo'],
+    ['typo.action', 'typo'],
+    ['proposal.typo.action', 'typo'],
+    ['proposal.action.typo', 'typo'],
+    ['proposal.items.value', 'value'],
+  ] as const) {
+    it(`rejects undeclared segment of ${path} in templates and conditions`, () => {
+      for (const surface of ['message', 'when']) {
+        const result = parseWorkflow(workflow(`$review.output.${path}`, surface), 'nested.yaml');
+        expect(result.workflow).toBeNull();
+        expect(result.error?.error).toContain(`$review.output.${path}`);
+        expect(result.error?.error).toContain(`field '${segment}'`);
+      }
+    });
+  }
+  it('rejects an unsupported suffix in current and prior templates and conditions', () => {
+    for (const prefix of ['$review', '$LOOP_PREV.review']) {
+      for (const surface of ['message', 'when']) {
+        const reference = `${prefix}.output.proposal.action[0]`;
+        const result = parseWorkflow(workflow(reference, surface), 'nested.yaml');
+        expect(result.workflow).toBeNull();
+        expect(result.error?.error).toContain('Unsupported output reference');
+        expect(result.error?.error).toContain(reference);
+      }
+    }
+  });
+
+  it('ignores reference-shaped RHS text', () => {
+    const yaml = workflow('$review.output.proposal.action', 'when').replace(
+      "== 'add'",
+      "== '$review.output.proposal.typo[0]'"
+    );
+    expect(parseWorkflow(yaml, 'nested.yaml').workflow).not.toBeNull();
+  });
+  it('preserves named input macros starting with output', () => {
+    const yaml = workflow('$INPUTS.outputMode').replace(
+      'nodes:',
+      'inputs:\n  outputMode: {required: true}\nnodes:'
+    );
+    expect(parseWorkflow(yaml, 'nested.yaml').error).toBeNull();
+  });
+
+  it('does not authorize undeclared prior fields in the enclosing loop body', () => {
+    const result = parseWorkflow(
+      `
+name: prior-contract
+description: prior access
+nodes:
+  - id: group
+    loop_group:
+      max_iterations: 2
+      until_bash: 'test $LOOP_PREV.work.output.proposal.typo = add'
+      nodes:
+        - id: work
+          bash: echo json
+          output_format:
+            properties:
+              proposal: {type: object, properties: {action: {type: string}}}
+`,
+      'prior.yaml'
+    );
+    expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.typo');
+    expect(result.error?.error).toContain("field 'typo'");
+  });
+});
+
+describe('loop_group prose completion with structured terminal output (#2998)', () => {
+  function parseGroup(outputFormat?: Record<string, unknown>, untilBash?: string): ParseResult {
+    return parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group',
+        description: 'test',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              ...(untilBash === undefined ? {} : { until_bash: untilBash }),
+              max_iterations: 3,
+              nodes: [
+                { id: 'work', prompt: 'work' },
+                {
+                  id: 'review',
+                  depends_on: ['work'],
+                  prompt: 'review',
+                  ...(outputFormat === undefined ? {} : { output_format: outputFormat }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group.yaml'
+    );
+  }
+
+  it('rejects an object terminal schema when until is the sole completion channel', () => {
+    const result = parseGroup({ type: 'object', properties: { done: { type: 'boolean' } } });
+    expect(result.workflow).toBeNull();
+    expect(result.error?.errorType).toBe('validation_error');
+    expect(result.error?.error).toContain("'refine'");
+    expect(result.error?.error).toContain("'review'");
+    expect(result.error?.error).toContain('serialized structured output');
+    expect(result.error?.error).toContain('until_bash');
+    expect(result.error?.error).toContain('structured field');
+  });
+
+  it.each([
+    { type: 'array' },
+    { type: 'number' },
+    { type: 'integer' },
+    { type: 'boolean' },
+    { type: 'null' },
+    { type: ['object', 'null'] },
+  ])('rejects a non-string terminal schema: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+  });
+
+  it.each([{}, { type: ['string', 'object'] }])(
+    'accepts a schema that permits string output: %j',
+    schema => {
+      expect(parseGroup(schema).error).toBeNull();
+    }
+  );
+
+  it('judges the node a terminal gate reads past to (#4043)', () => {
+    const result = parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group-gate',
+        description: 'test',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                {
+                  id: 'work',
+                  prompt: 'work',
+                  output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+                },
+                { id: 'ask', depends_on: ['work'], approval: { message: 'ok?' } },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group-gate.yaml'
+    );
+    expect(result.error?.error).toContain("node 'work', which the group's output is read from");
+  });
+
+  it('judges every node a terminal gate reads past to (#4043)', () => {
+    const result = parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group-gate-fan-in',
+        description: 'test',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                { id: 'notes', prompt: 'notes' },
+                {
+                  id: 'work',
+                  prompt: 'work',
+                  output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+                },
+                { id: 'ask', depends_on: ['notes', 'work'], approval: { message: 'ok?' } },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group-gate-fan-in.yaml'
+    );
+    expect(result.error?.error).toContain("node 'work', which the group's output is read from");
+  });
+
+  it('accepts a terminal node without output_format', () => {
+    expect(parseGroup().error).toBeNull();
+  });
+
+  it('accepts a string terminal schema', () => {
+    expect(parseGroup({ type: 'string' }).error).toBeNull();
+  });
+
+  it('accepts an object terminal schema with until_bash and retains the deprecation warning', () => {
+    const result = parseGroup(
+      { type: 'object', properties: { done: { type: 'boolean' } } },
+      'exit 0'
+    );
+    expect(result.error).toBeNull();
+    expect(
+      result.warnings?.some(w => w.includes("'loop_group.until' completion signal is deprecated"))
+    ).toBe(true);
+  });
+});
+
+it('parsing uses only the supplied registry for provider identity', () => {
+  const claude = providerRegistry.get('claude');
+  if (!claude) throw new Error('test registry must contain Claude');
+  const custom = { ...claude, id: 'custom' };
+  const providers = {
+    get: (id: string) => (id === custom.id ? custom : undefined),
+    list: () => [custom],
+  };
+  const yaml = `name: registry-port
+description: Registry boundary
+provider: custom
+nodes:
+  - id: act
+    prompt: Do something
+`;
+  expect(parseWorkflowWithProviders(yaml, 'registry.yaml', providers).error).toBeNull();
+  const result = parseWorkflowWithProviders(
+    yaml.replace('provider: custom', 'provider: claude'),
+    'registry.yaml',
+    providers
+  );
+  expect(result.error?.error).toBe(
+    "Provider 'claude' is not installed. Add it with: archon provider add claude"
+  );
+});
+
+describe('when syntax validation', () => {
+  function workflowWithWhen(when: string): string {
+    return `name: when-syntax
+description: Condition syntax
+nodes:
+  - id: a
+    bash: echo x
+  - id: b
+    bash: echo y
+  - id: c
+    bash: echo z
+  - id: guarded
+    bash: echo run
+    depends_on: [a, b, c]
+    when: ${JSON.stringify(when)}
+`;
+  }
+
+  it('rejects grouping with a diagnostic naming the node and parentheses', () => {
+    const result = parseWorkflow(
+      workflowWithWhen("$a.output == 'x' && ($b.output == 'y' || $c.output == 'z')"),
+      'when-syntax.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded'");
+    expect(result.error?.error).toContain('parentheses');
+  });
+
+  it('rejects malformed loop-body conditions while accepting scoped prior output', () => {
+    const yaml = `name: prior-condition
+description: Prior iteration syntax
+nodes:
+  - id: refine
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo done
+        - id: guarded
+          bash: echo run
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output == 'done' && ($work.output == 'done')"
+`;
+    const result = parseWorkflow(yaml, 'prior-condition.yaml');
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+    expect(result.error?.error).toContain('parentheses');
+    expect(
+      parseWorkflow(
+        yaml.replace("&& ($work.output == 'done')", "&& $work.output == 'done'"),
+        'prior-condition.yaml'
+      ).error
+    ).toBeNull();
+  });
+
+  it.each([
+    'not a condition',
+    "$a.output = 'x'",
+    '$a.output ==',
+    '$a.output == "x"',
+    "$a.output == 'unterminated",
+    "$a.output == 'x' &&",
+    "|| $a.output == 'x'",
+    "$a.output == 'x' || || $b.output == 'y'",
+    "$a.output == 'x' && not-valid",
+    "$a.output == 'x' || not-valid",
+    "$a.output == 'absent' && not-valid",
+    "($a.output == 'x')",
+    "$a.output == 'x' && ($b.output == 'y' || $c.output == 'z')",
+  ])('rejects invalid runtime syntax: %s', when => {
+    const outputs = new Map([
+      ['a', { state: 'completed' as const, output: 'x' }],
+      ['b', { state: 'completed' as const, output: 'y' }],
+      ['c', { state: 'completed' as const, output: 'z' }],
+    ]);
+    expect(evaluateCondition(when, outputs)).toEqual({ result: false, parsed: false });
+    const result = parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml');
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+  });
+
+  it.each([
+    "$a.output > 'high'",
+    "$a.output > ''",
+    '$a.output <= true',
+    "$a.output == 'x' || $b.output >= 'many'",
+  ])('rejects a numeric comparison against a non-numeric literal: %s', when => {
+    // A numeric output on every side still fails closed, so the node could never run.
+    const outputs = new Map(
+      ['a', 'b', 'c'].map(id => [id, { state: 'completed' as const, output: '90' }])
+    );
+    expect(evaluateCondition(when, outputs)).toEqual({ result: false, parsed: false });
+    const result = parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml');
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+  });
+
+  it('names grouping only when the expression has a parenthesis outside quotes', () => {
+    const typo = parseWorkflow(workflowWithWhen("$a.output = '(x)'"), 'when-syntax.yaml');
+    expect(typo.error?.error).toContain('unsupported condition syntax');
+    expect(typo.error?.error).not.toContain('parentheses');
+    const grouped = parseWorkflow(workflowWithWhen("($a.output == 'x')"), 'when-syntax.yaml');
+    expect(grouped.error?.error).toContain('Grouping parentheses are not supported');
+  });
+
+  it('rejects unsupported syntax on an include node', () => {
+    const result = parseWorkflow(
+      `name: include-when
+description: Condition on an include directive
+nodes:
+  - id: a
+    bash: echo x
+  - id: blk
+    include: block
+    depends_on: [a]
+    when: "$a.output > 'high'"
+`,
+      'include-when.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain(
+      "Node 'blk' field 'when' has unsupported condition syntax"
+    );
+  });
+
+  it.each([
+    "$a.output == 'x' && $b.output == 'y' || $a.output == 'x' && $c.output == 'z'",
+    "$a.output == '(x)'",
+    "$a.output == 'x && y || z'",
+    "$a.output != ''",
+    '$a.output >= 0.9',
+    "$a.output < '-3'",
+    '$a.output == true',
+  ])('loads supported syntax: %s', when => {
+    expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
+  });
+});
+
+describe('attention wait labels', () => {
+  const parseLabels = (labels: string, dependsOn = '[plan]'): ParseResult =>
+    parseWorkflow(
+      `name: labeled
+description: Labels on an attention wait
+nodes:
+  - id: plan
+    bash: echo '{}'
+  - id: other
+    bash: echo '{}'
+  - id: ask
+    depends_on: ${dependsOn}
+    wait:
+      attention: CI is red. Retry?
+      labels: ${labels}
+`,
+      'labeled.yaml'
+    );
+
+  it('loads literal labels and labels that reference an upstream output', () => {
+    expect(parseLabels('{ ci: "$plan.output.cause", area: delivery }').error).toBeNull();
+  });
+
+  it('rejects a label key a CLI filter could not name', () => {
+    expect(parseLabels('{ "ci=x": other }').error).not.toBeNull();
+  });
+
+  it('rejects a label that references a node the wait does not depend on', () => {
+    expect(parseLabels('{ ci: "$other.output.cause" }').error?.error).toContain(
+      "field 'wait.labels.ci' references '$other.output', which is not an upstream dependency"
+    );
+  });
+});
+
+describe('attention wait options from an upstream output_format (#4038)', () => {
+  function parseWithOptionsItems(items: Record<string, unknown>): ParseResult {
+    const outputFormat = {
+      type: 'object',
+      properties: { options: { type: 'array', items } },
+      required: ['options'],
+    };
+    return parseWorkflow(
+      `name: referenced-options
+description: Options computed upstream
+nodes:
+  - id: plan
+    prompt: Propose options.
+    output_format: ${JSON.stringify(outputFormat)}
+  - id: ask
+    depends_on: [plan]
+    wait:
+      attention: Which one?
+      form: select
+      options: "$plan.output.options"
+`,
+      'referenced-options.yaml'
+    );
+  }
+
+  it('loads a producer whose items declare { id, label? }', () => {
+    const result = parseWithOptionsItems({
+      type: 'object',
+      properties: { id: { type: 'string' }, label: { type: 'string' } },
+      required: ['id'],
+    });
+    expect(result.error).toBeNull();
+  });
+
+  it.each([
+    ['items that are strings', { type: 'string' }],
+    ['an id that is not required', { type: 'object', properties: { id: { type: 'string' } } }],
+    [
+      'an id that is not a string',
+      { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] },
+    ],
+    [
+      'a property attention options do not have',
+      {
+        type: 'object',
+        properties: { id: { type: 'string' }, score: { type: 'number' } },
+        required: ['id'],
+      },
+    ],
+  ])('rejects a producer with %s, naming the field and the producer', (_case, items) => {
+    const result = parseWithOptionsItems(items);
+    expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
+    expect(result.error?.error).toContain(
+      "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+    );
   });
 });

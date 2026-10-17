@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import type { IPlatformAdapter } from '../types';
 import type { Codebase } from '../types';
@@ -102,7 +103,7 @@ describe('reportUnpushedWorkInSource', () => {
     const platform = makePlatform();
     await reportUnpushedWorkInSource('conv-1', makeManagedCodebase(), platform);
     expect(platform.sendStructuredEvent).toHaveBeenCalledWith('conv-1', {
-      type: 'system',
+      type: 'system_status',
       content: expect.stringContaining('3 unpushed commits'),
     });
   });
@@ -114,7 +115,7 @@ describe('reportUnpushedWorkInSource', () => {
     const platform = makePlatform();
     await reportUnpushedWorkInSource('conv-1', makeManagedCodebase(), platform);
     expect(platform.sendStructuredEvent).toHaveBeenCalledWith('conv-1', {
-      type: 'system',
+      type: 'system_status',
       content: expect.stringContaining('1 unpushed commit'),
     });
   });
@@ -126,7 +127,7 @@ describe('reportUnpushedWorkInSource', () => {
     const platform = makePlatform();
     await reportUnpushedWorkInSource('conv-1', makeManagedCodebase(), platform);
     expect(platform.sendStructuredEvent).toHaveBeenCalledWith('conv-1', {
-      type: 'system',
+      type: 'system_status',
       content: expect.stringContaining('uncommitted changes'),
     });
   });

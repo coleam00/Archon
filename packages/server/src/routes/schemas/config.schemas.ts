@@ -1,63 +1,51 @@
 /**
  * Zod schemas for configuration API endpoints.
  */
+import { platformStreamingSchema, type SafeConfig } from '@archon/core/config';
 import { z } from '@hono/zod-openapi';
-import { effortLevelSchema, rejectRetiredThinking } from '@archon/workflows/schemas/effort';
+import {
+  modelAliasPresetSchema,
+  TIER_NAMES,
+  type TierName,
+} from '@archon/workflows/schemas/model-binding';
 
 /** Schema for the safe config subset returned to web clients (mirrors SafeConfig in config-types.ts). */
 const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('ProviderDefaults');
 
-/**
- * A single model-tier preset — mirrors `RawAliasEntry` in
- * `@archon/workflows/model-validation` ({ provider, model, effort? }).
- */
-export const tierEntrySchema = z
-  .preprocess(
-    rejectRetiredThinking,
-    z.object({
-      provider: z.string().min(1),
-      model: z.string().min(1),
-      effort: effortLevelSchema.optional(),
-    })
-  )
-  .openapi('TierEntry');
+/** A single model-tier preset ({ provider, model, effort? }), owned by the engine. */
+export const tierEntrySchema = modelAliasPresetSchema.meta({ id: 'TierEntry' });
 
-/** The three reserved tiers, each optional — mirrors `RawTiersConfig`. */
+/**
+ * One field per engine tier name. Every tier-shaped body builds its fields here,
+ * so a tier added to `TIER_NAMES` reaches the config, user-prefs and update
+ * schemas together. Named properties (not a record) keep the generated shape.
+ */
+export function tierFields<T extends z.ZodType>(entry: T): Record<TierName, T> {
+  return Object.fromEntries(TIER_NAMES.map(name => [name, entry])) as Record<TierName, T>;
+}
+
+/** The reserved tiers, each optional. */
 export const tiersConfigSchema = z
-  .object({
-    small: tierEntrySchema.optional(),
-    medium: tierEntrySchema.optional(),
-    large: tierEntrySchema.optional(),
-  })
+  .object(tierFields(tierEntrySchema.optional()))
   .openapi('TiersConfig');
 
 /** PATCH /api/config/tiers body — each tier optional; `null` unsets that tier. */
 export const updateTiersBodySchema = z
-  .object({
-    tiers: z.object({
-      small: tierEntrySchema.nullable().optional(),
-      medium: tierEntrySchema.nullable().optional(),
-      large: tierEntrySchema.nullable().optional(),
-    }),
-  })
+  .object({ tiers: z.object(tierFields(tierEntrySchema.nullable().optional())) })
   .openapi('UpdateTiersBody');
 
 export const safeConfigSchema = z
   .object({
     botName: z.string(),
-    assistant: z.string().min(1),
+    assistant: z.string().min(1).optional(),
     assistants: z.record(z.string(), providerDefaultsSchema),
-    streaming: z.object({
-      telegram: z.enum(['stream', 'batch']),
-      discord: z.enum(['stream', 'batch']),
-      slack: z.enum(['stream', 'batch']),
-      // github removed — never implemented; hardcoded 'batch' in GitHubAdapter
-    }),
+    streaming: platformStreamingSchema,
     concurrency: z.object({ maxConversations: z.number() }),
     defaults: z.object({
-      copyDefaults: z.boolean(),
       loadDefaultCommands: z.boolean(),
       loadDefaultWorkflows: z.boolean(),
+    } satisfies {
+      [K in keyof SafeConfig['defaults']]: z.ZodType<SafeConfig['defaults'][K]>;
     }),
     // Configured small/medium/large tiers (merged repo > global). Absent keys
     // fall back to `tierDefaults` (built-in presets for the default provider).
@@ -65,6 +53,8 @@ export const safeConfigSchema = z
     tierDefaults: tiersConfigSchema.optional(),
     // Configured @custom model aliases (merged repo > global). Not secrets.
     aliases: z.record(z.string(), tierEntrySchema).optional(),
+  } satisfies {
+    [K in keyof SafeConfig]-?: z.ZodType<SafeConfig[K]>;
   })
   .openapi('SafeConfig');
 

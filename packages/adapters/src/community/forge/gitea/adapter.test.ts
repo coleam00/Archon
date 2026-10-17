@@ -6,7 +6,9 @@
  */
 import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 // Mock @archon/paths to suppress noisy logger output during tests
@@ -24,6 +26,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
@@ -32,6 +35,7 @@ mock.module('@archon/paths', () => ({
     (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
   ),
   ensureProjectStructure: mock(async () => undefined),
+  resolveRepoProjectIdentity: paths.resolveRepoProjectIdentity,
   logArchonPaths: mock(() => undefined),
   validateAppDefaultsPaths: mock(async () => undefined),
 }));
@@ -51,12 +55,14 @@ mock.module('@archon/core/db/users', () => ({
 }));
 const mockGetOrCreateConversation = mock(
   async (): Promise<
-    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+    Pick<Conversation, 'id' | 'codebase_id' | 'cwd' | 'platform_type' | 'platform_conversation_id'>
   > => {
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  typeof import('@archon/core/db/conversations')['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -69,22 +75,24 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   updateCodebase: mockUpdateCodebase,
 }));
 
 // Mock @archon/git to avoid real git operations in tests
-const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
   ok: true,
   value: undefined,
 }));
@@ -118,6 +126,10 @@ mock.module('@archon/core', () => ({
 
 import { GiteaAdapter } from './adapter';
 import type { WebhookEvent } from './types';
+
+function utf8(text: string): Uint8Array {
+  return new TextEncoder().encode(text);
+}
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
@@ -173,6 +185,10 @@ describe('GiteaAdapter', () => {
   let originalFetch: typeof fetch;
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
+    mockGetOrCreateConversation.mockClear();
     mockCloneRepository.mockClear();
     mockSyncRepository.mockClear();
     mockAddSafeDirectory.mockClear();
@@ -191,6 +207,13 @@ describe('GiteaAdapter', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  test('initialization logs only operational configuration', () => {
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { baseUrl: 'https://gitea.example.com' },
+      'adapter_initialized'
+    );
   });
 
   describe('streaming mode', () => {
@@ -227,17 +250,27 @@ describe('GiteaAdapter', () => {
     );
 
     try {
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith('/definitely/missing/forgejo-repo');
+        return { ok: true, value: undefined };
+      });
       await (
         forgejoAdapter as unknown as {
           ensureRepoReady(
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/forgejo-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/forgejo-repo' },
+        false
+      );
 
       const [url, , options] = mockCloneRepository.mock.calls.at(-1)!;
       expect(url).toBe('https://forgejo.example.test:8443/owner/repo.git');
@@ -257,11 +290,17 @@ describe('GiteaAdapter', () => {
             owner: string,
             repo: string,
             defaultBranch: string,
-            repoPath: string,
+            codebase: { name: string; default_cwd: string },
             shouldSync: boolean
           ): Promise<void>;
         }
-      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/gitea-repo', false);
+      ).ensureRepoReady(
+        'owner',
+        'repo',
+        'main',
+        { name: 'owner/repo', default_cwd: '/definitely/missing/gitea-repo' },
+        false
+      );
     }
 
     test('preserves the clone destination when disk space is exhausted', async () => {
@@ -399,12 +438,126 @@ describe('GiteaAdapter', () => {
       }
     });
 
+    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+      const adapter = createSelfFilterAdapter();
+      const existing = {
+        id: 'bare-project',
+        name: 'local-api',
+        default_cwd: '/repos/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      };
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+      mockUpdateCodebase.mockClear();
+      // @ts-expect-error - exercise the private registration boundary
+      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
+        '/update-project'
+      );
+      expect(existing.default_cwd).toBe('/repos/worktrees/old');
+      expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    });
+
+    test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+      const adapter = createSelfFilterAdapter();
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+        repository_url: 'https://example.com/testuser/testrepo',
+      });
+      // @ts-expect-error - exercise the private registration boundary
+      const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
+      expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+      expect(result.codebase.default_cwd).toBe(result.repoPath);
+      expect(mockUpdateCodebase).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'allocated' }),
+        { default_cwd: result.repoPath }
+      );
+    });
+
+    test('webhook clones an absent saved checkout before dispatch', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'saved-project',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-saved',
+        codebase_id: 'saved-project',
+        cwd: path,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#1',
+      });
+      mockHandleMessage.mockClear();
+      mockCloneRepository.mockClear();
+      mockCloneRepository.mockImplementationOnce(async () => {
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        return { ok: true, value: undefined };
+      });
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      await adapter.handleWebhook(
+        utf8(createCommentPayload('@archon help', 'user123')),
+        'mock-signature'
+      );
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+        'https://gitea.example.com/testuser/testrepo.git',
+        path,
+      ]);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('allocated checkout path reaches preparation and conversation storage', async () => {
+      const adapter = createSelfFilterAdapter();
+      const path = '/tmp/test-workspaces/testuser/testrepo-2/source';
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+      mockCreateCodebase.mockResolvedValueOnce({
+        id: 'allocated',
+        name: 'testuser/testrepo-2',
+        default_cwd: path,
+        repository_url: null,
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-allocated',
+        codebase_id: null,
+        cwd: null,
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      });
+      mockUpdateConversation.mockResolvedValueOnce(undefined);
+      // @ts-expect-error - observe the private checkout boundary
+      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      globalThis.fetch = makeFetchMock(jsonResponse([]));
+      try {
+        await adapter.handleWebhook(
+          utf8(createCommentPayload('@archon help', 'user123')),
+          'mock-signature'
+        );
+        expect(prepare).toHaveBeenCalledWith(
+          'testuser',
+          'testrepo',
+          'main',
+          expect.objectContaining({ name: 'testuser/testrepo-2', default_cwd: path }),
+          true
+        );
+        expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+          codebase_id: 'allocated',
+          cwd: path,
+        });
+      } finally {
+        prepare.mockRestore();
+      }
+    });
+
     test('should ignore comments from the bot itself', async () => {
       const adapter = createSelfFilterAdapter();
       const payload = createCommentPayload('@archon fix this', 'archon');
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_own_comment');
       // Bot's own comments should be silently dropped - no lock acquired, no processing
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -413,7 +566,7 @@ describe('GiteaAdapter', () => {
       const adapter = createSelfFilterAdapter('Archon'); // Mixed case config
       const payload = createCommentPayload('@archon test', 'archon'); // Lowercase author
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       // Bot's own comments should be silently dropped regardless of case
       expect(mockAcquireLock).not.toHaveBeenCalled();
@@ -425,7 +578,7 @@ describe('GiteaAdapter', () => {
 
       // handleWebhook will error on DB operations, but self-filtering runs first
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -441,8 +594,9 @@ describe('GiteaAdapter', () => {
         'Wirasm'
       );
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_marked_comment');
       // Marked comments should be silently dropped
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -454,7 +608,7 @@ describe('GiteaAdapter', () => {
 
       // Will error on DB operations, but self-filtering runs first
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -468,7 +622,7 @@ describe('GiteaAdapter', () => {
 
       // Should not crash on undefined user
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked, but no TypeError from undefined user
       }
@@ -556,49 +710,60 @@ describe('GiteaAdapter', () => {
   });
 
   describe('signature verification', () => {
-    test('should verify valid signature', () => {
-      const crypto = require('crypto');
-      const secret = 'test-secret';
-      const payload = '{"test": "data"}';
-      // Gitea uses raw hex, no sha256= prefix
-      const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    const secret = 'test-secret';
+    // A bot-authored comment stops right after verification and parsing, so the
+    // log line proves the payload was accepted without reaching the database.
+    const body = JSON.stringify({
+      action: 'created',
+      issue: { number: 1, title: 't', body: '', user: { login: 'u' }, labels: [], state: 'open' },
+      comment: { body: 'hi', user: { login: 'archon' } },
+      repository: {
+        owner: { login: 'o' },
+        name: 'r',
+        full_name: 'o/r',
+        html_url: 'https://gitea.example.com/o/r',
+        default_branch: 'main',
+      },
+      sender: { login: 'archon' },
+    });
+    const sign = (bytes: Uint8Array): string =>
+      createHmac('sha256', secret).update(bytes).digest('hex');
+    const signedAdapter = (): GiteaAdapter =>
+      new GiteaAdapter('https://gitea.example.com', 'token', secret, mockLockManager);
 
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        secret,
-        mockLockManager
-      );
-
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature(payload, signature);
-      expect(result).toBe(true);
+    beforeEach(() => {
+      mockLogger.debug.mockClear();
+      mockLogger.error.mockClear();
     });
 
-    test('should reject invalid signature', () => {
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'test-secret',
-        mockLockManager
-      );
+    test('accepts a correctly signed body that starts with a UTF-8 BOM', async () => {
+      const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...utf8(body)]);
 
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature('{"test": "data"}', 'invalid-signature');
-      expect(result).toBe(false);
+      await signedAdapter().handleWebhook(bytes, sign(bytes));
+
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_own_comment');
+      expect(mockLogger.error).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'invalid_webhook_signature'
+      );
     });
 
-    test('should reject signature with different length', () => {
-      const testAdapter = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'test-secret',
-        mockLockManager
-      );
+    test('rejects a body altered after signing', async () => {
+      const bytes = utf8(body);
+      const signature = sign(bytes);
+      const tampered = utf8(body.replace('"hi"', '"ho"'));
 
-      // @ts-expect-error - accessing private method for testing
-      const result = testAdapter.verifySignature('{"test": "data"}', 'short');
-      expect(result).toBe(false);
+      await signedAdapter().handleWebhook(tampered, signature);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.anything(), 'invalid_webhook_signature');
+      expect(mockLogger.debug).not.toHaveBeenCalledWith('ignoring_own_comment');
+    });
+
+    test('rejects a signature of a different length', async () => {
+      await signedAdapter().handleWebhook(utf8(body), 'short');
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.anything(), 'signature_length_mismatch');
+      expect(mockLogger.debug).not.toHaveBeenCalledWith('ignoring_own_comment');
     });
   });
 
@@ -768,6 +933,7 @@ describe('GiteaAdapter', () => {
       mockGetOrCreateConversation.mockResolvedValueOnce({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitea',
         platform_conversation_id: 'testuser/testrepo!42',
       });
@@ -785,7 +951,7 @@ describe('GiteaAdapter', () => {
       const signature = createHmac('sha256', 'fake-webhook-secret').update(payload).digest('hex');
 
       try {
-        await adapter.handleWebhook(payload, signature);
+        await adapter.handleWebhook(utf8(payload), signature);
       } finally {
         fetchSpy.mockRestore();
       }
@@ -985,7 +1151,7 @@ describe('GiteaAdapter', () => {
     // calls fetchCommentHistory() — a bare `fetch` against the adapter's
     // baseUrl. Left unstubbed that is a real DNS + TCP attempt to
     // gitea.example.com on every run, making the test's outcome depend on an
-    // external host inside Bun's 5000 ms per-test budget (#2186). Stub it.
+    // external host inside the per-test budget (#2186). Stub it.
     let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
 
     beforeEach(() => {
@@ -1047,7 +1213,7 @@ describe('GiteaAdapter', () => {
 
       // DB mocks throw, but user resolution runs before DB calls
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked
       }
@@ -1086,7 +1252,7 @@ describe('GiteaAdapter', () => {
       });
 
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected
       }
@@ -1131,73 +1297,86 @@ describe('GiteaAdapter', () => {
 
       // Should not throw even though user resolution fails
       try {
-        await adapter.handleWebhook(payload, 'mock-signature');
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
       } catch {
         // Expected - database not mocked, but not from user resolution
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ giteaLogin: 'commenter' }),
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitea' },
         'gitea.user_resolve_failed'
       );
     });
 
-    test('passes resolved archonUserId to handleMessage', async () => {
-      // Seed DB mocks so handleWebhook reaches handleMessage
-      mockGetOrCreateConversation.mockImplementation(async () => ({
-        id: 'conv-test-uuid',
-        codebase_id: 'codebase-test-uuid',
-        platform_type: 'gitea',
-        platform_conversation_id: 'testuser/testrepo#42',
-      }));
-      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
-        id: 'codebase-test-uuid',
-        repository_url: 'https://gitea.example.com/testuser/testrepo',
-        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
-        name: 'testrepo',
-      }));
-
-      const adapter = createWebhookAdapter();
-
-      const payload = JSON.stringify({
-        action: 'created',
-        issue: {
-          number: 42,
-          title: 'Test Issue',
-          body: 'Description',
-          user: { login: 'user123' },
-          labels: [],
-          state: 'open',
-        },
-        comment: {
-          body: '@archon fix this',
-          user: { login: 'commenter' },
-        },
-        repository: {
-          owner: { login: 'testuser' },
+    test.each(['fix this', '/workflow run @alice'])(
+      'dispatches %s with internal identity and private logs',
+      async message => {
+        // Seed DB mocks so handleWebhook reaches handleMessage
+        mockGetOrCreateConversation.mockImplementation(async () => ({
+          id: 'conv-test-uuid',
+          codebase_id: 'codebase-test-uuid',
+          cwd: '/tmp/project',
+          platform_type: 'gitea',
+          platform_conversation_id: 'testuser/testrepo#42',
+        }));
+        mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+          id: 'codebase-test-uuid',
+          repository_url: 'https://gitea.example.com/testuser/testrepo',
+          default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
           name: 'testrepo',
-          full_name: 'testuser/testrepo',
-          html_url: 'https://gitea.example.com/testuser/testrepo',
-          default_branch: 'main',
-        },
-        sender: { login: 'senderuser' },
-      });
+        }));
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+        const adapter = createWebhookAdapter();
 
-      expect(mockHandleMessage).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ userId: 'user-test-uuid' })
-      );
-    });
+        const payload = JSON.stringify({
+          action: 'created',
+          issue: {
+            number: 42,
+            title: 'Test Issue',
+            body: 'Description',
+            user: { login: 'user123' },
+            labels: [],
+            state: 'open',
+          },
+          comment: {
+            body: `@archon ${message}`,
+            user: { login: 'commenter' },
+          },
+          repository: {
+            owner: { login: 'testuser' },
+            name: 'testrepo',
+            full_name: 'testuser/testrepo',
+            html_url: 'https://gitea.example.com/testuser/testrepo',
+            default_branch: 'main',
+          },
+          sender: { login: 'senderuser' },
+        });
+
+        await adapter.handleWebhook(utf8(payload), 'mock-signature');
+
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('slash_command_processing');
+
+        expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+          'gitea',
+          expect.any(String),
+          'codebase-test-uuid'
+        );
+        expect(mockHandleMessage).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
+        );
+      }
+    );
 
     test('skips user resolution when both commentAuthor and sender are missing', async () => {
       // Seed DB mocks so handleWebhook reaches handleMessage
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitea',
         platform_conversation_id: 'testuser/testrepo#42',
       }));
@@ -1233,14 +1412,14 @@ describe('GiteaAdapter', () => {
         // sender omitted entirely
       });
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+      await adapter.handleWebhook(utf8(payload), 'mock-signature');
 
       expect(mockFindOrCreateUserByPlatformIdentity).not.toHaveBeenCalled();
       expect(mockHandleMessage).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: undefined })
+        expect.objectContaining({ actor: { kind: 'unidentified' } })
       );
     });
   });

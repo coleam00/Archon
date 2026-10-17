@@ -8,8 +8,8 @@
  *
  * Three ways to pass, in order:
  * 1. New content: some path's content, mode, or type differs from where THIS implement
- *    invocation started (outside `.archon/`; see below). The start is the engine's own
- *    observation of the implement node's invocation, bound as `baseline`. Changes that
+ *    invocation started. The start is the engine's own observation of the implement
+ *    node's invocation, bound as `baseline`. Changes that
  *    were already in the checkout when it started are part of that start, so a dirty
  *    checkout the loop never touched does not pass. HEAD moving, staging, or an empty
  *    commit changes no content and does not pass either.
@@ -33,13 +33,6 @@
  * A loop that ended with its checks unfinished (`incomplete`) fails before any of
  * that is asked, whatever it changed: its work was never verified, and the green
  * gates refuse the same cause with the same message.
- *
- * Only UNCOMMITTED `.archon/` changes are excluded: Archon copies the operator's
- * workflow edits into every run worktree, so uncommitted `.archon/` files are not
- * implement's output. A `.archon/` path counts only when the current commit differs
- * from the start commit and the committed content differs from what the path held at
- * the start -- implement legitimately edits workflows, but committing bytes that were
- * already sitting in the checkout is not new work.
  *
  * Comparison: the engine records a start commit plus a manifest of only the paths that
  * differed from it, each identified by Git's blob id of its bytes (`hash-object`, clean
@@ -74,13 +67,25 @@ function tryGit(...args: string[]): string | undefined {
   return result.exitCode === 0 ? result.stdout.toString().trim() : undefined;
 }
 
-/** Commits this branch carries beyond the base, or `undefined` if neither ref resolves. */
+/**
+ * Commits this branch carries beyond the base, or `undefined` when no base ref resolves.
+ *
+ * Every copy of the base counts — the local branch and the same branch on each
+ * remote, whatever the remotes are named — and the fewest commits ahead wins, so a
+ * stale fork's base never makes base commits look like this branch's work.
+ */
 function commitsAheadOfBase(base: string): { readonly ref: string; readonly ahead: number } | undefined {
-  for (const ref of [`origin/${base}`, base]) {
+  const remotes = (tryGit('for-each-ref', '--format=%(refname:short)', `refs/remotes/*/${base}`) ?? '')
+    .split('\n')
+    .filter(ref => ref !== '');
+  let best: { readonly ref: string; readonly ahead: number } | undefined;
+  for (const ref of [...remotes, base]) {
     const ahead = tryGit('rev-list', '--count', `${ref}..HEAD`);
-    if (ahead !== undefined) return { ref, ahead: Number.parseInt(ahead, 10) };
+    if (ahead === undefined) continue;
+    const count = Number.parseInt(ahead, 10);
+    if (best === undefined || count < best.ahead) best = { ref, ahead: count };
   }
-  return undefined;
+  return best;
 }
 
 // --- The engine's checkout observation, as this consumer reads it --------------------
@@ -238,8 +243,6 @@ function same(a: Identity | undefined, b: Identity | undefined): boolean {
   return a.kind === b.kind && a.mode === b.mode && a.oid === b.oid;
 }
 
-const ARCHON_DIR = Buffer.from('.archon/', 'utf8');
-
 /** How many paths' content differs from where the invocation started. */
 function contentChanges(baseline: Observed, current: Observed): number {
   const keys = new Set<string>([
@@ -253,15 +256,6 @@ function contentChanges(baseline: Observed, current: Observed): number {
   let changed = 0;
   for (const key of all) {
     const start = baseline.dirty.get(key) ?? startTree.get(key);
-    if (Buffer.from(key, 'base64').subarray(0, ARCHON_DIR.length).equals(ARCHON_DIR)) {
-      // Only commits count here: the committed entry must have changed since the start,
-      // and must differ from what the path held at the start -- so a new commit that
-      // leaves a pre-existing uncommitted file alone, or commits its bytes as they were,
-      // is not new work.
-      const committed = currentTree.get(key);
-      if (!same(committed, startTree.get(key)) && !same(committed, start)) changed++;
-      continue;
-    }
     const now = current.dirty.get(key) ?? currentTree.get(key);
     if (!same(now, start)) changed++;
   }
@@ -332,11 +326,21 @@ function decide(): Decision {
     };
   }
 
+  // A loop that stopped on a blocker it declared is not unexplained red: name it.
+  if (green !== 'true' && declaredCause === '' && summary !== '' && unknownReason === undefined) {
+    return {
+      refusal:
+        `implement declared a blocker: ${summary}\n` +
+        'It changed no content since this invocation started, and the branch carries no ' +
+        'verified work ahead of the base.',
+    };
+  }
+
   return {
     refusal:
       (unknownReason !== undefined
         ? `implement's new work cannot be established: ${unknownReason}. `
-        : 'implement changed no content outside .archon/ since this invocation started ' +
+        : 'implement changed no content since this invocation started ' +
           '(pre-existing uncommitted changes are part of that start), ') +
       'and the branch carries no verified work ahead of the base ' +
       `(green=${green || 'unknown'}, red_cause=${declaredCause || 'unknown'}).\n` +

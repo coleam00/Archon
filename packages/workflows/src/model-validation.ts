@@ -13,13 +13,14 @@
  * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
  * per call.
  */
-
 import {
-  getProviderCapabilities,
-  isRegisteredProvider,
+  type ProviderRegistry,
   parseProviderRunModel,
-} from '@archon/providers';
-import { parsePiModelRef } from '@archon/providers/community/pi';
+  missingProviderMessage,
+  NoDefaultProviderError,
+  isMaintainedProvider,
+} from '@archon/provider-contract';
+
 import tierDefaults from './defaults/tier-defaults.json';
 import { EFFORT_LEVELS } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/dag-node';
@@ -109,14 +110,21 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
   }
 }
 
-function assertValidPersistedPreset(name: string, entry: ModelAliasPreset): void {
-  if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+function assertValidPersistedPreset(
+  providers: ProviderRegistry,
+  name: string,
+  entry: ModelAliasPreset
+): void {
+  if (
+    entry.effort !== undefined &&
+    !isEffortValidForProvider(providers, entry.provider, entry.effort)
+  ) {
     throw new Error(`Model binding '${name}' has an invalid effort.`);
   }
 }
 
 export type RunModelPresetValidationIssue =
-  | { kind: 'unknown-provider'; provider: string; field: 'provider' }
+  | { kind: 'unknown-provider'; provider: string; field: 'provider'; reason: string }
   | { kind: 'invalid-model'; provider: string; model: string; reason: string; field: 'model' }
   | { kind: 'unsupported-effort'; provider: string; effort: string; field: 'effort' }
   | {
@@ -130,7 +138,7 @@ export type RunModelPresetValidationIssue =
 function runModelPresetValidationMessage(issue: RunModelPresetValidationIssue): string {
   switch (issue.kind) {
     case 'unknown-provider':
-      return `resolved to unknown provider '${issue.provider}'`;
+      return issue.reason;
     case 'invalid-model':
       return `has invalid ${issue.provider} model '${issue.model}': ${issue.reason}`;
     case 'unsupported-effort':
@@ -156,18 +164,23 @@ export class RunModelPresetValidationError extends Error {
  * Ordinary layered config remains tolerant; every strict execution-input path
  * (fresh config, explicit overrides, and persisted overrides) shares this gate.
  */
-export function normalizeStrictRunModelPreset(preset: ModelAliasPreset): ModelAliasPreset {
-  if (!isRegisteredProvider(preset.provider)) {
+export function normalizeStrictRunModelPreset(
+  providers: ProviderRegistry,
+  preset: ModelAliasPreset
+): ModelAliasPreset {
+  const provider = providers.get(preset.provider);
+  if (!provider) {
     throw new RunModelPresetValidationError({
       kind: 'unknown-provider',
       provider: preset.provider,
+      reason: missingProviderMessage(providers, preset.provider),
       field: 'provider',
     });
   }
 
   let model: string;
   try {
-    model = parseProviderRunModel(preset.provider, preset.model);
+    model = parseProviderRunModel(provider, preset.model);
   } catch (error) {
     throw new RunModelPresetValidationError({
       kind: 'invalid-model',
@@ -179,7 +192,7 @@ export function normalizeStrictRunModelPreset(preset: ModelAliasPreset): ModelAl
   }
 
   if (preset.effort !== undefined) {
-    const valid = validEffortsForProvider(preset.provider);
+    const valid = validEffortsForProvider(providers, preset.provider);
     if (valid === null) {
       throw new RunModelPresetValidationError({
         kind: 'unsupported-effort',
@@ -202,9 +215,13 @@ export function normalizeStrictRunModelPreset(preset: ModelAliasPreset): ModelAl
   return model === preset.model ? preset : { ...preset, model };
 }
 
-function normalizePersistedOverridePreset(name: string, entry: ModelAliasPreset): ModelAliasPreset {
+function normalizePersistedOverridePreset(
+  providers: ProviderRegistry,
+  name: string,
+  entry: ModelAliasPreset
+): ModelAliasPreset {
   try {
-    return normalizeStrictRunModelPreset(entry);
+    return normalizeStrictRunModelPreset(providers, entry);
   } catch (error) {
     if (!(error instanceof RunModelPresetValidationError)) throw error;
     throw new Error(`Model binding '${name}' ${error.message}.`);
@@ -251,13 +268,13 @@ export interface BuildAiProfileOptions {
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
 export function buildAiProfile(
-  defaultProvider: string,
+  defaultProvider: string | undefined,
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
   const aliases: Record<string, ModelAliasPreset> = {};
 
-  const tierEntries = TIER_DEFAULTS[defaultProvider];
-  if (tierEntries) {
+  const tierEntries = defaultProvider === undefined ? undefined : TIER_DEFAULTS[defaultProvider];
+  if (tierEntries && defaultProvider !== undefined) {
     for (const tier of TIER_NAMES) {
       const entry = tierEntries[tier];
       if (entry) {
@@ -299,7 +316,8 @@ export function buildAiProfile(
     }
   }
 
-  return { defaultProvider, aliases };
+  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
+  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
 }
 
 function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): ModelAliasPreset {
@@ -311,9 +329,13 @@ function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): Mode
   return preset;
 }
 
-function normalizeRunOverridePreset(targetName: string, preset: RawAliasEntry): RawAliasEntry {
+function normalizeRunOverridePreset(
+  providers: ProviderRegistry,
+  targetName: string,
+  preset: RawAliasEntry
+): RawAliasEntry {
   try {
-    return normalizeStrictRunModelPreset(preset);
+    return normalizeStrictRunModelPreset(providers, preset);
   } catch (error) {
     if (!(error instanceof RunModelPresetValidationError)) throw error;
     throw new Error(`Model override '${targetName}' ${error.message}.`);
@@ -321,6 +343,7 @@ function normalizeRunOverridePreset(targetName: string, preset: RawAliasEntry): 
 }
 
 function resolveRunOverrideSpec(
+  providers: ProviderRegistry,
   profile: ResolvedAiProfile,
   targetName: string,
   rawSpec: string
@@ -333,36 +356,48 @@ function resolveRunOverrideSpec(
     if (isLiteralSpec(resolved)) {
       throw new Error(`Model override '${targetName}' could not resolve '${spec}'.`);
     }
-    return normalizeRunOverridePreset(targetName, { ...resolved });
+    return normalizeRunOverridePreset(providers, targetName, { ...resolved });
   }
 
   const slash = spec.indexOf('/');
   if (slash === -1) {
     const target = presetForOverrideTarget(profile, targetName);
-    return normalizeRunOverridePreset(targetName, { provider: target.provider, model: spec });
+    return normalizeRunOverridePreset(providers, targetName, {
+      provider: target.provider,
+      model: spec,
+    });
   }
 
   const prefix = spec.slice(0, slash);
   const remainder = spec.slice(slash + 1);
-  if (isRegisteredProvider(prefix)) {
+  if (providers.get(prefix) || isMaintainedProvider(prefix)) {
     if (remainder.length === 0) {
       throw new Error(`Model override '${targetName}' has an empty model id.`);
     }
-    if (prefix === 'pi' && !parsePiModelRef(remainder)) {
-      throw new Error(
-        `Model override '${targetName}' has invalid Pi model '${remainder}'. ` +
-          "Pi overrides need a vendor prefix, e.g. 'pi/minimax/minimax-m3'."
-      );
-    }
-    return normalizeRunOverridePreset(targetName, { provider: prefix, model: remainder });
+    return normalizeRunOverridePreset(providers, targetName, {
+      provider: prefix,
+      model: remainder,
+    });
   }
 
-  if (!parsePiModelRef(spec)) {
+  const owners = providers.list().filter(provider => provider.ownsUnprefixedModelRefs);
+  if (owners.length > 1) {
     throw new Error(
-      `Model override '${targetName}' has invalid model '${spec}'. Expected <agent>/<model> or <vendor>/<model>.`
+      `Model override '${targetName}' has ambiguous unprefixed model ownership: ${owners
+        .map(provider => provider.id)
+        .sort()
+        .join(', ')}.`
     );
   }
-  return normalizeRunOverridePreset(targetName, { provider: 'pi', model: spec });
+  const owner = owners[0];
+  const invalid = `Model override '${targetName}' has invalid model '${spec}'. Expected <agent>/<model> or <vendor>/<model>.`;
+  if (!owner) throw new Error(invalid);
+  try {
+    parseProviderRunModel(owner, spec);
+  } catch (cause) {
+    throw new Error(invalid, { cause });
+  }
+  return normalizeRunOverridePreset(providers, targetName, { provider: owner.id, model: spec });
 }
 
 /**
@@ -370,6 +405,7 @@ function resolveRunOverrideSpec(
  * profile. This is the only transport-to-profile boundary used by CLI and HTTP.
  */
 export function resolveRunModelOverrides(
+  providers: ProviderRegistry,
   profile: ResolvedAiProfile,
   overrides: RunModelOverrides | undefined
 ): ResolvedRunModelOverrides {
@@ -378,13 +414,13 @@ export function resolveRunModelOverrides(
   const tiers: RawTiersConfig = {};
   for (const [name, spec] of Object.entries(overrides.tiers ?? {})) {
     assertValidTierName(name);
-    tiers[name] = resolveRunOverrideSpec(profile, name, spec);
+    tiers[name] = resolveRunOverrideSpec(providers, profile, name, spec);
   }
 
   const aliases: RawAliasesConfig = {};
   for (const [name, spec] of Object.entries(overrides.aliases ?? {})) {
     presetForOverrideTarget(profile, name);
-    aliases[name] = resolveRunOverrideSpec(profile, name, spec);
+    aliases[name] = resolveRunOverrideSpec(providers, profile, name, spec);
   }
 
   return {
@@ -399,7 +435,7 @@ export function applyResolvedRunModelOverrides(
   overrides: ResolvedRunModelOverrides
 ): ResolvedAiProfile {
   return {
-    defaultProvider: profile.defaultProvider,
+    ...(profile.defaultProvider !== undefined ? { defaultProvider: profile.defaultProvider } : {}),
     aliases: {
       ...profile.aliases,
       ...overrides.tiers,
@@ -471,7 +507,9 @@ export function createRunModelBindingsMetadata(
       ...(overrides.aliases ? { aliases: { ...overrides.aliases } } : {}),
     },
     effective: {
-      defaultProvider: effective.defaultProvider,
+      ...(effective.defaultProvider !== undefined
+        ? { defaultProvider: effective.defaultProvider }
+        : {}),
       aliases: Object.fromEntries(
         Object.entries(effective.aliases).map(([name, preset]) => [name, { ...preset }])
       ),
@@ -481,6 +519,7 @@ export function createRunModelBindingsMetadata(
 
 /** Read metadata written by this module; malformed external JSON fails explicitly. */
 export function readRunModelBindingsMetadata(
+  providers: ProviderRegistry,
   metadata: Record<string, unknown> | undefined
 ): RunModelBindingsMetadata | undefined {
   const value = metadata?.[RUN_MODEL_BINDINGS_METADATA_KEY];
@@ -509,17 +548,17 @@ export function readRunModelBindingsMetadata(
   const tiers = Object.fromEntries(
     Object.entries(parsed.data.overrides.tiers ?? {}).map(([name, preset]) => [
       name,
-      normalizePersistedOverridePreset(name, preset),
+      normalizePersistedOverridePreset(providers, name, preset),
     ])
   );
   const aliases = Object.fromEntries(
     Object.entries(parsed.data.overrides.aliases ?? {}).map(([name, preset]) => [
       name,
-      normalizePersistedOverridePreset(name, preset),
+      normalizePersistedOverridePreset(providers, name, preset),
     ])
   );
   for (const [name, preset] of Object.entries(parsed.data.effective.aliases)) {
-    assertValidPersistedPreset(name, preset);
+    assertValidPersistedPreset(providers, name, preset);
   }
 
   return {
@@ -559,6 +598,7 @@ export function resolveTierWithFallback(
     const preset = profile.aliases[candidate];
     if (preset) return { preset, matchedTier: candidate };
   }
+  if (profile.defaultProvider === undefined) throw new NoDefaultProviderError();
   throw new TierResolutionError(
     `Tier '${tier}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. ` +
       'Built-in tier defaults exist only for claude and codex; every other provider must configure its own. ' +
@@ -606,9 +646,11 @@ export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: strin
  * paths (`PATCH /api/config/tiers`, `archon ai tier set --effort`) need to
  * reject `--effort extreme` up front instead of accepting a no-op.
  */
-export function validEffortsForProvider(provider: string): readonly EffortLevel[] | null {
-  if (!isRegisteredProvider(provider)) return null;
-  return getProviderCapabilities(provider).effortControl ? EFFORT_LEVELS : null;
+export function validEffortsForProvider(
+  providers: ProviderRegistry,
+  provider: string
+): readonly EffortLevel[] | null {
+  return providers.get(provider)?.capabilities.effortControl ? EFFORT_LEVELS : null;
 }
 
 /**
@@ -616,8 +658,12 @@ export function validEffortsForProvider(provider: string): readonly EffortLevel[
  * control accept any value (we don't block what we can't validate; it's a no-op
  * for them, not an error).
  */
-export function isEffortValidForProvider(provider: string, effort: string): boolean {
-  const valid = validEffortsForProvider(provider);
+export function isEffortValidForProvider(
+  providers: ProviderRegistry,
+  provider: string,
+  effort: string
+): boolean {
+  const valid = validEffortsForProvider(providers, provider);
   return valid === null || valid.some(validEffort => validEffort === effort);
 }
 
@@ -637,10 +683,11 @@ export type PresetEffortRejection =
  * between them.
  */
 export function resolvePresetEffort(
+  providers: ProviderRegistry,
   provider: string,
   effort: string
 ): { ok: true } | PresetEffortRejection {
-  const valid = validEffortsForProvider(provider);
+  const valid = validEffortsForProvider(providers, provider);
   // The provider has no reasoning control at all (OpenCode configures it in
   // opencode.json, not per request).
   if (valid === null) return { ok: false, reason: 'unsupported', valid: null };

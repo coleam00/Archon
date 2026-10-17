@@ -1,10 +1,10 @@
 /**
- * Tests for skill install command
+ * Tests for bundled skill copying and CLI commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { copyArchonSkill, skillInstallCommand } from './skill';
@@ -18,6 +18,19 @@ describe('copyArchonSkill', () => {
 
   afterEach(async () => {
     await removeTempTree(tempDir);
+  });
+
+  it('bundles every file under the shipped skill root', () => {
+    const files = [
+      ...new Bun.Glob('**/*').scanSync({
+        cwd: resolve(import.meta.dir, '../../../../.claude/skills/archon-cli'),
+        onlyFiles: true,
+        dot: true,
+      }),
+    ]
+      .map(file => file.replaceAll('\\', '/'))
+      .sort();
+    expect(Object.keys(BUNDLED_SKILL_FILES).sort()).toEqual(files);
   });
 
   it('creates missing parents and writes exact bundled content in both destinations', async () => {
@@ -163,5 +176,133 @@ describe('skillInstallCommand', () => {
     // Nothing should have been written to either path
     expect(existsSync(join(missing, '.claude'))).toBe(false);
     expect(existsSync(join(missing, '.agents'))).toBe(false);
+  });
+});
+
+describe('skill CLI verbs', () => {
+  for (const verb of ['add', 'install']) {
+    it(`${verb} rejects extra paths without replacing existing skill files`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-arity-'));
+      const target = join(root, 'target');
+      const extra = join(root, 'extra');
+      try {
+        for (const destination of ['.claude', '.agents']) {
+          const skillRoot = join(target, destination, 'skills', 'archon-cli');
+          mkdirSync(skillRoot, { recursive: true });
+          writeFileSync(join(skillRoot, 'SKILL.md'), 'User-owned skill content');
+          writeFileSync(join(skillRoot, 'custom.md'), 'Keep this file');
+        }
+        const child = Bun.spawn(
+          [process.execPath, join(import.meta.dir, '../cli.ts'), 'skill', verb, target, extra],
+          {
+            cwd: root,
+            env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [out, err, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect(code).toBe(1);
+        expect(err.trim()).toBe('Usage: archon skill add [path]');
+        expect(out).toBe('');
+        for (const destination of ['.claude', '.agents']) {
+          const skillRoot = join(target, destination, 'skills', 'archon-cli');
+          expect(readFileSync(join(skillRoot, 'SKILL.md'), 'utf8')).toBe(
+            'User-owned skill content'
+          );
+          expect(readFileSync(join(skillRoot, 'custom.md'), 'utf8')).toBe('Keep this file');
+        }
+        expect(existsSync(extra)).toBe(false);
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+  }
+
+  it('rejects an unknown verb without replacing existing skill files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-reject-'));
+    try {
+      for (const destination of ['.claude', '.agents']) {
+        const skillRoot = join(root, destination, 'skills', 'archon-cli');
+        mkdirSync(skillRoot, { recursive: true });
+        writeFileSync(join(skillRoot, 'SKILL.md'), 'User-owned skill content');
+      }
+      const child = Bun.spawn(
+        [process.execPath, join(import.meta.dir, '../cli.ts'), 'skill', 'bogus', root],
+        {
+          cwd: root,
+          env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code).toBe(1);
+      expect(err).toContain('Unknown skill subcommand: bogus');
+      expect(err.split('\n')).toContain('Available: add');
+      expect(out).not.toContain('Adding Archon skill');
+      for (const destination of ['.claude', '.agents']) {
+        expect(readFileSync(join(root, destination, 'skills/archon-cli/SKILL.md'), 'utf8')).toBe(
+          'User-owned skill content'
+        );
+      }
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  it('add and the deprecated alias write the bundled files, with one alias warning', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-'));
+    try {
+      for (const [verb, explicitPath] of [
+        ['add', false],
+        ['install', true],
+      ] as const) {
+        const target = join(root, verb);
+        mkdirSync(target);
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            join(import.meta.dir, '../cli.ts'),
+            'skill',
+            verb,
+            ...(explicitPath ? [target] : []),
+          ],
+          {
+            cwd: explicitPath ? root : target,
+            env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [out, err, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect(code).toBe(0);
+        expect(out).toContain('Restart Claude Code or Codex');
+        const warning =
+          'Warning: archon skill install is deprecated. Use archon skill add instead.';
+        expect(err.split(warning).length - 1).toBe(verb === 'install' ? 1 : 0);
+        for (const destination of ['.claude', '.agents']) {
+          for (const [file, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+            expect(readFileSync(join(target, destination, 'skills/archon-cli', file), 'utf8')).toBe(
+              content
+            );
+          }
+        }
+      }
+    } finally {
+      await removeTempTree(root);
+    }
   });
 });

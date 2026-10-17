@@ -166,6 +166,7 @@ const CATALOG_QUERIES: Record<string, string> = {
                  WHERE d.objid = (schemaname||'.'||sequencename)::regclass AND d.deptype = 'a'),
                 '-')
               FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1`,
+  triggers: 'SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1',
 };
 
 /**
@@ -271,6 +272,24 @@ try {
     const upgrade = psql(db, { file: SCHEMA_PATH });
     if (upgrade.code !== 0) {
       console.error(`FAIL ${ref}: upgrading to the current schema aborted\n${upgrade.out}`);
+      failures++;
+      drop(db);
+      continue;
+    }
+
+    const olderWriter = psql(db, {
+      sql: `WITH conversation AS (
+              INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id)
+              VALUES ('cli', 'upgrade-old-writer') RETURNING id
+            )
+            INSERT INTO remote_agent_workflow_runs
+              (workflow_name, conversation_id, user_message)
+            SELECT 'upgrade-old-writer', id, 'legacy insert after upgrade' FROM conversation;
+            SELECT COUNT(*) FROM remote_agent_workflow_runs
+             WHERE workflow_name = 'upgrade-old-writer' AND origin IS NULL;`,
+    });
+    if (olderWriter.code !== 0 || olderWriter.out.trim() !== '1') {
+      console.error(`FAIL ${ref}: older writer insert after upgrade failed\n${olderWriter.out}`);
       failures++;
       drop(db);
       continue;

@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from 'bun:test';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as git from '@archon/git';
 import { createRecordingGitFixture } from '@archon/git/test-utils';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
@@ -43,7 +44,7 @@ mock.module('@archon/core/db/conversations', () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mock(async () => null),
-  createCodebase: mock(async () => undefined),
+  createManagedCodebase: mock(async () => undefined),
   getCodebaseCommands: mock(async () => ({})),
   updateCodebaseCommands: mock(async () => undefined),
   updateCodebase: mock(async () => undefined),
@@ -51,10 +52,6 @@ mock.module('@archon/core/db/codebases', () => ({
 
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async () => undefined),
-}));
-
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mock(async () => 'claude'),
 }));
 
 const { GitLabAdapter } = await import('./adapter');
@@ -74,14 +71,77 @@ function ensureRepoReady(
       ensureRepoReady(
         projectPath: string,
         defaultBranch: string,
-        repoPath: string,
+        codebase: { name: string; default_cwd: string },
         shouldSync: boolean
       ): Promise<void>;
     }
-  ).ensureRepoReady(projectPath, 'main', repoPath, false);
+  ).ensureRepoReady(projectPath, 'main', { name: projectPath, default_cwd: repoPath }, false);
 }
 
 describe('GitLab clone child security boundary', () => {
+  test.skipIf(process.platform === 'win32')(
+    'trusts the destination before a real checkout hook runs',
+    async () => {
+      const root = trackTempRoot(
+        await realpath(await mkdtemp(join(tmpdir(), 'forge-checkout-trust-')))
+      );
+      const source = join(root, 'source');
+      const target = join(root, 'clone');
+      const hooks = join(root, 'hooks');
+      const config = join(root, 'gitconfig');
+      const saved = {
+        GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+        GIT_TEST_ASSUME_DIFFERENT_OWNER: process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER,
+      };
+      const realExec = git.execFileAsync;
+      let execSpy: ReturnType<typeof spyOn> | undefined;
+      try {
+        process.env.GIT_CONFIG_GLOBAL = config;
+        await mkdir(hooks);
+        await realExec('git', ['init', source]);
+        await realExec('git', [
+          '-C',
+          source,
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.com',
+          'commit',
+          '--allow-empty',
+          '-m',
+          'Initial',
+        ]);
+        await realExec('git', ['config', '--global', 'core.hooksPath', hooks]);
+        await git.addSafeDirectory(git.toRepoPath(source));
+        await git.addSafeDirectory(git.toRepoPath(join(source, '.git')));
+        await writeFile(
+          join(hooks, 'post-checkout'),
+          '#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\ngit status --porcelain > hook-ran\n',
+          { mode: 0o755 }
+        );
+        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+        execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
+          const clone = args.indexOf('clone');
+          const localArgs = [...args];
+          if (clone !== -1) localArgs[clone + 1] = source;
+          return realExec(file, localArgs, options);
+        });
+        await ensureRepoReady(
+          createAdapter('token', 'https://gitlab.example.test'),
+          'group/project',
+          target
+        );
+        expect(await Bun.file(join(target, 'hook-ran')).exists()).toBe(true);
+      } finally {
+        execSpy?.mockRestore();
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    }
+  );
+
   test.skipIf(process.platform === 'win32')(
     'passes request-scoped oauth2 credentials outside argv for an explicit HTTPS port',
     async () => {

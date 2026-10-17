@@ -9,22 +9,55 @@
  */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { requestRunLiveOwnerStop } from '@archon/core/services/run-live-owner';
+import { isRunOwnerAnswering, requestRunLiveOwnerStop } from '@archon/core/services/run-live-owner';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import { closeDatabase } from '@archon/core/db/connection';
+import { signalWorkflowWait } from '@archon/core/db/workflows';
+import {
+  workflowWaitContextSchema,
+  type WorkflowWaitContext,
+} from '@archon/workflows/schemas/workflow-run';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import {
+  serializedNodeDataSchema,
+  type SerializedNodeData,
+} from '@archon/workflows/node-record-serialization';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();
 const foregroundOwners = new Set<ForegroundOwner>();
+const observedDetachedOwners = new Set<number>();
 
 // One explicit hook, not `trackTempRoots()`: a still-running owner has to be stopped
 // before its tree can go, and two hooks would leave registration order as the only
 // thing keeping that correct.
 afterEach(async () => {
   await stopForegroundOwners();
+  for (const pid of observedDetachedOwners) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+    await waitFor(
+      `detached owner ${String(pid)} to stop before fixture cleanup`,
+      () => {
+        try {
+          process.kill(pid, 0);
+          return undefined;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
+          throw error;
+        }
+      },
+      5_000
+    );
+  }
+  observedDetachedOwners.clear();
   for (const runId of activeRunIds) {
     try {
       const target = await requestDetachedRunStop(runId);
@@ -44,12 +77,13 @@ const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 interface Fixture {
   projectRoot: string;
   archonHome: string;
+  env?: Record<string, string>;
 }
 
 function makeFixture(
   prefix: string,
   workflows: Record<string, string>,
-  options: { gitInit?: boolean } = {}
+  options: { gitInit?: boolean; env?: Record<string, string> } = {}
 ): Fixture {
   const fixtureRoot = mkdtempSync(join(tmpdir(), prefix));
   cleanupPaths.push(fixtureRoot);
@@ -66,7 +100,7 @@ function makeFixture(
     // runs `wait` has to be a repo.
     Bun.spawnSync(['git', 'init', '-q', projectRoot]);
   }
-  return { projectRoot, archonHome };
+  return { projectRoot, archonHome, env: options.env };
 }
 
 async function runCli(
@@ -75,7 +109,7 @@ async function runCli(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -96,7 +130,7 @@ interface ForegroundOwner {
 function startForegroundOwner(fixture: Fixture, args: string[]): ForegroundOwner {
   const child = Bun.spawn([process.execPath, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -187,7 +221,7 @@ function startWait(fixture: Fixture, runId: string, timeoutSeconds: number): Pen
     ],
     {
       cwd: fixture.projectRoot,
-      env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+      env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
       stdout: 'pipe',
       stderr: 'pipe',
     }
@@ -304,37 +338,29 @@ const SLOW_SUCCESS =
 const SLOW_FAILURE =
   'name: wait-failure\ndescription: Detached failure fixture.\n' +
   'nodes:\n  - id: fail\n    bash: "sleep 1; echo failed >&2; exit 42"\n';
-// `interactive: true` is refused for background dispatch by design (#2738), so this
-// one runs in the foreground OF ANOTHER PROCESS — which is the property that matters:
-// the waiter is not in the process that owns the run. The warm-up node is what lets
-// the waiter attach BEFORE the gate exists, so the gate is a wake and not a read.
+// The warm-up node is what lets the waiter attach BEFORE the gate exists, so the gate
+// is a wake and not a read.
 const GATED =
-  'name: wait-gated\ndescription: Out-of-process gate fixture.\ninteractive: true\n' +
+  'name: wait-gated\ndescription: Detached gate fixture.\n' +
   'nodes:\n  - id: warmup\n    bash: "sleep 3; echo ready"\n' +
-  '  - id: review\n    depends_on: [warmup]\n    approval:\n      message: Approve the plan?\n';
+  '  - id: review\n    depends_on: [warmup]\n    approval:\n      message: Approve the plan?\n' +
+  '  - id: after\n    depends_on: [review]\n    bash: "echo after"\n';
 
-/** The newest run of `workflowName`, read straight from the database file. */
-function readRunId(archonHome: string, workflowName: string): string | undefined {
-  const databasePath = join(archonHome, 'archon.db');
-  if (!existsSync(databasePath)) return undefined;
+/**
+ * Read-only handle for inspecting the database while the detached owner process may be
+ * writing. Without `busy_timeout` a read that lands mid-write throws SQLITE_BUSY at once.
+ */
+function openReadOnly(databasePath: string): Database {
   const database = new Database(databasePath, { readonly: true });
-  try {
-    return database
-      .query<{ id: string }, [string]>(
-        `SELECT id FROM remote_agent_workflow_runs
-         WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1`
-      )
-      .get(workflowName)?.id;
-  } finally {
-    database.close();
-  }
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
 }
 
 /** The status of one run, read straight from the database file. */
 function readRunStatus(archonHome: string, runId: string): string | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ status: string }, [string]>(
@@ -359,6 +385,84 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
   }
 }
 
+function readEventWait(
+  archonHome: string,
+  runId: string
+): Extract<WorkflowWaitContext, { kind: 'event' }> | undefined {
+  const database = openReadOnly(join(archonHome, 'archon.db'));
+  try {
+    const row = database
+      .query<{ metadata: string }, [string]>(
+        "SELECT metadata FROM remote_agent_workflow_runs WHERE id = ? AND status = 'paused'"
+      )
+      .get(runId);
+    if (!row) return undefined;
+    const metadata = JSON.parse(row.metadata) as { wait?: unknown };
+    const wait = workflowWaitContextSchema.parse(metadata.wait);
+    return wait.kind === 'event' ? wait : undefined;
+  } finally {
+    database.close();
+  }
+}
+
+function countNodeCompletions(archonHome: string, runId: string, nodeId: string): number {
+  const database = openReadOnly(join(archonHome, 'archon.db'));
+  try {
+    return (
+      database
+        .query<{ count: number }, [string, string]>(
+          `SELECT COUNT(*) AS count FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND step_name = ? AND event_type = 'node_completed'`
+        )
+        .get(runId, nodeId)?.count ?? 0
+    );
+  } finally {
+    database.close();
+  }
+}
+
+async function recordEventSignal(
+  fixture: Fixture,
+  runId: string,
+  wait: NonNullable<ReturnType<typeof readEventWait>>
+): Promise<{ signaled: boolean }> {
+  const previousHome = process.env.ARCHON_HOME;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  process.env.ARCHON_HOME = fixture.archonHome;
+  process.env.DATABASE_URL = '';
+  try {
+    return await signalWorkflowWait(runId, wait);
+  } finally {
+    await closeDatabase();
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+  }
+}
+
+function captureDetachedOwnerExit(fixture: Fixture): { startedPath: string; exitPath: string } {
+  const startedPath = join(fixture.projectRoot, 'owner-started.json');
+  const exitPath = join(fixture.projectRoot, 'owner-exit.json');
+  const preloadPath = join(fixture.projectRoot, 'owner-exit.ts');
+  // The launcher cannot await its detached child. A preload observes only that
+  // child's real exit without changing the CLI's launch or continuation behavior.
+  writeFileSync(
+    preloadPath,
+    `import { writeFileSync } from 'node:fs';
+if (process.env[${JSON.stringify(DETACHED_RUN_OWNER_ENV)}] === '1') {
+  writeFileSync(${JSON.stringify(startedPath)}, JSON.stringify({ pid: process.pid }));
+  process.on('exit', code => writeFileSync(${JSON.stringify(exitPath)}, JSON.stringify({ code })));
+}
+`
+  );
+  writeFileSync(
+    join(fixture.projectRoot, 'bunfig.toml'),
+    `preload = [${JSON.stringify(preloadPath)}]\n`
+  );
+  return { startedPath, exitPath };
+}
+
 /**
  * One node's persisted completion output, read straight from the events table.
  *
@@ -366,6 +470,13 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
  * what happened, so it proves more than wall-clock timing: `waited_ms` shows the
  * deadline was genuinely waited instead of short-circuited, and `status` distinguishes
  * a satisfied wait from an expired one.
+ *
+ * Every caller polls this through `waitFor` below, whose own catch is the documented
+ * home for tolerating a transient SQLite error (schema not yet applied, a commit still
+ * settling, a lock the owner still holds) — see its docstring. Swallowing errors here
+ * too used to erase that evidence: `waitFor` resets `lastError` on any return, even
+ * `undefined`, so a real bug read exactly like "not ready yet," and a timeout reported
+ * nothing about why (#3499).
  */
 function readNodeCompletedOutput(
   archonHome: string,
@@ -374,7 +485,7 @@ function readNodeCompletedOutput(
 ): Record<string, unknown> | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     const row = database
       .query<{ data: string }, [string, string]>(
@@ -389,10 +500,29 @@ function readNodeCompletedOutput(
     const parsed = typeof output === 'string' ? (JSON.parse(output) as unknown) : output;
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return parsed as Record<string, unknown>;
-  } catch {
-    // The owner creates archon.db before applying the schema and Windows can widen
-    // the commit window (#2306); the caller polls, so a transient read is not a result.
-    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
+/** One node's durable failure evidence, read from its terminal event. */
+function readNodeFailure(
+  archonHome: string,
+  runId: string,
+  nodeId: string
+): SerializedNodeData | undefined {
+  const databasePath = join(archonHome, 'archon.db');
+  if (!existsSync(databasePath)) return undefined;
+  const database = openReadOnly(databasePath);
+  try {
+    const row = database
+      .query<{ data: string }, [string, string]>(
+        `SELECT data FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND step_name = ? AND event_type = 'node_failed'
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(runId, nodeId);
+    return row ? serializedNodeDataSchema.parse(JSON.parse(row.data) as unknown) : undefined;
   } finally {
     database.close();
   }
@@ -404,11 +534,19 @@ function readNodeCompletedOutput(
  * An automatic resume that drops the run's conversation id generates a fresh one, so
  * the resumed segment's dispatch and result land in a second row while the run row
  * still points at the first. The set is the observable proof that did not happen.
+ *
+ * Unlike the readers above, this one isn't polled: it runs once, right where the
+ * assertion needs it, immediately after the run reaches `completed` — while the owner
+ * can still hold the write lock from that same commit. A plain readonly open used to
+ * fail that read with `SQLITE_BUSY`, and a bare `catch { return []; }` reported it as
+ * "no conversations" instead of an unreadable database (#3499). A busy timeout matching
+ * the product's own (`sqlite.ts`) waits out the lock instead; any other error now
+ * throws rather than being reported as an empty result.
  */
 function readCliConversationPlatformIds(archonHome: string): string[] {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return [];
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ platform_conversation_id: string }, []>(
@@ -416,8 +554,6 @@ function readCliConversationPlatformIds(archonHome: string): string[] {
       )
       .all()
       .map(row => row.platform_conversation_id);
-  } catch {
-    return [];
   } finally {
     database.close();
   }
@@ -545,8 +681,9 @@ describe('foreground run discovery', () => {
       'console.log("startup stdout"); console.error("controlled startup failure"); process.exit(23)',
     ]);
     // Through the same helper the boot waits use, at the same deadline: the claim is
-    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test's own budget is Bun's
-    // 5 s default. A guard that stopped firing could only fail here, never pass slowly.
+    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test runs on the default
+    // per-test budget, far below that deadline. A guard that stopped firing could only
+    // fail here, never pass slowly.
     const error = await waitForRunBoot('the failed run row', () => undefined, owner).catch(
       (error: unknown) => error
     );
@@ -596,6 +733,101 @@ describe('foreground run discovery', () => {
 });
 
 describe('archon workflow wait against a detached run', () => {
+  test('a detached Pi extension timer failure reaches workflow wait as a terminal failure', async () => {
+    const endpoint = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream({
+            start(controller): void {
+              controller.enqueue(new TextEncoder().encode(': waiting\n\n'));
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } }
+        ),
+    });
+    try {
+      const fixture = makeFixture('archon-wait-pi-extension-', {
+        'wait-pi-extension':
+          'name: wait-pi-extension\n' +
+          'description: Detached Pi extension failure fixture.\n' +
+          'provider: pi\n' +
+          'model: fixture/test-model\n' +
+          'nodes:\n' +
+          '  - id: agent\n' +
+          '    prompt: Wait for the extension failure.\n' +
+          '    allowed_tools: []\n' +
+          '    idle_timeout: 30000\n',
+      });
+      const agentDir = join(fixture.projectRoot, 'pi-agent');
+      const extensionDir = join(agentDir, 'extensions');
+      const extensionPath = join(extensionDir, 'detached-failure.ts');
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(
+        join(agentDir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            fixture: {
+              baseUrl: `http://127.0.0.1:${String(endpoint.port)}/v1`,
+              api: 'openai-completions',
+              apiKey: 'test-key',
+              models: [{ id: 'test-model' }],
+            },
+          },
+        })
+      );
+      writeFileSync(
+        extensionPath,
+        `export default function (pi) {
+  pi.on('session_start', async () => {
+    setTimeout(() => {
+      throw new Error('detached Pi extension timer failed');
+    }, 5000);
+  });
+}
+`
+      );
+      fixture.env = { PI_CODING_AGENT_DIR: agentDir };
+
+      const { runId } = await launchDetached(fixture, 'wait-pi-extension');
+      await waitForRunBoot('the detached Pi owner to start running', async () => {
+        if (readRunStatus(fixture.archonHome, runId) !== 'running') return undefined;
+        return (await isRunOwnerAnswering(runId)) ? true : undefined;
+      });
+
+      const waiter = startWait(fixture, runId, 60);
+      expect(await waiter.attached()).toEqual({ observedStatus: 'running' });
+      const settled = await waiter.settled();
+      activeRunIds.delete(runId);
+
+      expectWaitExit(settled, 0);
+      expect(settled.payload).toMatchObject({
+        result: 'attention',
+        attention: { kind: 'terminal', runId, status: 'failed' },
+      });
+      expect(settled.payload).not.toHaveProperty('result', 'owner_lost');
+      expect(
+        await waitFor(
+          'the detached Pi run to be readable as failed',
+          () => (readRunStatus(fixture.archonHome, runId) === 'failed' ? 'failed' : undefined),
+          10_000
+        )
+      ).toBe('failed');
+
+      const failure = await waitFor(
+        'the Pi node failure evidence',
+        () => readNodeFailure(fixture.archonHome, runId, 'agent'),
+        10_000
+      );
+      expect(failure.provider_failure?.class).toBe('unknown');
+      expect(failure.provider_failure?.evidence).toContain('detached Pi extension timer failed');
+      expect(failure.provider_failure?.evidence).toContain(extensionPath);
+    } finally {
+      endpoint.stop(true);
+    }
+  }, 120_000);
+
   test.each([
     { workflow: 'wait-success', status: 'completed' },
     { workflow: 'wait-failure', status: 'failed' },
@@ -646,55 +878,43 @@ describe('archon workflow wait against a detached run', () => {
     90_000
   );
 
-  test('wakes with awaiting_response on a gate, then with cancelled when it is rejected', async () => {
-    const fixture = makeFixture('archon-wait-gate-', { 'wait-gated': GATED });
-    // Owned by another process; it exits on its own once the run parks on the gate.
-    const owner = startForegroundOwner(fixture, [
-      CLI_PATH,
-      'workflow',
-      'run',
-      'wait-gated',
-      'run-attention wait integration',
-      '--folder',
-    ]);
+  test.each([
+    ['approve', 'completed'],
+    ['reject', 'cancelled'],
+  ] as const)(
+    'a detached launch wakes with awaiting_response on a gate, then %s ends it %s',
+    async (decision, status) => {
+      const fixture = makeFixture('archon-wait-gate-', { 'wait-gated': GATED });
+      const { runId } = await launchDetached(fixture, 'wait-gated');
 
-    // Discovering the id is test setup, not the contract under test — the launcher
-    // above has no `--detach --json` ack to carry one.
-    const runId = await waitForRunBoot(
-      'the gated run row',
-      () => readRunId(fixture.archonHome, 'wait-gated'),
-      owner
-    );
-    activeRunIds.add(runId);
+      // Attached while the warm-up node is still running, so the gate is a WAKE.
+      const gate = await startWait(fixture, runId, 60).settled();
+      expectWaitExit(gate, 0);
+      expect(gate.payload).toMatchObject({
+        result: 'attention',
+        attention: {
+          kind: 'awaiting_response',
+          runId,
+          respondTo: { runId, nodeId: 'review' },
+          message: 'Approve the plan?',
+        },
+      });
+      await waitFor(
+        'the gated owner to release',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        30_000
+      );
 
-    // Attached while the warm-up node is still running, so the gate is a WAKE.
-    const gateWaiter = startWait(fixture, runId, 60);
-    const gate = await gateWaiter.settled();
-
-    expectWaitExit(gate, 0);
-    expect(gate.payload).toMatchObject({
-      result: 'attention',
-      attention: {
-        kind: 'awaiting_response',
-        runId,
-        respondTo: { runId, nodeId: 'review' },
-        message: 'Approve the plan?',
-      },
-    });
-    const ownerExit = await owner.settled;
-    if (ownerExit !== 0) throw new Error(`Gated owner failed: ${ownerDiagnostics(owner)}`);
-
-    // Resolving the gate is the ordinary next step, and it is what makes the wake
-    // actionable. Rejecting to termination also exercises the transition that writes
-    // `cancelled` from the gate path.
-    const rejected = await runCli(fixture, ['workflow', 'reject', runId, 'not this time']);
-    if (rejected.exitCode !== 0) {
-      throw new Error(`reject failed: ${rejected.stderr || rejected.stdout}`);
-    }
-    activeRunIds.delete(runId);
-    const detail = await runCli(fixture, ['workflow', 'get', runId, '--json']);
-    expect(JSON.parse(detail.stdout.trim())).toMatchObject({ id: runId, status: 'cancelled' });
-  }, 120_000);
+      const answered = await runCli(fixture, ['workflow', decision, runId]);
+      if (answered.exitCode !== 0) {
+        throw new Error(`${decision} failed: ${answered.stderr || answered.stdout}`);
+      }
+      activeRunIds.delete(runId);
+      const detail = await runCli(fixture, ['workflow', 'get', runId, '--json']);
+      expect(JSON.parse(detail.stdout.trim())).toMatchObject({ id: runId, status });
+    },
+    120_000
+  );
 
   test('wakes on a cancelled run stopped from a third process', async () => {
     // `cancelled` is the transition that never arrives on its own — someone else
@@ -812,6 +1032,52 @@ describe('archon workflow wait against a detached run', () => {
   }, 60_000);
 });
 
+describe('wait immediately after detached resume', () => {
+  for (const nextPause of [false, true]) {
+    test(nextPause
+      ? 'reports a new attention pause'
+      : 'does not report the cleared pause', async () => {
+      const name = 'resume-attention';
+      const workflow =
+        `name: ${name}\ndescription: Resume acknowledgement fixture.\nnodes:\n` +
+        '  - id: warmup\n    bash: "echo ready"\n' +
+        '  - id: old-pause\n    depends_on: [warmup]\n    wait:\n      attention: "First action"\n' +
+        (nextPause
+          ? '  - id: new-pause\n    depends_on: [old-pause]\n    wait:\n      attention: "Second action"\n'
+          : '  - id: finish\n    depends_on: [old-pause]\n    bash: "echo done"\n');
+      const fixture = makeFixture('archon-resume-attention-', { [name]: workflow });
+      const { runId } = await launchDetached(fixture, name);
+      await waitFor(
+        'the initial pause',
+        () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? true : undefined),
+        30_000
+      );
+      await waitFor(
+        'the initial owner to release',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        30_000
+      );
+      const resume = await runCli(fixture, ['workflow', 'resume', runId, '--detach', '--json']);
+      expect(resume.exitCode).toBe(0);
+      expect(JSON.parse(resume.stdout)).toMatchObject({
+        ok: true,
+        runId,
+        action: 'resume',
+        detached: true,
+        continues: true,
+      });
+      const { exitCode, payload } = await startWait(fixture, runId, 30).settled();
+      expect(exitCode).toBe(0);
+      expect(payload).toMatchObject({
+        result: 'attention',
+        attention: nextPause
+          ? { kind: 'attention', nodeId: 'new-pause', message: 'Second action', form: 'message' }
+          : { kind: 'terminal', runId, status: 'completed' },
+      });
+    }, 90_000);
+  }
+});
+
 /**
  * #3312: with no `archon serve` anywhere in this block, the process that owns a run
  * enforces its own durable wait deadline. On a build where the `--detach` child exits
@@ -828,6 +1094,11 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     'nodes:\n' +
     '  - id: warmup\n    bash: "echo ready"\n' +
     '  - id: checks\n    depends_on: [warmup]\n    wait:\n      event: checks.complete\n      deadline_ms: 1500\n';
+  const SIGNALED_EVENT_WAIT =
+    'name: wait-signaled\ndescription: Signal under a sleeping detached owner.\n' +
+    'nodes:\n' +
+    '  - id: checks\n    wait:\n      event: checks.complete\n      deadline_ms: 120000\n' +
+    '  - id: finish\n    depends_on: [checks]\n    bash: "echo done"\n';
   const ATTENTION_WAIT =
     'name: wait-attention\ndescription: Durable attention wait fixture.\n' +
     'nodes:\n' +
@@ -848,7 +1119,7 @@ describe('a durable wait deadline is enforced by the owning process', () => {
 
   test('resumes a duration wait at its deadline and finishes the run', async () => {
     const fixture = makeFixture('archon-wait-duration-', { 'wait-duration': DURATION_WAIT });
-    const { runId, conversationId } = await launchDetached(fixture, 'wait-duration');
+    const { runId } = await launchDetached(fixture, 'wait-duration');
 
     const completed = await waitFor(
       'the duration wait to resume and complete the run',
@@ -867,9 +1138,7 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     // The engine's own record of the wait: the deadline was genuinely waited, and
     // only then did the owner resume the run.
     expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(3000);
-    // The resumed segment continues the run's original conversation instead of
-    // generating a second one for its dispatch and result card.
-    expect(readCliConversationPlatformIds(fixture.archonHome)).toEqual([conversationId]);
+    expect(readCliConversationPlatformIds(fixture.archonHome)).toEqual([]);
   }, 120_000);
 
   test('carries one owner through two sequential waits', async () => {
@@ -918,6 +1187,83 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     expect(output).toMatchObject({ status: 'expired', event: 'checks.complete' });
     expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(1500);
   }, 120_000);
+
+  for (const delivery of ['recorded', 'cli'] as const) {
+    test(delivery === 'recorded'
+      ? 'the sleeping owner resumes an event signal that is only recorded'
+      : 'a CLI event signal completes once while the detached owner sleeps', async () => {
+      const fixture = makeFixture(
+        'archon-wait-signaled-',
+        { 'wait-signaled': SIGNALED_EVENT_WAIT },
+        { env: { DATABASE_URL: '' } }
+      );
+      const { startedPath, exitPath } = captureDetachedOwnerExit(fixture);
+      const { runId } = await launchDetached(fixture, 'wait-signaled');
+      const owner = await waitFor(
+        'the detached owner to start',
+        () =>
+          existsSync(startedPath)
+            ? (JSON.parse(readFileSync(startedPath, 'utf8')) as { pid: number })
+            : undefined,
+        30_000
+      );
+      observedDetachedOwners.add(owner.pid);
+      const wait = await waitFor(
+        'the event-wait run to park',
+        () => readEventWait(fixture.archonHome, runId),
+        30_000
+      );
+      await waitFor(
+        'the paused owner to release its execution endpoint',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        10_000
+      );
+      expect(existsSync(exitPath)).toBe(false);
+      process.kill(owner.pid, 0);
+
+      if (delivery === 'recorded') {
+        expect(await recordEventSignal(fixture, runId, wait)).toEqual({ signaled: true });
+      } else {
+        const signal = await runCli(fixture, [
+          'workflow',
+          'signal',
+          runId,
+          '--event',
+          wait.event,
+          '--resume-at',
+          wait.resumeAt,
+          '--json',
+        ]);
+        expect(signal.exitCode, signal.stderr || signal.stdout).toBe(0);
+        expect(JSON.parse(signal.stdout)).toMatchObject({ ok: true, signaled: true });
+      }
+
+      await waitFor(
+        'the signaled event wait to complete the run before its deadline',
+        () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? true : undefined),
+        20_000
+      );
+      expect(Date.now()).toBeLessThan(Date.parse(wait.resumeAt));
+      expect(readNodeCompletedOutput(fixture.archonHome, runId, 'checks')).toMatchObject({
+        status: 'satisfied',
+        event: 'checks.complete',
+      });
+      if (delivery === 'cli') {
+        const exit = await waitFor(
+          'the detached owner to exit',
+          () =>
+            existsSync(exitPath)
+              ? (JSON.parse(readFileSync(exitPath, 'utf8')) as { code: number })
+              : undefined,
+          15_000
+        );
+        observedDetachedOwners.delete(owner.pid);
+        expect(exit).toEqual({ code: 0 });
+      }
+      activeRunIds.delete(runId);
+      expect(countNodeCompletions(fixture.archonHome, runId, 'finish')).toBe(1);
+    }, 90_000);
+  }
 
   test('workflow wait returns at the run terminal, not at the wait', async () => {
     const fixture = makeFixture('archon-wait-continuation-', { 'wait-duration': DURATION_WAIT });

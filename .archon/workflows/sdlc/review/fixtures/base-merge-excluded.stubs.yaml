@@ -1,0 +1,35 @@
+# Dry-run fixture: a continuation whose branch merged the base after the previous
+# round. The scope agent rebuilds the cursor's change on the merged base and diffs the
+# head against that tree, so code the base brought in never reaches the lenses. The
+# route agent adds nothing; the code lens reviews the delta alone.
+policy: { defaults: "fixture-policy-defaults" }
+mode: '{"continuation":true,"light":false,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
+route: { seams: false, code: false, tests: false, errors: false, docs: false, reason: "stub: no prior finding open beyond code; the delta touches no other lens's area" }
+scope:
+  head_matches: true
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+code: "0 findings in the change's own delta"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: the correction delta is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+publish: &published_verdict
+  ready: true
+  action: none
+  findings_summary: "stub: the correction delta is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+result: *published_verdict
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+fixture:
+  expect: completed
+  reached: [route, code, synthesize]
+  resolved-text-contains:
+    scope: "git merge-tree --write-tree"

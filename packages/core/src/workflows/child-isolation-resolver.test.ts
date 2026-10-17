@@ -1,10 +1,12 @@
+// @archon-test-isolated
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 /**
  * Child-isolation resolver — identifier uniqueness (#2121 slice 2, PR-A).
  *
  * The identifier becomes the child's branch name and its
  * `isolation_environments.workflow_id`. `WorktreeProvider.create()` ADOPTS an
- * existing worktree at the computed path with an INFO log and no error, so a
- * collision does not fail — it silently hands two children one checkout. These
+ * existing worktree at the computed path with a WARN log and no error, so a
+ * collision does not fail — it hands two children one checkout. These
  * tests pin the key at the granularity of the thing it names.
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
@@ -20,14 +22,25 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
     branchName: 'archon/task-stub',
     status: 'active' as const,
     createdAt: new Date(),
-    metadata: { adopted: nextCreateAdopts },
+    metadata: nextCreateAdopts
+      ? { provenance: 'adopted' as const, adopted: true as const }
+      : {
+          provenance: 'created' as const,
+          adopted: false as const,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          branchCreated: true,
+        },
   })
 );
 
 /** Records the loader the resolver hands to the isolation factory (see the M1 test). */
 const mockConfigureIsolation = mock((_loader: (repoPath: string) => Promise<unknown>) => undefined);
 
+const actualIsolation = await import('@archon/isolation');
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  ...actualIsolation,
+  worktreeRegistrationMetadata,
   getIsolationProvider: () => ({ create: mockProviderCreate }),
   configureIsolation: mockConfigureIsolation,
   // Distinctive prefix, not identity: proves the resolver actually routes provider
@@ -43,8 +56,35 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationDbCreate,
 }));
 
-const { buildChildIdentifier, createChildWorktreeResolver } =
-  await import('./child-isolation-resolver');
+const { buildChildIdentifier, createCodebaseChildResolver } = await import(
+  './child-isolation-resolver'
+);
+
+const setupDeps = {
+  store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} },
+};
+
+const REPO_CODEBASE = {
+  id: 'cb-1',
+  name: 'owner/repo',
+  default_cwd: '/repo',
+  kind: 'repo' as const,
+};
+
+function repoResolver(): NonNullable<ReturnType<typeof createCodebaseChildResolver>> {
+  const resolver = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    REPO_CODEBASE,
+    {
+      baseBranch: 'main',
+      createdByPlatform: 'cli',
+      createdByUserId: undefined,
+    },
+    setupDeps
+  );
+  if (!resolver) throw new Error('a repo codebase must get a resolver');
+  return resolver;
+}
 
 /** Mirrors `WorktreeProvider.slugify()` — the cap the identifier has to survive. */
 const PROVIDER_SLUG_CAP = 50;
@@ -162,18 +202,65 @@ describe('buildChildIdentifier', () => {
   });
 });
 
-describe('createChildWorktreeResolver', () => {
-  const parentRun = { id: PARENT_RUN_ID } as Parameters<
-    ReturnType<typeof createChildWorktreeResolver>['resolve']
-  >[0]['parentRun'];
+const parentRun = { id: PARENT_RUN_ID } as Parameters<
+  ReturnType<typeof repoResolver>['resolve']
+>[0]['parentRun'];
 
-  const resolver = createChildWorktreeResolver({
-    codebaseId: 'cb-1',
-    codebaseName: 'owner/repo',
-    canonicalRepoPath: '/repo',
-    baseBranch: 'main',
-    createdByPlatform: 'cli',
+describe('createCodebaseChildResolver', () => {
+  beforeEach(() => {
+    mockProviderCreate.mockClear();
+    mockIsolationDbCreate.mockClear();
+    mockConfigureIsolation.mockClear();
   });
+
+  test('a repo codebase gets a resolver bound to it and to the surface attribution', async () => {
+    const resolver = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
+      { id: 'cb-7', name: 'acme/api', default_cwd: '/repos/api', kind: 'repo' },
+      { baseBranch: 'develop', createdByPlatform: 'slack', createdByUserId: 'user-42' },
+      setupDeps
+    );
+
+    await resolver?.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'build',
+      codebaseId: 'cb-7',
+    });
+
+    expect(mockProviderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebaseId: 'cb-7',
+        codebaseName: 'acme/api',
+        canonicalRepoPath: '/repos/api',
+        baseBranch: 'develop',
+      }),
+      expect.any(Function)
+    );
+    expect(mockIsolationDbCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebase_id: 'cb-7',
+        created_by_platform: 'slack',
+        created_by_user_id: 'user-42',
+      })
+    );
+  });
+
+  test('a folder codebase gets no resolver', () => {
+    const resolver = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
+      { id: 'cb-8', name: 'ops', default_cwd: '/ops', kind: 'folder' },
+      { baseBranch: undefined, createdByPlatform: 'cli', createdByUserId: 'user-42' },
+      setupDeps
+    );
+
+    expect(resolver).toBeUndefined();
+    expect(mockConfigureIsolation).not.toHaveBeenCalled();
+  });
+});
+
+describe('child worktree resolver', () => {
+  const resolver = repoResolver();
 
   beforeEach(() => {
     nextCreateAdopts = false;
@@ -190,12 +277,7 @@ describe('createChildWorktreeResolver', () => {
     // block (baseBranch, path, remote, and copyFiles, which is what actually bites:
     // seeded files like .env never reach the child and its build fails confusingly).
     // Binding it to the resolver covers every construction site, present and future.
-    createChildWorktreeResolver({
-      codebaseId: 'cb-2',
-      codebaseName: 'owner/repo',
-      canonicalRepoPath: '/repo',
-      createdByPlatform: 'cli',
-    });
+    repoResolver();
 
     expect(mockConfigureIsolation).toHaveBeenCalledTimes(1);
     expect(typeof mockConfigureIsolation.mock.calls[0][0]).toBe('function');
@@ -210,7 +292,12 @@ describe('createChildWorktreeResolver', () => {
     );
 
     await expect(
-      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' })
+      resolver.resolve({
+        setupEnvironment: {},
+        parentRun,
+        nodeId: 'refactor-auth',
+        codebaseId: 'cb-1',
+      })
     ).rejects.toThrow('classified: No space left on device');
 
     // Failure happens before registration — no orphan environment row.
@@ -222,7 +309,12 @@ describe('createChildWorktreeResolver', () => {
     // it was wired to the wrong project, and creating a checkout in the wrong repo is
     // worse than failing. Guard had no coverage.
     await expect(
-      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-OTHER' })
+      resolver.resolve({
+        setupEnvironment: {},
+        parentRun,
+        nodeId: 'refactor-auth',
+        codebaseId: 'cb-OTHER',
+      })
     ).rejects.toThrow(/bound to codebase 'cb-1'.*carries codebase 'cb-OTHER'/s);
 
     expect(mockProviderCreate).not.toHaveBeenCalled();
@@ -230,8 +322,18 @@ describe('createChildWorktreeResolver', () => {
   });
 
   test('two isolated sub-run nodes in one parent request distinct worktrees', async () => {
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
-    await resolver.resolve({ parentRun, nodeId: 'refactor-billing', codebaseId: 'cb-1' });
+    await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
+    await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-billing',
+      codebaseId: 'cb-1',
+    });
 
     expect(mockProviderCreate).toHaveBeenCalledTimes(2);
     const [first, second] = mockProviderCreate.mock.calls.map(call => call[0].identifier);
@@ -240,21 +342,41 @@ describe('createChildWorktreeResolver', () => {
     expect(first).not.toBe(second);
   });
 
-  test('a re-used worktree is recorded as adopted on the environment row', async () => {
-    // Adoption is legitimate here — it is how a parent's resume recovers a worktree
-    // whose child row never got written — but it must never pass unremarked, because
-    // silence is exactly what made the identifier collision invisible. The row is the
-    // durable half of that signal (a WARN is emitted alongside it).
+  test('a re-used worktree is recorded without a creation proof on the environment row', async () => {
     nextCreateAdopts = true;
 
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+    const result = await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
 
-    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(true);
+    expect(mockIsolationDbCreate).toHaveBeenCalledTimes(1);
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata).toMatchObject({
+      adopted: true,
+      worktree_creation_id: null,
+      worktree_branch_created: false,
+      parent_run_id: PARENT_RUN_ID,
+      child_index: 0,
+    });
+    expect(result.ownedWorktree).toBeUndefined();
   });
 
-  test('a freshly created worktree is not recorded as adopted', async () => {
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+  test('a freshly created worktree is recorded with its creation proof', async () => {
+    const result = await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
 
-    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(false);
+    expect(result.ownedWorktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.worktree_creation_id).toBe(
+      result.ownedWorktree?.creationId
+    );
   });
 });

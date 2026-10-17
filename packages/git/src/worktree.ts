@@ -1,5 +1,7 @@
-import { readFile, access } from 'fs/promises';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { GitFailure } from './errors';
+import { readFile, access, realpath } from 'fs/promises';
+import * as nodePath from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
   getArchonWorkspacesPath,
@@ -156,7 +158,7 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
       return false;
     }
     getLog().error({ worktreePath, err, code: err.code }, 'worktree.existence_check_failed');
-    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`);
+    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`, { cause: err });
   }
 
   // Step 2: Check if .git entry exists (directory exists at this point)
@@ -172,7 +174,7 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
       return false;
     }
     getLog().error({ worktreePath, err, code: err.code }, 'worktree.existence_check_failed');
-    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`);
+    throw new Error(`Failed to check worktree at ${worktreePath}: ${err.message}`, { cause: err });
   }
 }
 
@@ -196,7 +198,7 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
 
     for (const line of stdout.split('\n')) {
       if (line.startsWith('worktree ')) {
-        currentPath = line.substring(9);
+        currentPath = toNativeWorktreePath(line.substring(9));
       } else if (line.startsWith('branch ')) {
         const branch = line.substring(7).replace('refs/heads/', '');
         if (currentPath) {
@@ -207,23 +209,9 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
 
     return worktrees;
   } catch (error) {
-    const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // ENOENT on repo path itself — distinct from "not a git repository"
-    if (errorText.includes('No such file or directory')) {
-      getLog().warn({ repoPath }, 'worktree.list_repo_missing');
-      return [];
-    }
-
-    // Expected: not a git repository - return empty list
-    if (errorText.includes('not a git repository')) {
-      return [];
-    }
-
-    // Unexpected error - log and throw
-    getLog().error({ repoPath, err, code: err.code, stderr: err.stderr }, 'worktree.list_failed');
-    throw new Error(`Failed to list worktrees for ${repoPath}: ${err.message}`);
+    if (error instanceof GitFailure && error.kind === 'not_repository') return [];
+    getLog().error({ repoPath, err: error }, 'worktree.list_failed');
+    throw error;
   }
 }
 
@@ -276,7 +264,7 @@ export async function isWorktreePath(path: string): Promise<boolean> {
     }
     // Unexpected error - throw since this affects critical path decisions
     getLog().error({ path, err, code: err.code }, 'worktree_status_check_failed');
-    throw new Error(`Cannot determine if ${path} is a worktree: ${err.message}`);
+    throw new Error(`Cannot determine if ${path} is a worktree: ${err.message}`, { cause: error });
   }
 }
 
@@ -478,13 +466,6 @@ export async function getCanonicalRepoPath(path: string): Promise<RepoPath> {
  *
  * Git's common-directory paths are normalized with `resolve()` before
  * comparison to handle trailing slashes and relative components.
- *
- * Error classification (surfaced via `classifyIsolationError` in
- * `@archon/isolation/errors.ts`):
- *   - "path contains a full git checkout" → EISDIR
- *   - "Cannot verify worktree ownership" → ENOENT / EACCES / EIO
- *   - "not a git-worktree reference" → submodule pointer or malformed
- *   - "belongs to a different clone" → cross-checkout
  */
 export async function verifyWorktreeOwnership(
   worktreePath: WorktreePath,
@@ -495,32 +476,32 @@ export async function verifyWorktreeOwnership(
     gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    // Preserve the original errno on the wrapped error so downstream
-    // classifiers can match by `.code` instead of substring — resilient to
-    // Node.js message format changes. The original error is also kept via
-    // `cause` for debugging.
-    const wrap = (message: string): Error => {
-      const wrapped = new Error(message, { cause: err });
-      if (err.code) (wrapped as NodeJS.ErrnoException).code = err.code;
-      return wrapped;
-    };
     // EISDIR: .git is a directory — path holds a full checkout, not a
     // worktree. Refusing adoption prevents accidentally treating an
     // unrelated repo at this path as ours.
     if (err.code === 'EISDIR') {
-      throw wrap(
-        `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`
+      throw new GitFailure(
+        'adoption_refused',
+        `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`,
+        err
       );
     }
     // ENOENT: .git file missing despite worktreeExists() reporting true —
     // a TOCTOU race or filesystem corruption. Fail fast.
     // EACCES/EIO/etc.: cannot verify ownership — fail fast rather than
     // defaulting to permissive adoption.
-    throw wrap(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
+    throw new GitFailure(
+      'ownership_unverified',
+      `Cannot verify worktree ownership at ${worktreePath}: ${err.message}`,
+      err
+    );
   }
 
   if (!gitContent.startsWith('gitdir:')) {
-    throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
+    throw new GitFailure(
+      'adoption_refused',
+      `Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`
+    );
   }
 
   let worktreeIdentity: GitCheckoutIdentity;
@@ -531,25 +512,118 @@ export async function verifyWorktreeOwnership(
       getGitCheckoutIdentity(expectedRepo),
     ]);
   } catch (error) {
-    throw new Error(
+    throw new GitFailure(
+      'ownership_unverified',
       `Cannot verify worktree ownership at ${worktreePath}: ${(error as Error).message}`,
-      {
-        cause: error,
-      }
+      error
     );
   }
   if (!worktreeIdentity.linkedWorktree) {
     // Not a git-worktree pointer (e.g., submodule pointer, or malformed).
     // We cannot confirm this is our worktree, so refuse adoption.
-    throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
+    throw new GitFailure(
+      'adoption_refused',
+      `Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`
+    );
   }
 
   // Compare resolved common-directory paths: the primary checkout and every
   // linked worktree share this Git identity, while separate clones differ.
   if (resolve(worktreeIdentity.commonGitDir) !== resolve(expectedIdentity.commonGitDir)) {
-    throw new Error(
+    throw new GitFailure(
+      'different_clone',
       `Worktree at ${worktreePath} belongs to a different clone (${worktreeIdentity.commonGitDir}). ` +
         'Remove it from that clone or use a different codebase registration.'
     );
+  }
+}
+
+/**
+ * Convert a path from `git worktree list` to the form Node builds for the same
+ * checkout, which is what Archon uses as a worktree environment's id.
+ *
+ * Git for Windows prints forward slashes, keeping the drive letter it was given;
+ * Archon gives it Node's paths, so normalizing the separators reproduces them.
+ * Elsewhere git's absolute path already is Node's form and is returned unchanged.
+ */
+export function toNativeWorktreePath(
+  gitPath: string,
+  paths: nodePath.PlatformPath = nodePath
+): string {
+  return paths.sep === '\\' ? paths.normalize(gitPath) : gitPath;
+}
+
+/**
+ * Whether two spellings name the same worktree path.
+ *
+ * Git prints Windows paths with forward slashes and its own drive-letter case,
+ * so on win32 both sides are normalized and compared case-insensitively.
+ * Symlinks are not resolved here; callers that need that resolve first.
+ */
+export function isSameWorktreePath(
+  a: string,
+  b: string,
+  paths: nodePath.PlatformPath = nodePath
+): boolean {
+  const normalize = (value: string): string => {
+    const resolved = paths.resolve(value);
+    return paths.sep === '\\' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * Whether Git still lists `worktreePath` as a worktree of `repoPath`.
+ *
+ * Unlike listWorktrees, this counts detached worktrees and lets a failed
+ * `git worktree list` throw: a caller deletes files on a `false`.
+ */
+export async function isWorktreeRegistered(
+  repoPath: RepoPath,
+  worktreePath: string
+): Promise<boolean> {
+  return (await readWorktreeRegistration(repoPath, worktreePath)) !== null;
+}
+
+/**
+ * Git's registration of `worktreePath` under `repoPath`, or null when it is not
+ * listed. `lockReason` is null when unlocked and '' for a lock without a reason.
+ *
+ * Read from Git's admin entry, so it works after the checkout directory is gone.
+ * Git prints symlink-resolved paths, so both sides are compared resolved; a path
+ * that no longer exists resolves through its nearest existing ancestor.
+ */
+export async function readWorktreeRegistration(
+  repoPath: RepoPath,
+  worktreePath: string
+): Promise<{ lockReason: string | null } | null> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+    { timeout: 10000 }
+  );
+  const target = await resolveThroughExistingAncestor(worktreePath);
+  // -z ends each field with NUL and each record with an extra NUL.
+  for (const record of stdout.split('\0\0')) {
+    const fields = record.split('\0');
+    const listedPath = fields.find(field => field.startsWith('worktree '));
+    if (!listedPath) continue;
+    const listed = await resolveThroughExistingAncestor(listedPath.slice('worktree '.length));
+    if (!isSameWorktreePath(listed, target)) continue;
+    const locked = fields.find(field => field === 'locked' || field.startsWith('locked '));
+    return { lockReason: locked === undefined ? null : locked.slice('locked '.length) };
+  }
+  return null;
+}
+
+async function resolveThroughExistingAncestor(path: string): Promise<string> {
+  const absolute = resolve(path);
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    const parent = dirname(absolute);
+    const { code } = error as NodeJS.ErrnoException;
+    if ((code !== 'ENOENT' && code !== 'ENOTDIR') || parent === absolute) throw error;
+    return join(await resolveThroughExistingAncestor(parent), basename(absolute));
   }
 }

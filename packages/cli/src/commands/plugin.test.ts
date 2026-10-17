@@ -1,11 +1,14 @@
+import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
-import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { pluginCommand, stagingName, type PluginEnvironment } from './plugin';
+import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
+import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
+import { receiptPath } from '@archon/plugin-manifest/store';
+import { parsePluginRef, pluginCommand, stagingName, type PluginEnvironment } from './plugin';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
 // protocol (so `git ls-remote` runs for real), next to the `releases/latest`
@@ -27,7 +30,13 @@ let pluginBinary: Uint8Array;
 const commits = new Map<string, string>();
 const manifests = new Map<string, unknown>();
 const releases = new Map<string, Release>();
+// Most of the suite needs the compiled fixture, which only the v1.0.0 release carries.
+const skipCompiled = skipCompiledBinaryTests();
 const latestTag = 'v1.0.0';
+// For the test that installs the ~86 MB compiled fixture (only v1.0.0 carries it; every
+// other release is a few bytes). That write has taken over 20 s on Windows CI, and a test
+// that times out keeps running after `afterEach` has deleted its temp home.
+const FIXTURE_WRITE_BUDGET_MS = 60_000;
 
 const manifest = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   schemaVersion: 1,
@@ -38,65 +47,32 @@ const manifest = (extra: Record<string, unknown> = {}): Record<string, unknown> 
   ...extra,
 });
 
-// On a Windows host this asset is also the host's, so it must stay the working binary.
-const windowsBinary = (): Uint8Array =>
-  hostAsset === 'archon-forge-github-windows-x64.exe' ? pluginBinary : new Uint8Array([7]);
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const checksumsFor = (assets: Record<string, Uint8Array>): string =>
   Object.entries(assets)
     .map(([name, bytes]) => `${sha256(bytes)}  ${name}\n`)
     .join('');
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const child = Bun.spawn(['git', '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
-  return stdout.trim();
-}
-
+// Compiles the same forge fixture as forge's discovery.test.ts, so it takes the same
+// compile-sized budget.
 beforeAll(async () => {
   fixtureRoot = await mkdtemp(join(tmpdir(), 'plugin-install-fixture-'));
-  // A real executable that answers forge discovery's metadata handshake as `github`.
-  const binaryPath = join(fixtureRoot, `archon-forge-github${hostExe}`);
-  const built = Bun.spawnSync(
-    [
-      process.execPath,
-      'build',
-      '--compile',
-      join(import.meta.dir, '../../../forge/src/fixtures/discovery-plugin.ts'),
-      '--outfile',
-      binaryPath,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (built.exitCode !== 0) throw new Error(built.stderr.toString());
-  pluginBinary = new Uint8Array(await readFile(binaryPath));
+  if (!skipCompiled) {
+    // A real executable that answers forge discovery's metadata handshake as `github`.
+    const binaryPath = compileDiscoveryPlugin(fixtureRoot);
+    pluginBinary = new Uint8Array(await readFile(binaryPath));
+    releases.set('v1.0.0', { assets: { [hostAsset]: pluginBinary } });
+  }
 
   const repo = join(fixtureRoot, 'repo');
-  await mkdir(repo);
-  await git(repo, 'init', '-q');
-  // HEAD stays v4.0.0, a forge manifest; pack-0.1.0 is an older commit whose
-  // manifest turned the plugin into a workflow pack.
-  for (const [tag, annotated] of [
-    ['pack-0.1.0', false],
-    ['v1.0.0', true],
-    ['v2.0.0', false],
-    ['v3.0.0', false],
-    ['v4.0.0', false],
-  ] as const) {
-    await git(repo, 'commit', '-q', '--allow-empty', '-m', tag);
-    await git(repo, 'tag', ...(annotated ? ['-a', '-m', tag] : []), tag);
-    commits.set(tag, await git(repo, 'rev-parse', 'HEAD'));
-  }
-  await git(repo, 'update-server-info');
+  const fixtureCommits = await createReleaseRepo(repo, [
+    { tag: 'pack-0.1.0' },
+    { tag: 'v1.0.0', annotated: true },
+    { tag: 'v2.0.0' },
+    { tag: 'v3.0.0' },
+    { tag: 'v4.0.0' },
+  ]);
+  for (const [tag, commit] of fixtureCommits) commits.set(tag, commit);
 
   server = Bun.serve({
     hostname: '127.0.0.1',
@@ -109,11 +85,8 @@ beforeAll(async () => {
           headers: { location: `/owner/repo/releases/tag/${latestTag}` },
         });
       }
-      const gitFile = /^\/owner\/repo\.git\/(.+)$/.exec(path);
-      if (gitFile) {
-        const file = Bun.file(join(repo, '.git', gitFile[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
+      const gitResponse = await serveFixtureGit(repo, path);
+      if (gitResponse) return gitResponse;
       const download = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
       if (download) {
         const release = releases.get(download[1]);
@@ -144,20 +117,20 @@ beforeAll(async () => {
     description: 'fixture',
     entrypoints: { review: 'review/review.yaml' },
   });
-  releases.set('v1.0.0', {
+  // On a Windows x64 host both keys are the same asset.
+  releases.set('v2.0.0', {
     assets: {
-      [hostAsset]: pluginBinary,
-      'archon-forge-github-windows-x64.exe': windowsBinary(),
+      [hostAsset]: new Uint8Array([2, 2]),
+      'archon-forge-github-windows-x64.exe': new Uint8Array([2, 2]),
     },
   });
-  releases.set('v2.0.0', { assets: { [hostAsset]: new Uint8Array([2, 2]) } });
   releases.set('v3.0.0', { assets: { [hostAsset]: new Uint8Array([3]) } });
   // The asset was replaced after checksums.txt was generated.
   releases.set('v4.0.0', {
     assets: { [hostAsset]: new Uint8Array([4, 4]) },
     checksums: checksumsFor({ [hostAsset]: new Uint8Array([4]) }),
   });
-});
+}, 60_000);
 
 afterAll(async () => {
   await server.stop(true);
@@ -216,52 +189,62 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 }
 
 const receiptOf = async (env: PluginEnvironment): Promise<Record<string, unknown>> =>
-  JSON.parse(
-    await readFile(join(env.pluginsDir, 'installed', ...ID.split('/'), 'receipt.json'), 'utf8')
-  ) as Record<string, unknown>;
+  JSON.parse(await readFile(receiptPath(env.pluginsDir, ID), 'utf8')) as Record<string, unknown>;
 
-describe('archon plugin', () => {
-  test('installs the latest release where forge discovery finds it, then updates, lists and removes it', async () => {
-    const env = await environment();
-    const installed = await run(env, 'install', ID);
-    expect(installed.err).toBe('');
-    expect(installed.code).toBe(0);
-    expect(installed.out).toContain(`commit ${commits.get('v1.0.0')}`);
+/** Writes `{not json` as `id`'s receipt and returns its path. */
+async function breakReceipt(env: PluginEnvironment, id: string): Promise<string> {
+  const file = receiptPath(env.pluginsDir, id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, '{not json');
+  return file;
+}
 
-    const receipt = await receiptOf(env);
-    expect(receipt).toMatchObject({ id: ID, tag: 'v1.0.0', commit: commits.get('v1.0.0') });
-    const discovery = await discoverPlugins({
-      config: { scanPath: false },
-      env: { ARCHON_HOME: join(env.pluginsDir, '..') },
-    });
-    expect(discovery.plugins.map(plugin => plugin.metadata.name)).toEqual(['github']);
+describe.skipIf(skipCompiled)('archon plugin', () => {
+  test(
+    'installs the latest release where forge discovery finds it, then updates, lists and removes it',
+    async () => {
+      const env = await environment();
+      const installed = await run(env, 'add', ID);
+      expect(installed.err).toBe('');
+      expect(installed.code).toBe(0);
+      expect(installed.out).toContain(`commit ${commits.get('v1.0.0')}`);
 
-    // A binary the operator placed by hand is not the receipt's to remove.
-    const handPlaced = join(env.pluginsDir, 'archon-forge-other');
-    await writeFile(handPlaced, 'mine');
+      const receipt = await receiptOf(env);
+      expect(receipt).toMatchObject({ id: ID, tag: 'v1.0.0', commit: commits.get('v1.0.0') });
+      const discovery = await discoverPlugins({
+        config: { scanPath: false },
+        pluginsDir: env.pluginsDir,
+      });
+      expect(discovery.plugins.map(plugin => plugin.metadata.name)).toEqual(['github']);
 
-    expect((await run(env, 'install', ID)).err).toContain('already installed');
-    const updated = await run(env, 'update', `${ID}@v2.0.0`);
-    expect(updated.code).toBe(0);
-    expect(updated.out).toContain(`${commits.get('v1.0.0')}) -> `);
-    expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
-    expect(
-      new Uint8Array(await readFile(join(env.pluginsDir, `archon-forge-github${hostExe}`)))
-    ).toEqual(new Uint8Array([2, 2]));
+      // A binary the operator placed by hand is not the receipt's to remove.
+      const handPlaced = join(env.pluginsDir, 'archon-forge-other');
+      await writeFile(handPlaced, 'mine');
 
-    const listed = await run(env, 'list');
-    expect(listed.out).toBe(
-      `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any`
-    );
+      expect((await run(env, 'add', ID)).err).toContain('already installed');
+      const updated = await run(env, 'update', `${ID}@v2.0.0`);
+      expect(updated.code).toBe(0);
+      expect(updated.out).toContain(`${commits.get('v1.0.0')}) -> `);
+      expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
+      expect(
+        new Uint8Array(await readFile(join(env.pluginsDir, `archon-forge-github${hostExe}`)))
+      ).toEqual(new Uint8Array([2, 2]));
 
-    expect((await run(env, 'remove', ID)).code).toBe(0);
-    expect(Object.keys(await snapshot(env.pluginsDir))).toEqual(['archon-forge-other']);
-    expect((await run(env, 'list')).out).toBe('No plugins installed.');
-  });
+      const listed = await run(env, 'list');
+      expect(listed.out).toBe(
+        `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any`
+      );
+
+      expect((await run(env, 'remove', ID)).code).toBe(0);
+      expect(Object.keys(await snapshot(env.pluginsDir))).toEqual(['archon-forge-other']);
+      expect((await run(env, 'list')).out).toBe('No plugins installed.');
+    },
+    FIXTURE_WRITE_BUDGET_MS
+  );
 
   test('a checksum mismatch fails the update and leaves the previous install untouched', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v2.0.0`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v2.0.0`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
     const result = await run(env, 'update', `${ID}@v4.0.0`);
     expect(result.code).toBe(1);
@@ -272,7 +255,7 @@ describe('archon plugin', () => {
   test('refuses a platform the release has no asset for, and writes nothing', async () => {
     const env = await environment({ platform: 'linux', arch: 'arm64' });
     if (hostAsset === 'archon-forge-github-linux-arm64') env.arch = 'x64';
-    const result = await run(env, 'install', `${ID}@v2.0.0`);
+    const result = await run(env, 'add', `${ID}@v2.0.0`);
     expect(result.code).toBe(1);
     expect(result.err).toContain('Release v2.0.0 of owner/repo has no archon-forge-github-linux-');
     expect(result.err).toContain('for this platform');
@@ -281,7 +264,7 @@ describe('archon plugin', () => {
 
   test('refuses a release whose manifest requires another Archon version', async () => {
     const env = await environment();
-    const result = await run(env, 'install', `${ID}@v3.0.0`);
+    const result = await run(env, 'add', `${ID}@v3.0.0`);
     expect(result.err).toContain('requires Archon >=99.0.0; this is Archon 0.11.0');
     expect(await snapshot(env.pluginsDir)).toEqual({});
   });
@@ -291,26 +274,26 @@ describe('archon plugin', () => {
     await mkdir(env.pluginsDir, { recursive: true });
     await writeFile(join(env.pluginsDir, `archon-forge-github${hostExe}`), 'built by hand');
     const before = await snapshot(env.pluginsDir);
-    const result = await run(env, 'install', ID);
+    const result = await run(env, 'add', ID);
     expect(result.err).toContain('was not installed by archon plugin');
     expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 
   test("never overwrites another plugin's executable", async () => {
     const env = await environment();
-    expect((await run(env, 'install', ID)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v2.0.0`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
-    const result = await run(env, 'install', 'owner/repo/plugins/copy');
+    const result = await run(env, 'add', 'owner/repo/plugins/copy');
     expect(result.err).toContain(`belongs to ${ID}`);
     expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 
   test('names the executable with .exe on Windows', async () => {
     const env = await environment({ platform: 'win32', arch: 'x64' });
-    expect((await run(env, 'install', `${ID}@v1.0.0`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v2.0.0`)).code).toBe(0);
     expect(Object.keys(await snapshot(env.pluginsDir))[0]).toBe('archon-forge-github.exe');
     expect(await receiptOf(env)).toMatchObject({
-      files: [{ path: 'archon-forge-github.exe', sha256: sha256(windowsBinary()) }],
+      files: [{ path: 'archon-forge-github.exe', sha256: sha256(new Uint8Array([2, 2])) }],
     });
   });
 
@@ -318,12 +301,13 @@ describe('archon plugin', () => {
     const env = await environment();
     await mkdir(env.pluginsDir, { recursive: true });
     const staged = join(env.pluginsDir, stagingName(`archon-forge-github${hostExe}`));
-    await writeFile(staged, pluginBinary, { mode: 0o755 });
+    // Probing these bytes fails the handshake, so a probed staging file shows in `unavailable`.
+    await writeFile(staged, new Uint8Array([1]), { mode: 0o755 });
     const stderr = spyOn(process.stderr, 'write');
     try {
       const discovery = await discoverPlugins({
         config: { scanPath: false },
-        env: { ARCHON_HOME: join(env.pluginsDir, '..') },
+        pluginsDir: env.pluginsDir,
       });
       expect(discovery.plugins).toEqual([]);
       expect(discovery.unavailable).toEqual([]);
@@ -335,7 +319,7 @@ describe('archon plugin', () => {
 
   test('update refuses a tag whose manifest is another kind, and copy refuses a forge plugin', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1.0.0`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v2.0.0`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
     expect((await run(env, 'update', `${ID}@pack-0.1.0`)).err).toContain(
       'is now a workflow-pack plugin, not forge'
@@ -346,11 +330,157 @@ describe('archon plugin', () => {
 
   test('refuses malformed plugin ids and extra arguments before touching the network', async () => {
     const env = await environment();
-    for (const args of [['install', ID, 'owner/repo/other'], ['list', ID], ['install']]) {
+    for (const args of [['add', ID, 'owner/repo/other'], ['list', ID], ['add']]) {
       expect((await run(env, args[0], ...args.slice(1))).err).toContain('Usage: archon plugin');
     }
     for (const target of ['owner', 'owner/../x', 'owner/repo/..', 'owner/repo@', '-x/repo']) {
-      expect((await run(env, 'install', target)).err).toContain('Invalid plugin');
+      expect((await run(env, 'add', target)).err).toContain('Invalid plugin');
     }
   });
+});
+
+describe('archon plugin with an unreadable receipt', () => {
+  const BROKEN = 'acme/broken';
+  const OTHER = 'acme/other';
+
+  /** A hand-written forge receipt for OTHER, with the executable it names. */
+  async function installOther(env: PluginEnvironment): Promise<void> {
+    const file = receiptPath(env.pluginsDir, OTHER);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: OTHER,
+        manifest: {
+          schemaVersion: 1,
+          kind: 'forge',
+          name: 'forge-other',
+          description: 'x',
+          executable: 'archon-forge-other',
+        },
+        tag: 'v1.0.0',
+        commit: 'a'.repeat(40),
+        installedAt: new Date().toISOString(),
+        files: [{ path: 'archon-forge-other', sha256: 'b'.repeat(64) }],
+      })
+    );
+    await writeFile(join(env.pluginsDir, 'archon-forge-other'), 'other');
+  }
+
+  test('list reports the broken receipt beside the valid plugins', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    const listed = await run(env, 'list');
+    expect(listed.code).toBe(0);
+    expect(listed.out.split('\n')).toEqual([
+      `${OTHER}  forge  v1.0.0  ${'a'.repeat(12)}  archon any`,
+      `${BROKEN}  unreadable  Invalid JSON in plugin receipt ${broken}. Repair it: archon plugin update ${BROKEN}, or archon plugin remove ${BROKEN}`,
+    ]);
+  });
+
+  test.each(['acme', 'acme/broken@v1', 'acme/repo/plugins/broken@v1'])(
+    'a receipt outside a valid plugin-id location (%s) is reported for deletion by hand',
+    async strayId => {
+      const env = await environment();
+      const stray = await breakReceipt(env, strayId);
+      expect((await run(env, 'list')).out).toBe(
+        `${strayId}  unreadable  Invalid JSON in plugin receipt ${stray}. It is not where archon plugin writes receipts; delete it by hand`
+      );
+    }
+  );
+
+  test('remove deletes the broken receipt and leaves every file it might name', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    const before = await snapshot(env.pluginsDir);
+    const removed = await run(env, 'remove', BROKEN);
+    expect(removed.code).toBe(0);
+    expect(removed.out).toContain(`Removed the unreadable receipt of ${BROKEN}: ${broken}`);
+    expect(removed.out).toContain('could not be identified and were left in place');
+    delete before[join('installed', ...BROKEN.split('/'), 'receipt.json')];
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+  });
+
+  test('remove and copy of an unrelated plugin still work', async () => {
+    const env = await environment();
+    await installOther(env);
+    const broken = await breakReceipt(env, BROKEN);
+    // OTHER is a forge plugin: copy reaching its kind check proves the scan let it through.
+    expect((await run(env, 'copy', OTHER)).err).toContain('only workflow packs copy');
+    expect((await run(env, 'copy', BROKEN)).err).toContain(
+      `Invalid JSON in plugin receipt ${broken}`
+    );
+    expect((await run(env, 'remove', OTHER)).code).toBe(0);
+    expect(Object.keys(await snapshot(env.pluginsDir))).toEqual([
+      join('installed', ...BROKEN.split('/'), 'receipt.json'),
+    ]);
+  });
+
+  test('installing any other plugin refuses, naming the broken receipt and its repair', async () => {
+    const env = await environment();
+    const broken = await breakReceipt(env, BROKEN);
+    const before = await snapshot(env.pluginsDir);
+    const result = await run(env, 'add', `${ID}@v2.0.0`);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`Invalid JSON in plugin receipt ${broken}`);
+    expect(result.err).toContain(`archon plugin remove ${BROKEN}`);
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+    expect((await run(env, 'add', BROKEN)).err).toContain(`${BROKEN} is installed, but`);
+  });
+
+  test('update repairs the broken plugin, replacing an executable nothing else can claim', async () => {
+    const env = await environment();
+    await installOther(env);
+    await breakReceipt(env, ID);
+    const target = join(env.pluginsDir, `archon-forge-github${hostExe}`);
+    await writeFile(target, 'left by the broken install');
+    const updated = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(updated.err).toBe('');
+    expect(updated.code).toBe(0);
+    expect(updated.out).toContain('Replaced the unreadable receipt');
+    expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
+    expect(new Uint8Array(await readFile(target))).toEqual(new Uint8Array([2, 2]));
+    expect((await run(env, 'list')).code).toBe(0);
+  });
+
+  test('update of a valid plugin works while another receipt is broken', async () => {
+    const env = await environment();
+    expect((await run(env, 'add', `${ID}@v2.0.0`)).code).toBe(0);
+    await breakReceipt(env, BROKEN);
+    const updated = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(updated.err).toBe('');
+    expect(updated.code).toBe(0);
+  });
+
+  test('update of a broken plugin refuses an existing target another broken receipt could own', async () => {
+    const env = await environment();
+    await breakReceipt(env, ID);
+    const other = await breakReceipt(env, BROKEN);
+    const target = join(env.pluginsDir, `archon-forge-github${hostExe}`);
+    await writeFile(target, 'owner unknown');
+    const before = await snapshot(env.pluginsDir);
+    const result = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`${target} exists and may belong to a plugin`);
+    expect(result.err).toContain(`Invalid JSON in plugin receipt ${other}`);
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+  });
+});
+
+test('plugin references accept installable directories and reject unsafe segments', () => {
+  expect(parsePluginRef('owner/repo/.archon/packs/review-kit@v1.0.0')).toMatchObject({
+    id: 'owner/repo/.archon/packs/review-kit',
+    tag: 'v1.0.0',
+  });
+  for (const target of [
+    'owner/../x',
+    'owner/repo/..',
+    'owner/repo/path with spaces',
+    'owner/repo/x;echo',
+  ]) {
+    expect(() => parsePluginRef(target)).toThrow('Invalid plugin');
+  }
 });

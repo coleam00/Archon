@@ -1,11 +1,16 @@
 /**
  * Database operations for isolation environments
  */
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
+import {
+  WORKTREE_REGISTRATION_ID,
+  WorktreeRegistrationChangedError,
+} from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
@@ -14,6 +19,8 @@ import type {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -54,6 +61,20 @@ function normalizeEnvironmentRow<T extends IsolationEnvironmentRow>(row: T): T {
   return row;
 }
 
+type EnvironmentWithCodebasePath = IsolationEnvironmentRow & {
+  codebase_default_cwd: string;
+  codebase_name: string;
+};
+
+type EnvironmentWithCodebase = EnvironmentWithCodebasePath & {
+  codebase_repository_url: string | null;
+};
+
+function normalizeEnvironmentWithCodebase<T extends EnvironmentWithCodebasePath>(row: T): T {
+  assertAbsoluteDefaultCwd(row.codebase_default_cwd, row.codebase_name);
+  return normalizeEnvironmentRow(row);
+}
+
 /**
  * Get an isolation environment by UUID
  */
@@ -81,6 +102,13 @@ export async function findActiveByWorkflow(
   );
   const row = result.rows[0];
   return row ? normalizeEnvironmentRow(row) : null;
+}
+
+export async function listActive(): Promise<readonly IsolationEnvironmentRow[]> {
+  const result = await pool.query<IsolationEnvironmentRow>(
+    "SELECT * FROM remote_agent_isolation_environments WHERE status = 'active'"
+  );
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**
@@ -137,6 +165,9 @@ export async function findLatestByCodebaseAndWorkingPath(
  */
 export async function create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow> {
   const dialect = getDialect();
+  const provider = env.provider ?? 'worktree';
+  const metadata = { ...env.metadata };
+  if (provider === 'worktree') metadata[WORKTREE_REGISTRATION_ID] = crypto.randomUUID();
   // Note: created_by_user_id is intentionally NOT in the DO UPDATE SET — on
   // re-creation (upsert) we preserve the original creator's attribution.
   // The first user to spin up an environment owns it; subsequent reactivations
@@ -159,12 +190,12 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
       env.codebase_id,
       env.workflow_type,
       env.workflow_id,
-      env.provider ?? 'worktree',
+      provider,
       env.working_path,
       env.branch_name,
       env.created_by_platform ?? null,
       env.created_by_user_id ?? null,
-      JSON.stringify(env.metadata ?? {}),
+      JSON.stringify(metadata),
     ]
   );
 
@@ -182,13 +213,35 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
 /**
  * Update environment status
  */
-export async function updateStatus(id: string, status: 'active' | 'destroyed'): Promise<void> {
+export async function updateStatus(
+  id: string,
+  status: 'active' | 'destroyed',
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
+  const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
-    'UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2',
-    [status, id]
+    `UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2${
+      predicate
+        ? ` AND status = 'destroyed'${predicate.sql}
+      AND NOT EXISTS (
+        SELECT 1 FROM remote_agent_isolation_environments replacement
+        WHERE replacement.codebase_id = $${3 + predicate.params.length}
+          AND replacement.workflow_type = $${4 + predicate.params.length}
+          AND replacement.workflow_id = $${5 + predicate.params.length}
+          AND replacement.status = 'active'
+      )`
+        : ''
+    }`,
+    [
+      status,
+      id,
+      ...(predicate && observed
+        ? [...predicate.params, observed.codebase_id, observed.workflow_type, observed.workflow_id]
+        : []),
+    ]
   );
-
   if (result.rowCount === 0) {
+    if (observed) throw new WorktreeRegistrationChangedError(id);
     throw new Error(
       `Failed to update isolation environment status: no environment found with id '${id}'`
     );
@@ -197,42 +250,99 @@ export async function updateStatus(id: string, status: 'active' | 'destroyed'): 
 }
 
 /**
+ * SQL that holds only while the row is still the observed worktree registration.
+ * Placeholders start at `$${first}`. Older writers do not rotate a registration token,
+ * so a tokenless observation is fenced with the whole observed snapshot instead.
+ */
+function observedRegistrationPredicate(
+  observed: IsolationEnvironmentRow,
+  first: number
+): { sql: string; params: unknown[] } {
+  const $ = (offset: number): string => `$${String(first + offset)}`;
+  const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
+  const sqlite = getDatabaseType() === 'sqlite';
+  const sql = ` AND provider = 'worktree'
+       AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
+       AND working_path = ${$(1)}${
+         legacy
+           ? `
+       AND branch_name = ${$(2)}
+       AND ${sqlite ? `julianday(created_at) = julianday(${$(3)})` : `date_trunc('milliseconds', created_at) = ${$(3)}::timestamptz`}
+       AND ${
+         sqlite
+           ? `NOT EXISTS (
+         WITH current_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(metadata)
+         ), observed_metadata AS (
+           SELECT fullkey, CASE WHEN type = 'integer' THEN 'real' ELSE type END AS type, atom
+           FROM json_tree(${$(4)})
+         )
+         SELECT * FROM (SELECT * FROM current_metadata EXCEPT SELECT * FROM observed_metadata)
+         UNION ALL
+         SELECT * FROM (SELECT * FROM observed_metadata EXCEPT SELECT * FROM current_metadata)
+       )`
+           : `metadata = ${$(4)}::jsonb`
+       }
+       AND codebase_id = ${$(5)} AND workflow_type = ${$(6)} AND workflow_id = ${$(7)}
+       AND created_by_platform IS NOT DISTINCT FROM ${$(8)} AND created_by_user_id IS NOT DISTINCT FROM ${$(9)}`
+           : ''
+       }`;
+  const params: unknown[] = [
+    observed.metadata[WORKTREE_REGISTRATION_ID] ?? '',
+    observed.working_path,
+  ];
+  if (legacy) {
+    params.push(
+      observed.branch_name,
+      observed.created_at.toISOString(),
+      JSON.stringify(observed.metadata),
+      observed.codebase_id,
+      observed.workflow_type,
+      observed.workflow_id,
+      observed.created_by_platform,
+      observed.created_by_user_id
+    );
+  }
+  return { sql, params };
+}
+
+/** Mark only the observed worktree registration destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+  const predicate = observedRegistrationPredicate(observed, 2);
+  const result = await pool.query(
+    `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
+     WHERE id = $1${predicate.sql}`,
+    [observed.id, ...predicate.params]
+  );
+  if (result.rowCount !== 1) {
+    throw new WorktreeRegistrationChangedError(observed.id);
+  }
+  getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
+}
+
+/**
  * Update environment metadata (merge with existing)
  */
-export async function updateMetadata(id: string, metadata: Record<string, unknown>): Promise<void> {
-  const dialect = getDialect();
+export async function updateMetadata(
+  id: string,
+  metadata: Record<string, unknown>,
+  observed?: IsolationEnvironmentRow
+): Promise<void> {
+  const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments
-     SET metadata = ${dialect.jsonMerge('metadata', 1)}
-     WHERE id = $2`,
-    [JSON.stringify(metadata), id]
+     SET metadata = ${getDialect().jsonMerge('metadata', 1)}
+     WHERE id = $2${predicate ? ` AND status = 'active'${predicate.sql}` : ''}`,
+    [JSON.stringify(metadata), id, ...(predicate?.params ?? [])]
   );
 
   if (result.rowCount === 0) {
+    if (observed) throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
     throw new Error(
       `Failed to update isolation environment metadata: no environment found with id '${id}'`
     );
   }
-}
-
-/**
- * Find environments by related issue (from metadata)
- */
-export async function findByRelatedIssue(
-  codebaseId: string,
-  issueNumber: number
-): Promise<IsolationEnvironmentRow | null> {
-  const dialect = getDialect();
-  const result = await pool.query<IsolationEnvironmentRow>(
-    `SELECT * FROM remote_agent_isolation_environments
-     WHERE codebase_id = $1
-       AND status = 'active'
-       AND ${dialect.jsonArrayContains('metadata', 'related_issues', 2)}
-     LIMIT 1`,
-    [codebaseId, String(issueNumber)]
-  );
-  const row = result.rows[0];
-  return row ? normalizeEnvironmentRow(row) : null;
 }
 
 /**
@@ -248,17 +358,34 @@ export async function countActiveByCodebase(codebaseId: string): Promise<number>
 }
 
 /**
- * A run releases its environment only once it can never claim it again: terminal
- * AND not resumable. 'failed' is terminal but resumable, and its worktree/branch is
- * the only estate `workflow run --resume` and `--adopt` can attach to — cleanup's
- * destroy path force-deletes the local branch (`git branch -D`, regardless of merge
- * state), so releasing a failed run's env discards committed-but-unpushed work with
- * no recovery path. Derived rather than hand-listed so a new resumable status keeps
- * its pin automatically.
+ * A run releases its environment unconditionally only once it can never claim it
+ * again: terminal AND not resumable. Derived rather than hand-listed so a new
+ * resumable status keeps its pin automatically.
  */
 const UNCLAIMABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(
   status => !RESUMABLE_WORKFLOW_STATUSES.includes(status)
 );
+
+/**
+ * Terminal but resumable ('failed'). Such a run pins its environment until a
+ * cleanup sweep settles its outcome (see FailedRunRelease). A paused run is
+ * resumable but not terminal, so it always pins.
+ */
+const SETTLEABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(status =>
+  RESUMABLE_WORKFLOW_STATUSES.includes(status)
+);
+
+/** Whether a claiming run's lock is one a cleanup sweep can release. */
+export function isSettleableRunStatus(status: string): boolean {
+  return (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
+ * settled (the branch merged or its PR closed), or once the run has been inactive
+ * longer than the sweep's stale window. The run row itself is never touched.
+ */
+export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
 
 /**
  * Find a workflow run that still owns an environment — the one signal that pins an
@@ -267,68 +394,104 @@ const UNCLAIMABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(
  * environment forever (#2868).
  *
  * "Owns" means the run can still act on the estate: it is running, pending or
- * paused, or it failed and remains resumable. See UNCLAIMABLE_WORKFLOW_STATUSES.
+ * paused, or it failed and remains resumable. With `release`, a failed run whose
+ * outcome the caller has settled no longer owns it; every other claimable run
+ * still does, whatever else shares the environment.
  *
- * A run attaches to an env through either route the code stamps:
- * - its own metadata.isolation_env_id (container runs, sub-run child worktrees)
- * - its worker conversation's isolation_env_id (top-level runs)
+ * Run metadata, conversation links, and same-codebase checkout paths all pin
+ * estate. Creation proof governs deletion, while any claimable user blocks it.
+ * `excludeRunId` leaves out a run that is still claimable while it decides about
+ * its own environment.
  */
 export async function getLiveRunOwningEnv(
-  envId: string
+  envId: string,
+  release?: FailedRunRelease,
+  excludeRunId?: string
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
-  const envIdExtract = postgres
-    ? "r.metadata->>'isolation_env_id'"
-    : "json_extract(r.metadata, '$.isolation_env_id')";
-  // Postgres types conversations.isolation_env_id as UUID; the cast keeps the
-  // shared $1 parameter text-typed across both OR branches — an untyped $1
-  // compared against text and UUID columns in one OR is rejected at parse time.
+  const dialect = getDialect();
+  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
+  // UUID identifiers must compare as text so $1 has one type across metadata,
+  // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
-  // Placeholders follow the unclaimable statuses' length so a new status extends
-  // the IN list without a hand-edited parameter position.
-  const unclaimablePlaceholders = UNCLAIMABLE_WORKFLOW_STATUSES.map(
-    (_, i) => `$${String(i + 2)}`
-  ).join(', ');
+  // Placeholders follow the status lists' lengths so a new status extends an IN
+  // list without a hand-edited parameter position.
+  const params: unknown[] = [envId];
+  const placeholders = (values: readonly unknown[]): string =>
+    values.map(value => `$${String(params.push(value))}`).join(', ');
+  const unclaimable = placeholders(UNCLAIMABLE_WORKFLOW_STATUSES);
+  let releaseFilter = '';
+  if (release) {
+    const settleable = placeholders(SETTLEABLE_WORKFLOW_STATUSES);
+    if (release.kind === 'settled') {
+      releaseFilter = `AND r.status NOT IN (${settleable})`;
+    } else {
+      // The run's own clock: a failed run's completed_at is when it failed. SQLite's
+      // datetime() normalizes either stored text format; a NULL or unparseable time
+      // keeps the lock.
+      const coalesced = 'COALESCE(r.completed_at, r.last_activity_at, r.started_at)';
+      const lastActive = postgres ? coalesced : `datetime(${coalesced})`;
+      params.push(release.staleDays);
+      const threshold = dialect.nowMinusDays(params.length);
+      releaseFilter = `AND (r.status NOT IN (${settleable}) OR ${lastActive} IS NULL OR ${lastActive} >= ${threshold})`;
+    }
+  }
+  const exclusion =
+    excludeRunId === undefined
+      ? ''
+      : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
+  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
-     WHERE (r.status NOT IN (${unclaimablePlaceholders}))
-       AND (${envIdExtract} = $1 OR ${conversationEnvMatch} = $1)
+     WHERE (r.status NOT IN (${unclaimable}))
+       ${releaseFilter}
+       ${exclusion}
+       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
+         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
+           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
      ORDER BY r.started_at DESC
      LIMIT 1`,
-    [envId, ...UNCLAIMABLE_WORKFLOW_STATUSES]
+    params
   );
   return result.rows[0] ?? null;
 }
 
 /**
  * Find stale environments (no activity for specified days)
- * Excludes Telegram (persistent workspaces never auto-cleanup)
  */
 export async function findStaleEnvironments(
   staleDays = 14
-): Promise<readonly (IsolationEnvironmentRow & { codebase_default_cwd: string })[]> {
+): Promise<readonly EnvironmentWithCodebasePath[]> {
   const dialect = getDialect();
   // Both conditions use the same staleDays value but need separate placeholders
   const staleActivityThreshold = dialect.nowMinusDays(1);
   const staleCreationThreshold = dialect.nowMinusDays(2);
 
-  const result = await pool.query<IsolationEnvironmentRow & { codebase_default_cwd: string }>(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd
+  const ageBasedIds = getRegisteredPlatformPolicies()
+    .filter(policy => policy.workspaceRetention === 'age-based')
+    .map(policy => policy.id);
+  const retentionFilter = ageBasedIds.length
+    ? `AND e.created_by_platform IN (${ageBasedIds.map((_, index) => `$${index + 3}`).join(', ')})`
+    : 'AND 1 = 0';
+
+  const result = await pool.query<EnvironmentWithCodebasePath>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.status = 'active'
-       AND e.created_by_platform != 'telegram'
+       AND e.created_by_platform IS NOT NULL
+       ${retentionFilter}
        AND NOT EXISTS (
          SELECT 1 FROM remote_agent_conversations conv
          WHERE conv.isolation_env_id = e.id
            AND conv.last_activity_at > ${staleActivityThreshold}
        )
        AND e.created_at < ${staleCreationThreshold}`,
-    [staleDays, staleDays]
+    [staleDays, staleDays, ...ageBasedIds]
   );
-  return result.rows.map(normalizeEnvironmentRow);
+  return result.rows.map(normalizeEnvironmentWithCodebase);
 }
 
 /**
@@ -338,9 +501,9 @@ export async function findStaleEnvironments(
  */
 export async function findActiveByBranchName(
   branchName: string
-): Promise<(IsolationEnvironmentRow & { codebase_default_cwd: string }) | null> {
-  const result = await pool.query<IsolationEnvironmentRow & { codebase_default_cwd: string }>(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd
+): Promise<EnvironmentWithCodebasePath | null> {
+  const result = await pool.query<EnvironmentWithCodebasePath>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.branch_name = $1 AND e.status = 'active'
@@ -349,31 +512,21 @@ export async function findActiveByBranchName(
     [branchName]
   );
   const row = result.rows[0];
-  return row ? normalizeEnvironmentRow(row) : null;
+  return row ? normalizeEnvironmentWithCodebase(row) : null;
 }
 
 /**
  * List all active environments with their codebase info (for cleanup)
  */
-export async function listAllActiveWithCodebase(): Promise<
-  readonly (IsolationEnvironmentRow & {
-    codebase_default_cwd: string;
-    codebase_repository_url: string | null;
-  })[]
-> {
-  const result = await pool.query<
-    IsolationEnvironmentRow & {
-      codebase_default_cwd: string;
-      codebase_repository_url: string | null;
-    }
-  >(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.repository_url as codebase_repository_url
+export async function listAllActiveWithCodebase(): Promise<readonly EnvironmentWithCodebase[]> {
+  const result = await pool.query<EnvironmentWithCodebase>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name, c.repository_url as codebase_repository_url
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.status = 'active'
      ORDER BY e.created_at DESC`
   );
-  return result.rows.map(normalizeEnvironmentRow);
+  return result.rows.map(normalizeEnvironmentWithCodebase);
 }
 
 /**
@@ -423,7 +576,7 @@ export async function listActiveContainerEnvironments(): Promise<
     `SELECT e.*, c.name as codebase_name, ${dialect.daysSince('e.created_at')} as days_since_created
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
-     WHERE e.status = 'active' AND e.provider = 'container'
+     WHERE ${ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE}
      ORDER BY e.created_at DESC`
   );
   return result.rows.map(normalizeEnvironmentRow);
@@ -437,8 +590,11 @@ export function createIsolationStore(): IIsolationStore {
   return {
     getById,
     findActiveByWorkflow,
+    listActive,
     create: (env: CreateEnvironmentParams) => create(env),
     updateStatus,
+    updateMetadata,
+    markWorktreeDestroyed,
     countActiveByCodebase,
   };
 }

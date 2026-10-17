@@ -15,10 +15,10 @@ Variables are placeholders in command files and workflow prompts that get replac
 | `$CONTEXT` | All modes | GitHub issue/PR context (if available from platform). Empty string if unavailable |
 | `$EXTERNAL_CONTEXT` | All modes | Alias for `$CONTEXT` |
 | `$ISSUE_CONTEXT` | All modes | Alias for `$CONTEXT` |
-| `$LOOP_USER_INPUT` | Loop / loop_group prompts | User feedback from `/workflow approve <id> <text>` at an interactive loop gate. Populated ONLY on the first iteration after a resume; empty string everywhere else |
+| `$LOOP_USER_INPUT` | Loop / loop_group prompts | **Deprecated** with interactive loop gates; new loops end a `loop_group` body in a `wait: attention` node and read `$LOOP_PREV.<wait-id>.output.text`. Feedback from `/workflow approve <id> <text>` at an interactive loop gate. Populated ONLY on the first iteration after a resume; empty string everywhere else |
 | `$LOOP_PREV_OUTPUT` | Loop prompts | Previous iteration's cleaned output (completion tags stripped). Empty on iteration 1. Key tool for `fresh_context: true` loops that need to know what the last pass did |
 | `$LOOP_PREV.<nodeId>.output[.field]` | loop_group body prompts and `when:` conditions | Previous iteration's output of a specific body node. Empty on iteration 1. Field access follows the strict contract below (except genuinely-absent prior output → `''`). In a body `when:`, it is a typed condition reference rather than text substitution |
-| `$REJECTION_REASON` | Legacy `approval.on_reject` prompts | Reviewer feedback from `/workflow reject <id> <reason>`. Empty string everywhere else. New gates read `$gate.output.text` |
+| `$REJECTION_REASON` | Legacy `approval.on_reject` prompts | **Deprecated.** The reason from `/workflow reject <id> <reason>`. Empty string everywhere else. New workflows read an attention wait's `$<wait-id>.output.text` from a node behind `when: "$<wait-id>.output.decision == 'reject'"` |
 | `$nodeId.output` | DAG only | Full text output of a completed upstream node. Unknown/skipped producer → `''` |
 | `$nodeId.output.field` | DAG only | JSON field access — **strict**: an unresolvable field FAILS the consuming node (see below) |
 
@@ -31,16 +31,15 @@ Variables are placeholders in command files and workflow prompts that get replac
 
 ## Substitution Order
 
-1. Standard workflow variables (`$WORKFLOW_ID`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$CONTEXT`, loop/rejection vars)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`, `$LOOP_PREV.*`) — DAG mode only
+A template is substituted in one pass. Each reference written in the template resolves once, and the value is inserted exactly as written: a message, issue context, loop reply, rejection reason, previous output, or input value that contains `$nodeId.output`, `$INPUTS.<name>`, a variable name, or `$&` reaches the node unchanged. Where two grammars match at the same `$`, the earlier group wins:
+
+1. Loop references inside a `loop_group` body (`$LOOP_PREV.<nodeId>.output`, the group's `$LOOP_USER_INPUT`)
+2. Workflow variables (`$WORKFLOW_ID`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$INPUTS.<name>`, `$CONTEXT`, loop/rejection vars)
+3. Node output references (`$nodeId.output`, `$nodeId.output.field`) — DAG mode only
 
 ## Context Auto-Append
 
 If `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` is NOT present anywhere in the prompt template but context exists (e.g., from a GitHub issue), it is automatically appended at the end after a `---` separator.
-
-## Escaped Dollar Signs
-
-Use `\$` to produce a literal `$` in command files (prevents variable substitution).
 
 ## NOT Supported: `$1` … `$9` Positional Arguments
 
@@ -48,18 +47,18 @@ Despite older docs suggesting otherwise, positional `$1`…`$9` are **not substi
 
 ## Node Output Details (DAG Only)
 
-`$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified validated result. Bash/script output without `output_format` is stdout with the trailing newline trimmed; with it, stdout is certified as JSON under the same result contract (see `node-reference.md` → Result contracts). Loop/loop_group output is the final iteration's output with completion-signal tags stripped. A gate with authored `approval.decisions` always outputs JSON `{decision, text}`; read its fields as `$gate.output.decision` and `$gate.output.text`. A legacy gate without authored decisions keeps the old behavior: its approval comment is output only when `capture_response: true`, otherwise `''`. Unknown or skipped producers resolve to an empty string (with a warning logged).
+`$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified validated result. Bash/script output without `output_format` is stdout with the trailing newline trimmed; with it, stdout is certified as JSON under the same result contract (see `node-reference.md` → Result contracts). Loop/loop_group output is the final iteration's output with completion-signal tags stripped. An attention wait outputs its answer by form: `{text}` for `message`, `{decision, text}` for `approval` and `select`, `{decisions, text}` for `multi_select`; read fields as `$ask.output.decision` and `$ask.output.text`. A deprecated gate with authored `approval.decisions` also outputs JSON `{decision, text}`. A deprecated gate without authored decisions keeps the old behavior: its approval comment is output only when `capture_response: true`, otherwise `''`. Unknown or skipped producers resolve to an empty string (with a warning logged).
 
-`$nodeId.output.field` is **strict** (no-silent-drop) — it either resolves or **fails the consuming node**:
+`$nodeId.output.field` and nested paths such as `$nodeId.output.proposal.action` are **strict** (no-silent-drop) — they either resolve or **fail the consuming node**. Paths are object field names only: no array indexing, wildcards or expressions. The same paths work in templates, `when:` (which needs a scalar), whole-value `with:` bindings and `$LOOP_PREV.<id>.output.a.b`. Do not flatten a producer's schema to reach a nested field.
 
-- Producer has `output_format`: a field **declared** in the schema resolves to its value, or `''` if absent (declared-optional). A field **not in the schema** fails the consumer (typo protection).
-- Schemaless producer (no `output_format` on the producing node): the output must be a JSON object containing the key — anything else (non-JSON output, missing key) fails the consumer.
+- Producer has `output_format`: every segment must be a declared `properties` entry; a declared field or parent that is absent or null resolves to `''` (declared-optional). An undeclared segment, at any depth, fails `archon validate workflows` when the producer's schema is known at load, and fails the consumer otherwise (typo protection).
+- Schemaless producer (no `output_format` on the producing node): the output must be a JSON object containing every key on the path, with an object at each intermediate step — anything else (non-JSON output, missing key, a scalar or array mid-path) fails the consumer.
 - Producer skipped or pending: fails the consumer — guard the reference with `when:` or a permissive `trigger_rule`.
 
 Values: strings pass through; numbers/booleans stringify; objects/arrays are JSON-stringified.
 
 For `workflow:` results, these field rules use the child's `returns:` node's
-schema, whose field names travel with the value and survive cold resume. The
+schema, whose declared paths travel with the value and survive cold resume. The
 caller cannot add or narrow the contract. An `include:` alias uses its selected
 producer directly after flattening.
 

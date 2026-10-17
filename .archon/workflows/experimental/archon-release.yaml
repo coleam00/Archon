@@ -6,7 +6,7 @@ description: |
             "release patch", "release minor", "release major".
   Does: Cuts a release from the dev branch end-to-end. Validates state,
         smoke-tests the compiled binary, bumps version, drafts a changelog
-        from commits via AI, gets human approval, then commits, opens a PR,
+        from commits via AI, pauses for review, then commits, opens a PR,
         tags after merge, creates the GitHub release, and updates the
         Homebrew formula and tap.
   NOT for: Hotfix recovery from a broken release CI run (manual recovery
@@ -24,7 +24,6 @@ description: |
 
 provider: claude
 model: sonnet
-interactive: true                       # required: has approval gates
 
 worktree:
   enabled: false                        # operates on the live dev branch — never use a worktree
@@ -51,8 +50,10 @@ nodes:
       set -euo pipefail
 
       echo "::: Validating release preconditions :::"
-      echo "Bump:    $parse-args.output.bump"
-      echo "Dry run: $parse-args.output.dryRun"
+      bump=$parse-args.output.bump
+      dry_run=$parse-args.output.dryRun
+      echo "Bump:    $bump"
+      echo "Dry run: $dry_run"
       echo
 
       git fetch origin --quiet
@@ -318,15 +319,11 @@ nodes:
   # String.raw template substitution. Necessary because AI-generated content
   # routinely contains backticks (markdown code spans) that would terminate
   # a JS template literal mid-string.
-  #
-  # CRITICAL: do NOT wrap $draft-changelog.output in your own quotes. Archon
-  # already wraps it in single quotes via shellQuote(). Adding your own quotes
-  # like '$node.output' produces ''<raw>'' which collapses to bare unquoted
-  # JSON, and bash brace-expands the {...} into separate words.
   - id: save-draft-json
     bash: |
       mkdir -p "$ARTIFACTS_DIR"
-      printf '%s' $draft-changelog.output > "$ARTIFACTS_DIR/draft-changelog.json"
+      draft=$draft-changelog.output
+      printf '%s' "$draft" > "$ARTIFACTS_DIR/draft-changelog.json"
       echo "wrote $ARTIFACTS_DIR/draft-changelog.json ($(wc -c < $ARTIFACTS_DIR/draft-changelog.json) bytes)"
     timeout: 10000
     depends_on: [draft-changelog]
@@ -383,54 +380,42 @@ nodes:
     depends_on: [save-draft-json, draft-changelog, bump-version, parse-args]
 
   # ═══════════════════════════════════════════════════════════════════
-  # PHASE 5 — Human approval gate (always runs)
+  # PHASE 5 — Release review (always runs)
   # ───────────────────────────────────────────────────────────────────
   # In dry-run mode the workflow stops here cleanly; in full mode it
-  # proceeds to write files and create the PR.
+  # proceeds to write files and create the PR. Rejecting cancels the run.
   # ═══════════════════════════════════════════════════════════════════
 
-  # ── Pre-approval summary ──
-  # Approval messages don't get variable substitution today, so we emit
-  # the dynamic summary as a Haiku prompt-node output (which DOES get
-  # substituted and streams to chat). Cheap pass-through, ~200 tokens.
-  - id: review-summary
-    prompt: |
-      Reply to the user with EXACTLY this text, verbatim, no elaboration,
-      no markdown-rendering, no commentary, no questions. Just print it.
-
-      ══════════════════════════════════════════════════════════════════
-      RELEASE REVIEW
-      ══════════════════════════════════════════════════════════════════
-
-      Version : $bump-version.output.oldVersion  →  $bump-version.output.newVersion
-      Bump    : $bump-version.output.bump
-      Dry run : $parse-args.output.dryRun
-
-      ── Proposed CHANGELOG ───────────────────────────────────────────
-
-      $format-changelog.output.rendered
-
-      ── Commits being shipped ────────────────────────────────────────
-
-      $collect-commits.output
-
-      ══════════════════════════════════════════════════════════════════
-
-      Reply with `/workflow approve <run-id>` to continue, or
-      `/workflow reject <run-id> <reason>` to abort.
-    depends_on: [format-changelog, collect-commits, bump-version, parse-args]
-    model: haiku
-    allowed_tools: []
-
   - id: review-changelog
-    approval:
-      message: |
-        Approve the release review above.
+    wait:
+      form: approval
+      attention: |
+        RELEASE REVIEW
 
+        Version : $bump-version.output.oldVersion  →  $bump-version.output.newVersion
+        Bump    : $bump-version.output.bump
+        Dry run : $parse-args.output.dryRun
+
+        ── Proposed CHANGELOG ───────────────────────────────────────────
+
+        $format-changelog.output.rendered
+
+        ── Commits being shipped ────────────────────────────────────────
+
+        $collect-commits.output
+
+        ─────────────────────────────────────────────────────────────────
+
+        Approve to continue, or reject to cancel the release.
         - In dry-run mode the workflow ends here without modifying any files.
         - In full mode approval triggers: write files, commit + push to dev,
           open a PR dev → main, then pause again before tag/release.
-    depends_on: [review-summary]
+    depends_on: [format-changelog, collect-commits, bump-version, parse-args]
+
+  - id: release-rejected
+    cancel: Release review rejected.
+    depends_on: [review-changelog]
+    when: "$review-changelog.output.decision == 'reject'"
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6 — Apply local file changes (skipped in --dry-run)
@@ -525,7 +510,7 @@ nodes:
     runtime: bun
     timeout: 120000
     depends_on: [review-changelog, bump-version, format-changelog]
-    when: "$parse-args.output.dryRun == 'false'"
+    when: "$parse-args.output.dryRun == 'false' && $review-changelog.output.decision == 'approve'"
 
   - id: commit-and-push
     bash: |
@@ -536,7 +521,8 @@ nodes:
       git add -A
       git status --short
 
-      git commit -m "Release $bump-version.output.newVersion"
+      version=$bump-version.output.newVersion
+      git commit -m "Release $version"
       git push origin dev
     timeout: 60000
     depends_on: [write-files, bump-version]
@@ -574,35 +560,28 @@ nodes:
   # then approves here. We don't auto-merge — keeps reviewer in control.
   # ═══════════════════════════════════════════════════════════════════
 
-  # Pre-merge-gate summary (same pass-through pattern as review-summary)
-  - id: merge-summary
-    prompt: |
-      Reply to the user with EXACTLY this text, verbatim, no elaboration:
-
-      ══════════════════════════════════════════════════════════════════
-      PR OPENED — waiting for merge
-      ══════════════════════════════════════════════════════════════════
-
-      $create-pr.output
-
-      Merge the PR however you prefer:
-        gh pr merge --squash --delete-branch=false
-        (or use the GitHub web UI)
-
-      Then approve here to continue with tag, GitHub release, dev sync,
-      binary wait, and Homebrew formula update.
-    depends_on: [create-pr]
-    model: haiku
-    allowed_tools: []
-    when: "$parse-args.output.dryRun == 'false'"
-
   - id: wait-for-merge
-    approval:
-      message: |
-        Approve once the PR above has been merged into main.
+    wait:
+      form: approval
+      attention: |
+        PR OPENED — waiting for merge
+
+        $create-pr.output
+
+        Merge the PR however you prefer:
+          gh pr merge --squash --delete-branch=false
+          (or use the GitHub web UI)
+
+        Then approve here to continue with tag, GitHub release, dev sync,
+        binary wait, and Homebrew formula update.
         Reject to stop — the PR will remain open and reviewable.
-    depends_on: [merge-summary]
+    depends_on: [create-pr]
     when: "$parse-args.output.dryRun == 'false'"
+
+  - id: merge-rejected
+    cancel: Release stopped before tagging; the PR remains open.
+    depends_on: [wait-for-merge]
+    when: "$wait-for-merge.output.decision == 'reject'"
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 8 — Tag, GitHub release, sync dev with main
@@ -629,7 +608,7 @@ nodes:
       echo "Tagged and released v$ver"
     timeout: 90000
     depends_on: [wait-for-merge, bump-version, format-changelog]
-    when: "$parse-args.output.dryRun == 'false'"
+    when: "$parse-args.output.dryRun == 'false' && $wait-for-merge.output.decision == 'approve'"
 
   - id: sync-dev-with-main
     bash: |
@@ -768,7 +747,7 @@ nodes:
           "# For development, see: https://github.com/coleam00/Archon",
           "",
           "class Archon < Formula",
-          '  desc "Remote agentic coding platform - control AI assistants from anywhere"',
+          '  desc "Governed agentic automation engine"',
           '  homepage "https://github.com/coleam00/Archon"',
           `  version "${ver}"`,
           '  license "MIT"',

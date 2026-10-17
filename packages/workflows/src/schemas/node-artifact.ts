@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /** One enclosing loop_group execution frame for a typed body artifact. */
 export const nodeArtifactLoopFrameSchema = z.object({
@@ -32,8 +32,6 @@ export const nodeArtifactSchema = z.object({
   producedAt: z.string().datetime(),
   /** Byte size (UTF-8) of the output file. */
   size: z.number().int().nonnegative(),
-  /** Provider session id that produced the output, when available. */
-  sessionId: z.string().optional(),
 });
 
 export type NodeArtifact = z.infer<typeof nodeArtifactSchema>;

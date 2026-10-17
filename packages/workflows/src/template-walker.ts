@@ -14,13 +14,11 @@ import {
   isWorkflowNode,
 } from './schemas';
 import {
-  COMPOSED_NODE,
   COMPILED_LOOP_COMMAND,
-  attachComposedBindings,
+  cloneNodeWithEngineMetadata,
   type LoopWithCompiledCommand,
   readComposedBindings,
   readComposedMeta,
-  type NodeWithComposedMeta,
 } from './compiled-command';
 
 export type TemplateSurface =
@@ -53,6 +51,8 @@ export type TemplateSlotName =
   | 'wait.until'
   | 'wait.event'
   | 'wait.attention'
+  | 'wait.options'
+  | 'wait.labels.*'
   | 'workflow.input'
   | 'workflow.with.*'
   | 'workflow.fan_out.items'
@@ -99,6 +99,8 @@ export const SLOT_SPEC = {
   'wait.until': { surface: 'value', outputReference: true },
   'wait.event': { surface: 'value', outputReference: true },
   'wait.attention': { surface: 'prompt', outputReference: true },
+  'wait.options': { surface: 'value', outputReference: true },
+  'wait.labels.*': { surface: 'value', outputReference: true },
   'workflow.input': { surface: 'value', outputReference: true },
   'workflow.with.*': { surface: 'value', outputReference: true, valuePosition: 'workflow_with' },
   'workflow.fan_out.items': { surface: 'value', outputReference: true },
@@ -306,9 +308,22 @@ function walk(
         node.wait.event,
         value => (node.wait = { event: value, deadline_ms: deadlineMs })
       );
+    // Each replace re-reads `node.wait`, so mapping both slots keeps both results.
     if (node.wait.attention !== undefined)
       slot('wait.attention', 'wait.attention', node.wait.attention, value => {
-        node.wait = { attention: value };
+        const wait = node.wait;
+        if (wait.attention !== undefined) node.wait = { ...wait, attention: value };
+      });
+    if (typeof node.wait.options === 'string')
+      slot('wait.options', 'wait.options', node.wait.options, value => {
+        const wait = node.wait;
+        if (wait.attention !== undefined) node.wait = { ...wait, options: value };
+      });
+    for (const [key, label] of Object.entries(node.wait.labels ?? {}))
+      slot('wait.labels.*', `wait.labels.${key}`, label, value => {
+        const wait = node.wait;
+        if (wait.attention !== undefined)
+          node.wait = { ...wait, labels: { ...wait.labels, [key]: value } };
       });
   } else if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
     if (isWorkflowNode(node) && node.input !== undefined)
@@ -367,7 +382,7 @@ export function mapNodeTemplateSlots(
   node: DagNode,
   mapper: (slot: TemplateSlot) => string
 ): DagNode {
-  const clone = cloneNode(node);
+  const clone = cloneNodeWithEngineMetadata(node);
   walk(clone, (slot, replace) => {
     replace(mapper(slot));
   });
@@ -379,7 +394,7 @@ export function mapNodeTemplateValueSlots(
   node: DagNode,
   mapper: (slot: TemplateValueSlot) => JsonValue
 ): DagNode {
-  const clone = cloneNode(node);
+  const clone = cloneNodeWithEngineMetadata(node);
   walk(
     clone,
     () => undefined,
@@ -389,36 +404,4 @@ export function mapNodeTemplateValueSlots(
     undefined
   );
   return clone;
-}
-
-function cloneNode(node: DagNode): DagNode {
-  const clone = structuredClone(node);
-  preserveInternalMetadata(node, clone);
-  return clone;
-}
-
-function preserveInternalMetadata(source: DagNode, target: DagNode): void {
-  const meta = readComposedMeta(source);
-  if (meta !== undefined)
-    (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
-  const bindings = readComposedBindings(source);
-  if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
-  if (isLoopNode(source) && isLoopNode(target)) {
-    const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
-      COMPILED_LOOP_COMMAND
-    ];
-    if (compiled !== undefined)
-      (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
-        structuredClone(compiled);
-  }
-  if (isLoopGroupNode(source) && isLoopGroupNode(target))
-    for (const [index, sourceBody] of source.loop_group.nodes.entries()) {
-      const targetBody = target.loop_group.nodes[index];
-      if (
-        targetBody !== undefined &&
-        !isIncludeDirective(sourceBody) &&
-        !isIncludeDirective(targetBody)
-      )
-        preserveInternalMetadata(sourceBody, targetBody);
-    }
 }

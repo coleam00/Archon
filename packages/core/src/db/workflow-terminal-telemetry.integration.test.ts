@@ -1,9 +1,10 @@
+// @archon-test-isolated
 /**
  * Terminal telemetry against a REAL bun:sqlite database: every terminal writer reports
  * its committed transition exactly once, a lost CAS reports nothing, and the projected
  * payload accumulates across resume segments.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
@@ -41,7 +42,6 @@ const {
   cancelFanOutRun,
   cancelResumableRunsForConversation,
   resolveAndCancelApprovalGate,
-  failPausedAttentionWait,
   resumeWorkflowRun,
 } = await import('./workflows');
 
@@ -98,8 +98,10 @@ describe('terminal writers report each committed transition once', () => {
     await expect(completeWorkflowRun('t-complete', { duration_ms: 5 })).rejects.toThrow();
 
     await seedRun('t-fail', 'running');
-    await failWorkflowRun('t-fail', 'boom', { exitReason: 'node_error' });
-    await expect(failWorkflowRun('t-fail', 'boom')).rejects.toThrow();
+    expect(await failWorkflowRun('t-fail', 'boom', { exitReason: 'node_error' })).toEqual({
+      failed: true,
+    });
+    expect(await failWorkflowRun('t-fail', 'boom')).toEqual({ failed: false });
 
     await seedRun('t-cancel', 'running');
     await cancelWorkflowRun('t-cancel', { cancel_reason: 'operator', reason: 'free text' });
@@ -122,7 +124,7 @@ describe('terminal writers report each committed transition once', () => {
     expect(JSON.stringify(captured)).not.toContain('free text');
   });
 
-  test('an approval reject and an undeliverable attention wait report on the won CAS only', async () => {
+  test('an approval reject reports on the won CAS only', async () => {
     await seedRun('t-reject', 'paused', {
       metadata: { approval: { nodeId: 'review', message: 'Approve?', type: 'approval' } },
     });
@@ -130,24 +132,8 @@ describe('terminal writers report each committed transition once', () => {
     expect((await resolveAndCancelApprovalGate('t-reject', [], rejection)).resolved).toBe(true);
     expect((await resolveAndCancelApprovalGate('t-reject', [], rejection)).resolved).toBe(false);
 
-    const attention = {
-      owner: 'node' as const,
-      nodeId: 'rerun-ci',
-      kind: 'attention' as const,
-      waitingSince: '2026-08-24T11:00:00.000Z',
-      message: 'Re-run the failing check, then resume.',
-    };
-    await seedRun('t-attention', 'paused', { metadata: { wait: attention } });
-    expect((await failPausedAttentionWait('t-attention', attention, 'undelivered')).failed).toBe(
-      true
-    );
-    expect((await failPausedAttentionWait('t-attention', attention, 'undelivered')).failed).toBe(
-      false
-    );
-
     expect(captured.map(p => [p.runId, p.outcome, p.cancelReason])).toEqual([
       ['t-reject', 'cancelled', 'approval_rejected'],
-      ['t-attention', 'failed', undefined],
     ]);
   });
 
@@ -174,6 +160,45 @@ describe('terminal writers report each committed transition once', () => {
 });
 
 describe('the projected payload', () => {
+  test('includes deferred own spend once alongside later completion and aggregate rollups', async () => {
+    await seedRun('t-deferred', 'running');
+    await seedEvent(
+      't-deferred',
+      'node_deferred_usage',
+      ago(3),
+      {
+        cost_usd: 0.25,
+        tokens: { input: 10, output: 5 },
+        accounting: 'node',
+      },
+      'group.review'
+    );
+    await seedEvent(
+      't-deferred',
+      'node_completed',
+      ago(1),
+      {
+        cost_usd: 0.5,
+        tokens: { input: 20, output: 10 },
+      },
+      'group.review'
+    );
+    await seedEvent(
+      't-deferred',
+      'node_completed',
+      ago(1),
+      {
+        cost_usd: 0.5,
+        tokens: { input: 20, output: 10 },
+        aggregate: true,
+      },
+      'group'
+    );
+    await completeWorkflowRun('t-deferred', { duration_ms: 1 });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ costUsd: 0.75, tokensIn: 30, tokensOut: 15 });
+  });
+
   test('accumulates duration, loop iterations and cost across a failed-then-resumed run', async () => {
     await seedRun('t-resume', 'running', {
       metadata: { dispatch: { base_branch: 'main', source: 'bundled' } },

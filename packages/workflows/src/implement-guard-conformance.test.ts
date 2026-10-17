@@ -123,6 +123,21 @@ describe('implement assert-changed guard over engine checkout observations', () 
     expect(verdict.output).toContain('changed no content');
   });
 
+  // A loop that stopped on a blocker it declared changed nothing on purpose: the
+  // refusal names the blocker rather than reporting red nobody explained.
+  test('a declared blocker with nothing to show is refused with the blocker named', async () => {
+    const s = scratch();
+    const baseline = await s.observe();
+    const verdict = await guard(s, baseline, {
+      summary: 'the plan names a module that does not exist',
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.output).toContain(
+      'implement declared a blocker: the plan names a module that does not exist'
+    );
+    expect(verdict.output).not.toContain('red nobody explained');
+  });
+
   // The original defect: the guard compared against HEAD, so dirt that existed before
   // implement started passed as new work with no implementation activity at all.
   test.each([
@@ -220,11 +235,11 @@ describe('implement assert-changed guard over engine checkout observations', () 
     expect((await guard(s, baseline)).passed).toBe(false);
   });
 
-  test('uncommitted .archon changes never count', async () => {
+  test('new uncommitted workflow files count as work', async () => {
     const s = scratch();
     const baseline = await s.observe();
     s.write('.archon/workflows/new.yaml', 'name: x\n');
-    expect((await guard(s, baseline)).passed).toBe(false);
+    expect((await guard(s, baseline)).passed).toBe(true);
   });
 
   test('an unrelated empty commit does not make a pre-existing .archon file count', async () => {

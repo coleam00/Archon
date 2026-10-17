@@ -1,0 +1,29 @@
+# Dry-run fixture: no item waits for the build queue, so no agent node runs. The
+# facts and apply scripts reach the state store, so they are stubbed here and
+# proved by .archon/scripts/__tests__/build-queue.test.ts.
+facts:
+  path: idle
+  item: null
+  url: ""
+  record: null
+  brief: ""
+  rounds: []
+  recorded: null
+  at_cap: false
+  policy_defaults: "/stub/policy"
+  pull_request: null
+  continues: null
+  branch: ""
+apply:
+  decision: idle
+  summary: "stub: No item waits for the build queue."
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, apply]
+exec-code: true

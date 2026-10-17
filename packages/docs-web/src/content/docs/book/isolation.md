@@ -14,7 +14,7 @@ You noticed in Chapter 4 that most workflows accept a `--branch` flag. That flag
 
 ## Why Isolation Matters
 
-Imagine you're running `archon-fix-github-issue` on issue #42 and ask it to also start working on issue #43. Without isolation, both tasks share the same files in your repository. Task A edits `auth.ts`. Task B also edits `auth.ts`. You now have a conflict mid-run, and Archon can't make sense of which changes belong to which task.
+Imagine you're running `archon-ship` on issue #42 and ask it to also start working on issue #43. Without isolation, both tasks share the same files in your repository. Task A edits `auth.ts`. Task B also edits `auth.ts`. You now have a conflict mid-run, and Archon can't make sense of which changes belong to which task.
 
 With isolation, each task gets its own **worktree** — a completely separate directory with its own files. Task A works in one directory, Task B works in another. Neither one sees the other's in-progress changes. Your main repo is never touched during the run.
 
@@ -52,7 +52,7 @@ You control isolation behavior with flags on the `workflow run` command:
 
 **The default is isolation.** If you don't pass `--no-worktree`, Archon creates a worktree for you.
 
-Use `--no-worktree` only for tasks that don't modify code — questions, exploration, running `archon-assist`. For anything that touches files, isolation is the right choice.
+Use `--no-worktree` only for tasks that don't modify code — questions, exploration, or read-only workflows such as `archon-investigate`. For anything that touches files, isolation is the right choice.
 
 > **Recommendation**: Always use `--branch` with a descriptive name for code-changing workflows. It makes it easy to identify worktrees later and creates clean branch names on GitHub.
 
@@ -70,24 +70,26 @@ One caution: a paused or failed sub-run tree can still be resumed, and a resume 
 
 Worktrees accumulate over time. Archon gives you a few commands to stay on top of them.
 
-### Viewing Active Worktrees
+### Viewing active environments
 
 ```bash
 archon isolation list
 ```
 
-Shows all active worktrees: branch name, path, creation time, and status.
+Lists active worktrees and containers.
 
-### Cleaning Up Stale Worktrees
+### Cleaning up stale environments
 
 ```bash
 archon isolation cleanup
 ```
 
-Removes worktrees older than 7 days. Pass a number to customize the threshold:
+Removes eligible worktrees and containers older than 7 days, including container volumes.
+Container cleanup runs even when no worktree qualifies. Live or resumable runs and platform
+retention policies protect their workspaces. Pass a number to customize the threshold:
 
 ```bash
-archon isolation cleanup 14   # Remove worktrees older than 14 days
+archon isolation cleanup 14   # Remove eligible worktrees, containers, and volumes older than 14 days
 ```
 
 To remove worktrees whose branches have already been merged into your main branch:
@@ -96,7 +98,9 @@ To remove worktrees whose branches have already been merged into your main branc
 archon isolation cleanup --merged
 ```
 
-This also deletes the remote branches — a clean sweep after a round of PRs.
+This also deletes the remote branches of removed worktrees. Workspaces whose originating
+platform is no longer registered are kept and reported, even when their branches are
+merged. Use `archon isolation list` to inspect them.
 
 By default, branches with open or closed-without-merging PRs are skipped to avoid
 accidental deletion. To also clean up abandoned (CLOSED) PRs:
@@ -128,6 +132,27 @@ This is the full lifecycle close-out. Run it after merging and you're back to a 
 **Use `--no-worktree` only for read-only tasks.** Questions, analysis, and exploration are safe without isolation. Anything that writes files belongs in a worktree.
 
 **Don't run the same branch twice simultaneously.** Each branch name maps to exactly one worktree. Starting a second workflow on the same branch will conflict with the first.
+
+## Provisioning new worktrees
+
+Use repository configuration to prepare dependencies and generated files before agents start:
+
+```yaml
+worktree:
+  copyFiles: ['.env']
+  postCreate:
+    - bun install --frozen-lockfile
+    - ./scripts/setup.sh
+  postCreateTimeout: 300000
+```
+
+Commands run in order in the new checkout, after submodules and copied files, with empty stdin. The timeout applies to each command. On macOS and Linux a command owns a process group: timeout, command exit (including success), or the owning Archon process ending kills the whole group, including background jobs. This covers Ctrl-C, stopping a detached owner, server exit, and even owner SIGKILL. Setup confirms the group is gone before settling. Processes that create their own session or group, such as `setsid` or a daemon, and external services such as `docker compose up -d`, escape cleanup. Setup provisions a checkout; it should not leave a server running.
+
+On Windows the timeout uses `taskkill /T /F` on the command's live tree. It can miss descendants whose parent already exited, and command exit leaves background jobs running; redirect their output so setup can finish. Windows owner-stop paths keep their existing behavior. Cooperative cancellation while a foreground or server owner stays alive does not interrupt setup.
+
+Existing checkouts are reused without running setup again. Managed project environment variables are available, with the same precedence and credential restrictions as host `bash:` nodes. Copied `.env` files are not loaded automatically; scripts may source them explicitly.
+
+A failed command stops creation, with its exit code or timeout and redacted output reported. Setup events are retained on the workflow run, or the parent for an isolated child, and rendered in `workflow logs`. Manual `/worktree` creation writes application logs. Failed setup that leaves files or changes can leave a locked checkout; inspect the path reported in the error before unlocking or removing it. Worktrees separate checkouts and do not sandbox setup commands.
 
 ---
 

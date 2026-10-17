@@ -4,7 +4,9 @@
  * Thin layer over @archon/workflows validator: discovers, validates, formats output.
  */
 
+import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -22,7 +24,7 @@ import type {
   ScriptValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
-import { parseClaudeSettingSources } from '@archon/providers';
+import { workflowValidationConfig } from '@archon/workflows/validation-config';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -91,7 +93,8 @@ export async function validateWorkflowsCommand(
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
     cwd,
-    loadConfig
+    loadConfig,
+    providerRegistry
   );
 
   // Build results from load errors (Level 1-2 failures)
@@ -100,7 +103,7 @@ export async function validateWorkflowsCommand(
   for (const loadError of loadErrors) {
     results.push(
       makeWorkflowResult(
-        loadError.filename.replace(/\.ya?ml$/, ''),
+        workflowLoadErrorName(loadError),
         [{ level: 'error', field: loadError.errorType, message: loadError.error }],
         loadError.filename
       )
@@ -112,28 +115,18 @@ export async function validateWorkflowsCommand(
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
+      providerRegistry,
       {
-        ...config,
+        ...workflowValidationConfig(mergedConfig, config),
         workflowSource: source,
-        assistant: mergedConfig.assistant,
-        aliases: mergedConfig.aliases,
-        tiers: mergedConfig.tiers,
-        // Normalize through the provider's own parser: config YAML is not schema
-        // -validated, so an unrecognized entry must be dropped here exactly as it
-        // is at run time, or validation and execution disagree about the node's
-        // effective sources.
-        claudeSettingSources: parseClaudeSettingSources(
-          mergedConfig.assistants.claude?.settingSources
-        ).value,
-        claudeConfigDir: mergedConfig.envVars?.CLAUDE_CONFIG_DIR,
       },
       defaultProvider
     );
 
-    // Surface parse-time unknown-key warnings (#2213) as validation issues
+    // Surface parse-time warnings (unknown keys, deprecations) as validation issues
     if (parseWarnings && parseWarnings.length > 0) {
       for (const warning of parseWarnings) {
-        issues.push({ level: 'warning', field: 'unknown_key', message: warning });
+        issues.push({ level: 'warning', field: 'parse_warning', message: warning });
       }
     }
 

@@ -1,22 +1,26 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
-# needs a human decision completes honestly, while the delivery tail is skipped
-# and the real outcome node points to plan.md.
+# needs a human decision completes honestly: the planner's open question stops the
+# run before delivery, and the real outcome node relays it with plan.md.
+forge: { source: forge }
 triage__triage:
-  contract: READY
-  route: plan
-  design_first: false
-  complexity: large
-  item: { repository: "", number: 0 }
+  decision: { contract: READY, route: plan }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: l, reason: "stub: size" }
+  complexity: { value: high, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
-  proposed_edits: { title: "", body: "" }
-  blocked_reason: ""
-  blocked_by: []
   summary: "stub: material product shape remains undecided"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+intel: "stub: no usage-data source is connected; the open call turns on how often operators edit the field"
 planned__plan:
   ready: false
+  open_questions:
+    - "stub: keep the new persisted field or derive it? No project document rules on it."
   summary: "stub: owner decision required before implementation"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed
+  reached: [intel, outcome]
 exec-code: true

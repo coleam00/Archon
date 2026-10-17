@@ -1,8 +1,8 @@
 # Test Review — Regression Protection
 
-Find one defect: **the change establishes or alters meaningful behavior, and no test would fail when that behavior regresses in a plausible way.** Tests protect outcomes and invariants — count, lines, and coverage percentages are not outcomes. Read-only: never modify files, commit, or post anywhere.
+Find this class of defect: **the change establishes or alters meaningful behavior, and no test would fail when that behavior regresses in a plausible way.** Tests protect outcomes and invariants — count, lines, and coverage percentages are not outcomes. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/scratch/tests" && mktemp -d "$ARTIFACTS_DIR/scratch/tests/XXXXXX")" HEAD`; the workflow removes it), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile. Any other scratch file you write — a probe script, a note, captured output — goes under `$ARTIFACTS_DIR`, never in this checkout.
 
-Read `$ARTIFACTS_DIR/review/scope.md` first, and the project's `architecture.md` if it has one. Anchor the review on the accepted work order's stated invariants, and scale depth to what the change can destroy: irreversible or destructive paths, lifecycle ownership, persisted contracts and schemas, credentials and auth boundaries, integration boundaries, and concurrency over shared state each get an explicit attempt to refute the invariant they rest on; a prose-only change gets the minimum. In light mode, verify prior findings from this lens first, then examine only the delta.
+Read `$ARTIFACTS_DIR/review/scope.md` first. The project's own values are in its steering documents: open, where the project has one, its `engineering.md` — at the root, in a config directory such as `.archon/`, or wherever its steering files point — only when a finding depends on a value it states, and read the section you cite, not the whole file. A preference it states is a finding you cite, and one it does not state is taste you leave out. Anchor the review on the accepted work order's stated invariants, and apply the supplied full-review policy: **$mode.output.risks**. In light mode, scope.md names the prior report and the correction delta: read the prior report and `$ARTIFACTS_DIR/implementation.md`, judge each prior finding assigned to this lens as resolved by the delta, validly declined (the implementer's evidence holds), or still open, then examine only the delta.
 
 ## A finding needs all four
 
@@ -17,20 +17,20 @@ Never report "missing test for line X" — name the observable failure that rema
 
 Prioritize gaps where regression means incorrect user-visible behavior, data loss, failure semantics becoming success, or resume/concurrency/ordering breaks. Test at the lowest stable boundary that proves the behavior — and only at the unit level when it can prove it without mocking the behavior under review away. Check the existing doubles and fixtures for exactly that: a mock that omits the changed behavior makes every test through it blind to the change, which no amount of assertion-reading reveals.
 
+Never propose a test that re-runs a whole suite, a package, or the project's test command to prove an invariant. That repeats CI inside the suite, costs every future run, and fails on its time budget rather than on the behavior. Check such an invariant once yourself and cite the result; the test you propose, if any, exercises the behavior at the boundary that owns it.
+
 ## Do not report
 
-Coverage targets; tests for getters, wiring, or framework behavior; implementation-detail assertions; snapshot volume; one test per permutation where one representative proves the invariant; deleted behavior; missing tests for code already proved wrong (the code lens owns the defect itself).
+Coverage targets; tests for getters, wiring, or framework behavior; implementation-detail assertions; snapshot volume; one test per permutation where one representative proves the invariant; deleted behavior.
 
-## Severity
+## What a finding costs
 
-- **Critical gap** — an unprotected high-impact invariant (data loss, security, irreversible behavior).
-- **Important gap** — meaningful supported behavior can regress silently.
-- **Suggestion** — useful leverage, non-blocking. Use sparingly.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Name the behavior that can regress silently and what that regression costs; say whether the change adds or fixes that behavior, or whether the gap is extra leverage beyond it, which you report sparingly.
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/tests.md`: each in-scope finding begins with `sources: [tests]`, followed by the four evidence parts and `file:line` references, then the examined-and-protected list citing the decisive assertions. In light mode, a verdict per prior finding. No findings is a valid result.
+Write `$ARTIFACTS_DIR/review/tests.md`: each in-scope finding begins with `sources: [tests]`, followed by the four evidence parts and `file:line` references, then the examined-and-protected list citing the decisive assertions. In light mode, a verdict per prior finding: resolved, validly declined, or still open. No findings is a valid result.
 
-If you prove useful work outside scope.md's accepted contract, do not turn it into a blocking finding. Write `$ARTIFACTS_DIR/discoveries/review-tests.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`adjacent` or `scope_conflict`), and `source_node` (`tests`). Write no file for no discovery; never append to another lens's file or record suspicion.
+A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. A proved defect you meet that does not touch the change — unrelated or pre-existing — is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/review-tests.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`tests`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
-Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/tests.md` and the findings count by severity.
+Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/tests.md` and the findings count.

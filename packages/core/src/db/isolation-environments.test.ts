@@ -1,6 +1,10 @@
+// @archon-test-isolated
+import { setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { resolve } from 'node:path';
+import { InvalidCodebaseDefaultCwdError } from './codebases';
 import { toBranchName } from '@archon/git';
 
 const mockQuery = createMockQuery();
@@ -25,10 +29,12 @@ import {
   getLiveRunOwningEnv,
   findStaleEnvironments,
   listAllActiveWithCodebase,
+  findActiveByBranchName,
 } from './isolation-environments';
 
 describe('isolation-environments', () => {
   beforeEach(() => {
+    setPlatformPolicies([]);
     mockQuery.mockClear();
   });
 
@@ -46,6 +52,47 @@ describe('isolation-environments', () => {
     created_by_user_id: null,
     metadata: {},
   };
+
+  for (const [name, read] of [
+    ['stale', () => findStaleEnvironments()],
+    ['branch', () => findActiveByBranchName('issue-42')],
+    ['active', () => listAllActiveWithCodebase()],
+  ] as const) {
+    test(`${name} joined reader rejects a legacy relative path`, async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { ...sampleEnv, codebase_name: 'legacy', codebase_default_cwd: 'projects/repo' },
+        ])
+      );
+      await expect(read()).rejects.toBeInstanceOf(InvalidCodebaseDefaultCwdError);
+    });
+  }
+
+  test('an invalid row rejects the entire joined collection', async () => {
+    mockQuery.mockResolvedValueOnce(
+      createQueryResult([
+        { ...sampleEnv, codebase_name: 'valid', codebase_default_cwd: resolve('valid') },
+        { ...sampleEnv, id: 'invalid', codebase_name: 'legacy', codebase_default_cwd: './repo' },
+      ])
+    );
+    await expect(listAllActiveWithCodebase()).rejects.toThrow('/register-project "legacy"');
+  });
+
+  test('branch lookup preserves null and normalizes valid rows', async () => {
+    mockQuery.mockResolvedValueOnce(createQueryResult([]));
+    expect(await findActiveByBranchName('missing')).toBeNull();
+    mockQuery.mockResolvedValueOnce(
+      createQueryResult([
+        {
+          ...sampleEnv,
+          codebase_name: 'valid',
+          codebase_default_cwd: resolve('valid'),
+          metadata: '{"key":"value"}',
+        },
+      ])
+    );
+    expect((await findActiveByBranchName('issue-42'))?.metadata).toEqual({ key: 'value' });
+  });
 
   describe('getById', () => {
     test('returns environment when found', async () => {
@@ -367,8 +414,8 @@ describe('isolation-environments', () => {
     // Only the parameters are asserted here. This file hardcodes the Postgres
     // dialect, so asserting SQL text would pin one branch of a dialect-parallel
     // query; the real-SQLite and real-Postgres integration tests prove behavior
-    // on both. 'failed' must NOT appear: it is terminal but resumable, so a failed
-    // run keeps its environment (see UNCLAIMABLE_WORKFLOW_STATUSES).
+    // on both. Without a release 'failed' must NOT appear: it is terminal but
+    // resumable, so a failed run keeps its environment until a sweep settles it.
     test('excludes only the statuses no run can claim back', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ id: 'run-1', status: 'running' }]));
 
@@ -377,6 +424,20 @@ describe('isolation-environments', () => {
       expect(result).toEqual({ id: 'run-1', status: 'running' });
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(params).toEqual(['env-123', 'completed', 'cancelled']);
+    });
+
+    test('a release adds the settleable statuses, and the stale window after them', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getLiveRunOwningEnv('env-123', { kind: 'settled' });
+      await getLiveRunOwningEnv('env-123', { kind: 'stale', staleDays: 7 });
+
+      const params = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[1]);
+      expect(params).toEqual([
+        ['env-123', 'completed', 'cancelled', 'failed'],
+        ['env-123', 'completed', 'cancelled', 'failed', 7],
+      ]);
     });
 
     test('returns null when the env has no live run', async () => {
@@ -408,18 +469,24 @@ describe('isolation-environments', () => {
       expect(params[0]).toBe(7);
     });
 
-    test('excludes telegram environments in query', async () => {
+    test('only registered age-based platforms enter the stale query', async () => {
+      setPlatformPolicies([
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'cli', workspaceRetention: 'age-based' },
+      ]);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await findStaleEnvironments();
 
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("created_by_platform != 'telegram'");
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('created_by_platform IN ($3)');
+      expect(params).toEqual([14, 14, 'cli']);
     });
 
     test('returns environments with codebase info', async () => {
       const mockEnv = {
         ...sampleEnv,
+        codebase_name: 'myapp',
         codebase_default_cwd: '/workspace/myapp',
       };
       mockQuery.mockResolvedValueOnce(createQueryResult([mockEnv]));
@@ -434,8 +501,18 @@ describe('isolation-environments', () => {
   describe('listAllActiveWithCodebase', () => {
     test('returns all active environments with codebase info', async () => {
       const mockEnvs = [
-        { ...sampleEnv, id: 'env-1', codebase_default_cwd: '/workspace/app1' },
-        { ...sampleEnv, id: 'env-2', codebase_default_cwd: '/workspace/app2' },
+        {
+          ...sampleEnv,
+          id: 'env-1',
+          codebase_name: 'myapp',
+          codebase_default_cwd: '/workspace/app1',
+        },
+        {
+          ...sampleEnv,
+          id: 'env-2',
+          codebase_name: 'myapp',
+          codebase_default_cwd: '/workspace/app2',
+        },
       ];
       mockQuery.mockResolvedValueOnce(createQueryResult(mockEnvs));
 

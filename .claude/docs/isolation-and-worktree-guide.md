@@ -134,17 +134,11 @@ Returns `DestroyResult` tracking partial failures:
 
 ## Error Classification (`packages/isolation/src/errors.ts`)
 
-`classifyIsolationError(err)` maps error messages to user-friendly messages:
+Isolation failures carry a typed kind set where they are thrown; message text never decides a kind. `IsolationFailure` and `GitFailure` carry a `kind`, `ConfiguredBaseBranchNotFoundError` is its own class, and filesystem errno (`EACCES`/`EPERM`, `ENOSPC`, `ETIMEDOUT`) maps directly. `failureKind()` follows the `cause` chain, so a wrapped failure keeps its kind.
 
-| Pattern | User Message |
-|---------|-------------|
-| `permission denied` / `eacces` | "Permission denied while creating workspace." |
-| `timeout` | "Timed out creating workspace." |
-| `no space left` / `enospc` | "No disk space available." |
-| `not a git repository` | "Target path is not a valid git repository." |
-| `branch not found` | "Branch not found." |
+`classifyIsolationError(err)` turns the kind into the user message, for example `permission_denied`, `timeout`, `no_space`, `not_repository`, `docker_unreachable` and `runner_image_missing`. Kinds without a static message (`branch_exists`, `configured_branch_missing`, ...) show the error's own message, which names the branch or path.
 
-`isKnownIsolationError(err)` decides: known → produce user message and block. Unknown → re-throw as crash.
+`isKnownIsolationError(err)` decides: any kind other than `unclassified` → produce the user message and block. An `unclassified` Git or Docker failure, or a programming error, is re-thrown as a crash with its original operation, stderr and exit code.
 
 `IsolationBlockedError` signals ALL message handling must stop — the user was already notified.
 

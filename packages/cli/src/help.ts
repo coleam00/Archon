@@ -14,6 +14,10 @@
  * filters the flag and example lists by owner for scoped slices.
  */
 
+import { userRoleSchema } from '@archon/core/schemas/user';
+import type { ForgeRequest } from '@archon/forge/operations';
+import { attachmentCommands } from './attachment-commands';
+
 interface FlagOwner {
   command: string;
   subcommand?: string;
@@ -22,9 +26,9 @@ interface FlagOwner {
 interface FlagHelp {
   spec: string;
   description: string;
-  // Each (command, subcommand?) tuple that owns this flag. Empty means
-  // "global": appears in `archon --help` only, never in any scoped slice.
-  owners: FlagOwner[];
+  // Each (command, subcommand?) tuple that owns this flag. Scoped-only flags
+  // omit owners because their enclosing entry owns them; empty means "global".
+  owners?: FlagOwner[];
 }
 
 interface ExampleHelp {
@@ -32,13 +36,6 @@ interface ExampleHelp {
   // The (command, subcommand?) tuple this example belongs to. An example
   // appears in `archon --help` iff its owner is selected.
   owner: FlagOwner;
-}
-
-// A scoped-only flag has no `owners` — the owning entry is implicit (the
-// entry it hangs off). It appears only when that entry's slice renders.
-interface ScopedFlagHelp {
-  spec: string;
-  description: string;
 }
 
 interface HelpEntry {
@@ -55,8 +52,43 @@ interface HelpEntry {
   // --merged`) rather than as a standalone Options entry, so the global
   // Options block stays byte-identical to the pre-refactor text while
   // scoped help can still surface every flag the entry actually accepts.
-  scopedFlags?: ScopedFlagHelp[];
+  scopedFlags?: FlagHelp[];
 }
+
+function attachmentHelp(command: keyof typeof attachmentCommands, scopedOnly = false): HelpEntry[] {
+  return Object.entries(attachmentCommands[command])
+    .filter(([, entry]) => Object.hasOwn(entry, 'scopedOnly') === scopedOnly)
+    .map(([subcommand, entry]) => ({
+      command,
+      subcommand,
+      spec: `${command} ${subcommand} ${entry.args}`.trimEnd(),
+      description: entry.description,
+    }));
+}
+
+const forgeOperationDescriptions = {
+  resolve: 'Resolve an explicit remote through optional forge plugins',
+  'checks.state': 'Observe checks for an explicit qualified pull request',
+  'workitem.view': 'Read a qualified work item',
+  'workitem.create': 'Create an issue or recover its canonical marker',
+  'workitem.labels.set': 'Set and verify the complete issue label set',
+  'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
+  'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
+  'workitem.list': 'List open issues and pull requests that carry one label',
+  'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
+  'workitem.close': 'Close an issue with a reason and verify the result',
+  'repo.labels.list': 'List repository label names',
+  'repo.label.ensure': 'Explicitly ensure one repository label exists',
+  'pr.view': 'Read a pull request by number or by qualified head',
+  'pr.create': 'Open a pull request and verify it by reading it back',
+  'pr.edit-body': 'Replace a pull request body and verify the result',
+  'pr.ready': 'Take a pull request out of draft and verify the result',
+  'pr.draft': 'Convert a pull request to draft and verify the result',
+  'pr.merge': 'Merge a pull request pinned to its approved head',
+  'checks.rerun': 'Rerun selected failed checks at a revision',
+  'pr.reviews': 'Read submitted reviews and root review comments',
+  'comment.upsert': 'Write the one marked comment on a pull request',
+} satisfies Record<ForgeRequest['op'], string>;
 
 // One entry per Commands-block line, in global-help order. `renderHelp()`
 // returns the global index with no selection; `renderHelp(...)`
@@ -68,22 +100,45 @@ interface HelpEntry {
 // live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
+    command: 'state',
+    spec: 'state <get|put|patch|log|delete|list>',
+    description: 'Read and audit durable project or install JSON documents',
+    scopedFlags: [
+      { spec: '--install', description: 'Use install scope instead of a project' },
+      {
+        spec: '--project <key>',
+        description: 'Outside a run: the project key (owner/repo) instead of the cwd project',
+      },
+    ],
+  },
+  {
     command: 'forge',
     subcommand: 'resolve',
     spec: 'forge resolve',
-    description: 'Resolve an explicit remote through optional forge plugins',
+    description: forgeOperationDescriptions.resolve,
     scopedFlags: [
-      { spec: '--data <json>', description: 'JSON object with remote (URL/SSH syntax or null)' },
+      {
+        spec: '--data <json>',
+        description: 'JSON object with remote (URL/SSH syntax or null)',
+      },
     ],
   },
   {
     command: 'forge',
     subcommand: 'checks',
     spec: 'forge checks',
-    description: 'Observe checks for an explicit qualified pull request',
+    description: forgeOperationDescriptions['checks.state'],
     scopedFlags: [
-      { spec: '--data <json>', description: 'JSON object with ref: {repo: {host, path}, number}' },
+      {
+        spec: '--data <json>',
+        description: 'JSON object with ref: {repo: {host, path}, number}',
+      },
     ],
+  },
+  {
+    command: 'user',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -126,6 +181,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'runs',
     spec: 'workflow runs',
     description: 'List recent runs (all statuses) for this project',
+    scopedFlags: [
+      {
+        spec: '--verbose, -v',
+        description: "With --json: add each run's per-node state and attention",
+      },
+    ],
   },
   {
     command: 'workflow',
@@ -143,7 +204,42 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'wait',
     spec: 'workflow wait <run-id>',
-    description: 'Block until the run ends or needs a human decision',
+    description: 'Block until the run ends or needs attention',
+  },
+  {
+    command: 'workflow',
+    subcommand: 'attention',
+    spec: 'workflow attention [<run-id>]',
+    description:
+      'List, count or stream the attention queue, or read the item one run stands for\n(defaults to the current project)',
+    scopedFlags: [
+      { spec: '--project <id|name|key>', description: 'Scope to another project' },
+      { spec: '--all', description: 'The whole install' },
+      { spec: '--label <k=v>', description: 'Exact label match; repeat to require several' },
+      {
+        spec: '--sort age|label:<key>',
+        description: 'Oldest pause first (default), or by a label',
+      },
+      {
+        spec: '--count-by project|label:<key>',
+        description: 'Count items per project or per label value',
+      },
+      {
+        spec: '--watch',
+        description: 'Stream every change as lines until stopped; the open set comes first',
+      },
+      { spec: '--after <cursor>', description: 'With --watch: replay after an earlier line' },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'attention label',
+    spec: 'workflow attention label <run-id> --occurrence <id>',
+    description: 'Set or remove labels on the attention wait a run is paused at',
+    scopedFlags: [
+      { spec: '--set <k=v>', description: 'Set a label; repeatable' },
+      { spec: '--unset <k>', description: 'Remove a label; repeatable' },
+    ],
   },
   {
     command: 'workflow',
@@ -151,6 +247,41 @@ const commandHelp: HelpEntry[] = [
     spec: 'workflow resume <run-id>',
     description: 'Resume a failed or paused run from completed nodes',
   },
+  {
+    command: 'workflow',
+    subcommand: 'wake',
+    spec: 'workflow wake [--watch] [--json]',
+    description: 'Wake due continuations across this install',
+    scopedFlags: [
+      {
+        spec: '--watch',
+        description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+      },
+      { spec: '--json', description: 'One JSON document per pass' },
+      { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
+      {
+        spec: '--interval <seconds>',
+        description: 'Timer interval (positive integer, default: 5)',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'signal',
+    spec: 'workflow signal <full-run-id>',
+    description: 'Signal and wake an event wait; use --occurrence for an exact match',
+    scopedFlags: [
+      { spec: '--event <name>', description: 'Required event name' },
+      { spec: '--occurrence <id>', description: 'Exact occurrence from metadata.wait.pauseId' },
+      {
+        spec: '--resume-at <ISO timestamp>',
+        description: 'Legacy deadline selector; cannot distinguish equal-deadline occurrences',
+      },
+      { spec: '--data <JSON>', description: 'Optional signal payload' },
+      { spec: '--json', description: 'Report signal and execution separately' },
+    ],
+  },
+
   {
     command: 'workflow',
     subcommand: 'cancel',
@@ -172,15 +303,17 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
-    subcommand: 'search',
-    spec: 'workflow search [query]',
-    description: 'Search the workflow marketplace',
-  },
-  {
-    command: 'workflow',
-    subcommand: 'install',
-    spec: 'workflow install <slug>',
-    description: 'Install a workflow from the marketplace',
+    subcommand: 'answer',
+    spec: 'workflow answer <run-id> --occurrence <id>',
+    description: 'Answer a paused attention wait in its declared form',
+    scopedFlags: [
+      {
+        spec: '--choose <id>',
+        description:
+          'A declared option to choose; repeat for a multi_select (omit for a message form)',
+      },
+      { spec: '--text <text>', description: 'Free text recorded with the answer' },
+    ],
   },
   {
     command: 'workflow',
@@ -229,50 +362,15 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'serve',
     spec: 'serve',
-    description: 'Start the web UI server (binary installs download it on first run)',
+    description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
-  {
-    command: 'skill',
-    subcommand: 'install',
-    spec: 'skill install [path]',
-    description: 'Install archon-cli into .claude/skills and .agents/skills',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'install',
-    spec: 'plugin install <owner/repo[/path][@tag]>',
-    description:
-      'Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'update',
-    spec: 'plugin update <id>[@tag]',
-    description: 'Reinstall an installed plugin at a tag, or its latest release or default branch',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'remove',
-    spec: 'plugin remove <id>',
-    description: 'Delete the files an installed plugin wrote',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'copy',
-    spec: 'plugin copy <id>',
-    description: "Copy an installed workflow pack into this project's .archon/workflows/",
-  },
-  {
-    command: 'plugin',
-    subcommand: 'list',
-    spec: 'plugin list',
-    description: 'Show installed plugins with tag and commit',
-  },
+  ...attachmentHelp('skill'),
+  ...attachmentHelp('provider'),
+  ...attachmentHelp('plugin'),
   {
     command: 'doctor',
-    spec: 'doctor [--full]',
-    description:
-      'Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)',
+    spec: 'doctor',
+    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
   },
   {
     command: 'auth',
@@ -400,28 +498,94 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
-  ...(
-    [
-      ['workitem.view', 'Read a qualified work item'],
-      ['pr.view', 'Read a pull request by number or by qualified head'],
-      ['pr.create', 'Open a pull request and verify it by reading it back'],
-      ['pr.edit-body', 'Replace a pull request body and verify the result'],
-      ['pr.ready', 'Take a pull request out of draft and verify the result'],
-      ['comment.upsert', 'Write the one marked comment on a pull request'],
-    ] as const
-  ).map(([subcommand, description]) => ({
+  ...attachmentHelp('plugin', true),
+  ...attachmentHelp('skill', true),
+  {
+    command: 'state',
+    subcommand: 'get',
+    spec: 'state get <name> [--raw]',
+    description: 'Read the latest value and revision as JSON; --raw prints a text value',
+  },
+  {
+    command: 'state',
+    subcommand: 'put',
+    spec: 'state put <name> --if-revision <n> [--raw]',
+    description: 'Replace the value with JSON (or --raw text) from stdin; 0 creates it',
+  },
+  {
+    command: 'state',
+    subcommand: 'patch',
+    spec: 'state patch <name> [--if-revision <n>]',
+    description: 'Apply {ops:[...]} from stdin to the latest value, or only to revision n',
+  },
+  {
+    command: 'state',
+    subcommand: 'delete',
+    spec: 'state delete <name> [--if-revision <n>]',
+    description: 'Append an audited tombstone',
+  },
+  {
+    command: 'state',
+    subcommand: 'log',
+    spec: 'state log <name> [--limit <n>]',
+    description: 'Read revisions newest first, including writers and operations',
+  },
+  {
+    command: 'state',
+    subcommand: 'list',
+    spec: 'state list [--prefix <p>] [--values]',
+    description:
+      'List document names with their latest revision and writer; --values returns live documents with values',
+  },
+  {
     command: 'forge',
-    subcommand,
-    spec: `forge ${subcommand}`,
-    description,
+    subcommand: 'metadata',
+    spec: 'forge metadata',
+    description:
+      'Inspect trusted plugin metadata for a host without credentials or forge operations',
     scopedFlags: [
-      { spec: '--data <json>', description: 'Structured request without operationId or op' },
       {
-        spec: '--data-file <path>',
-        description: 'Read that request from a file, keeping authored content out of argv',
+        spec: '--data <json>',
+        description: 'JSON object with the forge host, for example {"host":"github.com"}',
       },
     ],
-  })),
+  },
+  ...Object.entries(forgeOperationDescriptions)
+    .filter(([op]) => op !== 'resolve')
+    .map(([subcommand, description]) => ({
+      command: 'forge',
+      subcommand,
+      spec: `forge ${subcommand}`,
+      description,
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description: 'Structured request without operationId or op',
+        },
+        {
+          spec: '--data-file <path>',
+          description: 'Read that request from a file, keeping authored content out of argv',
+        },
+      ],
+    })),
+  {
+    command: 'user',
+    subcommand: 'list',
+    spec: 'user list',
+    description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
+  },
+  {
+    command: 'user',
+    subcommand: 'role',
+    spec: `user role <id> <${userRoleSchema.options.join('|')}>`,
+    description: 'Set a user role using the full user id',
+  },
   {
     command: 'trigger',
     subcommand: 'list',
@@ -431,8 +595,15 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'trigger',
     subcommand: 'fire',
-    spec: 'trigger fire --config <file>',
-    description: 'Record a configured timer start and drain its execution host',
+    spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+    description: 'Record a configured start and drain its execution host',
+    scopedFlags: [
+      {
+        spec: '--delivery-id <key>',
+        description: 'Deduplicate this delivery within the configured source',
+      },
+      { spec: '--inputs <file>', description: 'Read event input values from a JSON object' },
+    ],
   },
   {
     command: 'trigger',
@@ -535,9 +706,18 @@ const scopedOnlyHelp: HelpEntry[] = [
     spec: 'workflow event emit',
     description: 'Emit a workflow event into a run',
     scopedFlags: [
-      { spec: '--run-id <id>', description: 'Target run for the event (required)' },
-      { spec: '--type <event-type>', description: 'Event type to emit (required)' },
-      { spec: '--data <json>', description: 'JSON payload for the event (optional)' },
+      {
+        spec: '--run-id <id>',
+        description: 'Target run for the event (required)',
+      },
+      {
+        spec: '--type <event-type>',
+        description: 'Event type to emit (required)',
+      },
+      {
+        spec: '--data <json>',
+        description: 'JSON payload for the event (optional)',
+      },
     ],
   },
 ];
@@ -564,6 +744,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--base-branch <name>',
+    description:
+      'Initial repository registration only; omit to follow the remote default. Use --base for a run override.',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--base <branch>',
     description: 'Per-dispatch base override for epic slices (worktree cut-from + PR target)',
     owners: [{ command: 'workflow', subcommand: 'run' }],
@@ -581,7 +767,13 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--folder',
-    description: 'Register the current non-git directory as a folder project and run in place',
+    description:
+      'Register the current directory (with or without git) as a folder project and run in place',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--container',
+    description: 'Run a folder project in container isolation',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -650,6 +842,11 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--providers <ids>',
+    description: 'Add comma-separated maintained providers, skipping the setup provider question',
+    owners: [{ command: 'setup' }],
+  },
+  {
     spec: '--spawn',
     description: 'Open setup wizard in a new terminal window (for setup command)',
     owners: [{ command: 'setup' }],
@@ -667,7 +864,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)',
+      'Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)',
     owners: [],
   },
   {
@@ -679,9 +876,21 @@ const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--occurrence <id>',
+    description:
+      "For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still\npaused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer\nand attention label)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+      { command: 'workflow', subcommand: 'answer' },
+      { command: 'workflow', subcommand: 'attention label' },
+    ],
+  },
+  {
     spec: '--detach',
     description:
-      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)",
+      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'approve' },
@@ -725,9 +934,15 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'logs' }],
   },
   {
+    spec: '--format <jsonl|text>',
+    description:
+      "For 'workflow logs': jsonl (default) prints the exact transcript;\ntext renders it as progress lines for a human",
+    owners: [{ command: 'workflow', subcommand: 'logs' }],
+  },
+  {
     spec: '--conversation-id <id>',
     description:
-      'Reuse a stable conversation scope across runs (enables\npersist_session resume between separate CLI invocations)',
+      "Correlation id for the run's messages. It creates no\nconversation and no persist_session scope",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -737,13 +952,14 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--download-only',
-    description: 'Download web UI without starting the server',
+    description: 'Download server and web UI without starting the server',
     owners: [{ command: 'serve' }],
   },
   {
     spec: '--force',
-    description: 'Overwrite existing file (for workflow install)',
-    owners: [{ command: 'workflow', subcommand: 'install' }],
+    description:
+      "For 'setup': overwrite existing values instead of merging\nFor 'complete': remove even when safety checks block it",
+    owners: [{ command: 'setup' }, { command: 'complete' }],
   },
 ];
 
@@ -771,15 +987,15 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --folder "List every repo under this multi-repo root"',
+    text: 'archon workflow run investigate --folder "Explain how the repos under this root fit together"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-assist --detach "Investigate the flaky test"',
+    text: 'archon workflow run archon-investigate --detach "Investigate the flaky test"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --dry-run --stubs ./stubs.yaml --json',
+    text: 'archon workflow run investigate --dry-run --stubs ./stubs.yaml --json',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon workflow runs --json', owner: { command: 'workflow', subcommand: 'runs' } },
@@ -792,6 +1008,10 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'logs' },
   },
   {
+    text: 'archon workflow logs <run-id> --follow --format text',
+    owner: { command: 'workflow', subcommand: 'logs' },
+  },
+  {
     text: 'archon workflow wait <run-id> --json',
     owner: { command: 'workflow', subcommand: 'wait' },
   },
@@ -799,25 +1019,17 @@ const orderedExamples: ExampleHelp[] = [
   { text: 'archon workflow cancel <run-id>', owner: { command: 'workflow', subcommand: 'cancel' } },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
-    text: 'archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"',
+    text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
-  { text: 'archon skill install', owner: { command: 'skill', subcommand: 'install' } },
+  { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {
-    text: 'archon skill install /path/to/project',
-    owner: { command: 'skill', subcommand: 'install' },
+    text: 'archon skill add /path/to/project',
+    owner: { command: 'skill', subcommand: 'add' },
   },
   {
-    text: 'archon plugin install coleam00/Archon/plugins/forge-github',
-    owner: { command: 'plugin', subcommand: 'install' },
-  },
-  {
-    text: 'archon workflow search "pr review"',
-    owner: { command: 'workflow', subcommand: 'search' },
-  },
-  {
-    text: 'archon workflow install archon-piv-loop',
-    owner: { command: 'workflow', subcommand: 'install' },
+    text: 'archon plugin add coleam00/Archon/plugins/forge-github',
+    owner: { command: 'plugin', subcommand: 'add' },
   },
 ];
 
@@ -852,7 +1064,7 @@ function ownerKey(owner: FlagOwner): string {
   return `${owner.command}|${owner.subcommand ?? ''}`;
 }
 
-function selectFlagsFor(selected: HelpEntry[], scopedOnly: ScopedFlagHelp[] = []): FlagHelp[] {
+function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): FlagHelp[] {
   const keys = new Set(selected.map(e => ownerKey(e)));
   const seen = new Set<string>();
   const out: FlagHelp[] = [];
@@ -861,10 +1073,10 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: ScopedFlagHelp[] = []
   for (const f of scopedOnly) {
     if (seen.has(f.spec)) continue;
     seen.add(f.spec);
-    out.push({ ...f, owners: [] });
+    out.push(f);
   }
   for (const f of orderedFlags) {
-    if (!f.owners.some(o => keys.has(ownerKey(o)))) continue;
+    if (!f.owners?.some(o => keys.has(ownerKey(o)))) continue;
     if (seen.has(f.spec)) continue;
     seen.add(f.spec);
     out.push(f);

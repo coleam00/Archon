@@ -2,6 +2,10 @@ import type { IPlatformAdapter, MessageMetadata } from '../../types';
 import { mock, type Mock } from 'bun:test';
 
 export class MockPlatformAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   public sendMessage: Mock<
     (conversationId: string, message: string, metadata?: MessageMetadata) => Promise<void>
   > = mock(() => Promise.resolve());

@@ -1,0 +1,45 @@
+name: archon-simplify
+description: |
+  Judge whether a change delivers its outcome through more structure than it needs,
+  and name the smaller shape. Read-only: it judges, it never edits.
+
+  Delivery runs it once per run, after a review round passes and before CI, and
+  hands its findings to the implementer to adopt or decline.
+
+  Use when: a change needs its structure judged — "is this overbuilt", "simplify
+  review".
+  NOT for: correctness (review), fixing findings (implement), or writing code.
+
+model: medium
+
+inputs:
+  work_order:
+    default: ""
+    description: >-
+      The accepted outcome and scope boundaries the structure is judged against.
+
+returns: simplify
+
+nodes:
+  - id: simplify
+    output_type: structure-review
+    command: simplify
+    context: fresh
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        # True when the report holds any finding: delivery hands every one to the
+        # owner to judge.
+        findings: { type: boolean }
+      required: [findings]
+
+  # Scratch worktrees the lens tried mutations in are removed by the workflow,
+  # whether the lens succeeded or failed.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [simplify]
+    trigger_rule: all_done
+    with:
+      lens: simplify

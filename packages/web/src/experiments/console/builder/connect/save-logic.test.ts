@@ -140,8 +140,9 @@ describe('blockingErrors', () => {
 });
 
 describe('isReadOnlySource / saveTargetFor', () => {
-  test('only bundled is read-only', () => {
+  test('only bundled and installed are read-only', () => {
     expect(isReadOnlySource('bundled')).toBe(true);
+    expect(isReadOnlySource('installed')).toBe(true);
     expect(isReadOnlySource('project')).toBe(false);
     expect(isReadOnlySource('global')).toBe(false);
   });
@@ -150,6 +151,7 @@ describe('isReadOnlySource / saveTargetFor', () => {
     expect(saveTargetFor('bundled')).toBe('project');
     expect(saveTargetFor('project')).toBe('project');
     expect(saveTargetFor('global')).toBe('global');
+    expect(saveTargetFor('installed')).toBe('project');
   });
 
   // #2578 — the helpers accept `string` precisely so an unrecognised wire value

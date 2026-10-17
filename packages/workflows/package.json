@@ -1,14 +1,20 @@
 {
   "name": "@archon/workflows",
-  "version": "0.10.1",
+  "version": "0.11.1",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
+    "./run-ai-configuration": "./src/run-ai-configuration.ts",
+    "./run-preflight": "./src/run-preflight.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
     "./router": "./src/router.ts",
+    "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
+    "./attention-queue": "./src/attention-queue.ts",
+    "./attention-watch": "./src/attention-watch.ts",
+    "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
@@ -22,9 +28,11 @@
     "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
+    "./validation-config": "./src/validation-config.ts",
     "./dry-run": "./src/dry-run.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
+    "./utils/github-token-policy": "./src/utils/github-token-policy.ts",
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
@@ -39,7 +47,16 @@
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
     "./node-event-write": "./src/node-event-write.ts",
-    "./logger": "./src/logger.ts"
+    "./subprocess": "./src/subprocess.ts",
+    "./logger": "./src/logger.ts",
+    "./container-context": "./src/container-context.ts",
+    "./structured-output": "./src/structured-output.ts",
+    "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
+    "./store-conformance": "./src/store-conformance.ts",
+    "./file-store": "./src/file-store/index.ts",
+    "./provider-event-reader": "./src/provider-event-reader.ts",
+    "./state-document-store": "./src/state-document-store.ts",
+    "./state-document-conformance": "./src/state-document-conformance.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -48,9 +65,13 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*",
-    "@hono/zod-openapi": "^1.4.0",
-    "zod": "^4.4.3"
+    "@archon/provider-contract": "workspace:*",
+    "@archon/plugin-manifest": "workspace:*",
+    "zod": "^4.4.3",
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "@archon/providers": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -86,10 +107,20 @@
       "src/output-ref.test.ts"
     ],
     [
+      "src/run-budget.test.ts"
+    ],
+    [
       "src/event-emitter.test.ts"
     ],
     [
-      "src/executor-shared.test.ts"
+      "src/executor-shared.test.ts",
+      "src/subprocess.test.ts"
+    ],
+    [
+      "src/provider-events.test.ts"
+    ],
+    [
+      "src/tool-call-attention.test.ts"
     ],
     [
       "src/load-command-prompt.test.ts"
@@ -112,6 +143,8 @@
     [
       "src/defaults/",
       "src/run-config.test.ts",
+      "src/run-preflight.test.ts",
+      "src/run-ai-configuration.test.ts",
       "src/model-validation.test.ts",
       "src/router.test.ts",
       "src/utils/",
@@ -120,6 +153,7 @@
     ],
     [
       "src/schemas.test.ts",
+      "src/attention-queue.test.ts",
       "src/deprecation.test.ts",
       "src/command-validation.test.ts",
       "src/packaged-workflow.test.ts"
@@ -128,7 +162,16 @@
       "src/validator.test.ts"
     ],
     [
+      "src/mcp-path.test.ts"
+    ],
+    [
+      "src/workflow-corpus.test.ts"
+    ],
+    [
       "src/script-discovery.test.ts"
+    ],
+    [
+      "src/script-discovery-links.test.ts"
     ],
     [
       "src/bundle-live-selection.test.ts"
@@ -138,6 +181,9 @@
     ],
     [
       "src/workflow-source.test.ts"
+    ],
+    [
+      "src/installed-packs.test.ts"
     ],
     [
       "src/workflow-source-binary.test.ts"
@@ -159,6 +205,9 @@
       "src/telemetry-conformance.test.ts"
     ],
     [
+      "src/telemetry-shape.test.ts"
+    ],
+    [
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
@@ -167,11 +216,29 @@
       "src/node-record-reader.test.ts"
     ],
     [
-      "src/node-record-serialization.test.ts"
+      "src/node-record-serialization.test.ts",
+      "src/scripts/generate-node-execution-reference.test.ts"
     ],
     [
       "src/checkout-observation.test.ts",
       "src/implement-guard-conformance.test.ts"
+    ],
+    [
+      "src/structured-output.test.ts"
+    ],
+    [
+      "src/store-conformance.test.ts"
+    ],
+    [
+      "src/file-store/"
+    ],
+    [
+      "src/run-subscription.test.ts",
+      "src/attention-watch.test.ts"
+    ],
+    [
+      "src/state-document-store.test.ts",
+      "src/state-document-conformance.test.ts"
     ]
   ]
 }

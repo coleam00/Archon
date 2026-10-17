@@ -5,22 +5,29 @@
  *   /api/stream/__dashboard__       — multiplexed workflow events for every run
  *   /api/stream/<conversationId>    — per-conversation events (text/tool_call/tool_result + workflow_*)
  *
- * The console treats them as cache-invalidation triggers: an event lands,
+ * The console treats most of them as cache-invalidation triggers: an event lands,
  * the relevant cache key is invalidated, `useEntity` refetches authoritative
  * state from the API. The list+detail surfaces don't need to interpret event
- * payloads — they just need to know "data changed, ask again." This stays
- * loosely coupled to event schemas and avoids partial in-memory mutation.
+ * payloads — they just need to know "data changed, ask again."
+ *
+ * Provider events are the exception. A run streams thousands, and each frame carries
+ * the engine's record unchanged, so `workflow_provider_event` frames are appended to
+ * the provider-event store (lib/provider-events.ts) instead of triggering a refetch.
  */
 
 import { useEffect } from 'react';
 import { invalidate } from '../store/cache';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
+import { DASHBOARD_SSE_PATH } from './sse-endpoints';
+import { providerEventStore, type ProviderEventRecord } from './provider-events';
 
 interface ParsedEvent {
   type?: string;
   runId?: string;
   locked?: boolean;
+  nodeId?: string;
+  status?: string;
 }
 
 function parse(raw: string): ParsedEvent | null {
@@ -32,20 +39,20 @@ function parse(raw: string): ParsedEvent | null {
 }
 
 /**
- * Subscribe to the dashboard SSE stream and invalidate the runs feed on any
- * lifecycle change. Safe to mount from more than one route — RunsPage and the
- * ChatPage WorkflowDock both do; each opens an independent connection and the
- * invalidations are idempotent.
+ * Subscribe to the dashboard SSE stream, invalidate the runs feed on any
+ * lifecycle change, and report the changed run to `onRunChanged` (keep it
+ * stable: a new callback reconnects). Mounted once, at the console root, so
+ * every route stays live across navigation.
  *
  * Events we care about:
  *   workflow_status   — run created / status changed / completed / failed
  *   dag_node          — active-node lifecycle changes, rendered together on
  *                       each ActiveRunCard
  */
-export function useDashboardSSE(): void {
+export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
   useEffect(() => {
     // Use SSE_BASE_URL so dev bypasses the Vite proxy (which buffers SSE).
-    const es = new EventSource(`${SSE_BASE_URL}/api/stream/__dashboard__`);
+    const es = new EventSource(`${SSE_BASE_URL}${DASHBOARD_SSE_PATH}`);
 
     es.onmessage = (e: MessageEvent<string>): void => {
       const ev = parse(e.data);
@@ -57,6 +64,7 @@ export function useDashboardSSE(): void {
         // up status / node-transition changes without its own SSE round-trip.
         if (typeof ev.runId === 'string') {
           invalidate(K.run(ev.runId));
+          onRunChanged(ev.runId);
         }
       }
     };
@@ -74,7 +82,7 @@ export function useDashboardSSE(): void {
     return (): void => {
       es.close();
     };
-  }, []);
+  }, [onRunChanged]);
 }
 
 /**
@@ -83,10 +91,12 @@ export function useDashboardSSE(): void {
  * conversation id is known.
  *
  * Events we care about:
- *   text                  — new assistant text → messages changed
- *   tool_call/tool_result — new tool activity  → messages + run events changed
- *   workflow_status       — run status changed
- *   workflow_tool_activity / dag_node — workflow_events table grew
+ *   text / tool_call / tool_result — chat-message activity → messages changed
+ *   workflow_provider_event        — appended to the provider-event store, no refetch
+ *   workflow_status / dag_node     — run status or node lifecycle changed
+ *
+ * A reconnect, or a node reaching a terminal state, asks the provider-event store to
+ * fetch whatever frames the page may have missed.
  */
 export function useRunStreamSSE(conversationPlatformId: string | null, runId: string | null): void {
   useEffect(() => {
@@ -99,6 +109,13 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
     let messagesDirty = false;
     let runDirty = false;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let opened = false;
+
+    es.onopen = (): void => {
+      // EventSource reconnects on its own; frames sent while it was away are lost.
+      if (opened) providerEventStore.catchUp(runId);
+      opened = true;
+    };
 
     // Coalesce bursts. Streamed text can arrive at >10Hz; we don't want a
     // refetch per chunk. 100ms is fast enough to feel live and slow enough
@@ -123,17 +140,34 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
       if (ev?.type === undefined || ev.type === 'heartbeat') return;
 
       switch (ev.type) {
+        case 'workflow_provider_event': {
+          // The frame is the engine's record plus the channel's `type`.
+          const frame = JSON.parse(e.data) as ProviderEventRecord;
+          providerEventStore.receive({
+            runId: frame.runId,
+            stepName: frame.stepName,
+            attemptId: frame.attemptId,
+            seq: frame.seq,
+            observedAt: frame.observedAt,
+            event: frame.event,
+          });
+          return;
+        }
         case 'text':
-          messagesDirty = true;
-          break;
         case 'tool_call':
         case 'tool_result':
           messagesDirty = true;
+          break;
+        case 'dag_node':
+          if (
+            typeof ev.nodeId === 'string' &&
+            (ev.status === 'completed' || ev.status === 'failed')
+          ) {
+            providerEventStore.nodeFinished(runId, ev.nodeId);
+          }
           runDirty = true;
           break;
         case 'workflow_status':
-        case 'workflow_tool_activity':
-        case 'dag_node':
         case 'workflow_step':
         case 'workflow_artifact':
         case 'workflow_dispatch':

@@ -8,7 +8,19 @@
  * count is not exactly one): `loop → approval → wait → cancel → bash → script →
  * command → prompt`.
  */
-import type { VariantId, WireDagNode } from '../types';
+import type { OpaqueKind, VariantId, WireDagNode } from '../types';
+
+/**
+ * Resolve a valid authored mode the builder has no editor for, or `null`.
+ * Checked before {@link detectVariantOrNull}: such a node carries none of the
+ * eight editable mode fields, so it would otherwise read as "no mode field".
+ */
+export function detectOpaqueKind(node: WireDagNode): OpaqueKind | null {
+  if (node.loop_group !== undefined) return 'loop_group';
+  if (node.workflow !== undefined) return 'workflow';
+  if (node.include !== undefined) return 'include';
+  return null;
+}
 
 /**
  * Resolve the variant of a wire node by mode-field presence, or `null` when no

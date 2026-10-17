@@ -19,11 +19,17 @@
  * any node whose provider lacks the `containerExec` capability.
  */
 
+import { IsolationFailure } from '../errors';
 import { randomUUID } from 'crypto';
 import { isAbsolute, sep } from 'path';
 import type { BranchName } from '@archon/git';
 import { createLogger, isInsideArchonHome } from '@archon/paths';
-import type { WriteBackFinalizeResult, WriteBackApplySummary } from '@archon/providers/types';
+import {
+  OVERLAY_MODES,
+  type OverlayMode,
+  type WriteBackFinalizeResult,
+  type WriteBackApplySummary,
+} from '@archon/workflows/container-context';
 import type {
   BackendPrepareRequest,
   ContainerBackendConfig,
@@ -56,15 +62,10 @@ const READY_TIMEOUT_MS = 20_000;
 /** Poll interval while waiting for the ready sentinel. */
 const READY_POLL_INTERVAL_MS = 250;
 
-/**
- * Overlay mount modes, in PREFERENCE order (least-privileged first). `fuse` runs
- * with only `--device /dev/fuse` (no CAP_SYS_ADMIN — closes the remount escape,
- * but only mounts on rootless/userns daemons); `native` grants CAP_SYS_ADMIN
- * (works everywhere, grants the escape — see SECURITY.md). The backend tries them
- * in this order and keeps the first that mounts.
- */
-const OVERLAY_MODES = ['fuse', 'native'] as const;
-type OverlayMode = (typeof OVERLAY_MODES)[number];
+// The runner reserves this exit status for a failed fuse-overlayfs mount.
+// Older runner images have no such signal and fail without escalating privileges.
+const FUSE_MOUNT_FAILED_EXIT_CODE = 78;
+class FuseMountFailure extends IsolationFailure {}
 
 export interface ContainerBackendDeps {
   store: IIsolationStore;
@@ -103,7 +104,7 @@ interface HostMounts {
  * `resourceId` is the stable handle used for container/volume names + the
  * `env-id` label; `destroy()` reads `containerId`/`volume` back off the row.
  */
-interface ContainerEnvMetadata {
+type ContainerEnvMetadata = {
   containerId: string;
   containerName: string;
   volume: string;
@@ -127,8 +128,7 @@ interface ContainerEnvMetadata {
    * hand-back on suspend and destroy knows which host tree the container wrote into.
    */
   artifactsMount?: string;
-  [key: string]: unknown;
-}
+};
 
 /**
  * Reject a host mount that is not Archon's to mount.
@@ -226,9 +226,8 @@ export class ContainerBackend implements IIsolationBackend {
       volume,
     ]);
 
-    // 2. Create + start the container, mounting the overlay with the
-    //    least-privileged mode that works (fuse without CAP_SYS_ADMIN first,
-    //    native + CAP_SYS_ADMIN fallback). Fails only after both modes fail.
+    // Native grants CAP_SYS_ADMIN; only a confirmed runner FUSE mount failure
+    // authorizes that fallback.
     let containerId: string;
     let overlayMode: OverlayMode;
     try {
@@ -351,9 +350,7 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
-    await this.store.updateStatus(envId, 'destroyed').catch(err => {
-      log.warn({ envId, err: err as Error }, 'isolation.container_destroy_status_update_failed');
-    });
+    await this.store.updateStatus(envId, 'destroyed');
 
     log.info({ envId, containerName, volume }, 'isolation.container_destroy_completed');
   }
@@ -380,12 +377,17 @@ export class ContainerBackend implements IIsolationBackend {
       log.info({ envId, handle }, 'isolation.container_suspended');
     } catch (err) {
       const detail = extractDockerError(err);
-      if (/no such container|is not running/i.test(detail)) {
+      const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
+      if (state === 'missing' || state === 'stopped') {
         log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
         return;
       }
       log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
-      throw new Error(`Failed to suspend container '${handle}' for env '${envId}': ${detail}`);
+      throw new IsolationFailure(
+        'unclassified',
+        `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
+        err
+      );
     }
   }
 
@@ -411,20 +413,60 @@ export class ContainerBackend implements IIsolationBackend {
     }
     const row = await this.store.getById(envId);
     const codebaseId = row?.codebase_id ?? '';
-    // The mode the row recorded; the recreate branch below may re-probe and override.
-    const priorMode: OverlayMode = meta.overlayMode ?? 'native';
-
     const presence = await this.describeContainer(containerName);
-    if (presence === 'running') {
-      const containerId = await this.getContainerId(containerName);
-      log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
-      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+    if (presence === 'paused' || presence === 'restarting') {
+      throw new IsolationFailure(
+        'unclassified',
+        `Cannot resume container env '${envId}': container '${containerName}' is ${presence}.`
+      );
     }
-    if (presence === 'stopped') {
-      await this.docker(['start', containerName]);
+    if (presence === 'running' || presence === 'stopped') {
+      const priorMode =
+        meta.overlayMode === undefined
+          ? 'native'
+          : OVERLAY_MODES.find(mode => mode === meta.overlayMode);
+      if (priorMode === undefined) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': invalid persisted overlay mode ` +
+            `${JSON.stringify(meta.overlayMode)}. Expected one of: ${OVERLAY_MODES.join(', ')}.`
+        );
+      }
       const containerId = await this.getContainerId(containerName);
-      await this.waitForReady(containerId);
-      log.info({ envId, containerName }, 'isolation.container_resume_restarted');
+      if (containerId !== meta.containerId) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': container '${containerName}' ID ` +
+            `'${containerId}' does not match recorded ID '${meta.containerId}'. ` +
+            'Its overlay mode is unknown; remove the unrecorded container before retrying, ' +
+            `preserving overlay volume '${volume}'.`
+        );
+      }
+      const { stdout } = await this.docker(['inspect', '-f', '{{json .Config.Env}}', containerId]);
+      const environment: unknown = JSON.parse(stdout);
+      const modeEntries = Array.isArray(environment)
+        ? environment.filter(
+            (entry: unknown): entry is string =>
+              typeof entry === 'string' && entry.startsWith('ARCHON_OVERLAY_MODE=')
+          )
+        : [];
+      if (modeEntries.length !== 1 || modeEntries[0] !== `ARCHON_OVERLAY_MODE=${priorMode}`) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Cannot resume container env '${envId}': container '${containerId}' overlay mode ` +
+            `${JSON.stringify(modeEntries)} does not match recorded overlay mode '${priorMode}'.`
+        );
+      }
+      if (presence === 'stopped') {
+        await this.docker(['start', containerId]);
+        await this.waitForReady(containerId);
+      }
+      log.info(
+        { envId, containerName },
+        presence === 'running'
+          ? 'isolation.container_resume_reused_running'
+          : 'isolation.container_resume_restarted'
+      );
       return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
     }
 
@@ -459,6 +501,29 @@ export class ContainerBackend implements IIsolationBackend {
       codebaseId,
       mounts
     );
+    try {
+      await this.store.updateMetadata(envId, {
+        containerId,
+        overlayMode: mode,
+        image: this.config.image,
+      });
+    } catch (error) {
+      try {
+        await this.docker(['rm', '-f', containerId]);
+      } catch (cleanupError) {
+        throw new IsolationFailure(
+          'unclassified',
+          `Failed to record recreated container '${containerId}': ${extractDockerError(error)}. ` +
+            `Could not remove it: ${extractDockerError(cleanupError)}. ` +
+            `Overlay volume '${volume}' is preserved.`,
+          new AggregateError(
+            [error, cleanupError],
+            'Container recreation persistence and cleanup failed'
+          )
+        );
+      }
+      throw error;
+    }
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
     return this.preparedEnvFor(containerId, workspacePath, envId, mode);
   }
@@ -547,16 +612,6 @@ export class ContainerBackend implements IIsolationBackend {
       log.debug({ envId, handle, artifactsMount, owner }, 'isolation.container_artifacts_owned');
     } catch (err) {
       const detail = extractDockerError(err);
-      // A container that already stopped or vanished cannot run the chown; that is the
-      // normal destroy-after-suspend path, not a failed hand-back. Same reading of the
-      // daemon's answer that `suspend` uses.
-      if (/no such container|is not running/i.test(detail)) {
-        log.debug(
-          { envId, handle, artifactsMount, detail },
-          'isolation.container_artifacts_chown_skipped_stopped'
-        );
-        return;
-      }
       log.warn(
         { envId, handle, artifactsMount, owner, detail },
         'isolation.container_artifacts_chown_failed'
@@ -569,12 +624,14 @@ export class ContainerBackend implements IIsolationBackend {
    * store normalizes `metadata` to a parsed object on every dialect (SQLite returns
    * it as a JSON string otherwise), so this reads it directly.
    */
-  private async loadMetadata(envId: string): Promise<Partial<ContainerEnvMetadata>> {
+  private async loadMetadata(
+    envId: string
+  ): Promise<Partial<Omit<ContainerEnvMetadata, 'overlayMode'>> & { overlayMode?: unknown }> {
     const row = await this.store.getById(envId);
     if (!row) {
       throw new Error(`Container env '${envId}' not found (its tracking row is gone).`);
     }
-    return row.metadata as Partial<ContainerEnvMetadata>;
+    return row.metadata;
   }
 
   private preparedEnvFor(
@@ -587,19 +644,40 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Container presence as three outcomes: `running`, `stopped` (exists but not
-   * running), or `missing` (no such container). Distinct from {@link containerState}
+   * Preserve active states that cannot execute work: paused and restarting must
+   * neither resume as ready nor suppress a failed stop. Distinct from {@link containerState}
    * which folds "missing" and "inspect blip" into `unknown` — resume MUST tell
    * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
    */
-  private async describeContainer(nameOrId: string): Promise<'running' | 'stopped' | 'missing'> {
-    try {
-      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', nameOrId]);
-      return stdout.trim() === 'true' ? 'running' : 'stopped';
-    } catch (err) {
-      const detail = extractDockerError(err);
-      if (/no such (object|container)/i.test(detail)) return 'missing';
-      throw new Error(`Failed to inspect container '${nameOrId}': ${detail}`);
+  private async describeContainer(
+    nameOrId: string
+  ): Promise<'running' | 'paused' | 'restarting' | 'stopped' | 'missing'> {
+    const { stdout } = await this.docker([
+      'container',
+      'ls',
+      '--all',
+      '--no-trunc',
+      '--format',
+      '{{.ID}}\t{{.Names}}\t{{.State}}',
+    ]);
+    const match = stdout
+      .trim()
+      .split('\n')
+      .map(line => line.split('\t'))
+      .find(([id, name]) => name === nameOrId || id === nameOrId);
+    if (!match) return 'missing';
+    switch (match[2]) {
+      case 'running':
+      case 'paused':
+      case 'restarting':
+        return match[2];
+      case 'created':
+      case 'exited':
+      case 'dead':
+      case 'removing':
+        return 'stopped';
+      default:
+        throw new IsolationFailure('unclassified', `Unknown Docker container state: ${match[2]}`);
     }
   }
 
@@ -609,14 +687,8 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   private async volumeExists(volume: string): Promise<boolean> {
-    try {
-      await this.docker(['volume', 'inspect', volume]);
-      return true;
-    } catch (err) {
-      const detail = extractDockerError(err);
-      if (/no such volume/i.test(detail)) return false;
-      throw new Error(`Failed to inspect volume '${volume}': ${detail}`);
-    }
+    const { stdout } = await this.docker(['volume', 'ls', '--format', '{{.Name}}']);
+    return stdout.trim().split('\n').includes(volume);
   }
 
   /**
@@ -630,7 +702,18 @@ export class ContainerBackend implements IIsolationBackend {
       return undefined;
     } catch (err) {
       const detail = extractDockerError(err);
-      if (/no such (container|volume)/i.test(detail)) {
+      const name = args.at(-1);
+      let missing = false;
+      try {
+        missing =
+          name !== undefined &&
+          (args[0] === 'volume'
+            ? !(await this.volumeExists(name))
+            : (await this.describeContainer(name)) === 'missing');
+      } catch (inspectionError) {
+        return `${detail}; could not verify removal: ${extractDockerError(inspectionError)}`;
+      }
+      if (missing) {
         log.debug({ args, detail }, 'isolation.container_destroy_already_gone');
         return undefined;
       }
@@ -639,15 +722,11 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Start the container with the least-privileged overlay mount that works, and
-   * wait for it to become ready. Tries `fuse` FIRST — fuse-overlayfs runs with
-   * only `--device /dev/fuse` and NO `CAP_SYS_ADMIN`, closing the
-   * `mount -o remount,rw /mnt/lower` escape (see SECURITY.md). That path only
-   * succeeds where the daemon grants unprivileged FUSE mounts (rootless /
-   * userns-remap); on a standard rootful daemon it fails fast and we fall back to
-   * `native` (kernel overlay + `CAP_SYS_ADMIN`), which works everywhere but grants
-   * that escape. The failed attempt's container is removed before the next try so
-   * the name is free.
+   * Try FUSE without CAP_SYS_ADMIN first. Only the runner's dedicated FUSE
+   * mount failure status (78) permits native overlay with CAP_SYS_ADMIN, which
+   * allows in-container root to remount the lower directory (see SECURITY.md).
+   * Docker startup failures and other readiness failures stop preparation.
+   * The failed FUSE container must be removed before trying native.
    *
    * @returns the ready container id + the mode that succeeded.
    */
@@ -658,47 +737,48 @@ export class ContainerBackend implements IIsolationBackend {
     codebaseId: string,
     mounts: HostMounts
   ): Promise<{ containerId: string; mode: OverlayMode }> {
-    const failures: string[] = [];
-    for (const mode of OVERLAY_MODES) {
-      let containerId: string;
-      try {
-        containerId = await this.runContainerInMode(
-          containerName,
-          volume,
-          hostRoot,
-          codebaseId,
-          mode,
-          mounts
-        );
-      } catch (runErr) {
-        // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
-        // fuse device) — record and try the next mode. Nothing to remove.
-        failures.push(`${mode}: ${extractDockerError(runErr)}`);
-        continue;
-      }
+    const start = async (
+      mode: OverlayMode
+    ): Promise<{ containerId: string; mode: OverlayMode }> => {
+      const containerId = await this.runContainerInMode(
+        containerName,
+        volume,
+        hostRoot,
+        codebaseId,
+        mode,
+        mounts
+      );
       try {
         await this.waitForReady(containerId);
-        if (mode !== OVERLAY_MODES[0]) {
-          log.warn({ containerName, mode }, 'isolation.container_overlay_fallback');
-        }
         return { containerId, mode };
-      } catch (readyErr) {
-        // Container started but the mount failed (entrypoint exits fast) — remove
-        // it so the name is free for the next mode, then continue.
-        failures.push(`${mode}: ${(readyErr as Error).message}`);
+      } catch (error) {
         await this.docker(['rm', '-f', containerName]).catch(rmErr => {
           log.warn(
             { containerName, mode, detail: extractDockerError(rmErr) },
             'isolation.container_fallback_cleanup_failed'
           );
+          if (error instanceof FuseMountFailure) {
+            if (!(rmErr instanceof IsolationFailure)) throw rmErr;
+            throw new IsolationFailure(
+              'unclassified',
+              `Could not remove failed FUSE container: ${extractDockerError(rmErr)}`,
+              new AggregateError([error, rmErr], 'FUSE cleanup failed')
+            );
+          }
         });
+        throw error;
       }
+    };
+    try {
+      return await start('fuse');
+    } catch (error) {
+      if (!(error instanceof FuseMountFailure)) throw error;
+      log.warn(
+        { containerName, mode: 'native', detail: extractDockerError(error) },
+        'isolation.container_overlay_fallback'
+      );
+      return start('native');
     }
-    throw new Error(
-      'Could not mount the overlay in any mode. Native overlay needs CAP_SYS_ADMIN; ' +
-        'fuse-overlayfs needs /dev/fuse AND an unprivileged-mount daemon ' +
-        `(rootless / userns-remap). Attempts:\n${failures.join('\n')}`
-    );
   }
 
   /**
@@ -771,57 +851,58 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /**
-   * Poll for the entrypoint's ready sentinel. Fails FAST if the container has
-   * exited (the entrypoint exits 1 on a mount failure) rather than waiting out the
-   * full timeout, so the mode fallback is quick. Throws with the container's tail
-   * logs so a mount failure surfaces the entrypoint's own error.
+   * Poll for the entrypoint's ready sentinel, stopping early if the container exits.
+   * Only the runner's dedicated FUSE mount exit status permits native fallback.
+   * Failures retain the container's tail logs and Docker diagnostics.
    */
   private async waitForReady(containerId: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
+    const failures = new Map<'exec' | 'inspect' | 'logs', IsolationFailure>();
+    let fuseMountFailed = false;
     while (Date.now() < deadline) {
       try {
         await this.docker(['exec', containerId, 'test', '-f', READY_SENTINEL], { timeout: 5_000 });
         return;
-      } catch {
-        // Not ready yet. ONLY fast-fail when the container has DEFINITELY exited
-        // (`Running=false`) — a transient inspect error/timeout must NOT be read
-        // as "stopped", or an infra blip would silently trigger the native +
-        // CAP_SYS_ADMIN fallback (privilege broadening). On 'unknown' keep polling
-        // until the deadline (a real exit still surfaces via the timeout).
-        if ((await this.containerState(containerId)) === 'stopped') break;
-        await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
+      } catch (error) {
+        if (!(error instanceof IsolationFailure)) throw error;
+        failures.set('exec', error);
       }
+      // An inspect failure is not evidence of exit: keep polling rather than
+      // broadening privileges to native overlay on a transient daemon failure.
+      try {
+        const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
+          timeout: 5_000,
+        });
+        if (stdout.trim() === 'false') {
+          const { stdout: exitCode } = await this.docker(
+            ['inspect', '-f', '{{.State.ExitCode}}', containerId],
+            { timeout: 5_000 }
+          );
+          fuseMountFailed = exitCode.trim() === String(FUSE_MOUNT_FAILED_EXIT_CODE);
+          break;
+        }
+      } catch (error) {
+        if (!(error instanceof IsolationFailure)) throw error;
+        failures.set('inspect', error);
+      }
+      await new Promise(resolve => setTimeout(resolve, READY_POLL_INTERVAL_MS));
     }
     let logs = '';
     try {
       const { stdout, stderr } = await this.docker(['logs', '--tail', '20', containerId]);
       logs = `${stdout}\n${stderr}`.trim();
-    } catch {
-      // Best-effort — the timeout / exit is the real error.
+    } catch (error) {
+      if (!(error instanceof IsolationFailure)) throw error;
+      failures.set('logs', error);
     }
-    throw new Error(
-      `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}`
+    const errors = [...failures.values()];
+    const Failure = fuseMountFailed && !failures.has('logs') ? FuseMountFailure : IsolationFailure;
+    throw new Failure(
+      'unclassified',
+      `Container overlay did not become ready.${logs ? ` Container logs:\n${logs}` : ''}` +
+        (errors.length ? ` Docker failures:\n${errors.map(extractDockerError).join('\n')}` : ''),
+      new AggregateError(errors, 'Docker readiness checks failed')
     );
-  }
-
-  /**
-   * Container running state as three distinct outcomes. Crucially, an inspect
-   * ERROR (daemon timeout, transient failure) is `unknown`, NOT `stopped` — the
-   * caller must not treat "couldn't tell" as "exited" (see waitForReady: only an
-   * explicit `stopped` may fast-fail into the privileged native fallback).
-   */
-  private async containerState(containerId: string): Promise<'running' | 'stopped' | 'unknown'> {
-    try {
-      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', containerId], {
-        timeout: 5_000,
-      });
-      const value = stdout.trim();
-      if (value === 'true') return 'running';
-      if (value === 'false') return 'stopped';
-      return 'unknown';
-    } catch {
-      return 'unknown';
-    }
   }
 
   /**

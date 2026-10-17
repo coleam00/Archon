@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { formatCodexSetupDeprecation, readCodexSetupEnv } from '@archon/providers/codex/setup-env';
 
 interface AuthJson {
   OPENAI_API_KEY: null;
@@ -21,13 +22,13 @@ interface AuthJson {
 }
 
 function setupAuth(): void {
-  // Get environment variables
-  const idToken = process.env.CODEX_ID_TOKEN;
-  const accessToken = process.env.CODEX_ACCESS_TOKEN;
-  const refreshToken = process.env.CODEX_REFRESH_TOKEN;
-  const accountId = process.env.CODEX_ACCOUNT_ID;
+  const { values, deprecated } = readCodexSetupEnv(process.env);
+  if (deprecated.length > 0) {
+    console.warn(`⚠️  ${formatCodexSetupDeprecation(deprecated)}`);
+  }
+  const { idToken, accessToken, refreshToken, accountId } = values;
 
-  // No CODEX_* env vars provided: warn if a persisted auth.json already
+  // No ARCHON_CODEX_* env vars provided: warn if a persisted auth.json already
   // exists on the volume (may be stale), otherwise skip with "unavailable".
   if (!idToken || !accessToken || !refreshToken || !accountId) {
     // /home/appuser is now persisted across restarts in Docker, so a stale
@@ -36,7 +37,7 @@ function setupAuth(): void {
     const persistedAuthPath = path.join(os.homedir(), '.codex', 'auth.json');
     if (fs.existsSync(persistedAuthPath)) {
       console.warn(
-        `⚠️  CODEX_* env vars not set, but persisted ${persistedAuthPath} exists from a previous run`
+        `⚠️  ARCHON_CODEX_* env vars not set, but persisted ${persistedAuthPath} exists from a previous run`
       );
       console.warn(
         '    Codex will attempt to use those credentials. If they are stale or revoked,'

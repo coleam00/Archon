@@ -28,8 +28,8 @@ describe('when-grammar parse', () => {
     // Every other fixture here is hyphen-free, so this is the only case that
     // catches the node-id slot being filled with the hyphen-free segment
     // grammar — the natural slip now that ATOM_PATTERN is composed rather than
-    // written out. `archon-validate-pr.yaml` ships exactly this condition, so
-    // the slip would reject a bundled workflow that runs fine in production.
+    // written out. Hyphenated node ids are the norm in real workflows, so the
+    // slip would reject workflows that run fine in production.
     const r = parse("$classify-testability.output.testable == 'e2e_testable'");
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -49,6 +49,14 @@ describe('when-grammar parse', () => {
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.ast.or[0][0].op).toBe(op);
     }
+  });
+
+  test('rejects a numeric operator against a non-numeric literal', () => {
+    for (const expr of ["$n.output > 'high'", "$n.output > ''", '$n.output <= true']) {
+      expect(parse(expr).ok).toBe(false);
+    }
+    expect(parse("$n.output > '80'").ok).toBe(true);
+    expect(parse('$n.output > 80').ok).toBe(true);
   });
 
   test('parses && (inner) and || (outer) into DNF', () => {
@@ -253,4 +261,20 @@ describe('when-grammar toDnf', () => {
       [{ kind: 'node', nodeId: 'b', op: '==', value: 'Y' }],
     ]);
   });
+});
+
+test('round-trips canonical nested paths while keeping shorthand and inputs single-field', () => {
+  const expr = "$review.output.proposal.action == 'add'";
+  const parsed = parse(expr);
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) {
+    expect(parsed.ast.or[0][0]).toMatchObject({
+      kind: 'node',
+      nodeId: 'review',
+      field: 'proposal.action',
+    });
+    expect(format(parsed.ast)).toBe(expr);
+  }
+  expect(parse("$review.proposal.action == 'add'").ok).toBe(false);
+  expect(parse("$INPUTS.proposal.action == 'add'").ok).toBe(false);
 });

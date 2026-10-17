@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
@@ -6,6 +7,12 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
+import {
+  startNodeExecution,
+  finishNodeExecution,
+  executionMetadata,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,8 +24,7 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
 const mockQuery = createMockQuery();
@@ -41,8 +47,8 @@ import {
   persistWorkflowEvent,
   persistWorkflowEventIfRunning,
   listWorkflowEvents,
-  listRecentEvents,
   listActiveWorkflowNodeIds,
+  listEventsForRuns,
   getDagResumeSnapshot,
 } from './workflow-events';
 
@@ -115,6 +121,33 @@ describe('workflow-events', () => {
         event_type: 'loop_iteration_started',
       });
     });
+
+    test('a lost provider event is logged with its node, attempt and seq', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('database is locked'));
+      mockLogger.error.mockClear();
+
+      await createWorkflowEvent({
+        workflow_run_id: 'run-456',
+        event_type: 'provider_event',
+        step_name: 'implement',
+        data: {
+          attemptId: 'attempt-1',
+          seq: 7,
+          observedAt: '2026-10-02T10:00:00.000Z',
+          event: { type: 'agent_message_chunk', text: 'hi' },
+        },
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-456',
+          stepName: 'implement',
+          attemptId: 'attempt-1',
+          seq: 7,
+        }),
+        'db.workflow_event_create_failed'
+      );
+    });
   });
 
   describe('persistWorkflowEventIfRunning', () => {
@@ -178,6 +211,37 @@ describe('workflow-events', () => {
         })
       ).rejects.toThrow('disk full');
     });
+
+    test("waits for the run's previous write, which may fail, but not for other runs", async () => {
+      let failFirst: (error: Error) => void = () => {};
+      mockQuery.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            failFirst = reject;
+          })
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const write = (runId: string, step: string): Promise<void> =>
+        persistWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'node_started',
+          step_name: step,
+        });
+      const queriedSteps = (): unknown[] =>
+        mockQuery.mock.calls.map(([, params]) => (Array.isArray(params) ? params[4] : undefined));
+
+      const first = write('run-a', 'first');
+      const later = write('run-a', 'later');
+      const otherRun = write('run-b', 'other');
+      await otherRun;
+      expect(queriedSteps()).toEqual(['first', 'other']);
+
+      failFirst(new Error('connection lost'));
+      await expect(first).rejects.toThrow('connection lost');
+      await later;
+      expect(queriedSteps()).toEqual(['first', 'other', 'later']);
+    });
   });
 
   describe('listWorkflowEvents', () => {
@@ -212,57 +276,6 @@ describe('workflow-events', () => {
 
       await expect(listWorkflowEvents('run-456')).rejects.toThrow(
         'Failed to list workflow events: timeout'
-      );
-    });
-  });
-
-  describe('listRecentEvents', () => {
-    test('returns events filtered by since parameter', async () => {
-      const events: WorkflowEventRow[] = [mockEvent];
-      mockQuery.mockResolvedValueOnce(createQueryResult(events));
-
-      const since = new Date('2025-01-01T00:00:00.000Z');
-      const result = await listRecentEvents('run-456', since);
-
-      expect(result).toEqual(events);
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_workflow_events
-         WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        ['run-456', since.toISOString()]
-      );
-    });
-
-    test('delegates to listWorkflowEvents without since parameter', async () => {
-      const events: WorkflowEventRow[] = [mockEvent];
-      mockQuery.mockResolvedValueOnce(createQueryResult(events));
-
-      const result = await listRecentEvents('run-456');
-
-      expect(result).toEqual(events);
-      // Should use the same query as listWorkflowEvents (no created_at filter)
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id = $1
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        ['run-456']
-      );
-    });
-
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const since = new Date('2025-06-01T00:00:00.000Z');
-      const result = await listRecentEvents('run-456', since);
-
-      expect(result).toEqual([]);
-    });
-
-    test('throws wrapped error on query failure', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
-
-      await expect(listRecentEvents('run-456', new Date())).rejects.toThrow(
-        'Failed to list recent workflow events: connection lost'
       );
     });
   });
@@ -349,6 +362,56 @@ describe('workflow-events', () => {
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
       await expect(listActiveWorkflowNodeIds(['run-a'])).rejects.toThrow('connection refused');
+    });
+  });
+
+  describe('listEventsForRuns', () => {
+    test('groups the requested event types by run in one query, with an entry for every run', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { workflow_run_id: 'run-a', step_name: 'plan', event_type: 'node_started', data: '{}' },
+          {
+            workflow_run_id: 'run-a',
+            step_name: 'plan',
+            event_type: 'node_completed',
+            data: '{"node_output":"done"}',
+          },
+          { workflow_run_id: 'run-b', step_name: 'build', event_type: 'node_failed', data: {} },
+        ])
+      );
+
+      const result = await listEventsForRuns(
+        ['run-a', 'run-b', 'run-c'],
+        ['node_started', 'node_completed', 'node_failed']
+      );
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+        ),
+        ['run-a', 'run-b', 'run-c', 'node_started', 'node_completed', 'node_failed']
+      );
+      expect([...result.keys()]).toEqual(['run-a', 'run-b', 'run-c']);
+      expect(result.get('run-a')?.map(row => [row.event_type, row.data])).toEqual([
+        ['node_started', {}],
+        ['node_completed', { node_output: 'done' }],
+      ]);
+      expect(result.get('run-b')).toHaveLength(1);
+      expect(result.get('run-c')).toEqual([]);
+    });
+
+    test('throws wrapped error on query failure', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
+
+      await expect(listEventsForRuns(['run-a'], ['node_started'])).rejects.toThrow(
+        'Failed to list events for runs: connection lost'
+      );
+    });
+
+    test('returns an empty map without querying for an empty run list', async () => {
+      expect(await listEventsForRuns([], ['node_started'])).toEqual(new Map());
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 
@@ -440,7 +503,7 @@ describe('workflow-events', () => {
       });
     });
 
-    test('carries declared_fields back out; rows without it re-derive from the schema (#2453)', async () => {
+    test('carries the path contract back out, reading a legacy declared_fields row as depth-1 paths (#2453)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
@@ -452,10 +515,11 @@ describe('workflow-events', () => {
               node_output: '{"green":true}',
               structured_output: { green: true },
               declared_fields: ['green', 'note'],
+              declared_output_paths: [['green'], ['note'], ['note', 'text']],
             },
           },
           {
-            // The resume re-emit copies it forward for a SECOND resume.
+            // Written by an older binary (or its resume re-emit): only the root fields.
             step_name: 'replayed-sub',
             event_type: 'node_skipped_prior_success',
             data: { node_output: '{"n":1}', declared_fields: ['n'] },
@@ -481,17 +545,30 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.get('sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
-        declaredFields: ['green', 'note'],
+        declaredOutputPaths: [['green'], ['note'], ['note', 'text']],
       });
       expect(result.completedNodeOutputs.get('replayed-sub')).toEqual({
         output: '{"n":1}',
-        declaredFields: ['n'],
+        declaredOutputPaths: [['n']],
       });
       expect(result.completedNodeOutputs.get('legacy-sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
       });
       expect(result.completedNodeOutputs.get('corrupt-sub')).toEqual({ output: '{}' });
+    });
+
+    test('rejects malformed persisted nested contracts instead of restoring schemaless output', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'sub',
+            event_type: 'node_completed',
+            data: { node_output: '{}', declared_output_paths: [[]] },
+          },
+        ])
+      );
+      await expect(getDagResumeSnapshot('bad-contract')).rejects.toThrow();
     });
 
     test('reports cache from a mixed run as a floor instead of withholding it', async () => {
@@ -1262,6 +1339,239 @@ describe('workflow-events', () => {
       }
     );
 
+    test('selects reusable text outputs, unfinished invocations, and own usage', async () => {
+      // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
+      const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
+        node: { id: 'worker', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: `${accounting}-invocation`,
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+        },
+        attempt: { id: `${accounting}-attempt`, startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting,
+        tokens: { input, output: 1 },
+        cost_usd,
+      });
+      const failedFanOut = finishNodeExecution(
+        startNodeExecution({
+          runId: 'run-double',
+          path: 'work',
+          node: {
+            id: 'work',
+            kind: 'workflow',
+            workflow: 'child',
+            fan_out: { items: '[1,2,3]', join: 'all_done', max_parallel: 1 },
+          },
+          invocation: {
+            id: 'fan-out-invocation',
+            startedAt: '2026-09-22T10:00:00Z',
+            loopPath: [],
+          },
+        }),
+        {
+          status: 'failed',
+          failureKind: 'child_failed',
+          error: "fan_out node 'work' refused all 3 children at spawn: refused",
+        }
+      );
+      const rows = [
+        serializeNodeStateRecord(failedFanOut),
+        { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
+        { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
+        { step_name: 'object', event_type: 'node_completed', data: { node_output: { a: 1 } } },
+        { step_name: 'null', event_type: 'node_completed', data: { node_output: null } },
+        { step_name: 'missing', event_type: 'node_completed', data: {} },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+        { step_name: 'restarted', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'restarted', event_type: 'node_started', data: {} },
+        { step_name: 'failed', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'failed', event_type: 'node_failed', data: { error: 'boom' } },
+        { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
+        {
+          step_name: 'text',
+          event_type: 'node_deferred_usage',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 2, output: 1, cacheRead: 4, cacheWrite: 2, cachePartial: true },
+          },
+        },
+        {
+          step_name: 'rollup',
+          event_type: 'node_completed',
+          data: typedUsage('aggregate', 30, 5),
+        },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+
+      const production = await getDagResumeSnapshot('run-double');
+
+      expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
+      expect([...production.unfinishedInvocations!.values()]).toEqual([
+        executionMetadata(failedFanOut),
+      ]);
+      expect(production.tokens).toEqual({
+        input: 5,
+        output: 2,
+        cacheRead: 4,
+        cacheWrite: 2,
+        cachePartial: true,
+      });
+      expect(production.costUsd).toBe(0.75);
+    });
+
+    test('deferred segments add usage without changing unfinished invocation or reusable output', async () => {
+      const execution = startNodeExecution({
+        runId: 'run-deferred',
+        path: 'group.review',
+        node: {
+          id: 'review',
+          kind: 'loop',
+          loop: { prompt: 'Review', until: 'DONE', max_iterations: 3, fresh_context: false },
+        },
+        invocation: { id: 'inv', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+      });
+      const started = serializeNodeStateRecord(execution);
+      const suspendedExecution = finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'interactive_loop' },
+        { tokens: { input: 10, output: 5 }, costUsd: 0.25 }
+      );
+      const suspended = serializeNodeStateRecord(suspendedExecution);
+      const deferred = {
+        step_name: 'group.review',
+        event_type: 'node_deferred_usage',
+        data: {
+          accounting: 'node',
+          cost_usd: 0.5,
+          tokens: {
+            input: 20,
+            output: 10,
+            cacheRead: 4,
+            cacheWrite: 2,
+            cachePartial: true as const,
+          },
+        },
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([started, suspended, deferred]));
+      const running = await getDagResumeSnapshot('run-deferred');
+      expect(running.completedNodeOutputs.size).toBe(0);
+      expect(running.unresolvedNodeStarts.has('group.review')).toBe(true);
+      expect([...running.unfinishedInvocations!.values()]).toEqual([
+        executionMetadata(suspendedExecution),
+      ]);
+      expect(running.costUsd).toBe(0.5);
+      expect(running.tokens).toEqual(deferred.data.tokens);
+      const rows = [
+        started,
+        suspended,
+        deferred,
+        {
+          ...deferred,
+          data: { cost_usd: 0.25, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 } },
+        },
+        {
+          step_name: 'group.review',
+          event_type: 'node_failed',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
+            error: 'failed',
+          },
+        },
+        {
+          step_name: 'group.review',
+          event_type: 'node_completed',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
+            node_output: 'done',
+          },
+        },
+        {
+          step_name: 'group',
+          event_type: 'node_deferred_usage',
+          data: { accounting: 'aggregate', cost_usd: 99 },
+        },
+        {
+          step_name: 'group',
+          event_type: 'node_completed',
+          data: { aggregate: true, cost_usd: 99 },
+        },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const completed = await getDagResumeSnapshot('run-deferred');
+      expect(completed.costUsd).toBe(1.25);
+      expect(completed.tokens).toEqual({
+        input: 50,
+        output: 25,
+        cacheRead: 10,
+        cacheWrite: 5,
+        cachePartial: true,
+      });
+      expect(completed.completedNodeOutputs.get('group.review')?.output).toBe('done');
+      expect(completed.unresolvedNodeStarts.has('group.review')).toBe(false);
+    });
+
+    test('authoritative composed instance totals suppress deferred leaf usage', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'fan__item__review',
+            event_type: 'node_deferred_usage',
+            data: { cost_usd: 0.25, tokens: { input: 10, output: 5 } },
+          },
+          {
+            step_name: 'fan__item',
+            event_type: 'node_completed',
+            data: {
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              cost_usd: 0.75,
+              tokens: { input: 30, output: 15 },
+            },
+          },
+        ])
+      );
+      const snapshot = await getDagResumeSnapshot('run-scope');
+      expect(snapshot.costUsd).toBe(0.75);
+      expect(snapshot.tokens).toEqual({ input: 30, output: 15 });
+    });
+
+    test('deferred usage preserves reusable success and ignores malformed numeric usage', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'review', event_type: 'node_completed', data: { node_output: 'kept' } },
+          {
+            step_name: 'review',
+            event_type: 'node_deferred_usage',
+            data: { cost_usd: Infinity, tokens: { input: NaN, output: 5 } },
+          },
+        ])
+      );
+      const snapshot = await getDagResumeSnapshot('run-invalid-deferred');
+      expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
+      expect(snapshot.costUsd).toBe(0);
+      expect(snapshot.tokens).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        'db.workflow_dag_node_tokens_invalid_ignored'
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        'db.workflow_dag_node_cost_invalid_ignored'
+      );
+    });
+
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -1286,6 +1596,17 @@ describe('workflow-events', () => {
       );
       await expect(getDagResumeSnapshot('run-corrupt')).rejects.toThrow(
         "Invalid node execution record for 'publish'"
+      );
+    });
+
+    test('names the step and run when a deferred usage record is corrupt', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'review', event_type: 'node_deferred_usage', data: '{not json' },
+        ])
+      );
+      await expect(getDagResumeSnapshot('run-corrupt-deferred')).rejects.toThrow(
+        "Invalid deferred usage record for 'review' in run run-corrupt-deferred"
       );
     });
 

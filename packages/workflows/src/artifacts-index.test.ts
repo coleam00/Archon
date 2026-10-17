@@ -33,7 +33,6 @@ describe('artifacts-index writes', () => {
         outputType: 'plan',
         runId: 'run-1',
         producedAt: '2026-06-03T00:00:00.000Z',
-        sessionId: 'sess-1',
       },
       'the plan body'
     );
@@ -44,7 +43,6 @@ describe('artifacts-index writes', () => {
       path: join('nodes', 'planner.md'),
       runId: 'run-1',
       producedAt: '2026-06-03T00:00:00.000Z',
-      sessionId: 'sess-1',
     });
     expect(meta.size).toBe(Buffer.byteLength('the plan body', 'utf8'));
     expect(await readFile(join(dir, 'nodes', 'planner.md'), 'utf8')).toBe('the plan body');
@@ -54,14 +52,29 @@ describe('artifacts-index writes', () => {
     expect(onDisk.outputType).toBe('plan');
   });
 
-  test('writeNodeArtifact omits sessionId when not provided', async () => {
+  test('a sidecar written with a session id still indexes, without the id', async () => {
+    // Older binaries recorded the full provider session id here; the index must not
+    // republish it now that only the node record carries it.
     const dir = await makeDir();
-    const meta = await writeNodeArtifact(
-      dir,
-      { nodeId: 'n', outputType: 'findings', runId: 'r', producedAt: '2026-06-03T00:00:00.000Z' },
-      'x'
+    await mkdir(join(dir, 'nodes'));
+    await writeFile(join(dir, 'nodes', 'n.md'), 'x', 'utf8');
+    await writeFile(
+      join(dir, 'nodes', 'n.meta.json'),
+      JSON.stringify({
+        nodeId: 'n',
+        outputType: 'findings',
+        path: join('nodes', 'n.md'),
+        runId: 'r',
+        producedAt: '2026-06-03T00:00:00.000Z',
+        size: 1,
+        sessionId: 'legacy-session-id',
+      }),
+      'utf8'
     );
-    expect('sessionId' in meta).toBe(false);
+    const { artifactsByType, errors } = await readCurrentRun(dir);
+    expect(errors).toEqual([]);
+    expect(artifactsByType.findings).toHaveLength(1);
+    expect(JSON.stringify(artifactsByType)).not.toContain('legacy-session-id');
   });
 
   test('loop_group lineages produce distinct stable artifact identities', async () => {
@@ -617,7 +630,6 @@ describe('artifacts-index read', () => {
         ],
         runId: 'r',
         producedAt: '2026-06-03T00:00:00.000Z',
-        sessionId: 'sess',
       },
       'body'
     );
@@ -629,7 +641,6 @@ describe('artifacts-index read', () => {
         { groupId: 'outer', iteration: 2 },
         { groupId: 'inner', iteration: 1 },
       ],
-      sessionId: 'sess',
     });
   });
 });

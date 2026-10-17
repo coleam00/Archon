@@ -1,8 +1,9 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { format, resolveConfig } from 'prettier';
 import { registerApiRoutes } from '../routes/api';
 
 const OUTPUT_PATH = resolve(import.meta.dir, '../../../web/src/lib/api.generated.d.ts');
@@ -79,6 +80,25 @@ export async function runOpenApiGenerator(
   }
 }
 
+export function formatApiTypes(output: string): string {
+  const formatted = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(import.meta.resolve('@biomejs/biome/bin/biome')),
+      'format',
+      `--stdin-file-path=${OUTPUT_PATH}`,
+    ],
+    { input: output, encoding: 'utf8', timeout: GENERATOR_TIMEOUT_MS }
+  );
+  if (formatted.error) throw formatted.error;
+  if (formatted.status !== 0) {
+    throw new Error(
+      `Biome failed formatting API types (exit ${formatted.status}): ${formatted.stderr}`
+    );
+  }
+  return formatted.stdout;
+}
+
 async function generateApiTypes(): Promise<string> {
   const app = new OpenAPIHono();
   registerApiRoutes(app, {} as never, {} as never);
@@ -89,7 +109,7 @@ async function generateApiTypes(): Promise<string> {
   }
 
   const output = await runOpenApiGenerator(JSON.stringify(await response.json()));
-  return format(output, { ...(await resolveConfig(OUTPUT_PATH)), parser: 'typescript' });
+  return formatApiTypes(output);
 }
 
 export type ApiTypesOutcome = 'ok' | 'stale' | 'written';

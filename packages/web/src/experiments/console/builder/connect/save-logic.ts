@@ -62,13 +62,15 @@ export function blockingErrors(issues: readonly Issue[]): Issue[] {
 }
 
 /**
- * Bundled workflows open read-only; everything else is editable in place. The
+ * Bundled and installed-pack workflows open read-only (an installed pack is changed with
+ * `archon plugin update`, or copied with `archon plugin copy`); everything else is
+ * editable in place. The
  * parameter is widened to `string` so an unrecognised `Workflow.source` (#2578,
  * `WorkflowSource | (string & {})`) can pass through without a cast at the
- * call site — the comparison is the same `=== 'bundled'` either way.
+ * call site — the comparison is the same either way.
  */
 export function isReadOnlySource(source: string): boolean {
-  return source === 'bundled';
+  return source === 'bundled' || source === 'installed';
 }
 
 /**

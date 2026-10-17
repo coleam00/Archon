@@ -1,5 +1,16 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { mkdtemp, realpath } from 'fs/promises';
+// @archon-test-isolated
+import type { RunActor } from '../operations/run-authorization';
+import type { ProviderRegistry } from '@archon/provider-contract';
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
+import * as git from '@archon/git';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
+import { mkdtemp, realpath, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -32,6 +43,8 @@ import type * as WorkflowDb from '../db/workflows';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
+const operator: RunActor = { kind: 'operator' };
+
 const mockLogger = createMockLogger();
 // Stands in for the real shared canonicalizer. Tests build their expected
 // `default_cwd` by calling THIS function, so the expectation can never drift
@@ -40,9 +53,12 @@ async function canonicalizeForTest(p: string): Promise<string> {
   const absolute = resolve(p);
   return await realpath(absolute).catch(() => absolute);
 }
+const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 const mockCanonicalizeProjectPath = mock(canonicalizeForTest);
 mock.module('@archon/paths', () => ({
   canonicalizeProjectPath: mockCanonicalizeProjectPath,
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -105,13 +121,43 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
     updated_at: new Date(),
   })
 );
+const mockRepairCodebaseRegistration = mock<typeof CodebaseDb.repairCodebaseRegistration>(() =>
+  Promise.resolve()
+);
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebaseRegistrations: async () =>
+    (await mockListCodebases()).map(row => ({
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      stored_default_cwd: row.default_cwd,
+    })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  repairCodebaseRegistration: mockRepairCodebaseRegistration,
+}));
+
+// Registration itself is covered in ../handlers; these tests cover how chat routes to it.
+const registered = (path: string, name = 'my-app') => ({
+  codebaseId: 'new-id',
+  name,
+  repositoryUrl: null,
+  defaultCwd: path,
+  defaultBranch: null,
+  commandCount: 0,
+  alreadyExisted: false,
+});
+const mockRegisterFolder = mock(async (path: string, name?: string) => registered(path, name));
+const mockRegisterRepository = mock(async (path: string, options: { name?: string } = {}) =>
+  registered(path, options.name)
+);
+mock.module('../handlers/sql-registration', () => ({
+  registerFolder: mockRegisterFolder,
+  registerRepository: mockRegisterRepository,
 }));
 
 const mockGetActiveSession = mock<typeof SessionDb.getActiveSession>(() => Promise.resolve(null));
@@ -194,10 +240,12 @@ const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(() => {
   throw new Error('Agent provider mock is not configured');
 });
 const providerCapabilities: ProviderCapabilities = {
+  backgroundWork: 'unobserved' as const,
   sessionResume: true,
   mcp: true,
   hooks: true,
   skills: true,
+  plugins: false,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced',
@@ -208,7 +256,8 @@ const providerCapabilities: ProviderCapabilities = {
   fallbackModel: true,
   sandbox: true,
   settingSources: true,
-  nativeTools: true,
+  // The command-scan tests below model a provider without in-process tools.
+  nativeTools: false,
   containerExec: true,
   requiresAllPropertiesRequired: false,
 };
@@ -216,13 +265,26 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
   () => providerCapabilities
 );
 
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(id),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
-  // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
-  // registry to decide whether a tier's `effort` reaches this provider (#2556).
-  // Without this the REAL implementation runs against an empty registry and
-  // every provider looks unregistered.
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
@@ -243,9 +305,45 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    providers: providerRegistry,
+    store: {
+      getCodebaseEnvVars: async () => ({}),
+      createWorkflowRun: async (
+        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
+      ): Promise<import('@archon/workflows/schemas/workflow-run').WorkflowRun> => ({
+        id: data.id ?? 'run-1',
+        workflow_name: data.workflow_name,
+        status: 'pending',
+        outcome: null,
+        origin: data.origin ?? null,
+        conversation_id: data.origin?.conversationId ?? null,
+        parent_conversation_id: data.origin?.parentConversationId ?? null,
+        user_id: data.origin?.userId ?? null,
+        codebase_id: data.codebase_id ?? null,
+        user_message: data.user_message,
+        metadata: data.metadata ?? {},
+        started_at: new Date(),
+        completed_at: null,
+        last_activity_at: null,
+        working_path: null,
+        parent_run_id: null,
+        adopted_from_run_id: null,
+        output_root: null,
+        checkout_baseline: null,
+      }),
+      updateWorkflowRun: async () => {},
+      failWorkflowRun: async () => ({ failed: true }),
+    },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -256,24 +354,19 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
-    paths: { workspaces: '/tmp', worktrees: '/tmp' },
+    attentionNotices: [],
     concurrency: { maxConversations: 10 },
     workflows: {
       autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 86_400_000,
     },
     commands: { autoLoad: true },
-    defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+    defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
   })
 );
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createChildWorktreeResolver, which imports
-  // loadRepoConfig by name. This factory replaces the module process-wide, so
-  // omitting it fails that import at module-eval even though no test calls it.
-  loadRepoConfig: mock(() => Promise.resolve(null)),
+  loadRepoConfig: mock<typeof ConfigLoader.loadRepoConfig>(() => Promise.resolve({})),
 }));
 
 // Workflow source root: undefined = "read the cwd", the non-worktree behavior.
@@ -326,10 +419,10 @@ const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorP
   () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
-  () => 'You are scoped to project X.'
+  async () => 'You are scoped to project X.'
 );
 const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
-  () => 'orchestrator system append'
+  async () => 'orchestrator system append'
 );
 
 mock.module('./prompt-builder', () => ({
@@ -351,6 +444,19 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  finalizeWorkflowSource: mock(
+    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+  ),
+  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+    version: 1,
+    root: source.anchor.root,
+    origin: source.origin,
+    captured_at: source.manifest.captured_at,
+    digest: source.manifest.digest,
+    source_config: source.anchor.config,
+    file_count: source.manifest.file_count,
+    byte_count: source.manifest.byte_count,
+  }),
   hydrateResumableRun: mock(() => Promise.resolve(null)),
   // Source capture runs before dispatch and does real filesystem work; stub it so these
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
@@ -454,9 +560,6 @@ mock.module('../db/workflows', () => ({
 
 import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
 
-// Also import wrapCommandForExecution which still lives in orchestrator.ts
-import { wrapCommandForExecution } from './orchestrator';
-
 // ─── Test Fixtures ──────────────────────────────────────────────────────────
 
 const mockConversation: Conversation = {
@@ -510,7 +613,7 @@ const mockSession: Session = {
   ended_reason: null,
 };
 
-const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-assist']);
+const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-investigate']);
 const testWorkflows = testWorkflowDefs.map(workflow => ({
   workflow: resolveWorkflow(workflow),
   source: 'bundled' as const,
@@ -521,6 +624,7 @@ const mockClientSendQuery = mock<IAgentProvider['sendQuery']>(async function* ()
 });
 const mockClient = {
   sendQuery: mockClientSendQuery,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: mock(() => 'claude'),
   getCapabilities: mock(() => providerCapabilities),
 } satisfies IAgentProvider;
@@ -542,6 +646,8 @@ function clearAllMocks(): void {
   mockGetCodebase.mockClear();
   mockListCodebases.mockClear();
   mockCreateCodebase.mockClear();
+  mockRegisterFolder.mockClear();
+  mockRegisterRepository.mockClear();
   mockGetActiveSession.mockClear();
   mockCreateSession.mockClear();
   mockUpdateSession.mockClear();
@@ -564,6 +670,7 @@ function clearAllMocks(): void {
   mockLoadConfig.mockClear();
   mockExistsSync.mockClear();
   mockUpdateCodebase.mockClear();
+  mockRepairCodebaseRegistration.mockClear();
   // Reset, not clear: a `mockImplementationOnce` that its test never reached
   // (because the handler returned early) would otherwise be consumed by the
   // next test and report a second, misleading failure.
@@ -647,11 +754,11 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with double quotes', () => {
     const response =
-      'I will analyze this.\n/invoke-workflow archon-assist --project test-project --prompt "Analyze the orchestrator module architecture"';
+      'I will analyze this.\n/invoke-workflow archon-investigate --project test-project --prompt "Analyze the orchestrator module architecture"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.workflowName).toBe('archon-assist');
+    expect(result.workflowInvocation?.workflowName).toBe('archon-investigate');
     expect(result.workflowInvocation?.projectName).toBe('test-project');
     expect(result.workflowInvocation?.synthesizedPrompt).toBe(
       'Analyze the orchestrator module architecture'
@@ -679,7 +786,7 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with spaces in the quoted value', () => {
     const response =
-      '/invoke-workflow archon-assist --project test-project --prompt "Analyze the database schema and migration patterns in the project, focusing on table structure and relationships"';
+      '/invoke-workflow archon-investigate --project test-project --prompt "Analyze the database schema and migration patterns in the project, focusing on table structure and relationships"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation?.synthesizedPrompt).toBe(
@@ -700,7 +807,7 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with --project= equals syntax', () => {
     const response =
-      '/invoke-workflow archon-assist --project=test-project --prompt "Summarize the README"';
+      '/invoke-workflow archon-investigate --project=test-project --prompt "Summarize the README"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation?.projectName).toBe('test-project');
@@ -717,14 +824,6 @@ describe('parseOrchestratorCommands', () => {
     expect(result.workflowInvocation).not.toBeNull();
     expect(result.workflowInvocation?.projectName).toBe('dynamous-community/test-project');
     expect(result.workflowInvocation?.synthesizedPrompt).toBe('Fix the bug');
-  });
-});
-
-describe('wrapCommandForExecution', () => {
-  test('wraps command with tags', () => {
-    const result = wrapCommandForExecution('plan', 'Plan the feature');
-    expect(result).toContain('plan');
-    expect(result).toContain('Plan the feature');
   });
 });
 
@@ -760,7 +859,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/status');
+      await handleMessage(platform, 'chat-456', '/status', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Status info');
@@ -774,7 +873,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/help');
+      await handleMessage(platform, 'chat-456', '/help', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Help text');
@@ -787,7 +886,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/reset');
+      await handleMessage(platform, 'chat-456', '/reset', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Session cleared');
@@ -806,7 +905,9 @@ describe('orchestrator-agent handleMessage', () => {
         workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
 
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
+      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload', {
+        actor: operator,
+      });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -816,50 +917,14 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockExecuteWorkflow).toHaveBeenCalled();
     });
 
-    test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestResolvedWorkflow({
-        name: 'test-workflow',
-        description: 'A test workflow',
-      });
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockHandleCommand.mockResolvedValue({
-        success: true,
-        message: 'Starting workflow: `test-workflow`',
-        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
-      });
-      mockDiscoverWorkflows.mockResolvedValue({
-        workflows: [
-          {
-            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
-            source: 'bundled' as const,
-          },
-        ],
-        errors: [],
-      });
-
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
-
-      expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
-        '/workspace/test-project',
-        expect.any(Function),
-        undefined // non-worktree cwd: source root is the cwd itself
-      );
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        'Workflow `test-workflow` not found.\n\nUse /workflow list to see available workflows.'
-      );
-      expect(mockUpdateConversation).not.toHaveBeenCalled();
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    });
-
     test('non-deterministic commands go to AI orchestrator', async () => {
       // /unknown-command should NOT be routed to command handler
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can help with that.' };
+        yield { type: 'agent_message_chunk', text: 'I can help with that.' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', '/unknown-command');
+      await handleMessage(platform, 'chat-456', '/unknown-command', { actor: operator });
 
       expect(mockHandleCommand).not.toHaveBeenCalled();
       // Should go through AI path
@@ -872,11 +937,11 @@ describe('orchestrator-agent handleMessage', () => {
   describe('AI orchestrator path', () => {
     test('sends message to AI and streams response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can help you with that!' };
+        yield { type: 'agent_message_chunk', text: 'I can help you with that!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello, help me');
+      await handleMessage(platform, 'chat-456', 'Hello, help me', { actor: operator });
 
       expect(mockClient.sendQuery).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'I can help you with that!');
@@ -885,11 +950,11 @@ describe('orchestrator-agent handleMessage', () => {
     test('does NOT require a codebase to function', async () => {
       // Conversation has no codebase_id — this is fine for the orchestrator
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Hello!' };
+        yield { type: 'agent_message_chunk', text: 'Hello!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hi');
+      await handleMessage(platform, 'chat-456', 'hi', { actor: operator });
 
       // Should NOT send an error about missing codebase
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Hello!');
@@ -898,17 +963,41 @@ describe('orchestrator-agent handleMessage', () => {
     test('loads all codebases for prompt context', async () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       expect(mockListCodebases).toHaveBeenCalled();
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ id: expect.any(String) }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        'commands'
+      );
+    });
+
+    test('teaches the typed tools to a provider with in-process tools', async () => {
+      mockGetProviderCapabilities.mockImplementation(() => ({
+        ...providerCapabilities,
+        nativeTools: true,
+      }));
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      try {
+        await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
+      } finally {
+        mockGetProviderCapabilities.mockImplementation(() => providerCapabilities);
+      }
+
+      expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Array),
+        expect.any(Array),
+        'tools'
       );
     });
 
@@ -917,16 +1006,17 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Scoped response' };
+        yield { type: 'agent_message_chunk', text: 'Scoped response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        'commands'
       );
     });
 
@@ -935,7 +1025,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTouchConversation).toHaveBeenCalledWith('conv-123');
     });
@@ -950,7 +1040,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTransitionSession).toHaveBeenCalledWith('conv-123', 'first-message', {
         ai_assistant_type: 'claude',
@@ -963,7 +1053,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'new-ai-session' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTransitionSession).not.toHaveBeenCalled();
       // Should pass existing assistant_session_id to AI provider
@@ -981,7 +1071,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'new-ai-session-456' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockUpdateSession).toHaveBeenCalledWith('session-abc', 'new-ai-session-456');
     });
@@ -999,22 +1089,20 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
+        attentionNotices: [],
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockClient.sendQuery).toHaveBeenCalledWith(
         expect.any(String),
@@ -1040,15 +1128,13 @@ describe('orchestrator-agent handleMessage', () => {
           codex: {},
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
+        attentionNotices: [],
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       const codexSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
@@ -1056,12 +1142,13 @@ describe('orchestrator-agent handleMessage', () => {
       });
       const codexClient = {
         sendQuery: codexSendQuery,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
         getType: () => 'codex',
         getCapabilities: () => providerCapabilities,
       } satisfies IAgentProvider;
       mockGetAgentProvider.mockReturnValueOnce(codexClient);
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       // Should pass codex assistantConfig, not claude's
       const callArgs = codexClient.sendQuery.mock.calls[0];
@@ -1084,22 +1171,20 @@ describe('orchestrator-agent handleMessage', () => {
           small: { provider: 'claude', model: 'haiku' },
         },
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
-        paths: { workspaces: '/tmp', worktrees: '/tmp' },
+        attentionNotices: [],
         concurrency: { maxConversations: 10 },
         workflows: {
           autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 86_400_000,
         },
         commands: { autoLoad: true },
-        defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+        defaults: { loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
       expect(mockClient.sendQuery).toHaveBeenCalledWith(
@@ -1134,12 +1219,12 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('streams assistant messages immediately', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'First chunk' };
-        yield { type: 'assistant', content: 'Second chunk' };
+        yield { type: 'agent_message_chunk', text: 'First chunk' };
+        yield { type: 'agent_message_chunk', text: 'Second chunk' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'First chunk');
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Second chunk');
@@ -1147,12 +1232,17 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('streams tool calls with formatted message', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'tool', toolName: 'Bash', toolInput: { command: 'ls' } };
-        yield { type: 'assistant', content: 'Done' };
+        yield {
+          type: 'tool_call',
+          toolCallId: 'call-1',
+          name: 'Bash',
+          rawInput: { command: 'ls' },
+        };
+        yield { type: 'agent_message_chunk', text: 'Done' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'list files');
+      await handleMessage(platform, 'chat-456', 'list files', { actor: operator });
 
       // formatToolCall mock returns '🔧 BASH'
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '🔧 BASH', {
@@ -1171,17 +1261,17 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
+          type: 'agent_message_chunk',
           // Trailing \n terminates the line so INVOKE_WORKFLOW_FULL_RE fires immediately,
           // setting commandFullyParsed=true before the second chunk is processed.
-          content: '/invoke-workflow fix-bug --project test-project\n',
+          text: '/invoke-workflow fix-bug --project test-project\n',
         };
         // These are silenced (not sent to platform) but loop continues to capture result
-        yield { type: 'assistant', content: 'This should not appear' };
+        yield { type: 'agent_message_chunk', text: 'This should not appear' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Should dispatch the workflow
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -1204,16 +1294,16 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         // First chunk: user-visible explanation text - should be streamed
-        yield { type: 'assistant', content: "I'll help with that." };
+        yield { type: 'agent_message_chunk', text: "I'll help with that." };
         // Second chunk: the command - should NOT be streamed
         yield {
-          type: 'assistant',
-          content: '\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: '\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Prefix text streamed to platform
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', "I'll help with that.");
@@ -1229,23 +1319,17 @@ describe('orchestrator-agent handleMessage', () => {
     test('suppresses /register-project chunk in stream mode', async () => {
       mockExistsSync.mockReturnValue(true);
       mockListCodebases.mockResolvedValue([]);
-      mockCreateCodebase.mockResolvedValue({
-        ...mockCodebase,
-        id: 'new-id',
-        name: 'my-app',
-        default_cwd: '/home/user/my-app',
-      });
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/register-project my-app /home/user/my-app',
+          type: 'agent_message_chunk',
+          text: '/register-project my-app /home/user/my-app',
         };
-        yield { type: 'assistant', content: 'This should not appear' };
+        yield { type: 'agent_message_chunk', text: 'This should not appear' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'set up my app');
+      await handleMessage(platform, 'chat-456', 'set up my app', { actor: operator });
 
       // The /register-project chunk itself should NOT be streamed
       expect(platform.sendMessage).not.toHaveBeenCalledWith(
@@ -1266,13 +1350,13 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         // Chunk 1: partial command — does not match regex yet, so it IS sent
-        yield { type: 'assistant', content: '/invoke-work' };
+        yield { type: 'agent_message_chunk', text: '/invoke-work' };
         // Chunk 2: completes the command — accumulated string matches, NOT sent
-        yield { type: 'assistant', content: 'flow fix-bug --project test-project' };
+        yield { type: 'agent_message_chunk', text: 'flow fix-bug --project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Partial chunk is sent (pre-existing behavior: detection fires on accumulated text)
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '/invoke-work');
@@ -1294,13 +1378,13 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '/invoke-workflow ' };
-        yield { type: 'assistant', content: 'fix-bug ' };
-        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
+        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
+        yield { type: 'agent_message_chunk', text: '--project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(
         platform.sendMessage.mock.calls.some(
@@ -1321,12 +1405,12 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('accumulates messages and sends final clean response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Part 1' };
-        yield { type: 'assistant', content: 'Part 2\n\nFinal summary' };
+        yield { type: 'agent_message_chunk', text: 'Part 1' };
+        yield { type: 'agent_message_chunk', text: 'Part 2\n\nFinal summary' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Batch mode should send ONE combined message
       expect(platform.sendMessage).toHaveBeenCalledTimes(1);
@@ -1337,11 +1421,11 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('filters emoji tool indicators from batch response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '🔧 BASH\nnpm test\n\nClean summary here' };
+        yield { type: 'agent_message_chunk', text: '🔧 BASH\nnpm test\n\nClean summary here' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'run tests');
+      await handleMessage(platform, 'chat-456', 'run tests', { actor: operator });
 
       const sentMessage = platform.sendMessage.mock.calls[0][1] as string;
       expect(sentMessage).not.toContain('🔧');
@@ -1353,7 +1437,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(platform.sendMessage).not.toHaveBeenCalled();
     });
@@ -1374,13 +1458,13 @@ describe('orchestrator-agent handleMessage', () => {
     test('dispatches workflow when AI responds with /invoke-workflow', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
+      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
 
       // Should dispatch to workflow after validation
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -1389,13 +1473,13 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends remaining message before dispatching workflow', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix it');
+      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
 
       // First sendMessage should be the explanation text
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me investigate this.');
@@ -1404,13 +1488,13 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends error for unknown project in workflow invocation', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/invoke-workflow fix-bug --project nonexistent-project',
+          type: 'agent_message_chunk',
+          text: '/invoke-workflow fix-bug --project nonexistent-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix it');
+      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
 
       // Since parseOrchestratorCommands won't match (unknown project), the response
       // is sent as-is in stream mode
@@ -1419,11 +1503,11 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('conversational response passes through without routing', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Let me help you with that!' };
+        yield { type: 'agent_message_chunk', text: 'Let me help you with that!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'what can you do?');
+      await handleMessage(platform, 'chat-456', 'what can you do?', { actor: operator });
 
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
@@ -1434,13 +1518,13 @@ describe('orchestrator-agent handleMessage', () => {
       platform.getStreamingMode.mockReturnValue('batch');
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     });
@@ -1448,13 +1532,13 @@ describe('orchestrator-agent handleMessage', () => {
     test('batch mode dispatches workflow when command body arrives after detection', async () => {
       platform.getStreamingMode.mockReturnValue('batch');
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '/invoke-workflow ' };
-        yield { type: 'assistant', content: 'fix-bug ' };
-        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
+        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
+        yield { type: 'agent_message_chunk', text: '--project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
       expect(
@@ -1471,16 +1555,14 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: `Running analysis.\n/invoke-workflow archon-assist --project test-project --prompt "${synthesized}"`,
+          type: 'agent_message_chunk',
+          text: `Running analysis.\n/invoke-workflow archon-investigate --project test-project --prompt "${synthesized}"`,
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'do that analysis thing');
+      await handleMessage(platform, 'chat-456', 'do that analysis thing', { actor: operator });
 
-      // userMessage (position 5) carries the synthesized prompt; the opts bag
-      // (trailing arg) carries parentConversationId for approve/reject resume.
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
         expect.anything(), // platform
@@ -1488,10 +1570,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         synthesized, // synthesizedPrompt, not original message
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1500,13 +1583,13 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'On it.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'On it.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
+      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
 
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
@@ -1515,10 +1598,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         'fix the login bug', // original message used as fallback
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1538,18 +1622,18 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/invoke-workflow archon-assist --project test-project',
+          type: 'agent_message_chunk',
+          text: '/invoke-workflow archon-investigate --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
-        expect.stringContaining('archon-assist')
+        expect.stringContaining('archon-investigate')
       );
     });
   });
@@ -1559,17 +1643,18 @@ describe('orchestrator-agent handleMessage', () => {
   describe('workflow discovery', () => {
     test('discovers global workflows from workspaces path', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Discovery is called positionally with (cwd, loadConfig) — no options arg.
       // Home-scoped workflows (~/.archon/workflows/) are discovered internally.
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/home/test/.archon/workspaces',
-        expect.any(Function)
+        expect.any(Function),
+        providerRegistry
       );
     });
 
@@ -1577,17 +1662,18 @@ describe('orchestrator-agent handleMessage', () => {
       mockGetOrCreateConversation.mockResolvedValue(mockConversationWithProject);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Should call discoverWorkflows twice: global + repo-specific
       expect(mockDiscoverWorkflows).toHaveBeenCalledTimes(2);
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/workspace/project',
         expect.any(Function),
+        providerRegistry,
         undefined // non-worktree cwd: source root is the cwd itself
       );
     });
@@ -1599,7 +1685,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockGetOrCreateConversation.mockResolvedValue(mockConversationWithProject);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
       mockResolveWorkflowSourceRoot.mockImplementation(() =>
@@ -1607,12 +1693,12 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       const seenRoots: (string | undefined)[] = [];
-      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, roots) => {
+      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, _providers, roots) => {
         if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
         return { workflows: [], errors: [] };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(mockResolveWorkflowSourceRoot).toHaveBeenCalledWith('/workspace/project');
       // Discovery is pointed at the canonical repo's source, not the worktree's.
@@ -1622,12 +1708,12 @@ describe('orchestrator-agent handleMessage', () => {
     test('handles workflow discovery failure gracefully', async () => {
       mockDiscoverWorkflows.mockRejectedValue(new Error('No .archon/workflows directory'));
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can still help!' };
+        yield { type: 'agent_message_chunk', text: 'I can still help!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
       // Should not throw
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       // AI should still be called, just without workflows
       expect(mockClient.sendQuery).toHaveBeenCalled();
@@ -1640,7 +1726,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends classified error message on failure', async () => {
       mockGetOrCreateConversation.mockRejectedValue(new Error('Database error'));
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '⚠️ Error: Database error');
     });
@@ -1650,7 +1736,7 @@ describe('orchestrator-agent handleMessage', () => {
       platform.sendMessage.mockRejectedValueOnce(new Error('Send failed'));
 
       // Should not throw
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ conversationId: 'chat-456' }),
@@ -1707,6 +1793,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1731,6 +1818,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1745,6 +1833,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1761,6 +1850,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1776,80 +1866,230 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Project Registration ──────────────────────────────────────────────
 
   describe('project registration', () => {
-    test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
-      // Use a REAL non-git temp dir so findRepoRoot returns null via the
-      // definitive "not a git repository" path (deterministic) — not the
-      // exception-fallback branch a fake/nonexistent path would take.
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
-      const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+    for (const failure of [
+      'invalid gitfile',
+      'missing gitdir',
+      'not a git repository-bad-config',
+    ]) {
+      for (const repair of [false, true]) {
+        test(`/register-project refuses ${failure} during ${repair ? 'repair' : 'creation'}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), `archon-${failure}-`));
+          try {
+            if (failure.endsWith('bad-config')) {
+              const init = Bun.spawn(['git', '-C', projectPath, 'init'], {
+                stdout: 'ignore',
+                stderr: 'pipe',
+              });
+              expect(await init.exited).toBe(0);
+              await writeFile(join(projectPath, '.git', 'config'), 'invalid config line\n');
+            } else {
+              await writeFile(
+                join(projectPath, '.git'),
+                failure === 'missing gitdir'
+                  ? `gitdir: ${join(projectPath, 'missing')}\n`
+                  : 'invalid gitfile\n'
+              );
+            }
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue(
+              repair
+                ? [{ ...mockCodebase, name: 'my-app', default_cwd: 'legacy/path', kind: 'folder' }]
+                : []
+            );
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('Nothing was registered')
+            );
+            expect(mockCreateCodebase).not.toHaveBeenCalled();
+            expect(mockUpdateCodebase).not.toHaveBeenCalled();
+            expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
+          } finally {
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
+
+    for (const mode of ['stream', 'batch'] as const) {
+      test(`agent ${mode} project registration reports detection failure without persistence`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
+        try {
+          await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+          platform.getStreamingMode.mockReturnValue(mode);
+          mockClient.sendQuery.mockImplementation(async function* () {
+            yield {
+              type: 'agent_message_chunk',
+              text: `/register-project my-app ${projectPath}\n`,
+            };
+            yield { type: 'result', sessionId: 'session-id' };
+          });
+          await handleMessage(platform, 'chat-456', 'Register my app', { actor: operator });
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('Nothing was registered')
+          );
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
+        } finally {
+          await removeTempTree(projectPath);
+        }
+      });
+    }
+
+    test('/register-project refuses a path that disappears during detection', async () => {
+      const canonicalPath = await canonicalizeForTest('/vanished/path');
+      const repoSpy = spyOn(git, 'findRepoRoot').mockImplementation(async () => {
+        mockExistsSync.mockReturnValue(false);
+        throw new Error('git: cannot change directory');
+      });
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: canonicalPath,
-        });
-
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`);
-
-        expect(mockCreateCodebase).toHaveBeenCalledWith({
-          name: 'my-app',
-          default_cwd: canonicalPath,
-          default_branch: null,
-          ai_assistant_type: 'claude',
-          kind: 'folder',
+        await handleMessage(platform, 'chat-456', '/register-project my-app /vanished/path', {
+          actor: operator,
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          expect.stringContaining('registered successfully')
+          `Path does not exist: ${canonicalPath}`
         );
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
       } finally {
-        await removeTempTree(projectPath);
+        repoSpy.mockRestore();
+        mockExistsSync.mockReturnValue(true);
       }
     });
 
-    test('/register-project stores detected current branch', async () => {
+    for (const kind of ['repo', 'folder'] as const) {
+      test(`/register-project reports a persistence refusal when repairing to ${kind}`, async () => {
+        const canonicalPath = await canonicalizeForTest('/new/path');
+        const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
+          kind === 'repo' ? git.toRepoPath(canonicalPath) : null
+        );
+        try {
+          mockRepairCodebaseRegistration.mockRejectedValueOnce(
+            new Error('would move its Archon storage')
+          );
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([
+            {
+              ...mockCodebase,
+              name: 'my-app',
+              default_cwd: 'legacy/path',
+              kind: kind === 'repo' ? 'folder' : 'repo',
+            },
+          ]);
+          await handleMessage(platform, 'chat-456', '/register-project my-app /new/path', {
+            actor: operator,
+          });
+          expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith(mockCodebase.id, {
+            default_cwd: canonicalPath,
+            kind,
+          });
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('would move its Archon storage')
+          );
+        } finally {
+          repoSpy.mockRestore();
+        }
+      });
+    }
+
+    for (const trace of [
+      '',
+      'GIT_TRACE',
+      'GIT_TRACE_PERFORMANCE',
+      'GIT_TRACE2',
+      'GIT_TRACE2_EVENT',
+      'GIT_TRACE2_PERF',
+      'GIT_TRACE_SETUP',
+    ]) {
+      test(`/register-project on a real non-git dir creates a folder project with ${trace || 'no tracing'}`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
+        const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+        const previousTrace = trace ? process.env[trace] : undefined;
+        if (trace) process.env[trace] = '1';
+        try {
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+
+          await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+            actor: operator,
+          });
+
+          expect(mockRegisterFolder).toHaveBeenCalledWith(canonicalPath, 'my-app');
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('registered successfully')
+          );
+        } finally {
+          if (trace) {
+            if (previousTrace === undefined) delete process.env[trace];
+            else process.env[trace] = previousTrace;
+          }
+          await removeTempTree(projectPath);
+        }
+      });
+    }
+
+    for (const target of ['normalTarget', 'eventTarget', 'perfTarget']) {
+      for (const destination of [1, 2]) {
+        test(`/register-project registers a non-git folder with global trace2.${target}=${destination}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), 'archon-global-trace-'));
+          const configPath = join(projectPath, 'gitconfig');
+          const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+          await writeFile(configPath, `[trace2]\n${target} = ${destination}\n`);
+          process.env.GIT_CONFIG_GLOBAL = configPath;
+          try {
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue([]);
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(mockRegisterFolder).toHaveBeenCalledWith(
+              await mockCanonicalizeProjectPath(projectPath),
+              'my-app'
+            );
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('registered successfully')
+            );
+          } finally {
+            if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+            else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
+
+    test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+      const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath(canonicalPath));
       try {
-        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
-          cwd: projectPath,
-        }).exited;
-        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
-        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Archon Test',
-            GIT_AUTHOR_EMAIL: 'archon-test@example.com',
-            GIT_COMMITTER_NAME: 'Archon Test',
-            GIT_COMMITTER_EMAIL: 'archon-test@example.com',
-          },
-        }).exited;
-        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: projectPath,
+
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+          actor: operator,
         });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`);
-
-        expect(mockCreateCodebase).toHaveBeenCalledWith({
-          name: 'my-app',
-          default_cwd: canonicalPath,
-          default_branch: 'develop',
-          ai_assistant_type: 'claude',
-          kind: 'repo',
-        });
+        expect(mockRegisterRepository).toHaveBeenCalledWith(canonicalPath, { name: 'my-app' });
       } finally {
+        repoSpy.mockRestore();
         await removeTempTree(projectPath);
       }
     });
@@ -1857,7 +2097,9 @@ describe('orchestrator-agent handleMessage', () => {
     test('/register-project rejects non-existent path', async () => {
       mockExistsSync.mockReturnValue(false);
 
-      await handleMessage(platform, 'chat-456', '/register-project my-app /nonexistent/path');
+      await handleMessage(platform, 'chat-456', '/register-project my-app /nonexistent/path', {
+        actor: operator,
+      });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1866,21 +2108,8 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     });
 
-    test('/register-project detects duplicate project name', async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-
-      await handleMessage(platform, 'chat-456', '/register-project test-project /some/path');
-
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        expect.stringContaining('already registered')
-      );
-      expect(mockCreateCodebase).not.toHaveBeenCalled();
-    });
-
     test('/register-project shows usage for missing args', async () => {
-      await handleMessage(platform, 'chat-456', '/register-project');
+      await handleMessage(platform, 'chat-456', '/register-project', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1902,18 +2131,12 @@ describe('orchestrator-agent handleMessage', () => {
       try {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: canonicalPath,
+
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${suppliedPath}`, {
+          actor: operator,
         });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${suppliedPath}`);
-
-        expect(mockCreateCodebase).toHaveBeenCalledWith(
-          expect.objectContaining({ default_cwd: canonicalPath })
-        );
+        expect(mockRegisterFolder).toHaveBeenCalledWith(canonicalPath, 'my-app');
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);
@@ -1931,18 +2154,12 @@ describe('orchestrator-agent handleMessage', () => {
       mockExistsSync.mockImplementation(p => p.toString() === realPath);
       try {
         mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: realPath,
+
+        await handleMessage(platform, 'chat-456', '/register-project my-app ~/some-project', {
+          actor: operator,
         });
 
-        await handleMessage(platform, 'chat-456', '/register-project my-app ~/some-project');
-
-        expect(mockCreateCodebase).toHaveBeenCalledWith(
-          expect.objectContaining({ default_cwd: realPath })
-        );
+        expect(mockRegisterFolder).toHaveBeenCalledWith(realPath, 'my-app');
       } finally {
         mockExistsSync.mockReturnValue(true);
         await removeTempTree(realPath);
@@ -1960,12 +2177,16 @@ describe('orchestrator-agent handleMessage', () => {
         await handleMessage(
           platform,
           'chat-456',
-          `/update-project ${mockCodebase.name} ${suppliedPath}`
+          `/update-project ${mockCodebase.name} ${suppliedPath}`,
+          { actor: operator }
         );
 
-        expect(mockUpdateCodebase).toHaveBeenCalledWith(mockCodebase.id, {
-          default_cwd: canonicalPath,
-        });
+        expect(mockUpdateCodebase).toHaveBeenCalledWith(
+          expect.objectContaining({ id: mockCodebase.id, name: mockCodebase.name }),
+          {
+            default_cwd: canonicalPath,
+          }
+        );
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);
@@ -1978,11 +2199,12 @@ describe('orchestrator-agent handleMessage', () => {
   describe('prompt construction', () => {
     test('includes issueContext in prompt', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'On it' };
+        yield { type: 'agent_message_chunk', text: 'On it' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
       await handleMessage(platform, 'chat-456', 'fix this', {
+        actor: operator,
         issueContext: 'Issue #42: "Login bug"\nLabels: bug',
       });
 
@@ -1993,11 +2215,12 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('includes threadContext in prompt', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'On it' };
+        yield { type: 'agent_message_chunk', text: 'On it' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
       await handleMessage(platform, 'chat-456', 'continue', {
+        actor: operator,
         threadContext: 'Previous: user said hello\nAssistant: Hi there!',
       });
 
@@ -2015,7 +2238,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello world');
+      await handleMessage(platform, 'chat-456', 'Hello world', { actor: operator });
 
       expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
       expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(
@@ -2039,7 +2262,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/status');
+      await handleMessage(platform, 'chat-456', '/status', { actor: operator });
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });
@@ -2054,7 +2277,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello world');
+      await handleMessage(platform, 'chat-456', 'Hello world', { actor: operator });
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });

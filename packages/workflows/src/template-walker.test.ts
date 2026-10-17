@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import type { DagNode } from './schemas';
 import {
   bindingDirectiveSchema,
@@ -47,7 +47,9 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'retry.on_error': { kind: 'literal', reason: 'Retry error class is an engine policy enum' },
   ...HOOK_FIELD_CLASSIFICATIONS,
   mcp: { kind: 'literal', reason: 'MCP value is a configuration path' },
+  'mcp.path': { kind: 'literal', reason: 'MCP value is a configuration path' },
   'skills.*': { kind: 'literal', reason: 'Skill entries are capability identifiers' },
+  'plugins.*': { kind: 'literal', reason: 'Plugin entries are capability identifiers' },
   'agents.*.description': { kind: 'template', slots: ['agents.*.description'] },
   'agents.*.prompt': { kind: 'template', slots: ['agents.*.prompt'] },
   'agents.*.model': { kind: 'literal', reason: 'Sub-agent model is a provider identifier' },
@@ -144,6 +146,14 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'wait.until': { kind: 'template', slots: ['wait.until'] },
   'wait.event': { kind: 'template', slots: ['wait.event'] },
   'wait.attention': { kind: 'template', slots: ['wait.attention'] },
+  'wait.form': { kind: 'literal', reason: 'Attention form fixes the output contract' },
+  'wait.options': { kind: 'template', slots: ['wait.options'] },
+  'wait.options.*.id': { kind: 'literal', reason: 'Attention option id is an answer wire value' },
+  'wait.options.*.label': {
+    kind: 'literal',
+    reason: 'Display text is not an execution template',
+  },
+  'wait.labels.*': { kind: 'template', slots: ['wait.labels.*'] },
   cancel: { kind: 'template', slots: ['cancel.reason'] },
   include: { kind: 'literal', reason: 'Include target is a workflow resource identifier' },
   workflow: { kind: 'literal', reason: 'Child target is a workflow resource identifier' },
@@ -485,6 +495,8 @@ test('the slot catalogue rejects omitted fixed fields', () => {
     'wait.until': { surface: 'value' },
     'wait.event': { surface: 'value' },
     'wait.attention': { surface: 'prompt' },
+    'wait.options': { surface: 'value' },
+    'wait.labels.*': { surface: 'value' },
     'workflow.input': { surface: 'value' },
     'workflow.with.*': { surface: 'value' },
     'workflow.fan_out.items': { surface: 'value' },

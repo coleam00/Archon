@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import { ClassifiedProviderError } from '../shared/failure';
 
 const mockLogger = createMockLogger();
 
@@ -309,7 +310,10 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     // Env unset, config unset, vendor dir empty, every autodetect path missing.
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
 
-    await expect(resolver.resolveCodexBinaryPath()).rejects.toThrow('Codex CLI binary not found');
+    const promise = resolver.resolveCodexBinaryPath();
+    await expect(promise).rejects.toThrow('Codex CLI binary not found');
+    // The provider reports this as `misconfigured` from the error's class, not its words.
+    await expect(promise).rejects.toBeInstanceOf(ClassifiedProviderError);
   });
 
   test('does not resolve lower-tier directories as binaries', async () => {

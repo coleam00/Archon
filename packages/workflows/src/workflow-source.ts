@@ -32,10 +32,14 @@
  * project scope would leave a hole: a project workflow that includes a global one would
  * still change shape across a resume. Bundled content is selected by the same inventory
  * in source and binary builds, then written into the run's capture so an engine upgrade
- * cannot replace its executable source.
+ * cannot replace its executable source. Installed workflow packs are copied too, each at
+ * the commit its receipt records, so `archon plugin update` or `remove` affects only
+ * runs that start afterwards.
  *
  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
+ * The exception is installed packs: a child copies them from its parent's capture, so a
+ * pack's children run at the revision its parent started with.
  */
 import {
   mkdir,
@@ -51,7 +55,7 @@ import {
 import { createHash } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join, sep } from 'path';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
@@ -69,10 +73,19 @@ import {
 } from './defaults/bundle-inventory';
 import {
   readWorkflowSourceState,
+  workflowSourceMetadataSchema,
+  WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceConfigSchema,
   type WorkflowSourceConfig,
 } from './schemas/workflow-run';
-import { parsePackagedResourceReference } from './packaged-workflow';
+import {
+  describeIssues,
+  PLUGIN_MANIFEST_FILE,
+  workflowPackManifestSchema,
+  type WorkflowPackManifest,
+} from '@archon/plugin-manifest';
+import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
+import { parsePackagedResourceReference, type WorkflowResourceOwner } from './packaged-workflow';
 import type { WorkflowConfig } from './deps';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -85,6 +98,7 @@ function getLog(): ReturnType<typeof createLogger> {
 const PROJECT_SCOPE_DIR = 'project';
 const GLOBAL_SCOPE_DIR = 'global';
 const BUNDLED_SCOPE_DIR = 'bundled';
+const INSTALLED_SCOPE_DIR = 'installed';
 const MANIFEST_FILE = 'manifest.json';
 
 /**
@@ -126,11 +140,21 @@ interface WorkflowSourceRootPaths {
   readonly globalWorkflows: string;
   readonly globalCommands: string;
   readonly globalScripts: string;
-  /** Directory holding packaged bundled workflows (the parent of the defaults folder). */
+  /** Directory holding the bundled packs. */
   readonly bundledWorkflows: string;
-  /** Directory holding bundled default commands. */
-  readonly bundledCommands: string;
+  /** Where installed workflow packs are read from. */
+  readonly installed: InstalledPacksRoot;
 }
+
+/**
+ * Installed packs come either from the live receipts under `ARCHON_HOME/plugins`, or
+ * from a capture's `installed/` directory (one directory per pack, named by its
+ * {@link InstalledPack.key}). A `workflow:` child reads live project source with its
+ * parent's captured packs, so this is chosen apart from the rest of the roots.
+ */
+export type InstalledPacksRoot =
+  | { readonly kind: 'receipts'; readonly pluginsDir: string }
+  | { readonly kind: 'captured'; readonly captureRoot: string };
 
 export { workflowSourceConfigSchema, type WorkflowSourceConfig } from './schemas/workflow-run';
 
@@ -149,6 +173,9 @@ export interface LiveWorkflowSourceRoots extends WorkflowSourceRootPaths {
 export interface CapturedWorkflowSourceRoots extends WorkflowSourceRootPaths {
   readonly kind: 'captured';
   readonly anchor: WorkflowSourceAnchor;
+  /** Flat bundled commands an older build froze. Current builds bundle only packaged
+   * commands, so only a capture can hold these. */
+  readonly bundledCommands: string;
 }
 
 export type WorkflowSourceRoots = LiveWorkflowSourceRoots | CapturedWorkflowSourceRoots;
@@ -175,21 +202,26 @@ export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSource
     load_default_workflows: config.defaults?.loadDefaultWorkflows ?? true,
     load_default_commands: config.defaults?.loadDefaultCommands ?? true,
     ...(config.commands?.folder !== undefined ? { command_folder: config.commands.folder } : {}),
+    ...(config.envVars !== undefined ? { env_var_names: Object.keys(config.envVars) } : {}),
   };
 }
 
 /** Roots for reading source live off disk, exactly as Archon always has. */
 export function liveSourceRoots(
   project: string | null,
-  config: WorkflowSourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG
+  config: WorkflowSourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  installed: InstalledPacksRoot = {
+    kind: 'receipts',
+    pluginsDir: archonPaths.getPluginsPath(),
+  }
 ): LiveWorkflowSourceRoots {
   return {
     project,
     globalWorkflows: archonPaths.getHomeWorkflowsPath(),
     globalCommands: archonPaths.getHomeCommandsPath(),
     globalScripts: archonPaths.getHomeScriptsPath(),
-    bundledWorkflows: dirname(archonPaths.getDefaultWorkflowsPath()),
-    bundledCommands: archonPaths.getDefaultCommandsPath(),
+    bundledWorkflows: archonPaths.getBundledWorkflowsPath(),
+    installed,
     kind: 'live',
     config,
   };
@@ -213,9 +245,182 @@ export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkf
     // instead of failing because its bundled bytes could not be verified.
     bundledWorkflows: join(captureRoot, BUNDLED_SCOPE_DIR, 'workflows'),
     bundledCommands: join(captureRoot, BUNDLED_SCOPE_DIR, 'commands', 'defaults'),
+    installed: { kind: 'captured', captureRoot },
     kind: 'captured',
     anchor,
   };
+}
+
+/** Where an installed pack came from, as its receipt recorded it. */
+export const installedPluginRecordSchema = z.object({
+  /** {@link InstalledPack.key}: the pack's directory in a capture. */
+  key: z.string(),
+  /** `owner/repo[/path]` */
+  id: z.string(),
+  commit: z.string(),
+  tag: z.string().optional(),
+});
+
+export type InstalledPluginRecord = z.infer<typeof installedPluginRecordSchema>;
+
+/** One installed workflow pack, read from receipts (live) or from a capture. */
+export interface InstalledPack {
+  /** The install id's owner: the `owner` of `owner/plugin:entrypoint`. */
+  readonly owner: string;
+  /** The manifest `name`: the `plugin` of `owner/plugin:entrypoint`. */
+  readonly name: string;
+  /**
+   * `<owner>.<name>`, unique per install because the installer refuses a second pack
+   * with the same owner and name. Neither part can contain `.`, so it splits back
+   * unambiguously. It is the pack segment of the pack's resource references and the
+   * pack's directory in a capture.
+   */
+  readonly key: string;
+  /** The pack root, holding `archon-plugin.json`. */
+  readonly dir: string;
+  /** Read from the tree itself, so a capture and a live listing agree on entrypoints. */
+  readonly manifest: WorkflowPackManifest;
+  /** Present for a live pack; a capture's manifest keeps the records of its packs. */
+  readonly record?: InstalledPluginRecord;
+}
+
+export function installedPackKey(owner: string, name: string): string {
+  return `${owner}.${name}`;
+}
+
+/** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
+export function installedWorkflowName(
+  pack: Pick<InstalledPack, 'owner' | 'name'>,
+  name: string
+): string {
+  return `${pack.owner}/${pack.name}:${name}`;
+}
+
+async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
+  const file = join(dir, PLUGIN_MANIFEST_FILE);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(file, 'utf-8'));
+  } catch (error) {
+    throw new Error(`Cannot read ${file}: ${(error as Error).message}`, { cause: error });
+  }
+  const parsed = workflowPackManifestSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
+  return parsed.data;
+}
+
+/**
+ * Every installed workflow pack under `roots`. A pack that cannot be read is reported,
+ * not thrown: one broken install must not take the rest of the catalog down with it.
+ */
+export async function listInstalledPacks(root: InstalledPacksRoot): Promise<{
+  packs: InstalledPack[];
+  errors: { path: string; message: string; cause?: unknown; workflowName?: string }[];
+}> {
+  const packs: InstalledPack[] = [];
+  const errors: Awaited<ReturnType<typeof listInstalledPacks>>['errors'] = [];
+  if (root.kind === 'receipts') {
+    let scan: Awaited<ReturnType<typeof scanReceipts>>;
+    try {
+      scan = await scanReceipts(root.pluginsDir);
+    } catch (error) {
+      errors.push({ path: root.pluginsDir, message: (error as Error).message, cause: error });
+      return { packs, errors };
+    }
+    errors.push(
+      ...scan.broken.map(entry => ({
+        path: entry.file,
+        message: entry.message,
+        cause: entry.cause,
+      }))
+    );
+    for (const receipt of scan.receipts) {
+      if (receipt.manifest.kind !== 'workflow-pack') continue;
+      const owner = receipt.id.split('/')[0];
+      const dir = packTreePath(root.pluginsDir, receipt.id, receipt.commit);
+      try {
+        const manifest = await readPackManifest(dir);
+        const key = installedPackKey(owner, manifest.name);
+        packs.push({
+          owner,
+          name: manifest.name,
+          key,
+          dir,
+          manifest,
+          record: {
+            key,
+            id: receipt.id,
+            commit: receipt.commit,
+            ...(receipt.tag !== undefined ? { tag: receipt.tag } : {}),
+          },
+        });
+      } catch (error) {
+        for (const entry of Object.keys(receipt.manifest.entrypoints)) {
+          errors.push({
+            path: dir,
+            workflowName: installedWorkflowName({ owner, name: receipt.manifest.name }, entry),
+            message: (error as Error).message,
+            cause: error,
+          });
+        }
+      }
+    }
+    return { packs, errors };
+  }
+
+  const installedDir = join(root.captureRoot, INSTALLED_SCOPE_DIR);
+  let keys: string[];
+  try {
+    keys = await readdir(installedDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { packs, errors };
+    throw error;
+  }
+  for (const key of keys.sort()) {
+    const dir = join(installedDir, key);
+    const separator = key.indexOf('.');
+    try {
+      const manifest = await readPackManifest(dir);
+      if (separator < 1 || key.slice(separator + 1) !== manifest.name) {
+        throw new Error(`Captured pack ${key} does not match its manifest name ${manifest.name}`);
+      }
+      packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
+    } catch (error) {
+      errors.push({ path: dir, message: (error as Error).message, cause: error });
+    }
+  }
+  return { packs, errors };
+}
+
+/**
+ * The directory of one packaged workflow (`<pack>/<workflow>/`) under `roots`, or null
+ * when its scope has no source here. Command, script and validation lookups all map a
+ * resource owner to disk through this, so a new scope is added in one place.
+ */
+export async function packagedWorkflowDirectory(
+  roots: WorkflowSourceRoots,
+  owner: WorkflowResourceOwner
+): Promise<string | null> {
+  switch (owner.source) {
+    case 'project':
+      return roots.project === null
+        ? null
+        : join(roots.project, '.archon', 'workflows', owner.pack, owner.workflow);
+    case 'global':
+      return join(roots.globalWorkflows, owner.pack, owner.workflow);
+    case 'bundled':
+      return join(roots.bundledWorkflows, owner.pack, owner.workflow);
+    case 'installed': {
+      const { packs, errors } = await listInstalledPacks(roots.installed);
+      if (roots.installed.kind === 'captured') {
+        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, owner.pack);
+        const failure = errors.find(error => error.path === packPath);
+        if (failure) throw failure.cause ?? new Error(failure.message);
+      }
+      const pack = packs.find(p => p.key === owner.pack);
+      return pack ? join(pack.dir, owner.workflow) : null;
+    }
+  }
 }
 
 /**
@@ -235,19 +440,40 @@ export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkf
  * the capture is taken BEFORE discovery. That ordering is what stops a run executing one
  * moment's YAML against another moment's scripts.
  */
-export const workflowSourceManifestSchema = z.object({
-  version: z.literal(1),
+const manifestFields = {
   engine_version: z.string(),
   origin: z.string(),
   captured_at: z.string(),
   digest: z.string(),
   file_count: z.number(),
   byte_count: z.number(),
-  scopes: z.array(z.enum([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR])),
+  scopes: z.array(
+    z.enum([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR, INSTALLED_SCOPE_DIR])
+  ),
   source_config: workflowSourceConfigSchema,
   /** Absent until the caller has selected which workflow this run executes. */
   workflow_name: z.string().optional(),
-});
+  /**
+   * Entrypoint names of installed packs that could not be read at capture. The packs are
+   * left out, so only workflows that name them fail; discovery still reserves the names
+   * so a same-named project or global workflow cannot stand in for them.
+   */
+  unavailable_installed_workflows: z.array(z.string()).optional(),
+};
+
+/**
+ * Version 2 is written only when installed packs were captured, and records the plugin
+ * and commit each came from. A capture without packs stays version 1, so an older
+ * Archon can still resume it.
+ */
+export const workflowSourceManifestSchema = z.discriminatedUnion('version', [
+  z.object({ version: z.literal(1), ...manifestFields }),
+  z.object({
+    version: z.literal(2),
+    ...manifestFields,
+    installed_plugins: z.array(installedPluginRecordSchema).min(1),
+  }),
+]);
 
 export type WorkflowSourceManifest = z.infer<typeof workflowSourceManifestSchema>;
 
@@ -259,10 +485,125 @@ export type WorkflowSourceManifest = z.infer<typeof workflowSourceManifestSchema
  * the capture exists to prevent.
  */
 export class WorkflowSourceIntegrityError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly path?: string
+  ) {
     super(message);
     this.name = 'WorkflowSourceIntegrityError';
   }
+}
+
+export class WorkflowSourceUnavailableError extends WorkflowSourceIntegrityError {
+  constructor(
+    readonly path: string,
+    cause: unknown
+  ) {
+    super(
+      `Workflow source at ${path} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      path
+    );
+    this.name = 'WorkflowSourceUnavailableError';
+    this.cause = cause;
+  }
+}
+
+function sourceReadError(path: string, error: unknown): unknown {
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  switch (code) {
+    case 'ENOENT':
+    case 'ENOTDIR':
+    case 'EISDIR':
+    case 'EACCES':
+    case 'EPERM':
+    case 'ELOOP':
+      return new WorkflowSourceUnavailableError(path, error);
+    default:
+      return error;
+  }
+}
+
+/**
+ * True when `error` means this host failed to read the source, as opposed to source that
+ * was read and found wrong (a digest mismatch, a replaced capture, an unparseable
+ * manifest) or a script absent from it. Typed only: `WorkflowSourceUnavailableError`, or a
+ * Node system error (string `code` and `syscall`) on the error or its `cause` chain.
+ * Invalid file/directory shapes are recoverable only where the inventory proves the
+ * expected file or directory belonged.
+ *
+ * A capture missing from this host (`ENOENT`) counts: captures live on the host that made
+ * them, so another host may still read it. If it never returns, the continuation host's
+ * pre-admission check refuses the run and warns after repeated refusals.
+ */
+export function isSourceReadFailure(error: unknown, verifiedFiles?: ReadonlySet<string>): boolean {
+  if (error instanceof WorkflowSourceUnavailableError) return true;
+  if (error instanceof WorkflowSourceIntegrityError) return false;
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (isSystemError(current)) {
+      if (current.code === 'EISDIR') {
+        return typeof current.path === 'string' && verifiedFiles?.has(current.path) === true;
+      }
+      if (current.code === 'ENOTDIR') {
+        const readingDirectory = current.syscall === 'scandir' || current.syscall === 'readdir';
+        return (
+          typeof current.path === 'string' &&
+          ((!readingDirectory && verifiedFiles?.has(current.path) === true) ||
+            hasVerifiedFileBelow(verifiedFiles, current.path))
+        );
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasVerifiedFileBelow(
+  verifiedFiles: ReadonlySet<string> | undefined,
+  path: string
+): boolean {
+  return (
+    verifiedFiles !== undefined && [...verifiedFiles].some(file => file.startsWith(path + sep))
+  );
+}
+
+/** Discovery may omit vanished entries without a syscall error; the verified inventory cannot. */
+export async function assertCapturedFilesPresent(
+  verifiedFiles: ReadonlySet<string> | undefined
+): Promise<void> {
+  if (!verifiedFiles) return;
+  await Promise.all(
+    [...verifiedFiles].map(async path => {
+      const info = await stat(path);
+      if (!info.isFile()) {
+        throw new WorkflowSourceUnavailableError(
+          path,
+          new Error('Verified source file is no longer a file')
+        );
+      }
+    })
+  );
+}
+
+/** Missing live paths are optional; a path containing verified captured files is not. */
+export function capturedSourceReadGuard(
+  verifiedFiles: ReadonlySet<string> | undefined
+): (path: string, error: unknown) => void {
+  return (path, error) => {
+    if (verifiedFiles?.has(path) || hasVerifiedFileBelow(verifiedFiles, path)) {
+      throw error;
+    }
+  };
+}
+
+/** A Node or Bun system call failure, such as `readdir` failing with `EACCES`. */
+export function isSystemError(
+  error: unknown
+): error is Error & { code: string; syscall: string; path?: unknown } {
+  return (
+    error instanceof Error &&
+    typeof (error as { code?: unknown }).code === 'string' &&
+    typeof (error as { syscall?: unknown }).syscall === 'string'
+  );
 }
 
 /** Where a run's executable source came from, and what was frozen. */
@@ -307,8 +648,9 @@ function dedupeNestedDirs(dirs: readonly string[]): string[] {
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isSystemError(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return false;
+    throw error;
   }
 }
 
@@ -537,14 +879,6 @@ async function readBundledSources(
 
 let bundledScope: BundledScope | undefined;
 
-/** The two on-disk roots a source build keeps its bundled defaults under. */
-function bundledSourceRoots(): { name: string; from: string }[] {
-  return [
-    { name: 'workflows', from: dirname(archonPaths.getDefaultWorkflowsPath()) },
-    { name: 'commands', from: dirname(archonPaths.getDefaultCommandsPath()) },
-  ];
-}
-
 /**
  * Identity of the live bundled trees: their shape plus every file's size and mtime.
  *
@@ -579,8 +913,9 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
     return bundledScope;
   }
 
-  const roots = bundledSourceRoots();
-  const sources = await collectInstalledBundleSources(roots[0].from, roots[1].from);
+  // Every bundled pack, with its commands and scripts, lives under the workflows root.
+  const workflowsRoot = archonPaths.getBundledWorkflowsPath();
+  const sources = await collectInstalledBundleSources(workflowsRoot);
   if (!sources) return undefined;
   const files: TreeFile[] = [];
   for (const file of sources) {
@@ -593,7 +928,7 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
     });
   }
 
-  const key = `source\0${roots.map(r => r.from).join('\0')}`;
+  const key = `source\0${workflowsRoot}`;
   const stamp = stampListings([{ name: 'bundled', listing: { dirs: [], files } }]);
   if (bundledScope?.key !== key || bundledScope.stamp !== stamp) {
     bundledScope = { key, stamp, ...(await readBundledSources(sources)) };
@@ -649,12 +984,7 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   const entries: DigestEntry[] = [];
 
   const walk = async (dir: string, rel: string): Promise<void> => {
-    let dirEntries;
-    try {
-      dirEntries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const dirEntries = await readdir(dir, { withFileTypes: true });
     for (const entry of dirEntries) {
       const relPath = rel === '' ? entry.name : join(rel, entry.name);
       if (entry.isDirectory()) {
@@ -670,11 +1000,6 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   await walk(root, '');
 
   return entries;
-}
-
-/** Content digest over every captured file. */
-async function digestTree(root: string): Promise<string> {
-  return foldDigest(await digestEntries(root));
 }
 
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
@@ -697,6 +1022,12 @@ export async function captureWorkflowSource(opts: {
   captureRoot: string;
   commandFolder?: string;
   sourceConfig?: WorkflowSourceConfig;
+  /**
+   * Where installed packs are copied from. Omitted, the live installs. A `workflow:`
+   * child passes its parent's capture, so a pack updated or removed after the parent
+   * started cannot give the child a different revision from its parent.
+   */
+  installedFrom?: InstalledPacksRoot;
 }): Promise<WorkflowSourceCapture> {
   const {
     sourceRoot,
@@ -708,7 +1039,7 @@ export async function captureWorkflowSource(opts: {
   // (relative destination, absolute origin) pairs, one per MUTABLE directory worth copying.
   // The bundled scope is not among them: it is this build's own, read once into a
   // {@link BundledScope} and written from there.
-  const jobs: { dest: string; from: string; scope: 'project' | 'global' }[] = [];
+  const jobs: { dest: string; from: string; scope: 'project' | 'global' | 'installed' }[] = [];
 
   for (const dir of projectSourceDirs(commandFolder)) {
     const from = join(sourceRoot, dir);
@@ -724,12 +1055,43 @@ export async function captureWorkflowSource(opts: {
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
   }
 
+  const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
+  const { packs, errors } = await listInstalledPacks(installedFrom);
+  for (const pack of packs) {
+    jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
+  }
+  let installedRecords: InstalledPluginRecord[];
+  let unavailableWorkflows: string[];
+  if (installedFrom.kind === 'receipts') {
+    installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
+    unavailableWorkflows = errors.flatMap(error =>
+      error.workflowName ? [error.workflowName] : []
+    );
+  } else {
+    // A child copies its parent's frozen packs; one it cannot read is this host's fault.
+    if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
+    const parent = await readManifest(installedFrom.captureRoot);
+    unavailableWorkflows = parent.unavailable_installed_workflows ?? [];
+    const keys = new Set(packs.map(pack => pack.key));
+    installedRecords = parent.version === 2 ? parent.installed_plugins : [];
+    for (const record of installedRecords) {
+      if (!keys.has(record.key)) {
+        throw new WorkflowSourceUnavailableError(
+          join(installedFrom.captureRoot, INSTALLED_SCOPE_DIR, record.key),
+          new Error('Installed pack recorded by the parent capture could not be listed')
+        );
+      }
+    }
+  }
+
   const staging = `${captureRoot}.partial`;
   await rm(staging, { recursive: true, force: true });
 
   let fileCount = 0;
   let byteCount = 0;
-  const scopesCaptured = new Set<'project' | 'global' | 'bundled'>(jobs.map(j => j.scope));
+  const scopesCaptured = new Set<'project' | 'global' | 'bundled' | 'installed'>(
+    jobs.map(j => j.scope)
+  );
   try {
     await mkdir(staging, { recursive: true });
     for (const job of jobs) {
@@ -756,8 +1118,7 @@ export async function captureWorkflowSource(opts: {
     // them back would restate what the scope already carries. Everything else is read.
     const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
     const digest = foldDigest([...entries, ...(bundled?.files ?? [])]);
-    const manifest: WorkflowSourceManifest = {
-      version: 1,
+    const fields = {
       engine_version: BUNDLED_VERSION,
       origin: sourceRoot,
       captured_at: new Date().toISOString(),
@@ -766,7 +1127,14 @@ export async function captureWorkflowSource(opts: {
       byte_count: byteCount,
       scopes: [...scopesCaptured],
       source_config: sourceConfig,
+      ...(unavailableWorkflows.length > 0
+        ? { unavailable_installed_workflows: unavailableWorkflows }
+        : {}),
     };
+    const manifest: WorkflowSourceManifest =
+      installedRecords.length > 0
+        ? { version: 2, ...fields, installed_plugins: installedRecords }
+        : { version: 1, ...fields };
     await writeManifest(staging, manifest);
 
     // Replace rather than merge: a stale capture at this path would silently mix two
@@ -818,22 +1186,28 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
-    throw new WorkflowSourceIntegrityError(
-      `Workflow source capture at ${captureRoot} has no manifest: ${(error as Error).message}`
-    );
+    if (isSystemError(error) && error.code === 'EISDIR') {
+      throw new WorkflowSourceIntegrityError(
+        `Workflow source manifest at ${captureRoot} is a directory`,
+        join(captureRoot, MANIFEST_FILE)
+      );
+    }
+    throw sourceReadError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(raw);
   } catch (error) {
     throw new WorkflowSourceIntegrityError(
-      `Workflow source manifest at ${captureRoot} is not valid JSON: ${(error as Error).message}`
+      `Workflow source manifest at ${captureRoot} is not valid JSON: ${(error as Error).message}`,
+      join(captureRoot, MANIFEST_FILE)
     );
   }
   const parsed = workflowSourceManifestSchema.safeParse(parsedJson);
   if (!parsed.success) {
     throw new WorkflowSourceIntegrityError(
-      `Workflow source manifest at ${captureRoot} is not a shape this build understands: ${parsed.error.message}`
+      `Workflow source manifest at ${captureRoot} is not a shape this build understands: ${parsed.error.message}`,
+      join(captureRoot, MANIFEST_FILE)
     );
   }
   return parsed.data;
@@ -842,10 +1216,11 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
 /**
  * Load a capture and prove its bytes are the ones that were frozen.
  *
- * Throws {@link WorkflowSourceIntegrityError} when the manifest is missing, unreadable, of
- * an unknown shape, or when the digest no longer matches. Every one of those means the
- * run's executable source cannot be established, which is a reason to stop rather than to
- * quietly execute something else.
+ * Throws {@link WorkflowSourceUnavailableError} for missing or inaccessible source,
+ * including the manifest, so an admitted run can resume on a readable host.
+ * Throws {@link WorkflowSourceIntegrityError} for a malformed manifest, an unsupported
+ * shape, or a digest or resolution-settings mismatch; these invalidate the frozen source.
+ * Other I/O errors propagate unchanged.
  */
 export async function loadWorkflowSource(
   captureRoot: string,
@@ -860,13 +1235,14 @@ export async function loadWorkflowSource(
   expectedDigest?: string,
   /** The source resolution config the RUN recorded, when new enough to have one. */
   expectedConfig?: WorkflowSourceConfig
-): Promise<WorkflowSourceCapture> {
+): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
   const manifest = await readManifest(captureRoot);
   if (expectedDigest !== undefined && manifest.digest !== expectedDigest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} is not the one this run recorded ` +
         `(run expects ${expectedDigest.slice(0, 12)}…, capture claims ` +
-        `${manifest.digest.slice(0, 12)}…). The capture has been replaced.`
+        `${manifest.digest.slice(0, 12)}…). The capture has been replaced.`,
+      captureRoot
     );
   }
   if (
@@ -878,15 +1254,23 @@ export async function loadWorkflowSource(
   ) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} has different resolution settings than this ` +
-        'run recorded. The capture manifest has changed.'
+        'run recorded. The capture manifest has changed.',
+      captureRoot
     );
   }
-  const digest = await digestTree(captureRoot);
+  let entries: DigestEntry[];
+  try {
+    entries = await digestEntries(captureRoot);
+  } catch (error) {
+    throw sourceReadError(captureRoot, error);
+  }
+  const digest = foldDigest(entries);
   if (digest !== manifest.digest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
         `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
-        'The captured source has changed since the run started.'
+        'The captured source has changed since the run started.',
+      captureRoot
     );
   }
   if (manifest.engine_version !== BUNDLED_VERSION) {
@@ -898,6 +1282,7 @@ export async function loadWorkflowSource(
     );
   }
   return {
+    verifiedFiles: new Set(entries.map(entry => join(captureRoot, entry.relPath))),
     origin: manifest.origin,
     manifest,
     anchor: {
@@ -912,10 +1297,17 @@ function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unkno
   return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined));
 }
 
-/** Verify a captured root against its retained anchor immediately before a filesystem read. */
-export async function assertWorkflowSourceIntegrity(roots: WorkflowSourceRoots): Promise<void> {
+/** Returned paths are files covered by the verified digest; live roots have no inventory. */
+export async function assertWorkflowSourceIntegrity(
+  roots: WorkflowSourceRoots
+): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
-  await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config);
+  const capture = await loadWorkflowSource(
+    roots.anchor.root,
+    roots.anchor.digest,
+    roots.anchor.config
+  );
+  return capture.verifiedFiles;
 }
 
 /**
@@ -937,8 +1329,12 @@ export async function resolveRunSourceCapture(
   if (state.kind === 'unreadable') {
     // NOT the same as having no record. This run recorded something; we simply cannot
     // read it. Resolving live here would execute source the run never agreed to.
+    const recordedPath = workflowSourceMetadataSchema
+      .pick({ root: true })
+      .safeParse(metadata?.[WORKFLOW_SOURCE_METADATA_KEY]);
     throw new WorkflowSourceIntegrityError(
-      `This run's workflow source record cannot be read by this build: ${state.detail}`
+      `This run's workflow source record cannot be read by this build: ${state.detail}`,
+      recordedPath.success ? recordedPath.data.root : undefined
     );
   }
   if (state.kind === 'absent') return undefined;
@@ -969,17 +1365,31 @@ export async function resolveRunSourceCapture(
  * has not started yet is not a run, so it must not be frozen into its parent.
  *
  * Two behaviors depend on reading the live origin here rather than the parent's capture:
- * a parent may author a workflow mid-flight and then execute it as a child, and — the
- * case with a test on it — a fan-out child cancelled at a gate is recovered by removing
- * the gate from the child workflow and resuming the parent. Resolving that child from the
- * parent's frozen copy would re-drive the OLD gated definition forever, so the fix could
- * never take. The child's own run captures at its own start, which is where its
+ * a parent may author a workflow mid-flight and then execute it as a child, and a failed
+ * fan-out child is recovered by fixing the child workflow and resuming the parent, which
+ * re-drives that child. Resolving it from the parent's frozen copy would re-drive the OLD
+ * broken definition forever, so the fix could never take. The child's own run captures at its own start, which is where its
  * determinism begins.
  *
  * Returns `undefined` only for a historical parent with no source record. Once a parent
  * records an authoring directory, an unreadable record or unavailable directory fails
  * closed so a child cannot silently capture a same-named workflow from the target cwd.
  */
+/**
+ * The installed packs a not-yet-started `workflow:` child reads: its parent's verified
+ * capture, so the child cannot run a pack at a different revision from its parent after
+ * `archon plugin update` or `remove`. Undefined for a parent with no source record,
+ * which reads the live installs. Unlike project source (see
+ * {@link resolveChildDiscoveryRoot}), there is no mid-run authoring to pick up here: an
+ * installed pack changes only through the installer.
+ */
+export async function resolveChildInstalledPacks(
+  metadata: Record<string, unknown> | undefined
+): Promise<InstalledPacksRoot | undefined> {
+  const capture = await resolveRunSourceCapture(metadata);
+  return capture ? { kind: 'captured', captureRoot: capture.anchor.root } : undefined;
+}
+
 export async function resolveChildDiscoveryRoot(
   metadata: Record<string, unknown> | undefined
 ): Promise<string | undefined> {

@@ -1,7 +1,9 @@
+import { createLogger } from '@archon/paths';
+import { missingProviderMessage } from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
-  getRegisteredProviders,
   getRegistration,
   InvalidProviderRunConfigError,
   isRegisteredProvider,
@@ -12,6 +14,7 @@ import {
   type ModelAliasPreset,
 } from '@archon/workflows/model-validation';
 import {
+  deprecatedQuotaPolicyWarning,
   workflowRunConfigLayerSchema,
   type WorkflowRunConfigInput,
   type WorkflowRunConfigLayer,
@@ -22,10 +25,17 @@ import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { GlobalConfig, RepoConfig } from './config-types';
 import { unsealWorkflowRunConfigStructure } from './run-config-handoff';
 
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('config.run');
+  return cachedLog;
+}
+
 type ConfigKey = keyof GlobalConfig | keyof RepoConfig;
 type KeyClassification = { kind: 'runtime' } | { kind: 'unavailable'; reason: string };
 
 const keyClassifications = {
+  store: { kind: 'unavailable', reason: 'persistence is selected at install startup' },
   assistant: { kind: 'runtime' },
   defaultAssistant: { kind: 'runtime' },
   assistants: { kind: 'runtime' },
@@ -58,9 +68,9 @@ const keyClassifications = {
     kind: 'unavailable',
     reason: 'platform response streaming is process-scoped and has no per-run consumer',
   },
-  paths: {
+  attentionNotices: {
     kind: 'unavailable',
-    reason: 'workspace and worktree paths are resolved before run dispatch',
+    reason: 'attention notice routes are install-scoped and have no per-run consumer',
   },
   concurrency: {
     kind: 'unavailable',
@@ -84,32 +94,17 @@ function validationError(error: { issues: { path: PropertyKey[]; message: string
 
 function assertRegisteredProvider(provider: string, path: string): void {
   if (isRegisteredProvider(provider)) return;
-  const available = getRegisteredProviders()
-    .map(entry => entry.id)
-    .sort()
-    .join(', ');
   throw new Error(
-    `Invalid run config at '${path}': unknown provider '${provider}'.` +
-      (available ? ` Available: ${available}.` : ' No providers are registered.')
+    `Invalid run config at '${path}': ${missingProviderMessage(providerRegistry, provider)}`
   );
 }
 
 function normalizePreset(path: string, preset: ModelAliasPreset): ModelAliasPreset {
   try {
-    return normalizeStrictRunModelPreset(preset);
+    return normalizeStrictRunModelPreset(providerRegistry, preset);
   } catch (error) {
     if (!(error instanceof RunModelPresetValidationError)) throw error;
     const issuePath = `${path}.${error.issue.field}`;
-    if (error.issue.kind === 'unknown-provider') {
-      const available = getRegisteredProviders()
-        .map(entry => entry.id)
-        .sort()
-        .join(', ');
-      throw new Error(
-        `Invalid run config at '${issuePath}': unknown provider '${error.issue.provider}'.` +
-          (available ? ` Available: ${available}.` : ' No providers are registered.')
-      );
-    }
     throw new Error(`Invalid run config at '${issuePath}': ${error.message}.`);
   }
 }
@@ -203,6 +198,8 @@ export function parseWorkflowRunConfig(
   };
   const parsed = workflowRunConfigLayerSchema.safeParse(candidate);
   if (!parsed.success) throw validationError(parsed.error);
+  const warning = parsed.data.workflows && deprecatedQuotaPolicyWarning(parsed.data.workflows);
+  if (warning) getLog().warn({ source: source.label, warning }, 'run_config.quota_keys_deprecated');
   return { layer: normalizeRunConfigSemantics(parsed.data), source };
 }
 

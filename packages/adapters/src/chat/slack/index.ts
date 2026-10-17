@@ -1,2 +1,2 @@
 export { SlackAdapter } from './adapter';
-export { SlackWorkflowBridge } from './workflow-bridge';
+export { SlackWorkflowBridge, type SlackWorkflowResume } from './workflow-bridge';

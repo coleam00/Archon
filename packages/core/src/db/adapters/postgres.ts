@@ -9,6 +9,8 @@ import { createLogger } from '@archon/paths';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION } from '../schema-version';
 
+const SCHEMA_LOCK_SQL = 'SELECT pg_advisory_xact_lock(1796)';
+
 /**
  * Postgres-only: NOTIFY `archon_dashboard_event` on every workflow_events insert, so
  * the server's PgNotifyListener can wake the dashboard poller to stream events from
@@ -75,7 +77,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // (e.g. two app containers starting at once against a fresh DB).
       // Key 1796 is arbitrary — just needs to be stable across processes.
       await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(1796)');
+      await client.query(SCHEMA_LOCK_SQL);
       // Probe before applying: afterwards every table exists, and a database that
       // predates schema-version tracking is indistinguishable from a fresh one.
       const probe = await client.query<{ exists: boolean }>(
@@ -151,14 +153,15 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
   /**
    * Install the Postgres-only `pg_notify` trigger on workflow_events (real-time
    * dashboard push). Idempotent and non-fatal — its own advisory-locked txn so
-   * concurrent boots don't race on DROP/CREATE TRIGGER.
+   * concurrent boots don't race on DROP/CREATE TRIGGER. Shares the schema lock:
+   * both transactions mutate workflow_events, so separate locks can deadlock.
    */
   private async installNotifyTrigger(): Promise<void> {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect();
       await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(1797)');
+      await client.query(SCHEMA_LOCK_SQL);
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
       await client.query('COMMIT');
       getLog().info('db.postgres_notify_trigger_installed');
@@ -287,11 +290,11 @@ export const postgresDialect: SqlDialect = {
   },
 
   jsonMerge(column: string, paramIndex: number): string {
-    return `${column} || $${String(paramIndex)}::jsonb`;
-  },
-
-  jsonArrayContains(column: string, path: string, paramIndex: number): string {
-    return `${column}->'${path}' ? $${String(paramIndex)}`;
+    // `||` alone stores a patch's null values. Subtracting the null-valued top-level
+    // keys makes `{ key: null }` remove the key, as SQLite's json_patch does, so both
+    // databases hold the same shape after a clear.
+    const patch = `$${String(paramIndex)}::jsonb`;
+    return `(${column} || ${patch}) - ARRAY(SELECT key FROM jsonb_each(${patch}) WHERE jsonb_typeof(value) = 'null')`;
   },
 
   nowMinusDays(paramIndex: number): string {
@@ -300,5 +303,19 @@ export const postgresDialect: SqlDialect = {
 
   daysSince(column: string): string {
     return `EXTRACT(EPOCH FROM (NOW() - ${column})) / 86400`;
+  },
+
+  jsonText(column: string, path: string): string {
+    const keys = path.split('.');
+    const last = keys.length - 1;
+    return column + keys.map((key, i) => `${i === last ? '->>' : '->'}'${key}'`).join('');
+  },
+
+  jsonRemove(column: string, ...keys: string[]): string {
+    return [column, ...keys.map(key => `'${key}'`)].join(' - ');
+  },
+
+  rowLock(table?: string): string {
+    return table === undefined ? ' FOR UPDATE' : ` FOR UPDATE OF ${table}`;
   },
 };

@@ -17,29 +17,28 @@ diagnostics. All four must pass before a PR can be created.
 bun run type-check
 ```
 
-Runs `tsc --noEmit` across all 8 packages via `bun --filter '*' type-check`.
+Runs the workspace and script type-checks defined by the root `package.json`. Use `.archon/architecture.md` for package ownership and boundaries.
 
 **What to look for:**
-- Missing return types (explicit return types required on all functions)
 - Incorrect interface implementations (`IPlatformAdapter`, `IAgentProvider`, etc.)
 - Import type errors (use `import type` for type-only imports)
 - Package boundary violations (e.g., `@archon/workflows` importing from `@archon/core`)
 
 ---
 
-## Level 2: ESLint Linting
+## Level 2: Linting
 
 ```bash
 bun run lint
 ```
 
-Zero-tolerance policy: `--max-warnings 0`. Any warning is a failure.
+Biome runs with warnings as errors, after the test-cleanup drift and workflow
+persistence checks. Any diagnostic is a failure.
 
 **What to look for:**
-- `no-explicit-any` violations — fix the type, don't suppress
-- Missing explicit return types
-- Unused variables or imports
-- Import order issues
+- `noExplicitAny` violations — fix the type, don't suppress
+- Non-null assertions or empty blocks in source files
+- Restricted imports (provider admission, the console's store)
 
 To auto-fix safe lint issues:
 ```bash
@@ -48,11 +47,13 @@ bun run lint:fix
 
 ---
 
-## Level 3: Prettier Format Check
+## Level 3: Biome Format Check
 
 ```bash
 bun run format:check
 ```
+
+Checks files included by the formatter configuration in `biome.jsonc`.
 
 **What to look for:**
 - Inconsistent indentation (2 spaces)
@@ -107,8 +108,8 @@ bun run validate
 
 `scripts/validate.ts` lists what this runs; the levels above are a subset of it.
 
-This is the command CI runs. `CONTRIBUTING.md` lists the PostgreSQL, Docker, docs,
-and marketplace jobs kept outside it, with the command to run each one.
+This is the command CI runs. `CONTRIBUTING.md` lists the PostgreSQL, Docker and docs
+jobs kept outside it, with the command to run each one.
 
 ---
 

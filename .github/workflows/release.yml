@@ -117,12 +117,12 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          # Named by the same function `archon plugin install` uses to request it,
+          # Named by the same function `archon plugin add` uses to request it,
           # from the manifest's executable and this Bun target.
           ASSET=$(bun -e '
-            const { forgeReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+            const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
             const manifest = await Bun.file("plugins/forge-github/archon-plugin.json").json();
-            console.log(forgeReleaseAsset(manifest.executable, process.env.TARGET));
+            console.log(pluginReleaseAsset(manifest.executable, process.env.TARGET));
           ')
           bun build --compile --target="$TARGET" packages/adapters/src/forge/github/plugin.ts --outfile "dist/${ASSET}"
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
@@ -145,6 +145,52 @@ jobs:
             }
             console.log("::notice::Forge plugin metadata", JSON.stringify(metadata));
           '
+
+      - name: Build Slack chat plugin
+        id: chat-plugin
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          ASSET=$(bun -e '
+            const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+            const manifest = await Bun.file("plugins/chat-slack/archon-plugin.json").json();
+            console.log(pluginReleaseAsset(manifest.executable, process.env.TARGET));
+          ')
+          bun build --compile --target="$TARGET" packages/chat-slack/src/main.ts --outfile "dist/${ASSET}"
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test Slack chat plugin
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          ASSET: ${{ steps.chat-plugin.outputs.asset }}
+        run: bun packages/chat-slack/src/test/smoke.ts "dist/${ASSET}"
+
+      - name: Smoke-test server launch refusal
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          ASSET=$(bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
+          chmod +x "dist/$ASSET"
+          EXPECTED_VERSION="${RAW_VERSION#v}"
+          if OUTPUT=$(ARCHON_CLI_COMMAND='["archon"]' "dist/$ASSET" --cli-version 0.0.0 2>&1); then
+            echo "::error::Server accepted a mismatched CLI version"
+            exit 1
+          fi
+          echo "$OUTPUT"
+          grep -F "server version $EXPECTED_VERSION does not match CLI version 0.0.0" <<< "$OUTPUT"
+          if OUTPUT=$(ARCHON_CLI_COMMAND='' "dist/$ASSET" 2>&1); then
+            echo "::error::Server accepted a direct launch"
+            exit 1
+          fi
+          grep -F 'archon-server is started by `archon serve`' <<< "$OUTPUT"
+
+      - name: Smoke-test archon serve
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: bun scripts/smoke-serve.ts dist/archon-linux-x64 dist/archon-server-linux-x64 archon-web.tar.gz "${RAW_VERSION#v}"
 
       - name: Smoke-test built binary
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
@@ -199,59 +245,65 @@ jobs:
             exit 1
           fi
           echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "archon-assist"; then
+          if echo "$OUTPUT" | grep -q "archon-deliver"; then
             echo "::notice::Bundled workflows loaded correctly"
           else
             echo "::error::Bundled workflows did not load — embedded JSON may be missing from the binary"
             exit 1
           fi
 
-      - name: Smoke-test Claude binary-path resolver (negative case)
+      - name: Smoke-test missing provider
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         run: |
-          # With no CLAUDE_BIN_PATH and no config, running a Claude workflow must
-          # fail with a clear, user-facing error — NOT with "Module not found
-          # /Users/runner/..." which would indicate the resolver was bypassed.
+          # A release CLI carries no maintained provider. A run fails before any
+          # worktree and names the install command: generically on a fresh install,
+          # and for the configured provider on an upgraded one.
           BIN="$PWD/dist/${{ matrix.binary }}"
           TMP_REPO=$(mktemp -d)
           cd "$TMP_REPO"
           git init -q
           git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
+          for CONFIG in '' 'defaultAssistant: claude'; do
+            export ARCHON_HOME=$(mktemp -d)
+            if [ -n "$CONFIG" ]; then
+              echo "$CONFIG" > "$ARCHON_HOME/config.yaml"
+              EXPECTED='archon provider add claude'
+            else
+              EXPECTED='archon provider add <claude|codex|pi>'
+            fi
+            if OUTPUT=$(env -u DEFAULT_AI_ASSISTANT "$BIN" workflow run archon-investigate "hello" 2>&1); then
+              echo "$OUTPUT"
+              echo "::error::A CLI with no providers ran a workflow"
+              exit 1
+            fi
+            echo "$OUTPUT"
+            grep -F "$EXPECTED" <<< "$OUTPUT"
+            if [ "$(git worktree list | wc -l)" -ne 1 ]; then
+              echo "::error::A worktree was created before the missing provider was reported"
+              exit 1
+            fi
+          done
 
-          # Run without CLAUDE_BIN_PATH set. Expect a clean resolver error.
-          # Capture both stdout and stderr; we only care that the resolver message is present.
-          # --no-worktree skips isolation: this test exercises the Claude resolver
-          # path, not worktree setup. Without it we hit the worktree auto-sync added
-          # in #1310 first and fail on "neither origin/HEAD nor origin/main exist"
-          # because the fresh `git init` tmp repo has no origin configured.
-          set +e
-          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
-          EXIT_CODE=$?
-          set -e
-          echo "$OUTPUT"
+      - name: Smoke-test provider plugins initialize
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          chmod +x dist/archon-provider-*
+          bun packages/core/src/test/provider-plugin-smoke.ts initialize "${RAW_VERSION#v}" dist/archon-provider-*
 
-          if echo "$OUTPUT" | grep -qE 'Module not found.*Users/runner'; then
-            echo "::error::Resolver was bypassed — SDK hit the import.meta.url fallback (regression of #1210)"
-            exit 1
-          fi
-          if ! echo "$OUTPUT" | grep -q "Claude Code not found"; then
-            echo "::error::Expected 'Claude Code not found' error when CLAUDE_BIN_PATH is unset"
-            exit 1
-          fi
-          if ! echo "$OUTPUT" | grep -q "CLAUDE_BIN_PATH"; then
-            echo "::error::Error message does not reference CLAUDE_BIN_PATH remediation"
-            exit 1
-          fi
-          echo "::notice::Resolver error path works (exit code: $EXIT_CODE)"
-
-      - name: Smoke-test Claude subprocess spawn (positive case)
+      - name: Smoke-test Claude provider plugin without Claude Code
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         run: |
-          # Install Claude Code via the native installer (Anthropic's recommended
-          # default) and run a workflow with CLAUDE_BIN_PATH set. The subprocess
-          # must spawn cleanly. We do NOT require the query to succeed (no auth
-          # in CI — an auth error is fine and expected); we only fail if the SDK
-          # can't find the executable, which would indicate a resolver regression.
+          # The plugin resolves Claude Code as a release binary does: with no
+          # CLAUDE_BIN_PATH and nothing at the native installer path it reports
+          # the resolver's install instructions, not a build-host module path.
+          env -u CLAUDE_BIN_PATH bun packages/core/src/test/provider-plugin-smoke.ts claude-code missing dist/archon-provider-claude-linux-x64
+
+      - name: Smoke-test Claude provider plugin with Claude Code
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: |
+          # No auth in CI, so the query itself may fail; it must not fail to find Claude Code.
           curl -fsSL https://claude.ai/install.sh | bash
           CLI_PATH="$HOME/.local/bin/claude"
           if [ ! -x "$CLI_PATH" ]; then
@@ -259,35 +311,7 @@ jobs:
             ls -la "$HOME/.local/bin/" || true
             exit 1
           fi
-          echo "Using CLAUDE_BIN_PATH=$CLI_PATH"
-
-          BIN="$PWD/dist/${{ matrix.binary }}"
-          TMP_REPO=$(mktemp -d)
-          cd "$TMP_REPO"
-          git init -q
-          git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
-
-          # --no-worktree: same rationale as the negative-case test above — this
-          # test exercises the Claude subprocess spawn path, not worktree setup.
-          set +e
-          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
-          EXIT_CODE=$?
-          set -e
-          echo "$OUTPUT"
-
-          if echo "$OUTPUT" | grep -qE 'Module not found.*(cli\.js|Users/runner)'; then
-            echo "::error::Subprocess could not find the executable (resolver regression)"
-            exit 1
-          fi
-          if echo "$OUTPUT" | grep -q "Claude Code not found"; then
-            echo "::error::Resolver failed even though CLAUDE_BIN_PATH was set to an existing file"
-            exit 1
-          fi
-          # Any of these outcomes are acceptable — they prove the subprocess spawned:
-          #   - auth error ("credit balance", "unauthorized", "authentication")
-          #   - rate-limit / API error
-          #   - successful query (if auth was injected via some other mechanism)
-          echo "::notice::Claude subprocess spawn path is healthy (exit code: $EXIT_CODE)"
+          CLAUDE_BIN_PATH="$CLI_PATH" bun packages/core/src/test/provider-plugin-smoke.ts claude-code installed dist/archon-provider-claude-linux-x64
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -295,7 +319,10 @@ jobs:
           name: ${{ matrix.binary }}
           path: |
             dist/${{ matrix.binary }}
+            dist/archon-server-*
+            dist/archon-provider-*
             dist/${{ steps.forge-plugin.outputs.asset }}
+            dist/${{ steps.chat-plugin.outputs.asset }}
           retention-days: 1
 
   release:
@@ -328,6 +355,116 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Build release notes
+        id: notes
+        run: |
+          RAW_VERSION="${{ steps.version.outputs.version }}"
+          RAW_VERSION="${RAW_VERSION#v}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          HEADER="## [$RAW_VERSION]"
+
+          # CHANGELOG.md at this tag's commit is the one source of truth for the
+          # release body — the same curated text the /release skill's Step 6
+          # wrote there, in the category order its Step 5 defines (Breaking
+          # first). This step always (re)writes the body from it, so it does
+          # not matter whether the skill already created the release with its
+          # own placeholder notes: this step's output wins, every time.
+          # Previously `body:` was hardcoded to install instructions and
+          # `generate_release_notes: true` appended a one-line "What's Changed"
+          # summary — softprops/action-gh-release replaces the release's body
+          # with those two when the release already exists, silently discarding
+          # curated notes the skill had set (see v0.11.0, hand-fixed after the
+          # fact). Reading from one file removes that race entirely.
+          if grep -qF -- "$HEADER" CHANGELOG.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            awk -v hdr="$HEADER" '
+              index($0, hdr) == 1 { found=1; next }
+              found && index($0, "## [") == 1 { exit }
+              found { print }
+            ' CHANGELOG.md > "$NOTES_FILE"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No CHANGELOG.md section for $RAW_VERSION — falling back to GitHub's auto-generated notes"
+            : > "$NOTES_FILE"
+          fi
+
+          cat >> "$NOTES_FILE" << 'EOF'
+
+          ## Installation
+
+          ### Quick Install (Recommended)
+
+          **macOS / Linux**
+          ```bash
+          curl -fsSL https://archon.diy/install | bash
+          ```
+
+          **Windows (PowerShell)**
+          ```powershell
+          irm https://archon.diy/install.ps1 | iex
+          ```
+
+          **Homebrew (macOS / Linux)**
+          ```bash
+          brew install coleam00/archon/archon
+          ```
+
+          **Docker**
+          ```bash
+          docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+          ```
+
+          ### Manual Installation
+
+          **macOS (Apple Silicon)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **macOS (Intel)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Linux (x64)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Linux (ARM64)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Windows (Manual)**
+          Download `archon-windows-x64.exe` from the assets below, rename to `archon.exe`, and add to your PATH.
+
+          ### Release assets
+
+          | Asset | Purpose |
+          | --- | --- |
+          | `archon-<os>-<arch>[.exe]` | CLI |
+          | `archon-server-<os>-<arch>[.exe]` | Version-matched server executable fetched by `archon serve` |
+          | `archon-forge-github-<os>-<arch>[.exe]` | GitHub forge plugin |
+          | `archon-chat-slack-<os>-<arch>[.exe]` | Slack chat plugin |
+          | `archon-provider-claude-<os>-<arch>[.exe]` | Claude provider plugin, installed by `archon provider add claude` |
+          | `archon-provider-codex-<os>-<arch>[.exe]` | Codex provider plugin, installed by `archon provider add codex` |
+          | `archon-provider-pi-<os>-<arch>[.exe]` | Pi provider plugin, installed by `archon provider add pi` |
+          | `archon-web.tar.gz` | Web UI |
+          | `checksums.txt` | SHA-256 checksums for every asset |
+
+          ### Verify installation
+          ```bash
+          archon version
+          ```
+          EOF
+
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -335,69 +472,12 @@ jobs:
           name: Archon CLI ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.notes.outputs.found != 'true' }}
+          body_path: ${{ steps.notes.outputs.file }}
           files: |
             dist/archon-*
             dist/archon-web.tar.gz
             dist/checksums.txt
-          body: |
-            ## Installation
-
-            ### Quick Install (Recommended)
-
-            **macOS / Linux**
-            ```bash
-            curl -fsSL https://archon.diy/install | bash
-            ```
-
-            **Windows (PowerShell)**
-            ```powershell
-            irm https://archon.diy/install.ps1 | iex
-            ```
-
-            **Homebrew (macOS / Linux)**
-            ```bash
-            brew install coleam00/archon/archon
-            ```
-
-            **Docker**
-            ```bash
-            docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
-            ```
-
-            ### Manual Installation
-
-            **macOS (Apple Silicon)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **macOS (Intel)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Linux (x64)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Linux (ARM64)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Windows (Manual)**
-            Download `archon-windows-x64.exe` from the assets below, rename to `archon.exe`, and add to your PATH.
-
-            ### Verify installation
-            ```bash
-            archon version
-            ```
 
   update-homebrew:
     needs: release

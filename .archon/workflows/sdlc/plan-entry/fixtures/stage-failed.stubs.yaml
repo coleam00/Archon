@@ -1,0 +1,12 @@
+# Dry-run fixture: a stage that fails before its outcome node raises no attention
+# item. The policy stub breaks its schema, so `policy` fails and `plan` is skipped;
+# `answer` settles the pass on the empty outcome without judging it, so `decide`
+# (unstubbed) never runs and the run fails at the failed node.
+stage__policy: {}
+fixture:
+  inputs:
+    work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
+  expect: failed
+  fail-node: [stage__policy, cycle]
+  reached: [attend__settle]
+exec-code: true

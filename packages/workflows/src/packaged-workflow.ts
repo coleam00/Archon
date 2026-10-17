@@ -1,13 +1,16 @@
-import { join } from 'path';
 import type { WorkflowDefinition, WorkflowSource } from './schemas';
 import {
   isAgentNode,
+  isComposeFanOutNode,
   isExecNode,
   isIncludeDirective,
   isLoopGroupNode,
   isLoopNode,
+  isWorkflowNode,
 } from './schemas';
+import { workflowSourceSchema } from './schemas/workflow';
 import { isValidCommandName } from './command-validation';
+import { resolveWorkflowName } from './router';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
@@ -63,30 +66,25 @@ export function parsePackagedResourceReference(
   if (ownerParts.length !== 3) return null;
   const [source, pack, workflow] = ownerParts;
   const name = reference.slice(resourceMarker + RESOURCE_SEPARATOR.length);
+  const parsedSource = workflowSourceSchema.safeParse(source);
   if (
-    (source !== 'bundled' && source !== 'global' && source !== 'project') ||
+    !parsedSource.success ||
     !isValidWorkflowFolderSegment(pack) ||
     !isValidWorkflowFolderSegment(workflow) ||
     !isValidCommandName(name)
   ) {
     return null;
   }
-  return { owner: { source, pack, workflow }, name };
+  return { owner: { source: parsedSource.data, pack, workflow }, name };
 }
 
-export function getPackagedWorkflowPath(
-  workflowsRoot: string,
-  owner: Pick<WorkflowResourceOwner, 'pack' | 'workflow'>
-): string {
-  return join(workflowsRoot, owner.pack, owner.workflow);
-}
-
-export function getPackagedResourceDirectory(
-  workflowsRoot: string,
-  owner: Pick<WorkflowResourceOwner, 'pack' | 'workflow'>,
-  kind: 'commands' | 'scripts'
-): string {
-  return join(getPackagedWorkflowPath(workflowsRoot, owner), kind);
+/**
+ * A resource name without its package owner. Discovery qualifies a pack's commands with the
+ * owner it was found under; the owner is not part of what runs, so display and telemetry
+ * name the bare resource. Unqualified names pass through unchanged.
+ */
+export function unqualifiedResourceName(reference: string): string {
+  return parsePackagedResourceReference(reference)?.name ?? reference;
 }
 
 function isNamedScript(script: string): boolean {
@@ -125,4 +123,53 @@ export function qualifyWorkflowResources(
 ): WorkflowDefinition {
   for (const node of workflow.nodes) qualifyNodeResources(node, owner);
   return workflow;
+}
+
+/**
+ * Rewrite an installed pack workflow's references to workflows of the same pack from
+ * their authored `name:` to their qualified discovery identity: `include:` targets
+ * (a fan-out's too) and `workflow:` targets. Public identities take precedence over
+ * authored aliases, including other packs' entrypoints and targets that failed to load.
+ * Cross-pack includes still fail in the pack's own name map; child runs resolve
+ * through the catalog.
+ *
+ * Reports ambiguous authored references and `workflow:` targets that name support
+ * workflows. A child run is dispatch; support workflows compose through `include:` only.
+ */
+export function qualifyPackReferences(
+  workflow: WorkflowDefinition,
+  qualifiedByName: ReadonlyMap<string, readonly string[]>,
+  entrypoints: ReadonlySet<string>,
+  publicNames: ReadonlySet<string>
+): { supportChildren: string[]; ambiguousReferences: string[] } {
+  const supportChildren: string[] = [];
+  const ambiguousReferences = new Set<string>();
+  const publicWorkflows = [...publicNames].map(name => ({ name }));
+  const resolve = (name: string): string | undefined => {
+    if (name.includes(':')) {
+      return resolveWorkflowName(name, publicWorkflows)?.name;
+    }
+    const targets = qualifiedByName.get(name);
+    if (targets !== undefined && targets.length > 1) {
+      ambiguousReferences.add(name);
+      return undefined;
+    }
+    return targets?.[0];
+  };
+  const visit = (nodes: WorkflowDefinition['nodes']): void => {
+    for (const node of nodes) {
+      if (isIncludeDirective(node) || isComposeFanOutNode(node)) {
+        node.include = resolve(node.include) ?? node.include;
+        continue;
+      }
+      if (isWorkflowNode(node)) {
+        const target = resolve(node.workflow);
+        if (target !== undefined && !entrypoints.has(target)) supportChildren.push(node.workflow);
+        else if (target !== undefined) node.workflow = target;
+      }
+      if (isLoopGroupNode(node)) visit(node.loop_group.nodes);
+    }
+  };
+  visit(workflow.nodes);
+  return { supportChildren, ambiguousReferences: [...ambiguousReferences] };
 }

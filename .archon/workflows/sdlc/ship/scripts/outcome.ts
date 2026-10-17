@@ -1,75 +1,117 @@
 /**
- * One return for every legitimate terminal result of the routed fix chain.
+ * The result of every legitimate ending of the routed fix chain, which the `report`
+ * node relays as the workflow's return.
  *
- * Negative advisory verdicts complete with the report that explains them; delivery is
- * accepted when the deliver branch actually ran and handed back the pull request it
- * opened. `delivered` is this workflow's authored outcome: an honest "no work is
- * owed" is a successful run that shipped nothing, and the two facts are separate.
+ * Delivery is accepted when the deliver branch ran and reported its pull request
+ * ready; a delivery that ended not ready reports deliver's own reason. Every other
+ * completion reports, in the producing node's
+ * own words, why nothing was delivered — and says plainly when requested work was
+ * not done, so a completed run that shipped nothing never reads as a success it is
+ * not. `delivered` is this workflow's authored outcome: an honest "no work is owed"
+ * is a successful run that shipped nothing, and the two facts are separate.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
- * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the flip's certified URL, or "null"
- *   when the deliver branch was skipped (no_action, or an advisory stop upstream of
- *   the gates). The value is validated at the producer, so nothing here re-reads it
- *   for URL shape.
+ * - INPUTS_ROUTE / INPUTS_CONTRACT / INPUTS_BLOCKED_REASON / INPUTS_SUMMARY:
+ *   triage's verdict.
+ * - INPUTS_INV_VERDICT / INPUTS_INV_SUMMARY: the investigation's verdict and
+ *   summary, or "null" when it did not run.
+ * - INPUTS_PLAN_SUMMARY / INPUTS_OPEN_QUESTIONS: the planner's summary and the calls it
+ *   left to a person, or "null" when it did not run.
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_DELIVERY_REASON / INPUTS_PR_URL:
+ *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
+ *   branch was skipped.
  *
- * A delivery that STARTED and died no longer reaches this node at all: the failure
- * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
- * record names the node that actually failed. The spend gates' outputs used to be
- * bound here purely to tell that case apart from an advisory stop.
+ * A failed delivery arrives as deliver's `ready: false, reason: failed` report and is
+ * relayed like any other not-ready delivery. A failure before delivery skips this
+ * node; the workflow's `report` node answers then.
  */
 
-import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
-
-/**
- * The advisory report a route stopped at, when stopping there is a valid result.
- *
- * Keyed by plain string on purpose. Which routes exist is triage's vocabulary,
- * declared in its own schema; re-enumerating it here would be a second owner that
- * nothing keeps in step. A route this table does not know still cannot reach a
- * delivered report — it opens no spend gate, so it always arrives with no delivered
- * value and refuses through the branch below.
- */
-const ADVISORY_STOP: Record<string, { readonly reason: string; readonly report: string } | undefined> =
-  {
-    investigate: {
-      reason: 'the investigation did not establish a safe fix boundary',
-      report: 'investigation.md',
-    },
-    plan: { reason: 'planning left a material decision unresolved', report: 'plan.md' },
-  };
 
 const artifacts = artifactsDir();
 const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const route = text(process.env.INPUTS_ROUTE);
+const contract = text(process.env.INPUTS_CONTRACT);
+const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
 const summary = text(process.env.INPUTS_SUMMARY);
-const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
+/** A string binding with `if_skipped: null`: the producer's text, or null when it was skipped. */
+function optional(value: string | undefined): string | null {
+  const bound = text(value);
+  return bound === 'null' ? null : bound;
+}
 
-if (route === 'no_action') {
+const invVerdict = optional(process.env.INPUTS_INV_VERDICT);
+const invSummary = optional(process.env.INPUTS_INV_SUMMARY);
+const planSummary = optional(process.env.INPUTS_PLAN_SUMMARY);
+const openQuestions = JSON.parse(text(process.env.INPUTS_OPEN_QUESTIONS) || 'null') as
+  | string[]
+  | null;
+const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
+const delivery = text(process.env.INPUTS_DELIVERY);
+
+/** Why no delivery ran. */
+type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'needs_human';
+
+/**
+ * The planner's open questions as a list. Each carries the direction line that would
+ * settle it next time; the operator decides whether to record it.
+ */
+function questions(): string {
+  return (openQuestions ?? []).map(question => `- ${question}`).join('\n');
+}
+
+function stopped(): { readonly reason: Stop; readonly text: string; readonly report: string } {
+  if (route === 'no_action') {
+    if (contract === 'NO_ACTION') {
+      return { reason: 'no_action', text: `No delivery needed: ${summary}`, report: 'triage.md' };
+    }
+    if (contract === 'BLOCKED') {
+      return { reason: 'blocked', text: `Not done: blocked on ${blockedReason}. ${summary}`, report: 'triage.md' };
+    }
+    return {
+      reason: 'needs_contract',
+      text: `Not done: the work item needs contract work before a run can start. ${summary}`,
+      report: 'triage.md',
+    };
+  }
+  if (route === 'investigate') {
+    if (invVerdict === 'refuted') {
+      return {
+        reason: 'refuted',
+        text: `No work owed in this repository: ${invSummary ?? ''}`,
+        report: 'investigation.md',
+      };
+    }
+    return {
+      reason: 'not_rooted',
+      text: `Not done: the investigation was inconclusive. ${invSummary ?? ''}`,
+      report: 'investigation.md',
+    };
+  }
+  return {
+    reason: 'needs_human',
+    text: `Not done: planning stopped on calls only a person can make. ${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`,
+    report: 'plan.md',
+  };
+}
+
+if (delivered === 'null') {
+  const stop = stopped();
   emit({
     delivered: false,
-    summary:
-      `No delivery needed: ${summary}\nReport: ${artifacts}/triage.md` +
-      caveats(artifacts, { failed: false, listingFile }),
+    reason: stop.reason,
+    pr_url: '',
+    summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { listingFile }),
   });
-} else if (delivered === 'null') {
-  const stop = ADVISORY_STOP[route];
-  if (stop === undefined) {
-    refuse(
-      `outcome: route '${route}' skipped delivery without an advisory report ` +
-        'to point to.' +
-        caveats(artifacts, { failed: true, listingFile })
-    );
-  } else {
-    emit({
-      delivered: false,
-      summary:
-        `No delivery started: ${stop.reason}.\nReport: ${artifacts}/${stop.report}` +
-        caveats(artifacts, { failed: false, listingFile }),
-    });
-  }
 } else {
-  // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false, listingFile }) });
+  // Deliver ran, so its outcome is the report; its summary already carries the caveats.
+  // Questions the planner judged non-blocking still reach the operator.
+  const open = questions();
+  emit({
+    delivered: delivered === 'true',
+    reason: text(process.env.INPUTS_DELIVERY_REASON),
+    pr_url: text(process.env.INPUTS_PR_URL),
+    summary: open === '' ? delivery : `${delivery}\n\nOpen questions the planner judged non-blocking:\n${open}`,
+  });
 }

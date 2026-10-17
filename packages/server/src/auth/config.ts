@@ -95,6 +95,30 @@ export function isApiGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean 
   return isWebAuthEnabled(env) && env.ARCHON_WEB_AUTH_REQUIRED !== 'false';
 }
 
+/** The trusted reverse-proxy identity header when `ARCHON_WEB_AUTH_HEADER` is unset. */
+export const DEFAULT_WEB_AUTH_HEADER = 'X-Archon-User';
+
+/**
+ * The header Archon trusts to name the web user. Every path that reads or
+ * reports it calls this, so soft attribution, run actors, the strict credential
+ * guard and the startup warning cannot disagree about which header counts.
+ */
+export function webAuthHeaderName(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ARCHON_WEB_AUTH_HEADER || DEFAULT_WEB_AUTH_HEADER;
+}
+
+/**
+ * Whether web and CLI conversations are private to the user who created them.
+ * True wherever distinct identities actually arrive: Better Auth configured, or
+ * a reverse proxy supplying `ARCHON_WEB_AUTH_HEADER`. The header name has a
+ * default that is honored even when unset, so only an operator setting the
+ * variable signals a multi-user install. Solo installs own nothing and refuse
+ * nothing.
+ */
+export function isConversationOwnershipEnforced(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isWebAuthEnabled(env) || Boolean(env.ARCHON_WEB_AUTH_HEADER);
+}
+
 /**
  * Paths under `/api/auth/*` that Archon owns and the Better Auth catch-all must
  * NOT handle. Better Auth's `basePath` is `/api/auth`, so when web auth is on its

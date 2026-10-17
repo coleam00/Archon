@@ -87,7 +87,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 ### Preserve provider configuration; scope capabilities
 
 - Provider integrations must preserve the provider's native user and project configuration, including its global and project guidance files. The user's provider configuration owns whether those sources load; Archon must not replace a provider home directory or add a parallel context switch.
-- Workflow AI nodes start without ambient skills, skill-like plugins, or MCP servers. A node receives only the skills, plugins, and MCP servers it explicitly names. Enforce that boundary without hiding unrelated provider settings.
+- Workflow AI nodes start without ambient skills, plugins, or MCP servers. A node receives only the skills, plugins, and MCP servers it explicitly names. Enforce that boundary without hiding unrelated provider settings.
 - Pi extensions are user-owned provider configuration, not Archon-managed plugins. Load them as Pi configures them; any tools or MCP clients an extension exposes are the user's responsibility.
 - Leave native prompt templates and commands under provider control unless the provider automatically advertises them to the model as a skill-like capability. In that case they follow the same explicit node-scoping rule as skills and plugins.
 - Preserve the selected agent provider's native authentication contract. A Claude Code subscription runs through the Claude Agent SDK; using an Anthropic model through another provider is not Claude Code subscription support. Do not reroute or relabel provider identity to reuse credentials.
@@ -95,7 +95,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 
 ## Workflow-language boundary
 
-The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface.
+The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface. Read [`.archon/workflows/sdlc/CONSTITUTION.md`](.archon/workflows/sdlc/CONSTITUTION.md) before changing the SDLC pack.
 
 - YAML should expose only what the engine must see to govern a run: topology, gates, joins, retries, sessions, artifacts, durable waits, and reusable structure.
 - Computation belongs inside a `bash:`, `script:`, or `prompt:` node. Choosing a script instead of a prompt is an ordinary reliability and maintainability decision, not a constitutional rule.
@@ -166,10 +166,10 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Remove test temp trees with `removeTempTree` or `trackTempRoots` from `@archon/paths/test-utils`.
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
-- Always run lint through `bun run lint` or `bun run lint:fix`; the wrapper isolates packages to keep typed lint within its memory budget.
-- Run the narrow checks that prove the changed behavior while iterating.
-- Run `bun run validate` before opening a pull request. It runs every pull-request gate except the ones needing something a contributor may not have — a live PostgreSQL, a Docker daemon, an unshallowed checkout, Node for the docs site, GitHub API quota — because `scripts/validate.ts` owns the check list and the workflows call that script rather than restating it.
-- Those excluded jobs are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md) with the command to run each one yourself. Schema changes require the PostgreSQL upgrade check from that list.
+- Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.
+- Check what you changed: run the tests that cover it, and lint and type-check the packages you touched.
+- CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`.
+- Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
 
@@ -186,6 +186,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 Do not expand this file with copied reference material. Use the owning source:
 
 - Product direction: [`.archon/direction.md`](.archon/direction.md)
+- Code structure, flows, extension points and enforced boundaries: [`.archon/architecture.md`](.archon/architecture.md)
 - Workflow-language design: [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md)
 - Engineering craft and review values: [`.archon/engineering.md`](.archon/engineering.md)
 - CLI: [`packages/docs-web/src/content/docs/reference/cli.md`](packages/docs-web/src/content/docs/reference/cli.md) and `archon --help`

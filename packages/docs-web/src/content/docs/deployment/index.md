@@ -20,6 +20,8 @@ Archon can run locally for development or be deployed to a server for always-on 
 | **Cloud VPS** | 24/7 operation with automatic HTTPS | [Cloud Deployment](/deployment/cloud/) |
 | **Windows** | Native Windows or WSL2 | [Windows](/deployment/windows/) |
 
+Using an existing proxy? See [Running Archon behind your own reverse proxy](/deployment/reverse-proxy/) for routing, authentication, webhook, and streaming requirements.
+
 ## Database Options
 
 | Option | Setup | Best For |
