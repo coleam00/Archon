@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { buildRunTerminalTelemetry, type RunTelemetryEvent } from './run-terminal-telemetry';
 import { buildTerminalRecord } from './terminal-record';

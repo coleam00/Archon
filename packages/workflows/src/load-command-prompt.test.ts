@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'fs';
 import { symlink as fsSymlink } from 'fs/promises';

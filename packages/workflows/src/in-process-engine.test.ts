@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`

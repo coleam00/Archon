@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /** Tests for the declared-data dry-run fixture runner (#2772). */
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';

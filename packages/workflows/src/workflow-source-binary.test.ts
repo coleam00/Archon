@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A compiled binary's capture has to stand on its own.
  *

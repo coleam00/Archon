@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect } from 'bun:test';
 import { parseWorkflowInvocation, findWorkflow, resolveWorkflowName } from './router';
 import type { WorkflowDefinition } from './schemas';

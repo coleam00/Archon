@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
 import { parseNodeHooks } from './loader';
