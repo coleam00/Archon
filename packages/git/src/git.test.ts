@@ -3972,6 +3972,41 @@ branch refs/heads/feature/auth
       }
     );
 
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([
+      ['new grant', ''],
+      ['duplicate repair', '[safe]\n\tdirectory = /workspace/read-only\n'.repeat(2)],
+    ])('registers in a read-only config file (%s)', async (_case, content) => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-readonly-file-')));
+      const configPath = join(root, 'gitconfig');
+      await writeFile(configPath, content);
+      await chmod(configPath, 0o444);
+      await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
+        const path = repo('/workspace/read-only');
+        await git.addSafeDirectory(path);
+        const { stdout } = await git.execFileAsync('git', [
+          'config',
+          '--global',
+          '--get-all',
+          'safe.directory',
+        ]);
+        expect(stdout.trim().split('\n')).toEqual([path]);
+        expect((await stat(configPath)).mode & 0o777).toBe(0o444);
+      });
+    });
+
+    test.skipIf(process.platform === 'win32')(
+      'fails clearly when git has no global config',
+      async () => {
+        execSpy.mockRestore();
+        await withEnv({ GIT_CONFIG_GLOBAL: undefined, HOME: undefined }, async () => {
+          await expect(git.addSafeDirectory(repo('/workspace/no-home'))).rejects.toThrow(
+            'HOME is not set'
+          );
+        });
+      }
+    );
+
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;

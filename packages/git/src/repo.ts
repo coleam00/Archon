@@ -2,7 +2,17 @@ import { GitFailure } from './errors';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
-import { readdir, open, readFile, realpath, rename, stat, unlink, appendFile } from 'fs/promises';
+import {
+  appendFile,
+  chmod,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+} from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -642,11 +652,13 @@ async function editConfigFile(
   let published = false;
   let closed = false;
   try {
-    await lock.chmod((await stat(config)).mode);
+    const { mode } = await stat(config);
     await lock.writeFile(await readFile(config));
     await lock.close();
     closed = true;
     await edit(lockPath);
+    // Like git, apply the config's mode only after editing, so a read-only config stays editable.
+    await chmod(lockPath, mode);
     await rename(lockPath, config);
     published = true;
   } finally {
@@ -698,6 +710,16 @@ async function editSafeDirectory(
   });
 }
 
+/** Git's --global write target: ~/.gitconfig unless only the XDG file exists. */
+function defaultGlobalConfigPath(): string {
+  // POSIX git has no global config without HOME; Git for Windows derives one.
+  const home = process.env.HOME || (process.platform === 'win32' ? homedir() : undefined);
+  if (!home) throw new Error('HOME is not set, so git has no global config');
+  const homeConfig = join(home, '.gitconfig');
+  const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
+  return existsSync(homeConfig) || !existsSync(xdgConfig) ? homeConfig : xdgConfig;
+}
+
 /**
  * Add a directory to git's global safe.directory config.
  * Grants persist after setup failure: revocation could remove trust that a
@@ -736,15 +758,13 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     const values = entries.map(entry => entry.value);
     const grants = entries.filter(entry => entry.value === path);
     if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
-    const home = process.env.HOME || homedir();
-    const homeConfig = join(home, '.gitconfig');
-    const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
-    // Git's --global write target: ~/.gitconfig unless only the XDG file exists.
-    const targetPath =
-      process.env.GIT_CONFIG_GLOBAL ??
-      (existsSync(homeConfig) || !existsSync(xdgConfig) ? homeConfig : xdgConfig);
+    const targetPath = process.env.GIT_CONFIG_GLOBAL ?? defaultGlobalConfigPath();
     // git config --global creates a missing file; the lock-and-rename edit needs one.
-    await (await open(targetPath, 'a')).close();
+    try {
+      await (await open(targetPath, 'wx', 0o666)).close();
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    }
     if (grants.length === 0 && !values.includes('')) {
       await editConfigFile(targetPath, lockPath => replaceSafeDirectory(lockPath, path));
       return;
