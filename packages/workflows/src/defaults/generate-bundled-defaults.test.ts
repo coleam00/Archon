@@ -1,5 +1,5 @@
 /**
- * Integration tests for bundle generation, merge layout and the untracked-file guard.
+ * Integration tests for bundle generation and the untracked-file guard.
  *
  * Drives the real script via spawnSync inside an isolated mkdtempSync git
  * repo, pointed at the throwaway repo via the BUNDLED_DEFAULTS_REPO_ROOT test seam.
@@ -23,14 +23,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { BundledScriptPack } from './bundled-script-pack';
+import { collectBundleSources, readBundleRecords } from './bundle-inventory';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const SCRIPT = resolve(import.meta.dir, '../../../../scripts/generate-bundled-defaults.ts');
-const OUTPUT_REL = 'packages/workflows/src/defaults/bundled-defaults.generated.ts';
+const OUTPUT_REL = 'packages/workflows/src/defaults/bundled-data.ts';
 const INDEX_REL = 'packages/workflows/src/defaults/bundle-index.json';
 const SENTINEL = '// sentinel — must not be overwritten when the guard trips\n';
 
@@ -98,8 +99,8 @@ function createRepo(packs: string[] = [BASE_PACK]): string {
   return repoRoot;
 }
 
-function runScript(repoRoot: string, args: string[] = []): { exitCode: number; stderr: string } {
-  const result = spawnSync('bun', [SCRIPT, ...args], {
+function runScript(repoRoot: string): { exitCode: number; stderr: string } {
+  const result = spawnSync('bun', [SCRIPT], {
     env: { ...process.env, BUNDLED_DEFAULTS_REPO_ROOT: repoRoot },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -110,51 +111,6 @@ function runScript(repoRoot: string, args: string[] = []): { exitCode: number; s
 }
 
 describe('generate-bundled-defaults', () => {
-  it('merges independent edits to adjacent script, shared, command and workflow files', async () => {
-    const repoRoot = createRepo();
-    try {
-      const pack = join(repoRoot, '.archon/workflows', BASE_PACK);
-      const sources = ['alpha', 'beta'].map(name => ({
-        [`${name}/${name}.yaml`]: `name: ${name}\n`,
-        [`${name}/commands/run.md`]: `# ${name}\n`,
-        [`tracked-flow/scripts/${name}.ts`]: `console.log('${name}');\n`,
-        [`.shared/${name}.ts`]: `export const name = '${name}';\n`,
-      }));
-      const writeSources = (files: Record<string, string>, suffix = ''): void => {
-        for (const [path, content] of Object.entries(files)) {
-          mkdirSync(dirname(join(pack, path)), { recursive: true });
-          writeFileSync(join(pack, path), content + suffix);
-        }
-      };
-      for (const files of sources) writeSources(files);
-      runGit(repoRoot, ['add', '.archon/workflows']);
-      const snapshot = (name: string): string => {
-        expect(runScript(repoRoot)).toEqual({ exitCode: 0, stderr: '' });
-        const path = join(repoRoot, name);
-        cpSync(join(repoRoot, OUTPUT_REL), path);
-        return path;
-      };
-      const base = snapshot('base.ts');
-      writeSources(sources[0], '// first edit\n');
-      const ours = snapshot('ours.ts');
-      writeSources(sources[0]);
-      writeSources(sources[1], '// second edit\n');
-      const theirs = snapshot('theirs.ts');
-      const merge = spawnSync('git', ['merge-file', '-p', ours, base, theirs], {
-        encoding: 'utf8',
-      });
-      expect(merge.stderr).toBe('');
-      expect(merge.status).toBe(0);
-      writeSources(sources[0], '// first edit\n');
-      const combined = snapshot('combined.ts');
-      expect(merge.stdout).toBe(readFileSync(combined, 'utf8'));
-      expect(merge.stdout).not.toMatch(/^\/\/ .*\(\d+ total\)/m);
-      expect(runScript(repoRoot, ['--check'])).toEqual({ exitCode: 0, stderr: '' });
-    } finally {
-      await removeTempTree(repoRoot);
-    }
-  });
-
   it('ignores unindexed packs and fails without publishing when an indexed pack is missing', async () => {
     const repoRoot = createRepo();
     try {
@@ -246,6 +202,22 @@ describe('generate-bundled-defaults', () => {
         runtime: 'uv',
       });
       expect(bundle.files['release-flow/scripts/helpers/announce.py']).toBe("print('announced')\n");
+
+      // The embedded literals are exactly the records a source build reads, in the same
+      // key order: name resolution and telemetry matching iterate them.
+      const records = await readBundleRecords(
+        await collectBundleSources(join(repoRoot, '.archon/workflows'), [BASE_PACK, 'author-pack'])
+      );
+      const embedded: Record<string, unknown> = await import(join(repoRoot, OUTPUT_REL));
+      for (const [exportName, record] of [
+        ['BUNDLED_COMMANDS', records.commands],
+        ['BUNDLED_WORKFLOWS', records.workflows],
+        ['BUNDLED_WORKFLOW_PATHS', records.workflowPaths],
+        ['BUNDLED_WORKFLOW_OWNERS', records.workflowOwners],
+        ['BUNDLED_SCRIPT_PACKS', records.scriptPacks],
+      ] as const) {
+        expect(JSON.stringify(embedded[exportName])).toBe(JSON.stringify(record));
+      }
     } finally {
       await removeTempTree(repoRoot);
     }
@@ -271,7 +243,7 @@ describe('generate-bundled-defaults', () => {
     }
   });
 
-  it('includes tracked shared modules and documents, excludes other files and runnable keys, and checks shared-only drift', async () => {
+  it('includes tracked shared modules and documents, excludes other files and runnable keys', async () => {
     const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
       const pack = join(repoRoot, '.archon/workflows/author-pack');
@@ -304,17 +276,6 @@ describe('generate-bundled-defaults', () => {
       expect(Object.keys(bundle.scripts)).toEqual([
         '__archon_pack__bundled:author-pack:release::main',
       ]);
-      expect(runScript(repoRoot, ['--check'])).toEqual({ exitCode: 0, stderr: '' });
-      for (const [path, original, edited] of [
-        ['.shared/policy/rule.md', 'Rule.\n', 'Another rule.\n'],
-        ['.shared/nested/helper.ts', 'export const value = 1;\n', 'export const value = 3;\n'],
-      ] as const) {
-        writeFileSync(join(pack, path), edited);
-        const drift = runScript(repoRoot, ['--check']);
-        expect(drift.exitCode).toBe(2);
-        expect(drift.stderr).toContain('is stale');
-        writeFileSync(join(pack, path), original);
-      }
     } finally {
       await removeTempTree(repoRoot);
     }

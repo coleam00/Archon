@@ -10,8 +10,8 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
  * because a named check reads it:
- *   - `.archon/workflows/` holds the bundled packs, compiled into
- *     `packages/workflows/src/defaults/bundled-defaults.generated.ts` (`check:bundled`).
+ *   - `.archon/workflows/` holds the bundled packs, read by the bundle tests and embedded
+ *     into the binary by `scripts/build-binaries.sh` (`serve-binary`).
  *   - `.claude/skills/` is imported as text by `packages/cli/src/bundled-skill.ts`, so it is
  *     compiled into the CLI itself (CLI skill tests).
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`

@@ -83,11 +83,8 @@ describe('bundled-defaults', () => {
   });
 
   describe('bundle completeness', () => {
-    // These assertions are the canary for bundle drift: if someone adds a
-    // default file without regenerating bundled-defaults.generated.ts, the
-    // bundle would be missing in compiled binaries (see #979 context). The
-    // generator is `scripts/generate-bundled-defaults.ts`, and
-    // `bun run check:bundled` verifies the generated file is up to date.
+    // The records must match the pack files on disk: a compiled binary embeds these
+    // same records (see #979 context), written by `scripts/generate-bundled-defaults.ts`.
 
     it('packaged bundle metadata is internally consistent', () => {
       for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {

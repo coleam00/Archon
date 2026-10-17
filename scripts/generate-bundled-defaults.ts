@@ -1,39 +1,27 @@
 #!/usr/bin/env bun
 /**
- * Regenerates packages/workflows/src/defaults/bundled-defaults.generated.ts from
- * the packs selected by packages/workflows/src/defaults/bundle-index.json.
- * bundle-inventory.ts owns the file selection for this script and live source capture.
+ * Writes packages/workflows/src/defaults/bundled-data.ts as embedded string literals for
+ * the compiled binary. scripts/build-binaries.sh runs it before `bun build --compile` and
+ * restores the committed, source-reading module afterwards. Running it by hand overwrites
+ * that module; restore it with `git checkout`.
  *
- * Emits inline string literals (via JSON.stringify) rather than Bun's
- * `import X from '...' with { type: 'text' }` attributes so the module loads
- * in Node too. This fixes two problems at once:
- *   - bundle drift (hand-maintained import list in bundled-defaults.ts)
- *   - SDK blocker #2 (type: 'text' import attributes are Bun-specific)
- *
- * Determinism: filenames are sorted before emission so `bun run check:bundled`
- * (which regenerates into memory and compares to the committed file) catches
- * unregenerated changes. Wired into `bun run validate` and CI.
- *
- * Usage:
- *   bun run scripts/generate-bundled-defaults.ts           # write
- *   bun run scripts/generate-bundled-defaults.ts --check   # verify (exit 2 if stale)
+ * bundle-inventory.ts owns file selection and the records, so the binary embeds exactly
+ * what a source build reads. Contents are inlined via JSON.stringify rather than Bun's
+ * `with { type: 'text' }` import attributes, which Node cannot load.
  *
  * Exit codes:
- *   0  file generated (and unchanged, if --check)
- *   1  unexpected error (missing dir, unreadable source, invalid filename, etc.)
- *   2  --check was passed and the file would change
+ *   0  file written
+ *   1  unexpected error (missing dir, unreadable or untracked source, invalid filename, etc.)
  */
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join, relative, resolve } from 'path';
 import { execFileAsync } from '@archon/git';
 import {
+  type BundleRecords,
   collectBundleSources,
-  readBundleContent,
   readBundleIndex,
+  readBundleRecords,
 } from '../packages/workflows/src/defaults/bundle-inventory';
-
-import type { BundledScriptPack } from '../packages/workflows/src/defaults/bundled-script-pack';
-import type { WorkflowResourceOwner } from '../packages/workflows/src/packaged-workflow';
 
 // BUNDLED_DEFAULTS_REPO_ROOT is a test seam: the integration tests point the
 // script at a throwaway git repo (see
@@ -43,19 +31,7 @@ const REPO_ROOT = process.env.BUNDLED_DEFAULTS_REPO_ROOT
   : resolve(import.meta.dir, '..');
 const WORKFLOWS_ROOT_REL = '.archon/workflows';
 const WORKFLOWS_ROOT = join(REPO_ROOT, WORKFLOWS_ROOT_REL);
-const OUTPUT_PATH = join(
-  REPO_ROOT,
-  'packages/workflows/src/defaults/bundled-defaults.generated.ts'
-);
-
-const CHECK_ONLY = process.argv.includes('--check');
-
-interface BundledFile {
-  name: string;
-  content: string;
-}
-
-type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
+const OUTPUT_PATH = join(REPO_ROOT, 'packages/workflows/src/defaults/bundled-data.ts');
 
 /** Refuse to embed files that git does not track (#1578). An untracked selected file would
  * silently ship inside locally built binaries while being absent from every other checkout
@@ -79,111 +55,84 @@ async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<voi
   }
 }
 
-function renderEntries(entries: readonly (readonly [string, unknown])[], indent = '  '): string {
-  // Blank separators let edits to neighboring existing entries merge independently.
-  return entries
+function renderEntries(record: Readonly<Record<string, unknown>>, indent = '  '): string {
+  return Object.entries(record)
     .map(([name, value]) => `${indent}${JSON.stringify(name)}: ${JSON.stringify(value)},`)
-    .join('\n\n');
+    .join('\n');
 }
 
-function renderRecord(comment: string, exportName: string, files: BundledFile[]): string {
-  return [
-    `// ${comment}`,
-    `export const ${exportName}: Record<string, string> = {`,
-    renderEntries(files.map(f => [f.name, f.content])),
-    '};',
-  ].join('\n');
-}
-
-function renderMapRecord<T>(
+function renderRecord(
   comment: string,
   exportName: string,
-  typeName: string,
-  entries: ReadonlyMap<string, T>,
-  recordType = `Record<string, ${typeName}>`
+  recordType: string,
+  record: Readonly<Record<string, unknown>>
 ): string {
   return [
     `// ${comment}`,
     `export const ${exportName}: ${recordType} = {`,
-    renderEntries([...entries].sort(([a], [b]) => a.localeCompare(b))),
+    renderEntries(record),
     '};',
   ].join('\n');
 }
 
-function renderScriptPacks(packs: ReadonlyMap<string, BundledScriptPack>): string {
+function renderScriptPacks(packs: BundleRecords['scriptPacks']): string {
   return [
     '// Bundled script packs',
     'export const BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> = {',
-    [...packs]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, pack]) =>
-        [
-          `  ${JSON.stringify(name)}: {`,
-          ...Object.entries(pack).map(([field, entries]) =>
-            [
-              `    ${JSON.stringify(field)}: {`,
-              renderEntries(Object.entries(entries), '      '),
-              '    },',
-            ].join('\n')
-          ),
-          '  },',
-        ].join('\n')
-      )
-      .join('\n\n'),
+    ...Object.entries(packs).map(([name, pack]) =>
+      [
+        `  ${JSON.stringify(name)}: {`,
+        ...Object.entries(pack).map(([field, entries]) =>
+          [`    ${JSON.stringify(field)}: {`, renderEntries(entries, '      '), '    },'].join('\n')
+        ),
+        '  },',
+      ].join('\n')
+    ),
     '};',
   ].join('\n');
 }
 
-function renderFile(
-  commands: BundledFile[],
-  workflows: BundledFile[],
-  workflowOwners: ReadonlyMap<string, BundledWorkflowOwner>,
-  scriptPacks: ReadonlyMap<string, BundledScriptPack>,
-  workflowPaths: ReadonlyMap<string, string>
-): string {
-  const header = [
+function renderFile(records: BundleRecords): string {
+  return [
     '/**',
     ' * AUTO-GENERATED — DO NOT EDIT.',
     ' *',
-    ' * Regenerate with: bun run generate:bundled',
-    ' * Verify up-to-date:  bun run check:bundled',
-    ' *',
+    ' * Written by scripts/build-binaries.sh for the compiled binary; never committed.',
     ' * Source of truth: bundle-index.json selects packs; bundle-inventory.ts selects files.',
-    ' *',
-    ' * Contents are inlined as plain string literals (JSON-escaped) so this',
-    ' * module loads in both Bun and Node. Previous versions used',
-    " * `import X from '...' with { type: 'text' }` which is Bun-specific.",
     ' */',
     '',
-  ].join('\n');
-
-  return [
-    header,
+    "import type { BundledWorkflowOwner } from './bundle-inventory';",
     "import type { BundledScriptPack } from './bundled-script-pack';",
-    "import type { WorkflowResourceOwner } from '../packaged-workflow';",
     '',
-    "export type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;",
+    renderRecord(
+      'Bundled commands',
+      'BUNDLED_COMMANDS',
+      'Record<string, string>',
+      records.commands
+    ),
     '',
-    renderRecord('Bundled commands', 'BUNDLED_COMMANDS', commands),
+    renderRecord(
+      'Bundled workflows',
+      'BUNDLED_WORKFLOWS',
+      'Record<string, string>',
+      records.workflows
+    ),
     '',
-    renderRecord('Bundled workflows', 'BUNDLED_WORKFLOWS', workflows),
-    '',
-    renderMapRecord(
+    renderRecord(
       'Authored workflow paths beneath the bundled scope',
       'BUNDLED_WORKFLOW_PATHS',
-      'string',
-      workflowPaths
+      'Record<string, string>',
+      records.workflowPaths
     ),
     '',
-    renderMapRecord(
+    renderRecord(
       'Packaged workflow owners',
       'BUNDLED_WORKFLOW_OWNERS',
-      'BundledWorkflowOwner',
-      workflowOwners,
-      'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>'
+      'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>',
+      records.workflowOwners
     ),
     '',
-    renderScriptPacks(scriptPacks),
+    renderScriptPacks(records.scriptPacks),
     '',
   ].join('\n');
 }
@@ -194,62 +143,12 @@ async function main(): Promise<void> {
   );
   const files = await collectBundleSources(WORKFLOWS_ROOT, packs);
   await assertTrackedPackagedFiles(files.map(file => file.sourcePath));
-
-  const commands: BundledFile[] = [];
-  const workflows: BundledFile[] = [];
-  const workflowOwners = new Map<string, BundledWorkflowOwner>();
-  const workflowPaths = new Map<string, string>();
-  const scriptPacks = new Map<string, BundledScriptPack>();
-  for (const file of files) {
-    const content = await readBundleContent(file);
-    if (file.kind === 'command') commands.push({ name: file.name, content });
-    else if (file.kind === 'workflow') {
-      workflows.push({ name: file.name, content });
-      workflowPaths.set(file.name, file.relativePath);
-      workflowOwners.set(file.name, file.owner);
-    } else {
-      const prior = scriptPacks.get(file.pack) ?? { files: {}, scripts: {} };
-      scriptPacks.set(file.pack, {
-        files: { ...prior.files, [file.packPath]: content },
-        scripts: file.entry
-          ? {
-              ...prior.scripts,
-              [file.entry.name]: { path: file.packPath, runtime: file.entry.runtime },
-            }
-          : prior.scripts,
-      });
-    }
-  }
-  commands.sort((a, b) => a.name.localeCompare(b.name));
-  workflows.sort((a, b) => a.name.localeCompare(b.name));
-  const contents = renderFile(commands, workflows, workflowOwners, scriptPacks, workflowPaths);
-  if (CHECK_ONLY) {
-    let existing = '';
-    try {
-      const raw = await readFile(OUTPUT_PATH, 'utf-8');
-      // Same LF normalization as the bundled contents — the .ts itself may be
-      // checked out with CRLF line endings on Windows.
-      existing = raw.replace(/\r\n/g, '\n');
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') throw err;
-    }
-    if (existing !== contents) {
-      console.error('bundled-defaults.generated.ts is stale.\n' + 'Run: bun run generate:bundled');
-      process.exit(2);
-    }
-    console.log(
-      `bundled-defaults.generated.ts is up to date (${commands.length} commands, ${workflows.length} workflows, ${scriptPacks.size} script packs).`
-    );
-    return;
-  }
-
-  await writeFile(OUTPUT_PATH, contents, 'utf-8');
+  const records = await readBundleRecords(files);
+  await writeFile(OUTPUT_PATH, renderFile(records), 'utf-8');
   console.log(
-    `Wrote ${OUTPUT_PATH}\n  ${commands.length} commands, ${workflows.length} workflows, ${scriptPacks.size} script packs.`
+    `Wrote ${OUTPUT_PATH}\n  ${Object.keys(records.commands).length} commands, ${Object.keys(records.workflows).length} workflows, ${Object.keys(records.scriptPacks).length} script packs.`
   );
 }
-
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(msg);

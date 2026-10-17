@@ -25,17 +25,17 @@ OUTFILE="${OUTFILE:-}"
 
 echo "Building Archon server, CLI and provider plugins v${VERSION} (commit: ${GIT_COMMIT})"
 
-# Regenerate the bundled packs named in bundle-index.json so the
-# compiled binary always embeds the current on-disk contents. CI also runs
-# `bun run check:bundled` to catch committed drift.
-echo "Regenerating bundled defaults..."
-bun run scripts/generate-bundled-defaults.ts
-
-# Update build-time constants in source before compiling.
-# The file is restored via an EXIT trap so the dev tree is never left dirty,
+# Update build-time constants and embed the bundled packs in source before compiling.
+# Both files are restored via an EXIT trap so the dev tree is never left dirty,
 # even if `bun build --compile` fails mid-way. See GitHub issue #979.
 BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
-trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} — working tree may be dirty" >&2' EXIT
+BUNDLED_DATA_FILE="packages/workflows/src/defaults/bundled-data.ts"
+trap 'echo "Restoring ${BUNDLED_BUILD_FILE} and ${BUNDLED_DATA_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" "${BUNDLED_DATA_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} or ${BUNDLED_DATA_FILE} — working tree may be dirty" >&2' EXIT
+
+# The committed bundled-data.ts reads the packs named in bundle-index.json from disk;
+# the generator overwrites it with their current contents as literals for the binary.
+echo "Embedding bundled defaults..."
+bun run scripts/generate-bundled-defaults.ts
 
 echo "Updating build-time constants (version=${VERSION}, is_binary=true)..."
 

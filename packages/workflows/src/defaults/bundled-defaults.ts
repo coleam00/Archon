@@ -1,23 +1,11 @@
 /**
- * Bundled default commands and workflows for binary distribution.
+ * Bundled default commands, workflows and pack scripts, selected by `bundle-index.json`
+ * and `bundle-inventory.ts`.
  *
- * Content lives in `bundled-defaults.generated.ts`, which is regenerated from
- * the files selected by `bundle-index.json` and `bundle-inventory.ts`. The generated data includes
- * package ownership and packaged scripts. This file is the hand-written facade:
- * it re-exports the records and defines the binary-detection helper.
- *
- * Why two files:
- *   - Generated file is pure data — never hand-edited, diff on PRs shows
- *     exactly which defaults changed.
- *   - Facade keeps the documented `isBinaryBuild()` wrapper in a file that
- *     humans own.
- *
- * Why inline strings (and not `import X from '...file.md' with { type: 'text' }`)?
- *   - Node cannot load `type: 'text'` import attributes — it's Bun-specific.
- *     Using plain string literals keeps `@archon/workflows` importable from
- *     both runtimes, which removes SDK blocker #2.
- *   - Bun still embeds the data at compile time when building the CLI binary,
- *     so runtime behavior is unchanged.
+ * The records come from `bundled-data.ts`. A source build reads them from the pack tree
+ * on disk; a compiled binary embeds them as literals that `scripts/build-binaries.sh`
+ * swaps in before compiling. This facade re-exports the records and owns the
+ * binary-detection helper.
  */
 
 import { BUNDLED_IS_BINARY } from '@archon/paths';
@@ -28,8 +16,8 @@ export {
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_PATHS,
   BUNDLED_WORKFLOW_OWNERS,
-} from './bundled-defaults.generated';
-export type { BundledWorkflowOwner } from './bundled-defaults.generated';
+} from './bundled-data';
+export type { BundledWorkflowOwner } from './bundle-inventory';
 export type { BundledScriptPack } from './bundled-script-pack';
 
 /**

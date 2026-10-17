@@ -15,8 +15,6 @@
     "build:binaries": "bash scripts/build-binaries.sh",
     "build:runner-image": "bash scripts/build-runner-image.sh",
     "build:checksums": "bash scripts/checksums.sh",
-    "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
-    "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
     "generate:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts",
     "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
     "generate:codex-protocol": "bun run scripts/generate-codex-protocol.ts",
