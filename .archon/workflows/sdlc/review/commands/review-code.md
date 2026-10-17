@@ -35,7 +35,7 @@ When execution is practical, run the smallest command that can falsify a finding
 
 ## What a finding costs
 
-State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Report only a reachable supported path that is wrong or broken, or an explicit repository invariant the change violates; anything weaker is silence.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Report only a reachable supported path that is wrong or broken, or an explicit repository invariant the change violates; anything weaker is silence. A risk you can imagine but no supported path reaches today is silence too, not a note.
 
 When a clearance describes a predicate or contract, quote the actual code or config with its source, never your own characterization. If you cannot quote it, mark it unverified and leave it off the clean list.
 

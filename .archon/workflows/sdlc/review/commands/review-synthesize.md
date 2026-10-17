@@ -63,7 +63,7 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 - **Wrong** — a reachable path behaves incorrectly, reports false success, loses data, or opens an isolation or security hole.
 - **Untrue** — a comment, doc, name, type, or pull-request claim is false after the change.
 - **Undocumented** — user-facing behavior the change adds has no documentation where the project documents that kind of behavior.
-- **Unproved** — a test passes for the old or a plausibly wrong implementation; a new guard, check, or retry was never seen failing; behavior the change adds or fixes has no test that fails when it breaks; an acceptance item is met without the proof it names.
+- **Unproved** — a test passes for the old or a plausibly wrong implementation; a new guard, check, or retry was never seen failing; behavior the change adds or fixes at a tool boundary, in persisted data, in user-visible output, or in failure semantics has no test that fails when it breaks; an acceptance item is met without the proof it names.
 - **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes: dead code, an unused field, parameter, or extension point, a pass-through wrapper, a redundant gate or branch, a reimplemented primitive, speculative configuration or fallback.
 - **Doubly owned** — two declarations must agree and nothing enforces it; data or a decision gains a second owner; a vocabulary is re-enumerated at a use site; two sites on the touched path disagree. A wire or persisted contract without a type at the seam is doubly owned.
 
@@ -77,7 +77,7 @@ A boundary never demotes the other kinds. A wrong, untrue, undocumented, or unpr
 
 A **note** is a real, evidence-backed improvement that fails that test: a smaller shape that changes observable behavior or could not be falsified, a speculative one, small local duplication the project's own documents allow, naming and wording, test-local tidying, tests or docs beyond what the change adds or claims. A note never blocks.
 
-Not a finding at all: taste the project's own documents do not back, defense against a failure with no named reachable path, and pre-existing work the change did not touch, which is a discovery.
+Not a finding at all: taste the project's own documents do not back, defense against a failure with no named reachable path, a test, guard, or check for a failure no supported path reaches today, and pre-existing work the change did not touch, which is a discovery. Models, you included, overrate imagined risks. A finding names the path that reaches the failure now, not a path that could exist. When a lens reports one without that path, drop it.
 
 **Declining.** The owner judges every finding: fixes it, declines it, or names it unrelated to the change. A note may be declined for any stated reason; record it `declined`. A declined note may still be preserved as a discovery; see Consolidate discoveries. A blocking finding may be declined only with evidence that it is not a finding — it is wrong, already satisfied, or its smaller shape changes behavior — which you record as `disproved` when the evidence holds. Taste is never a reason to decline a blocking finding: a finding of one of the kinds above is not taste. When fixing a blocking finding would cross an explicit boundary — one the operator stated or explicitly authorized as this delivery — the answer is `replan`, not a decline; an unneeded or doubly owned finding becomes a `scope_conflict` discovery instead, as above.
 
