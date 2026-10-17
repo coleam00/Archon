@@ -1546,11 +1546,7 @@ describe('DAG Loader -- cycle detection', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      /* ignore */
-    }
+    await removeTempTree(testDir);
   });
 
   it('rejects cyclic DAG at load time', async () => {
@@ -2595,11 +2591,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('passes allowed_tools to sendQuery options for Claude node', async () => {
@@ -3358,11 +3350,7 @@ describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('records a node_failed event when $BASE_BRANCH cannot be resolved (not a silent skip)', async () => {
@@ -3441,11 +3429,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('bash node executes and captures stdout as output', async () => {
@@ -4132,11 +4116,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   for (const kind of ['agent', 'loop'] as const) {
@@ -4686,11 +4666,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('skips node (does not run it) when when: expression is unparseable', async () => {
@@ -4894,11 +4870,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('node succeeds on retry after a transient error', async () => {
@@ -5829,11 +5801,7 @@ describe('executeDagWorkflow -- tool events reach a streaming platform', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('calls sendStructuredEvent for tool messages in streaming mode during DAG', async () => {
@@ -5897,11 +5865,7 @@ describe('executeDagWorkflow -- provider event recording', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('records every provider event unchanged in the store, the JSONL log and the emitter', async () => {
@@ -6348,11 +6312,7 @@ describe('executeDagWorkflow -- skills options', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('passes agents/agent/allowedTools to sendQuery when node has skills', async () => {
@@ -6978,11 +6938,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function rawLoopGroupWorkflow(field: 'note' | 'status'): WorkflowDefinition {
@@ -13940,11 +13896,7 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('re-runs node flagged always_run even when present in priorCompletedNodes', async () => {
@@ -14202,11 +14154,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('invalidates a cached downstream when an always_run dep re-runs with fresh output', async () => {
@@ -14956,11 +14904,7 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('command/prompt node completes at settled — does not block on a subprocess that never exits', async () => {
@@ -15067,11 +15011,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('returns output of the single terminal node in a linear DAG', async () => {
@@ -17066,11 +17006,7 @@ describe('executeDagWorkflow -- cancel node', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('cancel node transitions run to cancelled and sends message', async () => {
@@ -17188,11 +17124,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       yield { type: 'agent_message_chunk', text: 'DAG AI response' };
       yield { type: 'result', sessionId: 'dag-session-id' };
     });
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it.each([
@@ -18493,11 +18425,7 @@ describe('executeDagWorkflow -- approval node', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('fresh approval node pauses with extended context (capture_response + on_reject)', async () => {
@@ -19483,11 +19411,7 @@ describe('executeDagWorkflow -- env var injection', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('passes config.envVars as env to sendQuery for Claude node', async () => {
@@ -19680,11 +19604,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('fails node when SDK returns error_max_budget_usd result', async () => {
@@ -20353,11 +20273,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('persists total_cost_usd on the run row when a node yields cost', async () => {
@@ -20560,11 +20476,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('records what a FAILED run burned before it died', async () => {
@@ -21343,11 +21255,7 @@ describe('executeDagWorkflow -- script nodes', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('inline bun script executes and captures stdout', async () => {
@@ -23241,11 +23149,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   async function runWithEvents(
@@ -23792,11 +23696,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('a failed-only DAG delegates its terminal event to failWorkflowRun', async () => {
@@ -23963,11 +23863,7 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   async function runEvidenceWorkflow(opts: {
@@ -24285,11 +24181,7 @@ describe('provider resolution -- regression for #1610', () => {
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('node with no provider annotation routes to workflowProvider (codex), not to model-implied provider', async () => {
@@ -24396,11 +24288,7 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('node with output_type writes nodes/<id>.md + .meta.json with the declared type', async () => {
@@ -24694,11 +24582,7 @@ describe('executeDagWorkflow -- persist_session', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('persist_session: true with no prior row → fresh resumeSessionId, upsert on completion', async () => {
@@ -25955,11 +25839,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore
-    }
+    await removeTempTree(testDir);
   });
 
   it('completes a loop_group when the until signal appears on iteration N', async () => {
@@ -30374,11 +30254,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore
-    }
+    await removeTempTree(testDir);
   });
 
   it('capacity retry audit rows keep the loop-group body path and iteration', async () => {
@@ -32119,11 +31995,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   async function runWorkflow(
@@ -32539,11 +32411,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function buildWf(name: string, nodes: unknown[]): WorkflowDefinition {
@@ -33359,11 +33227,7 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function buildWf(name: string, nodes: unknown[]): WorkflowDefinition {
@@ -35317,11 +35181,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('presents the admitted gate before a slow sibling settles and persists before sending', async () => {
@@ -36109,11 +35969,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   /** Per-node configuration as the provider actually received it. */
@@ -36428,11 +36284,7 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function buildWf(name: string, nodes: unknown[], extra: object = {}): WorkflowDefinition {
@@ -36782,11 +36634,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   async function runNodes(
@@ -36911,11 +36759,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function buildWf(name: string, nodes: unknown[], extra: object = {}): WorkflowDefinition {
@@ -37063,11 +36907,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('sends one message for a conflict the author declared once, not one per node', async () => {
@@ -37361,11 +37201,7 @@ describe('TokenUsage axis seam guard', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
     // Restore the file-level provider stubs. `mockClear()` drops call records
     // but leaves implementations in place, and this block's last test installs a
     // generator that yields "should never run" — a describe appended after this
@@ -39471,11 +39307,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('pauses correctly instead of barreling through remaining iterations', async () => {
@@ -40630,11 +40462,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   for (const kind of ['child', 'compose'] as const) {
@@ -42995,11 +42823,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
   });
 
   afterEach(async () => {
-    try {
-      await removeTempTree(testDir);
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('a clean read-only node succeeds', async () => {
