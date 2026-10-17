@@ -64,7 +64,7 @@ Each node names only the policy documents its decision needs; no policy goes to 
 
 ## 13. Tests check behavior, not structure
 
-The engine tests the workflow language: that `when:` gates, includes expand, loops stop and outputs validate. The pack doesn't test those again.
+The engine tests the workflow language: that `when:` gates, includes expand, loops stop and outputs validate. The pack doesn't test those again, and it supplies no fixture for an engine test. The engine tests itself with its own fixtures.
 
 A pack test checks what a script does at a tool boundary, such as writing an issue exactly once, reading back a pushed head, or merging only what was approved. Agent judgment is checked by evaluating the outcome, not with fixtures. Nothing tests a prompt's wording, the YAML's shape or the route a run takes. Pins like that make the pack harder to change and teach agents to satisfy the pins instead of reaching the outcome.
 
