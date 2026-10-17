@@ -714,9 +714,32 @@ export class SlackWorkflowBridge {
     if (!runId) return;
 
     try {
-      let result: Awaited<ReturnType<WorkflowOperations['cancelWorkflow']>>;
       try {
-        result = await this.operations.cancelWorkflow(runId, await this.resolveRunActor(actorId));
+        const result = await this.operations.cancelWorkflow(
+          runId,
+          await this.resolveRunActor(actorId)
+        );
+        getLog().info({ runId }, 'slack.bridge_cancel_dispatched');
+        // The eventual workflow_cancelled event repaints the status message. It carries
+        // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
+        if (result.kind === 'stopped') {
+          let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
+          for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
+          if (result.cascadeFailures > 0) {
+            note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
+          }
+          if (result.blockedParentRunId) {
+            note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
+          }
+          await this.postActionNote(body, runId, note);
+        } else if (!result.cancelled) {
+          await this.postActionNote(
+            body,
+            runId,
+            `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
+          );
+        }
+        return;
       } catch (error) {
         if (error instanceof RunActionForbiddenError) {
           await this.postForbiddenAction(body, error.message);
@@ -739,27 +762,6 @@ export class SlackWorkflowBridge {
             : this.runs.has(runId)
               ? `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
               : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
-        );
-        return;
-      }
-      getLog().info({ runId }, 'slack.bridge_cancel_dispatched');
-      // The eventual workflow_cancelled event repaints the status message. It carries
-      // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
-      if (result.kind === 'stopped') {
-        let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
-        for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
-        if (result.cascadeFailures > 0) {
-          note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
-        }
-        if (result.blockedParentRunId) {
-          note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
-        }
-        await this.postActionNote(body, runId, note);
-      } else if (!result.cancelled) {
-        await this.postActionNote(
-          body,
-          runId,
-          `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
         );
       }
     } catch (error) {
@@ -791,11 +793,15 @@ export class SlackWorkflowBridge {
       return;
     }
 
-    await this.adapter.getApp().client.chat.postMessage({
-      channel: target.channel,
-      thread_ts: target.thread_ts,
-      text,
-    });
+    try {
+      await this.adapter.getApp().client.chat.postMessage({
+        channel: target.channel,
+        thread_ts: target.thread_ts,
+        text,
+      });
+    } catch (error) {
+      getLog().warn({ err: error as Error, runId }, 'slack.bridge_action_notify_failed');
+    }
   }
 
   private async applyResolutionEdit(args: {

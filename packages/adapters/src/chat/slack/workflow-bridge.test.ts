@@ -475,7 +475,7 @@ describe('SlackWorkflowBridge', () => {
   );
 
   test.each(['approve', 'reject'] as const)(
-    '%s logs a failed child redirect delivery with the action and Slack error',
+    '%s logs a failed child redirect delivery with the run and Slack error',
     async decision => {
       const { adapter, fakeApp, posted, updated, dispatchAction } = makeFakeAdapter();
       const resume = mock(async () => 'resumed' as const);
@@ -495,9 +495,9 @@ describe('SlackWorkflowBridge', () => {
         thread_ts: '2.000',
         text: expect.stringContaining(`/archon-workflow ${decision} child-full-id`),
       });
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { err: slackError, runId: 'r1', nodeId: 'sub', decision },
-        'slack.bridge_approval_handler_failed'
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { err: slackError, runId: 'r1' },
+        'slack.bridge_action_notify_failed'
       );
       expect(posted).toHaveLength(0);
       expect(resume).not.toHaveBeenCalled();
@@ -1124,9 +1124,9 @@ describe('SlackWorkflowBridge', () => {
           } else {
             expect(note?.text).toContain('already finished');
           }
-          expect(mockLogger.error).toHaveBeenCalledWith(
+          expect(mockLogger.warn).toHaveBeenCalledWith(
             { err: slackError, runId: 'r1' },
-            'slack.bridge_cancel_handler_failed'
+            'slack.bridge_action_notify_failed'
           );
           expect(mockLogger.warn).not.toHaveBeenCalledWith(
             expect.anything(),
