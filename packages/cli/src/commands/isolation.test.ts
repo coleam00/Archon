@@ -770,6 +770,33 @@ describe('isolationCleanupMergedCommand', () => {
     expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {});
   });
 
+  // A project's scheduler sweeps after its own runs; it must never reach every other
+  // project registered on the machine.
+  describe('scoped to one project', () => {
+    beforeEach(() => {
+      mockListEnvironments.mockResolvedValueOnce({
+        codebases: [
+          { codebaseId: 'cb-1', defaultCwd: '/test/repo', repositoryUrl: null, environments: [] },
+          { codebaseId: 'cb-2', defaultCwd: '/other/repo', repositoryUrl: null, environments: [] },
+        ],
+        totalEnvironments: 0,
+        ghostsReconciled: 0,
+      });
+    });
+
+    it('sweeps only the named project, matching its path loosely', async () => {
+      await isolationCleanupMergedCommand({ project: '/other/repo/' });
+      expect(mockCleanupMergedEnvironments).toHaveBeenCalledTimes(1);
+      expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-2', '/other/repo', {});
+    });
+
+    it('removes nothing when the named project has no environments', async () => {
+      await isolationCleanupMergedCommand({ project: '/unregistered' });
+      expect(mockCleanupMergedEnvironments).not.toHaveBeenCalled();
+      expect(consoleLogSpy).toHaveBeenCalledWith(`No active environments for /unregistered.`);
+    });
+  });
+
   // The command used to claim "merged into main" while comparing against the repo's
   // configured base branch (#3471).
   it('names the base ref the sweep compared against, never a hardcoded main', async () => {

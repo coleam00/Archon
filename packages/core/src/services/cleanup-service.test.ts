@@ -2034,6 +2034,36 @@ describe('cleanupMergedWorktrees', () => {
     );
   });
 
+  test('keepRemote removes the local worktree but leaves the remote branch', async () => {
+    mockListByCodebase.mockResolvedValueOnce([
+      makeEnvironment({
+        id: 'env-merged',
+        branch_name: 'merged-branch',
+        working_path: '/workspace/repo/worktrees/merged-branch',
+        status: 'active',
+      }),
+    ]);
+    mockIsBranchMerged.mockResolvedValueOnce(true);
+    mockGetById.mockResolvedValueOnce(
+      makeEnvironment({
+        id: 'env-merged',
+        working_path: '/workspace/repo/worktrees/merged-branch',
+        status: 'active',
+      })
+    );
+    mockWorktreeExists.mockResolvedValueOnce(true);
+
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+      keepRemote: true,
+    });
+
+    expect(result.removed).toContain('merged-branch');
+    expect(mockDestroy).toHaveBeenCalledWith(
+      '/workspace/repo/worktrees/merged-branch',
+      expect.objectContaining({ deleteRemoteBranch: false })
+    );
+  });
+
   // Git proves the branch merged, but the worktree's HEAD (detached, or a branch
   // renamed inside it) holds commits the base never received. Removal would delete them.
   test('keeps a worktree whose HEAD has commits git cannot find in the base', async () => {

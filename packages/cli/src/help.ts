@@ -273,6 +273,14 @@ const commandHelp: HelpEntry[] = [
         spec: '--include-closed',
         description: 'Also remove environments whose PRs were closed without merging',
       },
+      {
+        spec: '--keep-remote',
+        description: 'Keep the remote branches; remove only local worktrees and branches',
+      },
+      {
+        spec: '--cwd <path>',
+        description: 'Sweep only the project at this path',
+      },
     ],
   },
   {
