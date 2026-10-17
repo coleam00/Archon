@@ -8,7 +8,7 @@
  * mocks the Pi SDK process-wide.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -105,6 +105,13 @@ beforeAll(() => {
     apiKey: 'ext-key',
     models: [{ id: 'x1', name: 'x1', reasoning: false, input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 }],
+  });
+  pi.registerTool({
+    name: 'ext_echo',
+    label: 'ext_echo',
+    description: 'Echo',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => ({ content: [{ type: 'text', text: 'echo' }] }),
   });
 }
 `
@@ -272,5 +279,63 @@ test('persisted Pi resume and fork report only the current prompt usage', async 
   } finally {
     void stub.stop(true);
     writeFileSync(modelsPath, savedModels);
+  }
+});
+
+test('a resumed or forked Pi node without tool restrictions gets the tools of a fresh node, not those of the node it resumes', async () => {
+  const toolsPerRequest: string[][] = [];
+  const stub = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { tools?: { function: { name: string } }[] };
+      toolsPerRequest.push((body.tools ?? []).map(t => t.function.name).sort());
+      return sse(completion({ role: 'assistant', content: 'done' }, 'stop'));
+    },
+  });
+  const modelsPath = join(agentDir, 'models.json');
+  const settingsPath = join(agentDir, 'settings.json');
+  const savedModels = readFileSync(modelsPath, 'utf8');
+  writeFileSync(settingsPath, JSON.stringify({ defaultTools: ['+grep'] }));
+  writeFileSync(
+    modelsPath,
+    JSON.stringify({
+      providers: {
+        tools: {
+          baseUrl: `http://127.0.0.1:${stub.port}/v1`,
+          api: 'openai-completions',
+          apiKey: 'stub',
+          models: [{ id: 'tools' }],
+        },
+      },
+    })
+  );
+  try {
+    async function turn(
+      nodeConfig: { allowed_tools?: string[] },
+      resume?: string,
+      forkSession = false
+    ) {
+      for await (const chunk of new PiProvider().sendQuery('reply done', repoDir, resume, {
+        model: 'tools/tools',
+        forkSession,
+        nodeConfig,
+      })) {
+        if (chunk.type === 'result') return chunk;
+      }
+      throw new Error('missing Pi result');
+    }
+    await turn({});
+    const restricted = await turn({ allowed_tools: ['read'] });
+    expect(restricted.sessionId).toBeDefined();
+    for (const forkSession of [false, true]) {
+      const result = await turn({}, restricted.sessionId, forkSession);
+      expect(result.resumed).toBe(true);
+    }
+    const fresh = ['bash', 'edit', 'ext_echo', 'grep', 'read', 'write'];
+    expect(toolsPerRequest).toEqual([fresh, ['ext_echo', 'read'], fresh, fresh]);
+  } finally {
+    void stub.stop(true);
+    writeFileSync(modelsPath, savedModels);
+    rmSync(settingsPath);
   }
 });

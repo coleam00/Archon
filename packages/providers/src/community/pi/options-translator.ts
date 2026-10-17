@@ -8,6 +8,7 @@ import {
   createReadTool,
   createWriteTool,
   type BashSpawnContext,
+  type AgentSession,
   type BashSpawnHook,
 } from '@earendil-works/pi-coding-agent';
 import { delimiter } from 'node:path';
@@ -162,6 +163,30 @@ const PI_DEFAULT_TOOL_NAMES = [
 export function buildDefaultPiTools(cwd: string, env?: Record<string, string>): PiTool[] {
   const spawnHook = buildBashSpawnHook(env);
   return PI_DEFAULT_TOOL_NAMES.map(name => buildPiTool(name, cwd, spawnHook));
+}
+
+/**
+ * The tools a fresh Pi session with no tool options starts with: the
+ * `defaultTools` setting (or Pi's default four) plus every extension tool that
+ * activates on registration. Mirrors `AgentSession`'s initial loadout so a
+ * reopened session can be reset to it; Pi 1.3+ otherwise restores the loadout
+ * its transcript records. Pi's own built-in tools carry the `builtin:<name>`
+ * source path; Archon loads no built-in extensions, so nothing else does.
+ */
+export function freshPiToolNames(
+  session: Pick<AgentSession, 'getAllTools' | 'getToolDefinition'>,
+  defaultToolNames: readonly string[] | undefined
+): string[] {
+  const extensionTools = session
+    .getAllTools()
+    .filter(
+      tool =>
+        tool.sourceInfo.path !== `builtin:${tool.name}` &&
+        (tool.exposure === 'direct' || tool.exposure === 'model-only') &&
+        session.getToolDefinition(tool.name)?.defaultActive !== false
+    )
+    .map(tool => tool.name);
+  return [...(defaultToolNames ?? PI_DEFAULT_TOOL_NAMES), ...extensionTools];
 }
 
 /**
