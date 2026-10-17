@@ -65,18 +65,23 @@ import {
   getArchonEnvPath as pathsGetArchonEnvPath,
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
   getArchonHome as pathsGetArchonHome,
-  createLogger,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   getPluginsPath,
   expandTilde,
 } from '@archon/paths';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('cli.setup');
-  return cachedLog;
-}
+import {
+  SetupExit,
+  cancelSetup,
+  exitSetup,
+  getLog,
+  type CodexTokens,
+  type GitHubConfig,
+  type SetupConfig,
+  type SetupOptions,
+  type SlackConfig,
+  type TelegramConfig,
+} from './setup-shared';
 
 // =============================================================================
 // Types
@@ -159,58 +164,6 @@ const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string 
 const KEEP_MODEL = '__keep__';
 const CUSTOM_MODEL = '__custom__';
 
-interface SetupConfig {
-  ai: {
-    claude: boolean;
-    claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
-    claudeApiKey?: string;
-    claudeOauthToken?: string;
-    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
-     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
-    claudeBinaryPath?: string;
-    codex: boolean;
-    codexTokens?: CodexTokens;
-    pi: boolean;
-    /** e.g. 'anthropic/claude-haiku-4-5' — written to ~/.archon/config.yaml */
-    piModel?: string;
-    /** API key value for the chosen Pi backend */
-    piApiKey?: string;
-    /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
-    piApiKeyEnvVar?: string;
-    defaultAssistant: string | undefined;
-    /** Gates the config.yaml write so an empty selection preserves the saved default. */
-    defaultAssistantSelected?: boolean;
-    /** Default CHAT model for the default assistant — written to
-     *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
-     *  Unset when the user keeps the SDK default (or the default is Pi, whose
-     *  model is collected in collectPiConfig). */
-    defaultModel?: string;
-  };
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
-  github?: GitHubConfig;
-  telegram?: TelegramConfig;
-  slack?: SlackConfig;
-  botDisplayName: string;
-}
-
-type GitHubConfig = {
-  webhookSecret: string;
-  allowedUsers: string;
-  botMention?: string;
-} & (
-  | { mode: 'pat'; token: string }
-  | {
-      mode: 'app';
-      appId: string;
-      slug?: string;
-      privateKey: { source: 'path' | 'inline'; value: string };
-    }
-);
-
 export const GITHUB_APP_KEYS = [
   ...GITHUB_APP_CREDENTIAL_KEYS,
   'GITHUB_APP_CLIENT_ID',
@@ -225,24 +178,6 @@ function hasCompleteAppCredential(env: Record<string, string | undefined>): bool
   );
 }
 
-interface TelegramConfig {
-  botToken: string;
-  allowedUserIds: string;
-}
-
-interface SlackConfig {
-  botToken: string;
-  appToken: string;
-  allowedUserIds: string;
-}
-
-interface CodexTokens {
-  idToken: string;
-  accessToken: string;
-  refreshToken: string;
-  accountId: string;
-}
-
 interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
@@ -252,18 +187,6 @@ interface ExistingConfig {
     telegram: boolean;
     slack: boolean;
   };
-}
-
-interface SetupOptions {
-  /** Environment before CLI startup overlays the Archon env files. */
-  inheritedEnv?: NodeJS.ProcessEnv;
-  spawn?: boolean;
-  providers?: readonly string[];
-  repoPath: string;
-  /** Which archon-owned file to target. Default: 'home'. */
-  scope?: 'home' | 'project';
-  /** Skip merge and overwrite the target wholesale (backup still written). Default: false. */
-  force?: boolean;
 }
 
 interface SpawnResult {
@@ -486,10 +409,7 @@ async function collectPiConfig(): Promise<{
     options: PI_BACKENDS.map(b => ({ value: b.id, label: b.label, hint: b.hint })),
   });
 
-  if (isCancel(backendChoice)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(backendChoice)) cancelSetup();
 
   const backend = PI_BACKENDS.find(b => b.id === backendChoice);
   if (!backend) {
@@ -506,10 +426,7 @@ async function collectPiConfig(): Promise<{
     validate: () => undefined,
   });
 
-  if (isCancel(apiKey)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(apiKey)) cancelSetup();
 
   const key = apiKey.trim();
 
@@ -604,10 +521,7 @@ async function confirmModelTiers(provider: string): Promise<void> {
       message: `Use the built-in model tiers for ${provider}? (${rows.join(', ')})`,
       initialValue: true,
     });
-    if (isCancel(useDefaults)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(useDefaults)) cancelSetup();
     if (!useDefaults) {
       note(
         'Set your own tiers with `archon ai tier set <tier> <provider> <model>`\n' +
@@ -661,10 +575,7 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
     options: buildDefaultModelChoices(provider, currentModel),
   });
 
-  if (isCancel(choice)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(choice)) cancelSetup();
 
   if (choice === KEEP_MODEL) return undefined;
 
@@ -673,10 +584,7 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
       message: `Model id for ${provider}:`,
       placeholder: provider === 'codex' ? 'gpt-5.6-sol' : 'claude-sonnet-4-6',
     });
-    if (isCancel(typed)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(typed)) cancelSetup();
     // clack's text() is typed as string but resolves undefined on an empty
     // submit — guard like the docs-path prompt does. Empty input = same as
     // keeping the default (guide, never gate).
@@ -756,10 +664,7 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
       message: `Found Claude Code at ${detected} ${suffix}. Write this to CLAUDE_BIN_PATH?`,
       initialValue: true,
     });
-    if (isCancel(useDetected)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(useDetected)) cancelSetup();
     if (useDetected) return detected;
   }
 
@@ -782,10 +687,7 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
     placeholder: nativeExample,
   });
 
-  if (isCancel(customPath)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(customPath)) cancelSetup();
 
   const trimmed = (customPath ?? '').trim();
   if (!trimmed) return undefined;
@@ -835,10 +737,7 @@ async function collectClaudeAuth(): Promise<{
     ],
   });
 
-  if (isCancel(authType)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(authType)) cancelSetup();
 
   if (authType === 'apiKey') {
     const apiKey = await password({
@@ -851,10 +750,7 @@ async function collectClaudeAuth(): Promise<{
       },
     });
 
-    if (isCancel(apiKey)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(apiKey)) cancelSetup();
 
     return { authType: 'apiKey', apiKey };
   }
@@ -870,10 +766,7 @@ async function collectClaudeAuth(): Promise<{
       },
     });
 
-    if (isCancel(oauthToken)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(oauthToken)) cancelSetup();
 
     return { authType: 'oauthToken', oauthToken };
   }
@@ -893,10 +786,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
       message: 'Found existing Codex auth at ~/.codex/auth.json. Use it?',
     });
 
-    if (isCancel(useExisting)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(useExisting)) cancelSetup();
 
     if (useExisting) {
       return existingAuth;
@@ -917,10 +807,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     message: 'Enter Codex tokens manually?',
   });
 
-  if (isCancel(enterManually)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(enterManually)) cancelSetup();
 
   if (!enterManually) {
     return null;
@@ -934,10 +821,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     },
   });
 
-  if (isCancel(idToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(idToken)) cancelSetup();
 
   const accessToken = await password({
     message: `Enter ${CODEX_SETUP_ENV.accessToken.name}:`,
@@ -947,10 +831,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     },
   });
 
-  if (isCancel(accessToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(accessToken)) cancelSetup();
 
   const refreshToken = await password({
     message: `Enter ${CODEX_SETUP_ENV.refreshToken.name}:`,
@@ -960,10 +841,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     },
   });
 
-  if (isCancel(refreshToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(refreshToken)) cancelSetup();
 
   const accountId = await text({
     message: `Enter ${CODEX_SETUP_ENV.accountId.name}:`,
@@ -973,10 +851,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     },
   });
 
-  if (isCancel(accountId)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(accountId)) cancelSetup();
 
   return {
     idToken,
@@ -1018,10 +893,7 @@ export async function selectSetupProviders(
     })
 ): Promise<string[]> {
   const selection = providers ?? (await ask());
-  if (isCancel(selection)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(selection)) cancelSetup();
   if (typeof selection === 'symbol') throw new Error('Invalid provider selection');
   const ids = [...new Set(selection)];
   for (const id of ids) {
@@ -1107,10 +979,7 @@ export async function collectAIConfig(
       options: providerChoices,
     });
 
-    if (isCancel(defaultChoice)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(defaultChoice)) cancelSetup();
 
     defaultAssistant = defaultChoice;
   } else if (selectedProviders.length === 1) {
@@ -1158,10 +1027,7 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
     required: false,
   });
 
-  if (isCancel(platforms)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(platforms)) cancelSetup();
 
   return {
     github: platforms.includes('github'),
@@ -1182,10 +1048,7 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
       { value: 'app', label: 'GitHub App', hint: 'Recommended for teams' },
     ],
   });
-  if (isCancel(mode)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(mode)) cancelSetup();
   return mode === 'app' ? collectGitHubAppConfig() : collectGitHubPatConfig();
 }
 
@@ -1202,10 +1065,7 @@ async function collectGitHubAppConfig(): Promise<GitHubConfig> {
         ? undefined
         : 'Enter a positive decimal App ID',
   });
-  if (isCancel(appId)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(appId)) cancelSetup();
   const source = await select({
     message: 'GitHub App private key source?',
     options: [
@@ -1213,10 +1073,7 @@ async function collectGitHubAppConfig(): Promise<GitHubConfig> {
       { value: 'inline', label: 'Inline PEM', hint: 'Use literal \\n for line breaks' },
     ],
   });
-  if (isCancel(source)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(source)) cancelSetup();
   const resolveKeyPath = (value: string): string => resolve(expandTilde(value.trim()));
   const validateKey = (value: string | undefined): string | undefined => {
     if (!value?.trim()) return 'A private key is required';
@@ -1235,24 +1092,15 @@ async function collectGitHubAppConfig(): Promise<GitHubConfig> {
     source === 'path'
       ? await text({ message: 'GitHub App private key path:', validate: validateKey })
       : await password({ message: 'GitHub App private key (PEM):', validate: validateKey });
-  if (isCancel(key)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(key)) cancelSetup();
   const webhookSecret = await password({
     message: 'GitHub webhook secret:',
     validate: value =>
       value?.trim() ? undefined : 'Enter the secret configured on your GitHub App',
   });
-  if (isCancel(webhookSecret)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(webhookSecret)) cancelSetup();
   const slug = await text({ message: 'GitHub App slug (optional):' });
-  if (isCancel(slug)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(slug)) cancelSetup();
   return {
     mode: 'app',
     appId: appId.trim(),
@@ -1272,10 +1120,7 @@ async function collectGitHubAllowedUsers(): Promise<string> {
     placeholder: 'username1,username2',
   });
 
-  if (isCancel(allowedUsers)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(allowedUsers)) cancelSetup();
   return allowedUsers;
 }
 
@@ -1306,10 +1151,7 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
     },
   });
 
-  if (isCancel(token)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(token)) cancelSetup();
 
   // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
   // create`, `gh pr edit`) need this even if the PAT is set, because they call
@@ -1369,10 +1211,7 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
     message: 'Do you want to set a custom @mention name? (Default: archon)',
   });
 
-  if (isCancel(customMention)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(customMention)) cancelSetup();
 
   let botMention: string | undefined;
   if (customMention) {
@@ -1386,10 +1225,7 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
       },
     });
 
-    if (isCancel(mention)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(mention)) cancelSetup();
 
     botMention = mention;
   }
@@ -1441,10 +1277,7 @@ async function collectTelegramConfig(): Promise<TelegramConfig> {
     },
   });
 
-  if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(botToken)) cancelSetup();
 
   // Do NOT set required: true — clack's text() blocks the enter key when
   // required is true and the value is empty, which traps the user. Validate
@@ -1454,10 +1287,7 @@ async function collectTelegramConfig(): Promise<TelegramConfig> {
     placeholder: '123456789,987654321',
   });
 
-  if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(allowedUserIds)) cancelSetup();
 
   if (!allowedUserIds?.trim()) {
     log.warning(
@@ -1505,10 +1335,7 @@ async function collectSlackConfig(): Promise<SlackConfig> {
     },
   });
 
-  if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(botToken)) cancelSetup();
 
   const appToken = await password({
     message: 'Enter your Slack App Token (xapp-...):',
@@ -1520,20 +1347,14 @@ async function collectSlackConfig(): Promise<SlackConfig> {
     },
   });
 
-  if (isCancel(appToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(appToken)) cancelSetup();
 
   const allowedUserIds = await text({
     message: 'Enter allowed Slack user IDs (comma-separated, or leave empty for all):',
     placeholder: 'U12345678,U87654321',
   });
 
-  if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(allowedUserIds)) cancelSetup();
 
   return {
     botToken,
@@ -1550,10 +1371,7 @@ async function collectBotDisplayName(): Promise<string> {
     message: 'Do you want to set a custom bot display name? (Default: Archon)',
   });
 
-  if (isCancel(customName)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(customName)) cancelSetup();
 
   if (!customName) {
     return 'Archon';
@@ -1568,10 +1386,7 @@ async function collectBotDisplayName(): Promise<string> {
     },
   });
 
-  if (isCancel(name)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(name)) cancelSetup();
 
   return name;
 }
@@ -2161,20 +1976,6 @@ export function spawnTerminalWithSetup(
 // =============================================================================
 
 /**
- * Ends setup early. Thrown instead of calling `process.exit` so the CLI's
- * `main()` returns the code through its `finally`, which flushes telemetry.
- */
-class SetupExit extends Error {
-  constructor(readonly exitCode: 0 | 1) {
-    super(`setup exited with ${exitCode}`);
-  }
-}
-
-function exitSetup(exitCode: 0 | 1): never {
-  throw new SetupExit(exitCode);
-}
-
-/**
  * Main setup command entry point. Resolves to the process exit code.
  */
 export async function setupCommand(options: SetupOptions): Promise<number> {
@@ -2269,10 +2070,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
       ],
     });
 
-    if (isCancel(modeChoice)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(modeChoice)) cancelSetup();
 
     mode = modeChoice as SetupMode;
   }
@@ -2500,10 +2298,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     initialValue: true,
   });
 
-  if (isCancel(shouldCopySkill)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  if (isCancel(shouldCopySkill)) cancelSetup();
 
   let skillInstalledPath: string | null = null;
   let skillInstalledBase: string | null = null;
@@ -2516,10 +2311,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
       placeholder: options.repoPath,
     });
 
-    if (isCancel(skillTargetRaw)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
+    if (isCancel(skillTargetRaw)) cancelSetup();
 
     s.start('Installing Archon skill...');
     try {

@@ -47,6 +47,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     commands: [['bun', 'run', 'lint']],
   },
   {
+    id: 'ratchet',
+    label: 'Touched functions and files are no more complex or longer than on the base',
+    commands: [['bun', 'run', 'check:ratchet']],
+  },
+  {
     id: 'format',
     label: 'Biome formatting',
     commands: [['bun', 'run', 'format:check']],
