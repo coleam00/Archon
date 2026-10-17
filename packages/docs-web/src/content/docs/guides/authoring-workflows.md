@@ -287,7 +287,8 @@ Cancelling a run that `archon serve` executes ends the process tree of each of t
 running host `bash:` and `script:` nodes and `until_bash` checks within about a second
 (`SIGKILL` to the node's process group on macOS and Linux, `taskkill /T /F` on Windows), and
 records the node failed as cancelled. Other runs' processes are not touched. A process that
-left the node's group with `setsid` escapes, and a container node's command is not reached.
+left the node's group with `setsid` escapes. On Windows, background work whose node process
+already exited is not reached. A container node's command is not reached.
 Cancelling a detached run ends its owner's process group, nodes included.
 
 ### Addressable session ancestry
@@ -2234,8 +2235,10 @@ sub-pipeline.**
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
   run).
 - **Cancel cascade.** Abandoning the parent cancels its non-terminal descendants
-  cooperatively (their executors abort at the next status check, within ~10s — there is no
-  hard subprocess kill yet).
+  cooperatively: their executors abort at the next status check, within ~10s. A running
+  host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
+  under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
+  detached run ends its owner's process group.
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its

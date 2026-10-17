@@ -241,8 +241,8 @@ export async function runSubprocess(
     endTreeOnTimeout?: true;
     /**
      * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
-     * host node. Any other node is ended by its owner's own cancel, so the signal is
-     * ignored there.
+     * host node. An unrecorded (detached) node is ended by its owner's group kill; a
+     * container node's command is not ended.
      */
     abortSignal?: AbortSignal;
     env: NodeJS.ProcessEnv;
@@ -459,10 +459,10 @@ export async function execOwnedProcessGroup(
   const abort = (): void => {
     cancelled = true;
     clearTimeout(timer);
-    // Unlike `stop`, and like the owner's `end()`, this still signals a group whose root
-    // exited: until `close`, a background job can hold that group, and its PID stays
-    // reserved while the group lives.
-    if (!termination && rootPid !== undefined) endTree(rootPid, 'SIGKILL');
+    // Unlike `stop`, a POSIX abort still signals a group whose root exited: until `close`,
+    // a background job can hold that group, and its PID stays reserved while the group
+    // lives. Windows reserves no PID once the root exits, so taskkill could end a reused one.
+    if (!termination && rootPid !== undefined && (posix || !exited)) endTree(rootPid, 'SIGKILL');
     child.stdout?.destroy();
     child.stderr?.destroy();
   };

@@ -40120,6 +40120,68 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     ).toBe(1);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'a cancel ends the resumed loop_group.until_bash tree and stops the group cancelled',
+    async () => {
+      const store = createEscalationStore('run-escalation-cancel');
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        existsSync(join(testDir, 'started')) ? 'cancelled' : 'running'
+      );
+      const approvedDecision = { decision: 'approve', text: '' };
+      const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+        ['grp.work', { output: 'work output' }],
+        [
+          'grp.check',
+          { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
+        ],
+      ]);
+      const workflowRun = makeWorkflowRun('run-escalation-cancel', {
+        metadata: {
+          approval: {
+            nodeId: 'grp',
+            message: 'Continue?',
+            type: 'approval',
+            bodyGateId: 'check',
+            iteration: 1,
+            decisions: [{ id: 'approve' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          } satisfies ApprovalContext,
+        },
+      });
+      const workflow = gateTerminatedLoopGroupWorkflow();
+      const group = workflow.nodes[0];
+      if (group?.kind !== 'loop_group') throw new Error('expected group');
+      group.loop_group.until_bash = 'touch started; (sleep 2; touch leaked) & wait';
+
+      const trees = recordNodeProcessTrees('server');
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: ready(workflow),
+            workflowRun,
+            priorCompletedNodes,
+          })
+        );
+      } finally {
+        trees.release();
+      }
+      await new Promise(resolve => setTimeout(resolve, 2500));
+
+      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'grp',
+          data: expect.objectContaining({ error: 'Workflow cancelled', failure_kind: 'cancelled' }),
+        })
+      );
+      expect(existsSync(join(testDir, 'leaked'))).toBe(false);
+    },
+    testTimeout(15000)
+  );
+
   it('resuming after a non-completing decision advances to a fresh iteration, with the text available via $LOOP_PREV', async () => {
     mockSendQueryDag.mockClear();
     let seenPrompt: string | undefined;
