@@ -80,7 +80,7 @@ nodes:
   # The target dependency is the work, so implement's own lockfile rule (update it
   # only for a dependency the work order changes) already covers this order.
   - id: deliver
-    include: archon-deliver
+    include: archon-deliver-block
     with:
       errors: "$INPUTS.errors"
       work: >-

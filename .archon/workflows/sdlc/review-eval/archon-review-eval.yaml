@@ -19,7 +19,7 @@ inputs:
 
 nodes:
   - id: review
-    include: archon-review
+    include: archon-review-block
     with:
       work_order: "$INPUTS.work_order"
 

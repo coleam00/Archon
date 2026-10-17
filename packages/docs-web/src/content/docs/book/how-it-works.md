@@ -14,15 +14,15 @@ Let's trace exactly what happened when you ran `archon-ship`. What looked like o
 
 ## The Workflow Definition
 
-Here's the YAML you ran, abridged. It lives in Archon's bundled `sdlc` pack at `.archon/workflows/sdlc/ship/archon-ship.yaml`:
+`archon-ship` runs its stages as one block, `archon-ship-block`, and adds one thing around it: when the run stops where only a person can take it forward, such as a question triage or the planner could not settle or a delivery that ended not ready, it pauses as an attention item and continues on the answer. Here's the block, abridged. It lives in Archon's bundled `sdlc` pack at `.archon/workflows/sdlc/ship/archon-ship-block.yaml`:
 
 ```yaml
-name: archon-ship
+name: archon-ship-block
 
 nodes:
   # STAGE 1: TRIAGE. Check the issue against the current code and pick a route
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
 
   # STAGE 2: INVESTIGATE or PLAN, depending on the route triage chose
   - id: inv
@@ -36,13 +36,13 @@ nodes:
     when: "$triage.output.route == 'plan'"
 
   - id: planned
-    include: archon-plan
+    include: archon-plan-block
     depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
   # STAGE 3: DELIVER. Rounds of implement, draft PR, review; then CI flips it ready
   - id: deliver
-    include: archon-deliver
+    include: archon-deliver-block
     depends_on: [triage, inv, planned]
     trigger_rule: none_failed_min_one_success
     when: "$triage.output.route == 'deliver' || ..."
@@ -61,13 +61,13 @@ That's the shape of it. Each `include:` node pulls in another bundled workflow, 
 
 | Stage | Workflow | What the AI Did | Artifact Produced |
 |-------|----------|-----------------|-------------------|
-| Triage | `archon-triage` | Read the issue, checked its claims against the current code, and chose a route | `triage.md` |
+| Triage | `archon-triage-block` | Read the issue, checked its claims against the current code, and chose a route | `triage.md` |
 | Investigate | `archon-investigate` | For an unknown cause: reproduced the problem and proved the root cause | `investigation.md` |
 | Intel | `intel` agent (plan route) | Judged whether usage data could change a design call, and said so when no data source is connected | `intel.md` |
-| Plan | `archon-plan` | For an undecided shape: made the design calls from the project's own documents, citing what settled each one, and stopped with the open questions when a call needs a person | `plan.md` |
+| Plan | `archon-plan-block` | For an undecided shape: made the design calls from the project's own documents, citing what settled each one, and stopped with the open questions when a call needs a person | `plan.md` |
 | Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran focused checks on what it changed, committed | `implementation.md` |
 | Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened a draft PR | Draft PR on GitHub |
-| Review | `archon-review` (inside deliver) | Ran the review lenses a route agent picked; open findings went back to the implementer for another round | PR comment |
+| Review | `archon-review-block` (inside deliver) | Ran the review lenses a route agent picked; open findings went back to the implementer for another round | PR comment |
 | Simplify | `archon-simplify` (inside deliver) | Once a review passed, looked for a smaller shape; the implementer adopted or declined each finding | `shape.md` |
 | CI | `ci` agent (inside deliver) | Marked the PR ready, waited for CI (the project's full validation), and put the PR back in draft if CI was red; a red the change caused, or a conflict with the base, went back to the implementer and review | PR checks |
 

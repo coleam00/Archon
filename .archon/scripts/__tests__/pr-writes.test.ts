@@ -749,7 +749,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
   });
 });
 
-describe('markPrDraft uses the selected source', () => {
+describe('setPrDraft into draft uses the selected source', () => {
   const script = '../../scripts/__tests__/mark-pr-draft';
   it('converts through gh and reads back draft state', () => {
     const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false } } });

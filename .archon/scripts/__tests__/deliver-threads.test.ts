@@ -182,7 +182,7 @@ describe("deliver's thread wiring", () => {
     output_format?: { properties: Record<string, unknown> };
     loop_group?: { nodes: Node[] };
   }
-  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'deliver/archon-deliver.yaml'), 'utf8')) as { nodes: Node[] };
+  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'deliver/archon-deliver-block.yaml'), 'utf8')) as { nodes: Node[] };
   const round = workflow.nodes.find(node => node.id === 'rounds')?.loop_group?.nodes ?? [];
   const node = (id: string): Node => {
     const found = round.find(candidate => candidate.id === id);
