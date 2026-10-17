@@ -8,7 +8,7 @@
  * mocks the Pi SDK process-wide.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -105,6 +105,13 @@ beforeAll(() => {
     apiKey: 'ext-key',
     models: [{ id: 'x1', name: 'x1', reasoning: false, input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 }],
+  });
+  pi.registerTool({
+    name: 'ext_echo',
+    label: 'ext_echo',
+    description: 'Echo',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => ({ content: [{ type: 'text', text: 'echo' }] }),
   });
 }
 `
@@ -275,7 +282,7 @@ test('persisted Pi resume and fork report only the current prompt usage', async 
   }
 });
 
-test('a resumed or forked Pi node without tool restrictions gets the default tools, not the tools of the node it resumes', async () => {
+test('a resumed or forked Pi node without tool restrictions gets the tools of a fresh node, not those of the node it resumes', async () => {
   const toolsPerRequest: string[][] = [];
   const stub = Bun.serve({
     port: 0,
@@ -286,7 +293,9 @@ test('a resumed or forked Pi node without tool restrictions gets the default too
     },
   });
   const modelsPath = join(agentDir, 'models.json');
+  const settingsPath = join(agentDir, 'settings.json');
   const savedModels = readFileSync(modelsPath, 'utf8');
+  writeFileSync(settingsPath, JSON.stringify({ defaultTools: ['+grep'] }));
   writeFileSync(
     modelsPath,
     JSON.stringify({
@@ -315,19 +324,18 @@ test('a resumed or forked Pi node without tool restrictions gets the default too
       }
       throw new Error('missing Pi result');
     }
+    await turn({});
     const restricted = await turn({ allowed_tools: ['read'] });
     expect(restricted.sessionId).toBeDefined();
     for (const forkSession of [false, true]) {
       const result = await turn({}, restricted.sessionId, forkSession);
       expect(result.resumed).toBe(true);
     }
-    expect(toolsPerRequest).toEqual([
-      ['read'],
-      ['bash', 'edit', 'read', 'write'],
-      ['bash', 'edit', 'read', 'write'],
-    ]);
+    const fresh = ['bash', 'edit', 'ext_echo', 'grep', 'read', 'write'];
+    expect(toolsPerRequest).toEqual([fresh, ['ext_echo', 'read'], fresh, fresh]);
   } finally {
     void stub.stop(true);
     writeFileSync(modelsPath, savedModels);
+    rmSync(settingsPath);
   }
 });

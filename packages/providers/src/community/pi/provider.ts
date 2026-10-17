@@ -766,7 +766,13 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools, buildDefaultPiTools },
+      {
+        resolvePiSkills,
+        resolvePiThinkingLevel,
+        resolvePiTools,
+        buildDefaultPiTools,
+        freshPiToolNames,
+      },
       { createPiResourceLoader, getOrCreateReloadedExtensionLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
@@ -1156,20 +1162,13 @@ export class PiProvider implements IAgentProvider {
       // In-process native tools (e.g. manage_run) via Pi customTools. Because
       // setting customTools forces noTools:'builtin' (dropping Pi's defaults), the
       // base tool set must be re-supplied alongside the native defs.
-      //
-      // A resumed or forked session needs the same explicit defaults: given
-      // neither `tools` nor `noTools`, Pi 1.3+ restores the session's active
-      // tools, so an unrestricted node would inherit the restriction of the node
-      // that wrote the session.
       const nativeToolDefs =
         requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
           ? buildPiNativeToolDefinitions(requestOptions.nativeTools)
           : [];
       const baseTools =
         filteredTools ??
-        (nativeToolDefs.length > 0 || resumed
-          ? buildDefaultPiTools(cwd, requestOptions?.env)
-          : undefined);
+        (nativeToolDefs.length > 0 ? buildDefaultPiTools(cwd, requestOptions?.env) : undefined);
       const piCustomTools = baseTools && [...baseTools, ...nativeToolDefs];
 
       // A caller that aborted (the idle watchdog, a cancel) has stopped reading, so a
@@ -1202,7 +1201,7 @@ export class PiProvider implements IAgentProvider {
           // `noTools: "builtin"` suppresses the default built-in set so our
           // filtered (and env-injected bash) list isn't doubled up (the
           // suppression-behavior bug was fixed in pi 0.70.0). When piCustomTools
-          // is undefined (a fresh, unrestricted session) we keep Pi's defaults.
+          // is undefined (an unrestricted node) we keep Pi's defaults.
           //
           // `customTools` is also the only path through which we can attach a
           // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
@@ -1213,6 +1212,15 @@ export class PiProvider implements IAgentProvider {
             ? { customTools: piCustomTools, noTools: 'builtin' as const }
             : {}),
         });
+
+        // Given neither `tools` nor `noTools`, Pi 1.3+ restores a reopened
+        // session's tools from its transcript, so an unrestricted node would
+        // inherit the restriction of the node that wrote the session.
+        if (resumed && piCustomTools === undefined) {
+          session.setActiveToolsByName(
+            freshPiToolNames(session, settingsManager.getDefaultTools())
+          );
+        }
 
         // Extension models aren't in the static catalog — skip the fallback warning.
         if (modelFallbackMessage && model) {
