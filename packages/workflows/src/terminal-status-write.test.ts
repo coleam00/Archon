@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * The wrapper is the only place a terminal status-write failure is diagnosed.
  *

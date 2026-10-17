@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { afterAll, describe, expect, mock, test } from 'bun:test';

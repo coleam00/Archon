@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Tests for the legacy `.archon/state/` migration warning (#2200).
  *

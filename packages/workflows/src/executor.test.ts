@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import * as checkout from './checkout-observation';
 import { prepareRunAiConfiguration } from './run-preflight';
 import type { WorkflowEmitterEvent } from './event-emitter';

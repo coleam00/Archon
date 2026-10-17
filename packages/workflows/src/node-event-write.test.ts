@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir, readFile } from 'node:fs/promises';
