@@ -3,14 +3,17 @@
  * answers from the status table in `INTAKE_RUN_STATUSES`, `workflow runs --json` from
  * the rows in `RUN_LISTING`; every other command runs the real CLI.
  *
+ * When `ARCHON_CALL_LOG` names a file, each call's argv is appended to it as a JSON line.
+ *
  * The real CLI runs as a surface write, outside any run, in `INTAKE_STATE_CWD` when
  * set: inside a run it would refuse with exit 5, because its store has no such run.
  */
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
+if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(argv)}\n`);
 if (argv[0] === 'workflow' && argv[1] === 'runs') {
   // The project's run listing, from `RUN_LISTING` (a JSON array of run rows).
   const runs = JSON.parse(process.env.RUN_LISTING ?? '[]') as unknown[];

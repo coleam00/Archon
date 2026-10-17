@@ -291,5 +291,7 @@ export interface IStateDocumentStore {
     scope: StateScope,
     options?: { prefix?: string }
   ): Promise<StateDocumentSummary[]>;
+  /** The latest revision of every live document, values included, ordered by name. */
+  getStateDocuments(scope: StateScope, options?: { prefix?: string }): Promise<StateRevision[]>;
   pruneStateRevisions(olderThanDays: number): Promise<{ count: number }>;
 }

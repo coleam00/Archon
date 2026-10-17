@@ -265,6 +265,9 @@ function createMockStore(): MockWorkflowStore {
     listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
       throw new Error('Unexpected listStateDocuments');
     }),
+    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
+      throw new Error('Unexpected getStateDocuments');
+    }),
     pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
       throw new Error('Unexpected pruneStateRevisions');
     }),
@@ -22792,6 +22795,83 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
   });
 });
 
+describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-exec-stop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  // The subprocess writes `started`, then waits on a grandchild that would write `leaked`.
+  // The store reports the run cancelled once `started` exists.
+  async function runUntilCancelled(
+    name: string,
+    nodeInput: unknown
+  ): Promise<{ store: MockWorkflowStore; leaked: boolean }> {
+    const store = createMockStore();
+    store.getWorkflowRunStatus.mockImplementation(async () =>
+      existsSync(join(testDir, 'started')) ? 'cancelled' : 'running'
+    );
+    const trees = recordNodeProcessTrees();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(name),
+          workflow: { name, nodes: [dagNodeSchema.parse(nodeInput)] },
+        })
+      );
+    } finally {
+      trees.release();
+    }
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    return { store, leaked: existsSync(join(testDir, 'leaked')) };
+  }
+
+  // Each case starts a background job that would write `leaked` after the cancel.
+  it.skipIf(process.platform === 'win32').each([
+    [
+      'bash',
+      { id: 'hang', bash: 'touch started; (sleep 2; touch leaked) & wait' },
+      "Bash node 'hang' cancelled",
+    ],
+    [
+      'loop until_bash',
+      {
+        id: 'hang',
+        loop: {
+          prompt: 'work',
+          fresh_context: false,
+          max_iterations: 2,
+          until_bash: 'touch started; (sleep 2; touch leaked) & wait',
+        },
+      },
+      'Command cancelled',
+    ],
+  ] as const)(
+    'ends the %s tree and records the node cancelled',
+    async (kind, nodeInput, error) => {
+      const { store, leaked } = await runUntilCancelled(`stop-${kind}`, nodeInput);
+      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'hang',
+          data: expect.objectContaining({ error, failure_kind: 'cancelled' }),
+        })
+      );
+      expect(leaked).toBe(false);
+    },
+    testTimeout(15000)
+  );
+});
+
 describe('resolveNodeMcp', () => {
   let testDir: string;
   const claude = getProviderCapabilities('claude');
@@ -40297,6 +40377,78 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
   });
+
+  it('passes no deadline to the resumed until_bash probe when the group declares no timeout', async () => {
+    mockSendQueryDag.mockClear();
+    const store = createEscalationStore('run-escalation-no-timeout');
+    const approvedDecision = { decision: 'approve', text: '' };
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['grp.work', { output: 'work output' }],
+      [
+        'grp.check',
+        { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
+      ],
+    ]);
+    const workflowRun = makeWorkflowRun('run-escalation-no-timeout', {
+      metadata: {
+        approval: {
+          nodeId: 'grp',
+          message: 'Continue?',
+          type: 'approval',
+          bodyGateId: 'check',
+          iteration: 1,
+          decisions: [{ id: 'approve' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        } satisfies ApprovalContext,
+      },
+    });
+    const undeclaredWorkflow: WorkflowDefinition = {
+      ...gateTerminatedLoopGroupWorkflow(),
+      nodes: [
+        dagNodeSchema.parse({
+          id: 'grp',
+          loop_group: {
+            until_bash: 'echo UNDECLARED; [ $check.output.decision = "approve" ]',
+            max_iterations: 5,
+            nodes: [
+              { id: 'work', prompt: 'do work' },
+              {
+                id: 'check',
+                depends_on: ['work'],
+                approval: {
+                  message: 'Continue?',
+                  decisions: [{ id: 'approve' }, { id: 'revise' }],
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    };
+
+    const execSpy = spyOn(git, 'execFileAsync');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: ready(undeclaredWorkflow),
+          workflowRun,
+          priorCompletedNodes,
+        })
+      );
+      const resumeProbe = execSpy.mock.calls.find(call =>
+        (call[1] as string[]).some(arg => arg.includes('UNDECLARED'))
+      );
+      expect(resumeProbe).toBeDefined();
+      expect(resumeProbe?.[2]?.timeout).toBeUndefined();
+    } finally {
+      execSpy.mockRestore();
+    }
+    // No fresh iteration ran, so the probe above came from the resume branch.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
 });
 
 // A pause asks about the work; it is not the work. The group's output reads past it
@@ -43658,12 +43810,10 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
   });
 });
 
-// A loop predicate could not declare a time budget: every `until_bash` execution path passed a
-// bare SUBPROCESS_DEFAULT_TIMEOUT while the ordinary bash/script paths already resolved
-// `node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT`. Nodes are built through the real schema, so
-// each test proves the whole chain (schema -> transform -> executor), not just the
-// executor's fallback expression.
-describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
+// Every subprocess call site passes the node's own timeout, and only that. Nodes are built
+// through the real schema, so each test proves the whole chain (schema -> transform ->
+// executor).
+describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => {
   let testDir: string;
 
   beforeEach(async () => {
@@ -43679,15 +43829,15 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
     await removeTempTree(testDir);
   });
 
-  // runSubprocess is local/unexported — spy on the module boundary it actually calls
-  // (@archon/git's execFileAsync), the same way the script-injection tests above do.
+  // Spy on the module boundary runSubprocess calls (@archon/git's execFileAsync), the same
+  // way the script-injection tests above do.
   function spyOnExec() {
     return spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
   }
 
   function untilBashTimeout(execSpy: ReturnType<typeof spyOnExec>): number | undefined {
     const call = execSpy.mock.calls.find(c => (c[1] as string[])[0] === '-c') as
-      | [string, string[], { timeout: number }]
+      | [string, string[], { timeout?: number }]
       | undefined;
     expect(call).toBeDefined();
     return call?.[2]?.timeout;
@@ -43723,11 +43873,7 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
     }
   });
 
-  // Pins the `??` fallback the fix depends on: a loop node with NO declared timeout must
-  // still get SUBPROCESS_DEFAULT_TIMEOUT (120000). Guards against a future edit that
-  // replaces the resolution with a bare `node.timeout`, which would silently break every
-  // undeclared-timeout loop in every workflow.
-  it('falls back to the 120s default when a loop node declares no timeout', async () => {
+  it('passes no deadline when a loop node declares no timeout', async () => {
     const node = dagNodeSchema.parse({
       id: 'my-loop-no-timeout',
       loop: { prompt: 'Do a task.', until: 'NEVER_EMITTED', until_bash: 'true', max_iterations: 1 },
@@ -43750,7 +43896,7 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
         })
       );
 
-      expect(untilBashTimeout(execSpy)).toBe(120_000);
+      expect(untilBashTimeout(execSpy)).toBeUndefined();
     } finally {
       execSpy.mockRestore();
     }
@@ -43790,6 +43936,57 @@ describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
       expect(untilBashTimeout(execSpy)).toBe(600_000);
     } finally {
       execSpy.mockRestore();
+    }
+  });
+
+  // A node that declares no timeout reaches runSubprocess with no deadline. Spying there
+  // rather than at execFileAsync keeps the check platform-independent: on Windows bash and
+  // script nodes spawn through execOwnedProcessGroup. The loop until_bash site is covered
+  // above and the resumed loop_group probe in the '#2707 step 3' escalation block.
+  it.each([
+    ['bash node', { id: 'b', bash: 'echo UNDECLARED' }],
+    ['script node', { id: 's', script: 'console.log("UNDECLARED")', runtime: 'bun' }],
+    [
+      'loop_group until_bash',
+      {
+        id: 'g',
+        loop_group: {
+          until: 'NEVER_EMITTED',
+          until_bash: 'echo UNDECLARED',
+          max_iterations: 1,
+          nodes: [{ id: 'work', prompt: 'Do a task.', depends_on: [] }],
+        },
+      },
+    ],
+  ])('passes no deadline for an undeclared %s', async (_site, raw) => {
+    const node = dagNodeSchema.parse(raw);
+
+    const runSpy = spyOn(subprocess, 'runSubprocess').mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      credentialValues: [],
+    });
+    try {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'working on it' };
+        yield { type: 'result', sessionId: 'undeclared-timeout-session' };
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-undeclared-timeout', nodes: [node] },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+
+      const call = runSpy.mock.calls.find(c => c[2].some(arg => arg.includes('UNDECLARED')));
+      expect(call).toBeDefined();
+      expect(call?.[3].timeout).toBeUndefined();
+    } finally {
+      runSpy.mockRestore();
     }
   });
 });

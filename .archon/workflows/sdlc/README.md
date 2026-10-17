@@ -21,13 +21,9 @@ A guard here must protect an action the node it lives in takes.
 **Cut** a guard when it re-asserts an invariant something else already established.
 That belongs where it is established, once — not at each node that depends on it.
 
-**The test: if this pack's fixture suite cannot exercise the guard, it is not a
-guard. It is a comment — write it as one.**
-
-That test is mechanical and settles most arguments without debating threat models.
-A node the dry run cannot execute — a composed `bash:` node, for instance, which
-never receives its caller's `with:` values — can only ever be stubbed, so no
-fixture can show the guard working or catch it breaking.
+**The test: a guard names the real run it would have saved, or it stands in front
+of an irreversible action. Otherwise it is a comment; write it as one.** A guard
+does not earn its place by having a fixture that turns it red.
 
 ### Why this rule exists
 

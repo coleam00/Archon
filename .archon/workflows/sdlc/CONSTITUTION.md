@@ -20,7 +20,7 @@ Nodes talk through `output_format`, never through prose another node parses. Kee
 
 ## 5. Outcomes over routes
 
-Draw the workflow as nodes and outcomes before building it. Test each outcome once with a fixture. Don't add a fixture per route through the graph.
+Draw the workflow as nodes and outcomes before building it. A fixture shows an outcome a person cares about, once. Don't add a fixture per route through the graph, and don't pin a prompt's wording in one.
 
 ## 6. CI is one agent node
 
@@ -35,6 +35,8 @@ An agent tests, lints and type-checks the code it changed, nothing more. The pro
 The pack doesn't know a project's commands, branches, CI names or language. An agent discovers them and records them as typed output. Pack files carry no tracker references and no history; they describe what is true now.
 
 ## 9. Smaller is the default
+
+A workflow should be simple to write: a few nodes, a few prompts, and a script only where section 2 allows one. The pack is a set of workflows, not an application. When it grows its own store, lifecycle or test framework, cut it back.
 
 Before adding a node, look for one to delete. A structural change is drawn with the maintainer first, and benched against the current pack before it replaces it. The bench reports outcome correctness, wall clock and cost.
 
@@ -59,3 +61,11 @@ Adding a handler changes neither the pack's main path nor the engine.
 Pack policy, such as what triage accepts or when a pull request may merge, lives in markdown policy documents the project can reword. They work like the project's other sidecar documents: a judging node reads them at `.archon/sdlc/policy/<topic>.md`, falling back to the pack's default. The pack ships a default for each, and the project's own document replaces it whole. A policy document may be nothing but a pointer to documents the project already has, such as "Triage against `.archon/direction.md`, and against `docs/product/` for feature scope", and the agent reads what it points to.
 
 Each node names only the policy documents its decision needs; no policy goes to every node. Agents interpret policy prose, and nothing parses it. Anything that must be exact, such as label names, allow-lists of users or numeric caps, stays typed configuration.
+
+## 13. Tests check behavior, not structure
+
+The engine tests the workflow language: that `when:` gates, includes expand, loops stop and outputs validate. The pack doesn't test those again.
+
+A pack test checks what a script does at a tool boundary, such as writing an issue exactly once, reading back a pushed head, or merging only what was approved. Agent judgment is checked by evaluating the outcome, not with fixtures. Nothing tests a prompt's wording, the YAML's shape or the route a run takes. Pins like that make the pack harder to change and teach agents to satisfy the pins instead of reaching the outcome.
+
+Most pack files need no test. A prompt, a policy document, or a script with no tool-boundary behavior gets none. When a change breaks tests that only check structure, delete those tests.

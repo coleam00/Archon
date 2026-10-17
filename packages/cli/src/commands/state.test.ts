@@ -299,11 +299,16 @@ test('install scope is separate from the run project and keeps run attribution',
 
 test('outside a run, --project and --install address scopes without the cwd', async () => {
   const { host, root, output, store } = await fixture();
-  const call = (op: string, flags: Partial<Omit<StateCommandOptions, 'cwd'>>, input = '') =>
+  const call = (
+    op: string,
+    flags: Partial<Omit<StateCommandOptions, 'cwd'>>,
+    input = '',
+    name = 'notes/a'
+  ) =>
     stateCommand(
       host,
       op,
-      op === 'list' ? [] : ['notes/a'],
+      op === 'list' ? [] : [name],
       { cwd: root, ...flags },
       {
         env: {},
@@ -331,6 +336,16 @@ test('outside a run, --project and --install address scopes without the cwd', as
       },
     ],
   });
+  expect(
+    await call('put', { project: 'acme/widgets', ifRevision: '0' }, '{"n":2}', 'notes/b')
+  ).toBe(0);
+  expect(await call('delete', { project: 'acme/widgets' }, '', 'notes/b')).toBe(0);
+  expect(await call('list', { project: 'acme/widgets', prefix: 'notes/', values: true })).toBe(0);
+  expect(output.at(-1)).toEqual({
+    scope: { kind: 'project', key: 'acme/widgets' },
+    documents: [{ name: 'notes/a', revision: 1, value: { n: 1 } }],
+  });
+  expect(await call('get', { project: 'acme/widgets', values: true })).toBe(1);
   expect(await call('list', { install: true })).toBe(0);
   expect(output.at(-1)).toEqual({ scope: { kind: 'install' }, documents: [] });
   // A one-segment key is the install scope's storage key, never a project.

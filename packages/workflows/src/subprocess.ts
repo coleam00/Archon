@@ -68,12 +68,14 @@ export type RawSubprocessRejection = Error & {
    * never a timeout `on_timeout: skip` could pass over while the tree may still run.
    */
   treeSurvived?: true;
+  /** The node's run stopped and its tree was ended for it; never a timeout. */
+  cancelled?: true;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  if (error.treeSurvived) return false;
+  if (error.treeSurvived || error.cancelled) return false;
   return error.timedOut === true || (error.killed === true && error.code === null);
 }
 
@@ -122,14 +124,21 @@ interface NodeProcessRecorder {
 let nodeProcessRecorder: NodeProcessRecorder | undefined;
 
 /**
- * Record the root of every host node subprocess this process starts, so the run
- * owner's interrupt can end those trees before it exits (#3552). Each root leads its
- * own process group on POSIX; `taskkill /T` walks the tree from the PID on Windows.
+ * Record the root of every host node subprocess this process starts, so its trees can
+ * be ended. Each root leads its own process group on POSIX; `taskkill /T` walks the tree
+ * from the PID on Windows. A POSIX root also gets a watcher that ends its group when this
+ * process dies.
  *
- * Process-scoped on purpose: only a foreground CLI owner, which drives exactly one run
- * and holds the process-wide signal handlers for it, turns this on. A detached owner
- * must not: the cancel controller ends its nodes by killing the owner's process group,
- * which a node in its own group would escape. `archon serve` never records.
+ * Process-scoped on purpose, because process-group membership belongs to the owning
+ * process. Two owners turn this on:
+ * - A foreground CLI owner, which drives exactly one run and holds the process-wide
+ *   signal handlers for it, ends every tree through `end()` on interrupt, so a resume does
+ *   not overlap the interrupted attempt (#3552).
+ * - `archon serve` ends one run's trees through each node's `abortSignal` when that run
+ *   stops, and never calls `end()`.
+ *
+ * A detached owner must not record: the cancel controller ends its nodes by killing the
+ * owner's process group, which a node in its own group would escape.
  *
  * `end()` refuses every later node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
@@ -214,7 +223,8 @@ export async function runSubprocess(
   args: string[],
   options: {
     cwd: string;
-    timeout: number;
+    /** Absent means no deadline: the subprocess runs until it exits. */
+    timeout?: number;
     /** Host setup only: end the group on deadline, command exit, or owner death. */
     ownProcessGroup?: true;
     /**
@@ -225,6 +235,12 @@ export async function runSubprocess(
      * root only.
      */
     endTreeOnTimeout?: true;
+    /**
+     * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
+     * host node. An unrecorded (detached) node is ended by its owner's group kill; a
+     * container node's command is not ended.
+     */
+    abortSignal?: AbortSignal;
     env: NodeJS.ProcessEnv;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
@@ -274,6 +290,7 @@ export async function runSubprocess(
                 node: {
                   recorder: nodeProcessRecorder,
                   endTreeOnTimeout: options.endTreeOnTimeout === true,
+                  abortSignal: options.abortSignal,
                 },
               })
             : await execFileAsync(cmd, args, {
@@ -353,15 +370,20 @@ export async function execOwnedProcessGroup(
   args: string[],
   options: {
     cwd: string;
-    timeout: number;
+    timeout?: number;
     env: NodeJS.ProcessEnv;
     /**
      * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
      * jobs outlive the command, a deadline reports the SIGTERM documented for
      * `exit_code`) and make the tree endable through the recorder. The deadline SIGTERMs
-     * the whole tree when `endTreeOnTimeout` is set, the root only otherwise.
+     * the whole tree when `endTreeOnTimeout` is set, the root only otherwise. An abort
+     * SIGKILLs a recorded node's whole tree.
      */
-    node?: { recorder: NodeProcessRecorder | undefined; endTreeOnTimeout: boolean };
+    node?: {
+      recorder: NodeProcessRecorder | undefined;
+      endTreeOnTimeout: boolean;
+      abortSignal?: AbortSignal;
+    };
   }
 ): Promise<{ stdout: string; stderr: string }> {
   const { node } = options;
@@ -381,22 +403,26 @@ export async function execOwnedProcessGroup(
   let stderr = Buffer.alloc(0);
   let failure: RawSubprocessRejection | undefined;
   let timedOut = false;
+  let cancelled = false;
   let exited = false;
   let termination: Promise<void> | undefined;
   let terminationError: Error | undefined;
-  const stop = (endTree: boolean): void => {
-    // Never signal a group after its leader exited: that PID may already be reused.
-    if (termination || exited || child.pid === undefined) return;
-    if (!endTree) {
-      child.kill('SIGTERM');
-      return;
-    }
-    termination = terminateTree(child.pid, node ? 'SIGTERM' : 'SIGKILL').catch((error: unknown) => {
+  const endTree = (pid: number, signal: NodeJS.Signals): void => {
+    termination = terminateTree(pid, signal).catch((error: unknown) => {
       terminationError = error instanceof Error ? error : new Error(String(error));
       // `close` waits for the root, so a root left running would hang the caller. SIGKILL,
       // because a root that ignores SIGTERM would otherwise outlive the deadline.
       if (!exited) child.kill('SIGKILL');
     });
+  };
+  const stop = (whole: boolean): void => {
+    // Never signal a group after its leader exited: that PID may already be reused.
+    if (termination || exited || child.pid === undefined) return;
+    if (!whole) {
+      child.kill('SIGTERM');
+      return;
+    }
+    endTree(child.pid, node ? 'SIGTERM' : 'SIGKILL');
   };
   const rootPid = child.pid;
   if (recorder && rootPid !== undefined) {
@@ -417,12 +443,28 @@ export async function execOwnedProcessGroup(
       disarm();
     });
   }
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop(!node || node.endTreeOnTimeout);
+  const timer =
+    options.timeout === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          stop(!node || node.endTreeOnTimeout);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }, options.timeout);
+  const abortSignal = recorder ? node?.abortSignal : undefined;
+  const abort = (): void => {
+    cancelled = true;
+    clearTimeout(timer);
+    // Unlike `stop`, a POSIX abort still signals a group whose root exited: until `close`,
+    // a background job can hold that group, and its PID stays reserved while the group
+    // lives. Windows reserves no PID once the root exits, so taskkill could end a reused one.
+    if (!termination && rootPid !== undefined && (posix || !exited)) endTree(rootPid, 'SIGKILL');
     child.stdout?.destroy();
     child.stderr?.destroy();
-  }, options.timeout);
+  };
+  if (abortSignal?.aborted) abort();
+  else abortSignal?.addEventListener('abort', abort, { once: true });
   const collect = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
     const previous = stream === 'stdout' ? stdout : stderr;
     const buffer = Buffer.concat([previous, chunk.subarray(0, maxBuffer - previous.length)]);
@@ -452,6 +494,7 @@ export async function execOwnedProcessGroup(
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
   clearTimeout(timer);
+  abortSignal?.removeEventListener('abort', abort);
   child.stdin?.destroy();
   await termination;
   if (lifeline && child.pid !== undefined) {
@@ -463,9 +506,11 @@ export async function execOwnedProcessGroup(
   }
   if (terminationError) {
     failure ??= new Error(
-      node
-        ? `Command timed out after ${options.timeout} ms`
-        : 'Setup process group termination failed'
+      cancelled
+        ? 'Command cancelled'
+        : node
+          ? `Command timed out after ${options.timeout} ms`
+          : 'Setup process group termination failed'
     );
     failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
   }
@@ -473,13 +518,15 @@ export async function execOwnedProcessGroup(
   // child.kill reported for it, as documented for `exit_code`.
   const exit = node && termination && !posix ? { code: null, signal: 'SIGTERM' } : closed;
   const output = { stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') };
-  if (timedOut || failure || exit.code !== 0) {
+  if (timedOut || cancelled || failure || exit.code !== 0) {
     throw Object.assign(
       failure ??
         new Error(
           timedOut
             ? `Command timed out after ${options.timeout} ms`
-            : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
+            : cancelled
+              ? 'Command cancelled'
+              : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
         ),
       {
         ...output,
@@ -487,6 +534,7 @@ export async function execOwnedProcessGroup(
         signal: exit.signal,
         timedOut,
         ...(node && terminationError ? { treeSurvived: true as const } : {}),
+        ...(cancelled ? { cancelled: true as const } : {}),
         cmd: `${cmd} ${args.join(' ')}`,
         spawnargs: args,
       }

@@ -37,6 +37,7 @@ export interface StateCommandOptions {
   project?: string;
   install?: boolean;
   raw?: boolean;
+  values?: boolean;
 }
 
 // Scripts branch on these, never on message text.
@@ -89,6 +90,7 @@ export async function stateCommand(
       throw new Error('--limit is only valid for log');
     if (options.prefix !== undefined && command !== 'list')
       throw new Error('--prefix is only valid for list');
+    if (options.values && command !== 'list') throw new Error('--values is only valid for list');
     if (options.raw && !['get', 'put'].includes(command))
       throw new Error('--raw is only valid for get or put');
     if (options.install && options.project !== undefined)
@@ -235,12 +237,20 @@ export async function stateCommand(
           ),
         };
         break;
-      case 'list':
+      case 'list': {
+        const filter = prefix === undefined ? {} : { prefix };
         output = {
           scope,
-          documents: await store.listStateDocuments(scope, prefix === undefined ? {} : { prefix }),
+          documents: options.values
+            ? (await store.getStateDocuments(scope, filter)).map(row => ({
+                name: row.name,
+                revision: row.revision,
+                value: row.value,
+              }))
+            : await store.listStateDocuments(scope, filter),
         };
         break;
+      }
     }
     await write(output);
     return 0;

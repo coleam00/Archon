@@ -533,8 +533,9 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'state',
     subcommand: 'list',
-    spec: 'state list [--prefix <p>]',
-    description: 'List document names with their latest revision and writer, never values',
+    spec: 'state list [--prefix <p>] [--values]',
+    description:
+      'List document names with their latest revision and writer; --values returns live documents with values',
   },
   {
     command: 'forge',

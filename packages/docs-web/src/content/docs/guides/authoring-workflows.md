@@ -211,8 +211,8 @@ nodes:
 |-------|------|-------------|
 | `command` | string | Command name. Packaged workflows resolve it only from their own `commands/`; legacy workflows use shared repo → home → bundled lookup. Optional `with:` binds upstream values by name into the file's `$INPUTS.<name>` surface — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes) |
 | `prompt` | string | Inline prompt string |
-| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed |
-| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
+| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed |
+| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | **Deprecated.** Use `wait: { attention: <message>, form: approval }` instead. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
@@ -263,12 +263,12 @@ nodes:
 When a `bash:` or `script:` node on the host reaches its `timeout`, Archon signals the node's
 whole process tree before it reports the timeout, so the real work behind a wrapper such as
 `bun run` or `uv run` stops too. On Windows it runs `taskkill /T /F` on the node's process.
-On macOS and Linux a foreground `workflow run`, `workflow resume` or `trigger execute` starts
-the node in its own process group and sends `SIGTERM` to that group. A node under
-`archon serve` or a detached run shares its owner's process group, so on macOS and Linux its
-timeout still ends only the node's own process, and work it started in the background keeps
-running. `until_bash` checks end only their own process. A container node's timeout ends only
-the local `docker exec` client, so the command inside the container may keep running.
+On macOS and Linux `archon serve` and a foreground `workflow run`, `workflow resume` or
+`trigger execute` start the node in its own process group and send `SIGTERM` to that group. A
+node of a detached run shares its owner's process group, so on macOS and Linux its timeout
+still ends only the node's own process, and work it started in the background keeps running.
+`until_bash` checks end only their own process. A container node's timeout ends only the
+local `docker exec` client, so the command inside the container may keep running.
 
 Archon does not confirm that the tree is gone, so some work outlives a reported timeout:
 
@@ -282,6 +282,14 @@ Archon does not confirm that the tree is gone, so some work outlives a reported 
 If the tree cannot be ended, Archon kills the node's own process (`SIGKILL` on macOS and
 Linux) and the node fails with the termination error instead of timing out. It does not take
 `on_timeout: skip`, and dependents follow their `trigger_rule` as for any failed node.
+
+Cancelling a run that `archon serve` executes ends the process tree of each of that run's
+running host `bash:` and `script:` nodes and `until_bash` checks within about a second
+(`SIGKILL` to the node's process group on macOS and Linux, `taskkill /T /F` on Windows), and
+records the node failed as cancelled. Other runs' processes are not touched. A process that
+left the node's group with `setsid` escapes. On Windows, background work whose node process
+already exited is not reached. A container node's command is not reached.
+Cancelling a detached run ends its owner's process group, nodes included.
 
 ### Addressable session ancestry
 
@@ -2227,8 +2235,10 @@ sub-pipeline.**
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
   run).
 - **Cancel cascade.** Abandoning the parent cancels its non-terminal descendants
-  cooperatively (their executors abort at the next status check, within ~10s — there is no
-  hard subprocess kill yet).
+  cooperatively: their executors abort at the next status check, within ~10s. A running
+  host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
+  under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
+  detached run ends its owner's process group.
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its

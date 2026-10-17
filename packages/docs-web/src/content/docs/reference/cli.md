@@ -1778,6 +1778,7 @@ printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state pat
 printf '{"ops":[{"op":"set","path":"/owner","value":"b"}]}' | archon state patch review/123 --if-revision 2
 archon state log review/123 --limit 100
 archon state list --prefix review/
+archon state list --prefix review/ --values
 archon state delete review/123 --if-revision 3
 archon state get notes --install --raw
 archon state list --project acme/widgets
@@ -1791,8 +1792,9 @@ name. `put`, `patch`, and `delete` return the scope and the new full revision. `
 returns `{scope, name, revisions}`, newest first (use a positive `--limit` to bound the
 result), including tombstones, operation, writer and timestamp. `list` returns
 `{scope, documents}`: each document's name, latest revision, `updatedAt`, writer and
-`deleted`, ordered by name and never with values. `--prefix` keeps names that start with
-the given text.
+`deleted`, ordered by name, without values. `--prefix` keeps names that start with
+the given text. `list --values` reads every live document's value in one call instead:
+each entry is `{name, revision, value}`, and deleted documents are left out.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from

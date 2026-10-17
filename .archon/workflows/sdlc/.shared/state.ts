@@ -83,6 +83,19 @@ export function stateList(prefix: string): string[] {
     .map(row => row?.name as string);
 }
 
+/** Every live document under the prefix with its value, in one read. */
+export function stateDocuments(prefix: string): (Stored & { readonly name: string })[] {
+  const result = archon(['state', 'list', '--prefix', prefix, '--values']);
+  const documents = record(result.value)?.documents;
+  if (result.code !== 0 || !Array.isArray(documents)) throw failed('state list', result);
+  return documents.map(entry => {
+    const row = record(entry);
+    if (typeof row?.name !== 'string' || typeof row.revision !== 'number')
+      throw failed('state list', result);
+    return { name: row.name, revision: row.revision, value: row.value ?? null };
+  });
+}
+
 /** One run as `archon workflow get --json` reports it, or undefined when it reports none. */
 export function runDetail(runId: string): Record<string, unknown> | undefined {
   const result = archon(['workflow', 'get', runId, '--json']);
