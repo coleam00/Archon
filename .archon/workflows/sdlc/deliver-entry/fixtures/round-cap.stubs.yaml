@@ -48,6 +48,7 @@ round:
   prior_report: "review/report.md"
   light_review: false
   ci_rerun: none
+  threads_checked: false
   contract_left: []
   summary: "stub: four rounds ended on a conflict with dev each time"
 attend__decide:
