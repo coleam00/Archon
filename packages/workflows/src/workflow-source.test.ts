@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Source capture: what a run freezes, and what it must keep resolving after the
  * authoring checkout moves on.

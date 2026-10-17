@@ -248,11 +248,6 @@ import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
-export {
-  DETACHED_RUN_FAILED_EXIT_CODE,
-  WorkflowRunFailedError,
-  resolveCliExitCode,
-} from '../utils/workflow-exit-code';
 import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,

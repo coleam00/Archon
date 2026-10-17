@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './node-execution';
 import { readNodeRecordEvent, readDeferredNodeUsageEvent } from './node-record-reader';
 import { describe, expect, it } from 'bun:test';

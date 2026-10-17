@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import {
   compileOutputSchema,

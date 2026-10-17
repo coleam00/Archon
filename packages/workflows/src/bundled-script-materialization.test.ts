@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
 import * as fs from 'fs/promises';
 import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'fs/promises';

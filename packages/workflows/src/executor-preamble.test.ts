@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Tests for the executeWorkflow() preamble: concurrent-run guard, staleness
  * detection, and resume logic.  These run before DAG dispatch and are exercised

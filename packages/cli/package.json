@@ -97,6 +97,7 @@
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
+      "src/utils/workflow-exit-code.test.ts",
       "src/utils/safe-console.test.ts",
       "src/utils/cli-start-telemetry.test.ts",
       "src/utils/cli-program-arguments.test.ts"

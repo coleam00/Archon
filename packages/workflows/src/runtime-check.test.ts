@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 // Mock @archon/git before importing the module under test

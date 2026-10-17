@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Installed workflow packs in the one catalog: every consumer resolves them through
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run

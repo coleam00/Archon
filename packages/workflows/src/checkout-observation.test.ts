@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {

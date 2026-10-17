@@ -31,13 +31,12 @@ import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflo
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
 import { isAbsolute } from 'node:path';
-import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
+import { captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
   Conversation,
   Codebase,
-  AttachedFile,
   CommandResult,
   WorkflowRequest,
 } from '../types';
@@ -48,7 +47,6 @@ import {
   toolCallDisplayName,
   type ResultUsageTotal,
 } from '@archon/provider-contract';
-import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -56,7 +54,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
-import { quoteCommandArg, parseSlashCommand } from '../utils/command-args';
+import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getProviderCapabilities } from '@archon/providers';
 import { getAgentProvider } from '../services/provider-admission';
@@ -68,17 +66,9 @@ import {
   type ChatLaunch,
   type ProjectRegistration,
 } from './chat-tools';
-import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
+import { ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
-import {
-  getDefaultRemote,
-  syncWorkspace,
-  toBranchName,
-  toRepoPath,
-  toWorktreePath,
-  verifyWorktreeOwnership,
-} from '@archon/git';
-import type { WorkspaceSyncResult } from '@archon/git';
+import { toRepoPath, toWorktreePath, verifyWorktreeOwnership } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import {
@@ -95,7 +85,6 @@ import {
   TerminalStatusWriteError,
   requireTerminalStatusWrite,
 } from '@archon/workflows/terminal-status-write';
-import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
@@ -106,9 +95,7 @@ import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
 import type {
   ResolvedWorkflow,
-  WorkflowDefinition,
   WorkflowWithSource,
-  WorkflowLoadError,
   WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
@@ -118,16 +105,10 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import { deliverCredential } from '../credentials/delivery';
 import {
   ConnectedCredentialUnavailableError,
   type CredentialFailure,
 } from '../credentials/unavailable-error';
-import {
-  resolveUserProviderCredentials,
-  type UserProviderCredential,
-} from '../credentials/user-provider-resolution';
-import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
 import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
@@ -136,8 +117,7 @@ import {
   resolveWorkflowAdoption,
   WorkflowAdoptionError,
 } from '../operations/workflow-adoption';
-import { loadConfig, loadRepoConfig } from '../config/config-loader';
-import type { MergedConfig } from '../config/config-types';
+import { loadConfig } from '../config/config-loader';
 import { generateTitleForUser } from '../services/user-title-generator';
 import { startRunLiveOwner, withRunLiveOwner } from '../services/run-live-owner';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
@@ -150,27 +130,28 @@ import {
 } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
+import { getLog } from './agent-log';
+import {
+  NO_COMMANDS,
+  hasCommandPrefix,
+  isCommandFullyParsed,
+  normalizeCommandText,
+  parseOrchestratorCommands,
+  parseProjectRegistration,
+  type WorkflowInvocation,
+} from './command-scan';
+import {
+  applyPresetToRequestOptions,
+  resolveChatModelRequest,
+  resolveModelRequest,
+  resolveUserAiPrefsForChat,
+  resolveUserProviderEnvForChat,
+} from './chat-request';
+import { buildFullPrompt, discoverAllWorkflows, inheritThreadContext } from './chat-context';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import { getCodebaseEnvVars } from '../db/env-vars';
-import {
-  buildAiProfile,
-  isLiteralSpec,
-  isTierName,
-  resolveModelSpec,
-  resolveTierWithFallback,
-  resolvePresetEffort,
-  type ModelAliasPreset,
-  type RunModelOverrides,
-  type TierName,
-} from '@archon/workflows/model-validation';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('orchestrator-agent');
-  return cachedLog;
-}
+import { buildAiProfile, type RunModelOverrides } from '@archon/workflows/model-validation';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -178,351 +159,6 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
-function applyPresetToRequestOptions(
-  provider: string,
-  preset: ModelAliasPreset,
-  options: SendQueryOptions
-): void {
-  if (preset.effort === undefined) return;
-
-  // One effort channel for every provider (#2556): the preset's rung goes on
-  // nodeConfig and the provider clamps it into its own SDK vocabulary. The gate
-  // is shared with `applyPresetOptions` in the DAG executor rather than
-  // restated, so the same tier cannot mean different depths in chat and in a
-  // workflow.
-  const decision = resolvePresetEffort(providerRegistry, provider, preset.effort);
-  if (!decision.ok) {
-    // `unsupported` = the provider has no reasoning control at all. Warn instead
-    // of silently dropping.
-    getLog().warn(
-      { provider, effort: preset.effort, valid: decision.valid },
-      decision.reason === 'unsupported'
-        ? 'orchestrator.preset_effort_unsupported'
-        : 'orchestrator.preset_effort_unknown'
-    );
-    return;
-  }
-  options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: preset.effort };
-}
-
-interface ResolvedModelRequest {
-  provider: string;
-  model: string | undefined;
-  preset?: ModelAliasPreset;
-  /** When `modelRef` was a tier: which tier in the fallback chain matched. */
-  matchedTier?: TierName;
-}
-
-function resolveModelRequest(
-  aiProfile: ReturnType<typeof buildAiProfile>,
-  modelRef: string,
-  fallbackProvider: string
-): ResolvedModelRequest {
-  if (isTierName(modelRef)) {
-    const { preset, matchedTier } = resolveTierWithFallback(aiProfile, modelRef);
-    return { provider: preset.provider, model: preset.model, preset, matchedTier };
-  }
-  const spec = resolveModelSpec(aiProfile, modelRef);
-  if (isLiteralSpec(spec)) {
-    return { provider: fallbackProvider, model: spec.literal };
-  }
-  return { provider: spec.provider, model: spec.model, preset: spec };
-}
-
-/**
- * Resolve the model request for the MAIN chat turn (#1998).
- *
- * Model precedence (chat call-site only — workflows keep resolving `large`):
- *   1. per-user `default_model` — applied only when the user's
- *      `default_provider` matches the effective provider (a stale pin must
- *      never ride a different provider). Routed through resolveModelRequest so
- *      `@alias` and tier refs keep working; an unresolvable ref (e.g. deleted
- *      alias) degrades to the tier path with a warning instead of failing chat.
- *   2. tier `large` from CONFIGURED tiers (user > repo > global).
- *   3. install `assistants.<p>.model` — outranks the BUILT-IN tier default
- *      only, never a configured tier ('inherit' means "SDK default", skip).
- *   4. built-in tier default.
- *
- * Title generation is NOT routed through this — it keeps the `small` tier.
- * With no user prefs and no `assistants.<p>.model`, this reduces byte-for-byte
- * to the previous `resolveModelRequest(aiProfile, 'large', provider)` call.
- * Exported for tests.
- */
-export function resolveChatModelRequest(
-  aiProfile: ReturnType<typeof buildAiProfile>,
-  configuredProviderKey: string,
-  userAiPrefs: UserAiPrefs,
-  config: Pick<MergedConfig, 'assistants' | 'tiers'>
-): ResolvedModelRequest {
-  if (
-    userAiPrefs.defaultModel !== undefined &&
-    userAiPrefs.defaultProvider === configuredProviderKey
-  ) {
-    try {
-      return resolveModelRequest(aiProfile, userAiPrefs.defaultModel, configuredProviderKey);
-    } catch (err) {
-      getLog().warn(
-        { err: err as Error, defaultModel: userAiPrefs.defaultModel },
-        'orchestrator.user_default_model_invalid'
-      );
-    }
-  }
-  const request = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
-  if (request.matchedTier === undefined) return request;
-
-  const tierConfigured =
-    config.tiers?.[request.matchedTier] !== undefined ||
-    userAiPrefs.tiers?.[request.matchedTier] !== undefined;
-  if (tierConfigured) return request;
-
-  const installModel = config.assistants[request.provider]?.model;
-  if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
-    return { ...request, model: installModel };
-  }
-  return request;
-}
-
-/** A resolved title-generation request: which provider to call, with fully resolved options. */
-export interface TitleRequest {
-  provider: string;
-  options: SendQueryOptions;
-}
-
-/**
- * Resolve provider + request options for conversation-title generation (#1855).
- *
- * Entry points that fire title generation outside a full chat turn
- * (create-with-message, web workflow run, CLI workflow run) resolve the `small` tier here —
- * config tiers plus per-user prefs when a userId is available — instead of
- * letting the provider fall through to its raw config-default model, which
- * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
- * Codex accounts). Mirrors the chat path's title resolution in
- * `handleMessage` (#1873), which keeps its own inline resolution to reuse
- * the already-loaded config and profile.
- *
- * NEVER THROWS — degrades to `{ provider: fallbackProvider, options: {} }`
- * (the legacy behavior) so fire-and-forget callers stay safe.
- */
-export async function resolveTitleRequest(
-  fallbackProvider: string,
-  userId?: string,
-  repoPath?: string
-): Promise<TitleRequest> {
-  try {
-    const config = await loadConfig(repoPath);
-    const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
-    let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
-    let aiProfile: ReturnType<typeof buildAiProfile>;
-    try {
-      aiProfile = buildAiProfile(configuredProviderKey, {
-        repoTiers: config.tiers,
-        repoAliases: config.aliases,
-        userTiers: userAiPrefs.tiers,
-        userAliases: userAiPrefs.aliases,
-      });
-    } catch (profileErr) {
-      // Structurally invalid STORED prefs must not break title generation —
-      // degrade to config-only (mirrors the chat path in handleMessage).
-      getLog().warn({ err: profileErr as Error, userId }, 'orchestrator.title_prefs_invalid');
-      configuredProviderKey = fallbackProvider;
-      aiProfile = buildAiProfile(configuredProviderKey, {
-        repoTiers: config.tiers,
-        repoAliases: config.aliases,
-      });
-    }
-    const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
-    const options: SendQueryOptions = {
-      model: titleRequest.model,
-      assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
-    };
-    if (titleRequest.preset) {
-      applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, options);
-    }
-    return { provider: titleRequest.provider, options };
-  } catch (err) {
-    getLog().warn(
-      { err: err as Error, fallbackProvider },
-      'orchestrator.title_request_resolve_failed'
-    );
-    return { provider: fallbackProvider, options: {} };
-  }
-}
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-export interface WorkflowInvocation {
-  workflowName: string;
-  projectName: string;
-  remainingMessage: string;
-  synthesizedPrompt?: string;
-}
-
-export interface OrchestratorCommands {
-  workflowInvocation: WorkflowInvocation | null;
-  projectRegistration: ProjectRegistration | null;
-}
-
-const NO_COMMANDS: OrchestratorCommands = { workflowInvocation: null, projectRegistration: null };
-
-// ─── Command Parsing ────────────────────────────────────────────────────────
-
-function parseProjectRegistration(message: string): ProjectRegistration | null {
-  const { command, args } = parseSlashCommand(message);
-  if (command !== 'register-project') return null;
-  const folder = args[0] === '--folder';
-  const [projectName, ...pathParts] = folder ? args.slice(1) : args;
-  if (!projectName || pathParts.length === 0) return null;
-  return {
-    projectName,
-    projectPath: pathParts.join(' '),
-    ...(folder ? { folder: true } : {}),
-  };
-}
-
-// One definition of a quoted command argument, shared by the streaming completeness
-// checks and the --prompt extractor. When they disagreed, an escaped quote passed the
-// check and truncated the extracted prompt.
-const DQ_ARG_BODY = String.raw`(?:[^"\\]|\\.)`;
-const SQ_ARG_BODY = String.raw`(?:[^'\\]|\\.)`;
-const DQ_ARG_RE = new RegExp(`^"${DQ_ARG_BODY}*"`);
-const SQ_ARG_RE = new RegExp(`^'${SQ_ARG_BODY}*'`);
-const PROMPT_ARG_RE = new RegExp(
-  String.raw`--prompt\s+(?:"(${DQ_ARG_BODY}+)"|'(${SQ_ARG_BODY}+)')`
-);
-
-// Prefix patterns: fire as soon as the command keyword is seen.
-const INVOKE_WORKFLOW_PREFIX_RE = /^\/invoke-workflow\s/m;
-const REGISTER_PROJECT_PREFIX_RE = /^\/register-project\s/m;
-
-// Full-command patterns: fire once all required tokens are present.
-// These determine when accumulation can stop — further chunks cannot add
-// required parse tokens and could corrupt already-captured ones.
-//
-// INVOKE_WORKFLOW_FULL_RE uses a test() object because the stop condition must account
-// for the optional --prompt parameter:
-//   - If --prompt "..." is present with a closing quote → fully parsed.
-//   - If --prompt is started but not closed → keep accumulating for the closing quote.
-//   - If no --prompt and the line is terminated (\n) → fully parsed (no more params).
-//   - If no --prompt and EOS (no \n yet) → keep accumulating in case --prompt follows.
-// A plain regex would fire as soon as --project <token> matched, dropping a --prompt
-// that arrives in a later chunk and causing synthesizedPrompt to be lost.
-const INVOKE_WORKFLOW_FULL_RE = {
-  test(text: string): boolean {
-    // Match the invoke-workflow line up to and including its terminator (\n) or end of string.
-    const lineMatch = /^\/invoke-workflow[^\r\n]*(\r?\n|$)/m.exec(text);
-    if (!lineMatch) return false;
-    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
-    // Must have workflow name and --project token before we consider stopping.
-    if (!/--project[\s=]+\S+/.test(line)) return false;
-    const isEos = !lineMatch[0].endsWith('\n');
-    // Check for optional --prompt parameter (system prompt specifies it follows --project).
-    const promptKeywordMatch = /--prompt\s+/.exec(line);
-    if (promptKeywordMatch) {
-      const afterPrompt = line.slice(promptKeywordMatch.index + promptKeywordMatch[0].length);
-      if (afterPrompt.startsWith('"')) return DQ_ARG_RE.test(afterPrompt);
-      if (afterPrompt.startsWith("'")) return SQ_ARG_RE.test(afterPrompt);
-      // Unquoted --prompt value: require line terminator.
-      return !isEos;
-    }
-    // No --prompt yet: require line terminator so a --prompt in a later chunk is not missed.
-    return !isEos;
-  },
-};
-// REGISTER_PROJECT_FULL_RE uses a test() object instead of a plain regex because the
-// stop condition must be conservative:
-//   - Unquoted paths: require the line to be terminated (\n or end of stream preceded
-//     by a non-whitespace char) so a space-containing path like "/home/user/my project"
-//     is not declared complete after "my" arrives.
-//   - Quoted paths: require the closing quote so we don't stop mid-path.
-const REGISTER_PROJECT_FULL_RE = {
-  test(text: string): boolean {
-    // Match the register-project line up to and including its terminator (\n) or end of string.
-    const lineMatch = /^\/register-project[^\r\n]*(\r?\n|$)/m.exec(text);
-    if (!lineMatch) return false;
-    // Only treat end-of-string as a line terminator when at least one non-whitespace
-    // character follows the project name — avoids matching a partial "/register-project "
-    // line that was cut mid-word.
-    const isEos = !lineMatch[0].endsWith('\n');
-    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
-    const commandArgs = line.replace(/^\/register-project\s+/, '');
-    const rest = commandArgs.replace(/^--folder\s+/, '');
-    if (commandArgs === line) return false; // no whitespace after command keyword
-    const nameEnd = rest.search(/\s/);
-    if (nameEnd === -1) return false; // no path token yet
-    const projectPath = rest.slice(nameEnd).trimStart();
-    if (!projectPath) return false;
-    // Quoted path: require the closing quote
-    if (projectPath.startsWith('"')) return DQ_ARG_RE.test(projectPath);
-    if (projectPath.startsWith("'")) return SQ_ARG_RE.test(projectPath);
-    // Unquoted path: require line terminator so we don't freeze on a partial path with spaces
-    return !isEos;
-  },
-};
-
-/**
- * Strip markdown bold/italic decorators from slash-command lines.
- * Pi and other models occasionally emit **\/register-project ...** or
- * *\/invoke-workflow ...* instead of a bare slash command. The leading
- * asterisks cause both prefix and full-command regexes to miss the line.
- * Only lines whose first non-asterisk character is '/' are affected.
- */
-function normalizeCommandText(text: string): string {
-  return text.replace(/^\s*\*+(\/[^\n]*?)\**\s*$/gm, '$1');
-}
-
-/** Returns true once accumulated text starts an orchestrator command line. */
-function hasCommandPrefix(accumulated: string): boolean {
-  const normalized = normalizeCommandText(accumulated);
-  return INVOKE_WORKFLOW_PREFIX_RE.test(normalized) || REGISTER_PROJECT_PREFIX_RE.test(normalized);
-}
-
-/** Returns true once accumulated text contains a complete orchestrator command. */
-function isCommandFullyParsed(accumulated: string): boolean {
-  const normalized = normalizeCommandText(accumulated);
-  return INVOKE_WORKFLOW_FULL_RE.test(normalized) || REGISTER_PROJECT_FULL_RE.test(normalized);
-}
-
-/**
- * Resolve the per-user AI-provider credential env for a direct-chat turn
- * (Phase 2). Every usable connected credential is delivered as env, the ChatGPT
- * subscription included, so chat and workflows authenticate the same way.
- *
- * A connected credential that cannot be used is returned in `failed`, keyed by
- * vendor, with a reason that is safe to show. The caller refuses a turn whose own
- * vendor failed: running it would authenticate with the host's login instead of
- * the user's. Throws when the user's credentials cannot be listed, for the same
- * reason.
- */
-async function resolveUserProviderEnvForChat(userId: string): Promise<{
-  env: Record<string, string>;
-  failed: Map<string, CredentialFailure>;
-  credentials: UserProviderCredential[];
-}> {
-  const env: Record<string, string> = {};
-  const failed = new Map<string, CredentialFailure>();
-  const credentials = await resolveUserProviderCredentials(userId);
-  for (const { provider, vendor, stored } of credentials) {
-    if (stored.state === 'usable') {
-      try {
-        Object.assign(env, deliverCredential(provider, stored.credential).env);
-      } catch (err) {
-        getLog().error(
-          { err: err as Error, userId, provider },
-          'orchestrator.provider_creds_deliver_failed'
-        );
-        failed.set(vendor, { reason: (err as Error).message, retryable: false });
-      }
-    } else if (stored.state !== 'not_connected') {
-      // `not_connected` here means the row was deleted after the listing: the user has
-      // no credential for this vendor, so the host login is theirs to use, as before.
-      failed.set(vendor, {
-        reason: stored.evidence,
-        retryable: stored.state === 'check_failed',
-      });
-    }
-  }
-  return { env, failed, credentials };
-}
 
 /**
  * Conversations (DB ids) already nudged about a tier fallback. Process-lifetime
@@ -530,23 +166,6 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<{
  * state — a server restart re-nudging once per conversation is acceptable.
  */
 const tierFallbackNudgedConversations = new Set<string>();
-
-/**
- * Resolve the user's personal AI prefs (tiers / aliases / default assistant)
- * for a direct-chat turn (Phase 3). Folded into `buildAiProfile` as the
- * highest-precedence layer.
- *
- * NEVER THROWS — returns `{}` on any failure so model resolution falls back
- * to install-wide config exactly as before.
- */
-async function resolveUserAiPrefsForChat(userId: string): Promise<UserAiPrefs> {
-  try {
-    return await getUserAiPrefs(userId);
-  } catch (err) {
-    getLog().warn({ err: err as Error, userId }, 'orchestrator.user_ai_prefs_resolve_failed');
-    return {};
-  }
-}
 
 /**
  * Resolve a codebase by name using 4-tier fuzzy matching.
@@ -589,74 +208,6 @@ function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Code
       'project.set_resolve_substring_match'
     )
   );
-}
-
-/**
- * Parse orchestrator commands from AI response text.
- * Scans for /invoke-workflow and /register-project patterns.
- */
-export function parseOrchestratorCommands(
-  response: string,
-  codebases: readonly Codebase[],
-  workflows: readonly Pick<WorkflowDefinition, 'name'>[]
-): OrchestratorCommands {
-  const result: OrchestratorCommands = {
-    workflowInvocation: null,
-    projectRegistration: null,
-  };
-
-  // Strip markdown bold/italic decorators from slash command lines before matching.
-  // Pi models occasionally emit **\/register-project ...** or **\/invoke-workflow ...**.
-  const normalizedResponse = normalizeCommandText(response);
-
-  // Parse /invoke-workflow {name} --project {project-name}
-  // Use (\S+) for project name to avoid capturing trailing text on the same line
-  // (e.g., when AI appends tool call indicators or continues text after the command).
-  // --project MUST appear before --prompt; this order is specified in the system prompt
-  // template. Commands with --prompt before --project will not match.
-  const invokePattern = /^\/invoke-workflow\s+(\S+)\s+--project[\s=]+(\S+)/m;
-  const invokeMatch = invokePattern.exec(normalizedResponse);
-  if (invokeMatch) {
-    const workflowName = invokeMatch[1].trim();
-    const projectName = invokeMatch[2].trim();
-
-    // Validate workflow exists
-    const workflow = findWorkflow(workflowName, [...workflows]);
-    if (workflow) {
-      // Validate project exists (case-insensitive, supports partial name matching)
-      // e.g., "Archon" matches "coleam00/Archon"
-      const matchedCodebase = findCodebaseByName(codebases, projectName);
-      if (matchedCodebase) {
-        // Extract message before the command
-        const commandIndex = normalizedResponse.indexOf(invokeMatch[0]);
-        const remainingMessage = normalizedResponse.slice(0, commandIndex).trim();
-
-        // Extract optional --prompt "..." parameter (double or single quotes)
-        const commandText = normalizedResponse.slice(commandIndex);
-        const promptMatch = PROMPT_ARG_RE.exec(commandText);
-        const rawPrompt = (promptMatch?.[1] ?? promptMatch?.[2])
-          ?.replace(/\\(["'\\])/g, '$1')
-          .trim();
-        const synthesizedPrompt = rawPrompt || undefined;
-
-        if (promptMatch && !synthesizedPrompt) {
-          getLog().warn({ workflowName, projectName }, 'synthesized_prompt_empty_discarded');
-        }
-
-        result.workflowInvocation = {
-          workflowName: workflow.name,
-          projectName: matchedCodebase.name,
-          remainingMessage,
-          synthesizedPrompt,
-        };
-      }
-    }
-  }
-
-  const registerMatch = /^\/register-project[^\S\r\n]+[^\r\n]+/m.exec(normalizedResponse);
-  if (registerMatch) result.projectRegistration = parseProjectRegistration(registerMatch[0]);
-
-  return result;
 }
 
 // ─── Batch Mode Helpers ─────────────────────────────────────────────────────
@@ -1918,198 +1469,6 @@ async function tryPersistSessionId(
       'session_id_persist_failed'
     );
   }
-}
-
-// ─── Extracted Helpers ──────────────────────────────────────────────────────
-
-/** Copy parent conversation's project context to child thread if missing */
-async function inheritThreadContext(
-  platform: IPlatformAdapter,
-  conversation: Conversation,
-  parentConversationId: string | undefined,
-  conversationId: string
-): Promise<Conversation> {
-  if (!parentConversationId || conversation.codebase_id) return conversation;
-
-  const parentConversation = await db.getConversationByPlatformId(
-    platform.getPlatformType(),
-    parentConversationId
-  );
-  if (!parentConversation?.codebase_id) return conversation;
-
-  try {
-    await db.updateConversation(conversation.id, {
-      codebase_id: parentConversation.codebase_id,
-      cwd: parentConversation.cwd,
-    });
-    const refreshed = await db.getOrCreateConversation(platform.getPlatformType(), conversationId);
-    getLog().debug({ conversationId, parentConversationId }, 'thread_context_inherited');
-    return refreshed;
-  } catch (err) {
-    if (err instanceof ConversationNotFoundError) {
-      getLog().warn({ conversationId: conversation.id }, 'thread_inheritance_failed');
-      return conversation;
-    }
-    throw err;
-  }
-}
-
-interface DiscoverResult {
-  workflows: WorkflowWithSource[];
-  errors: readonly WorkflowLoadError[];
-  syncResult?: WorkspaceSyncResult;
-  syncError?: string;
-  config?: MergedConfig;
-  codebase?: Codebase | null;
-  /** Remote name used for the workspace sync (undefined when no sync ran). */
-  remote?: string;
-}
-
-/** Discover global + repo-specific workflows, merge by name (repo overrides global) */
-async function discoverAllWorkflows(conversation: Conversation): Promise<DiscoverResult> {
-  let workflows: WorkflowWithSource[] = [];
-  const allErrors: WorkflowLoadError[] = [];
-  let syncResult: WorkspaceSyncResult | undefined;
-  let syncError: string | undefined;
-  let config: MergedConfig | undefined;
-  let codebase: Codebase | null | undefined;
-  let remote: string | undefined;
-
-  try {
-    // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
-    // by discoverWorkflowsWithConfig — no option needed.
-    const result = await discoverWorkflowsWithConfig(
-      getArchonWorkspacesPath(),
-      loadConfig,
-      providerRegistry
-    );
-    workflows = [...result.workflows];
-    allErrors.push(...result.errors);
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, errorType: err.constructor.name }, 'global_workflow_discovery_failed');
-  }
-
-  if (conversation.codebase_id) {
-    try {
-      codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-    } catch (error) {
-      getLog().warn({ err: error as Error }, 'repo_workflow_discovery_failed');
-    }
-  }
-  if (codebase) {
-    // Sync canonical source with remote before the AI reads codebase state.
-    // This path must remain non-destructive: users and agents can write to source/.
-    // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-    // Folder projects leave git synchronization to the user and agent.
-    if (codebase.kind === 'folder') {
-      getLog().debug(
-        { codebaseId: codebase.id, path: codebase.default_cwd },
-        'workspace.sync_skipped_folder_project'
-      );
-    } else {
-      try {
-        // Resolve the git remote: explicit repo config wins, otherwise
-        // auto-detect ('origin' if present, else the sole remote).
-        const repoPath = toRepoPath(codebase.default_cwd);
-        const repoConf = await loadRepoConfig(codebase.default_cwd);
-        remote =
-          repoConf.worktree?.remote?.trim() || (await getDefaultRemote(repoPath)) || undefined;
-        syncResult = await syncWorkspace(
-          repoPath,
-          codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
-          { remote }
-        );
-        getLog().debug(
-          {
-            codebaseId: codebase.id,
-            repoPath: codebase.default_cwd,
-            remote,
-            ...syncResult,
-          },
-          'workspace.sync_completed'
-        );
-      } catch (err) {
-        const error = err as Error;
-        syncError = error.message;
-        getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
-      }
-    }
-    const workflowCwd = conversation.cwd ?? codebase.default_cwd;
-    // Outside the discovery catch: a config that fails to load fails the turn,
-    // as it does for a run start, instead of listing no repository workflows.
-    const loadedConfig = await loadConfig(workflowCwd);
-    config = loadedConfig;
-    try {
-      // Read workflows from the authoring repo rather than copying its `.archon` into
-      // this worktree first. Config still comes from `workflowCwd` — settings belong to
-      // the workspace being acted on.
-      const workflowSourceRoot = await resolveWorkflowSourceRoot(workflowCwd);
-      const repoResult = await discoverWorkflowsWithConfig(
-        workflowCwd,
-        () => Promise.resolve(loadedConfig),
-        providerRegistry,
-        workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
-      );
-      const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));
-      for (const rw of repoResult.workflows) {
-        workflowMap.set(rw.workflow.name, rw);
-      }
-      workflows = Array.from(workflowMap.values());
-      allErrors.push(...repoResult.errors);
-    } catch (error) {
-      getLog().warn({ err: error as Error }, 'repo_workflow_discovery_failed');
-    }
-  }
-
-  return { workflows, errors: allErrors, syncResult, syncError, config, codebase, remote };
-}
-
-/** Build the user-facing prompt with message and optional contexts */
-function buildFullPrompt(
-  message: string,
-  issueContext: string | undefined,
-  threadContext: string | undefined,
-  attachedFiles?: AttachedFile[],
-  workflowContext?: string,
-  pausedGateContext?: string
-): string {
-  const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
-
-  const fileSuffix =
-    attachedFiles && attachedFiles.length > 0
-      ? '\n\n---\n\n## Attached Files\n\nThe user has uploaded the following files. Use your file reading tools (Read, View) to access them:\n\n' +
-        attachedFiles
-          .map(f => `- ${f.name} (${f.mimeType}, ${String(f.size)} bytes): ${f.path}`)
-          .join('\n')
-      : '';
-
-  const workflowContextSuffix = workflowContext ? '\n\n---\n\n' + workflowContext : '';
-  // Placed LAST of the context blocks, immediately before the user's message —
-  // the gate is the thing the message is most likely answering (#2565).
-  const gateSuffix = pausedGateContext ? '\n\n---\n\n' + pausedGateContext : '';
-
-  if (threadContext) {
-    return (
-      '## Thread Context (previous messages)\n\n' +
-      threadContext +
-      workflowContextSuffix +
-      gateSuffix +
-      '\n\n---\n\n## Current Request\n\n' +
-      message +
-      contextSuffix +
-      fileSuffix
-    );
-  }
-
-  return (
-    workflowContextSuffix +
-    gateSuffix +
-    '\n\n---\n\n## User Message\n\n' +
-    message +
-    contextSuffix +
-    fileSuffix
-  );
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
