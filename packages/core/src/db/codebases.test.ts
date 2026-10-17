@@ -590,6 +590,7 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 1))
         .mockResolvedValueOnce(createQueryResult([{ ...adoCodebase, name: 'qes' }]));
 
@@ -625,6 +626,7 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 0))
         .mockResolvedValueOnce(createQueryResult([adoCodebase]));
 
@@ -636,6 +638,7 @@ describe('codebases', () => {
     test('throws CodebaseNotFoundError when the codebase disappears before the update', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 0))
         .mockResolvedValueOnce(createQueryResult([]));

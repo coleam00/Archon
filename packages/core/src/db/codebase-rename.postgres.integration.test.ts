@@ -29,6 +29,27 @@ test.skipIf(!baseUrl)(
       }));
       const codebases = await import('./codebases');
 
+      for (const [index, [name, variant]] of [
+        ['acme api', 'Acme API'],
+        ['münchen', 'MÜNCHEN'],
+      ].entries()) {
+        const existing = await codebases.createCodebase({
+          name,
+          default_cwd: `/repos/case-${index}-existing`,
+        });
+        const candidate = await codebases.createCodebase({
+          name: `candidate-${index}`,
+          default_cwd: `/repos/case-${index}-candidate`,
+        });
+
+        await expect(codebases.renameCodebase(candidate.id, variant)).rejects.toBeInstanceOf(
+          codebases.CodebaseNameTakenError
+        );
+        expect((await codebases.getCodebase(candidate.id))?.name).toBe(candidate.name);
+        expect((await codebases.getCodebase(existing.id))?.name).toBe(name);
+        expect((await codebases.renameCodebase(existing.id, variant)).name).toBe(variant);
+      }
+
       const claims = await Promise.allSettled([
         codebases.createCodebase({ name: 'My App', kind: 'folder', default_cwd: '/first' }),
         codebases.createCodebase({ name: 'my-app', kind: 'folder', default_cwd: '/second' }),
@@ -65,7 +86,7 @@ test.skipIf(!baseUrl)(
         const target = `qes-${round}`;
         const results = await Promise.allSettled([
           codebases.renameCodebase(a.id, target),
-          codebases.renameCodebase(b.id, target),
+          codebases.renameCodebase(b.id, round % 2 === 0 ? target : target.toUpperCase()),
         ]);
         const rejected = results.filter(r => r.status === 'rejected');
         expect(rejected).toHaveLength(1);
@@ -73,7 +94,7 @@ test.skipIf(!baseUrl)(
           codebases.CodebaseNameTakenError
         );
         const owners = await adapter.query<{ id: string }>(
-          'SELECT id FROM remote_agent_codebases WHERE name = $1',
+          'SELECT id FROM remote_agent_codebases WHERE LOWER(name) = LOWER($1)',
           [target]
         );
         expect(owners.rows).toHaveLength(1);

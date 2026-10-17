@@ -30,3 +30,27 @@ test('SQLite renames through the conditional UPDATE and refuses a taken name', a
   expect((await codebases.renameCodebase(qes.id, 'qes')).name).toBe('qes');
   expect((await codebases.findCodebaseByName('qes'))?.id).toBe(qes.id);
 });
+
+for (const [index, [name, variant]] of [
+  ['acme api', 'Acme API'],
+  ['münchen', 'MÜNCHEN'],
+].entries()) {
+  test(`SQLite refuses a case variant of another project's name: ${variant}`, async () => {
+    const codebases = await import('./codebases');
+    const existing = await codebases.createCodebase({
+      name,
+      default_cwd: `/repos/case-${index}-existing`,
+    });
+    const candidate = await codebases.createCodebase({
+      name: `candidate-${index}`,
+      default_cwd: `/repos/case-${index}-candidate`,
+    });
+
+    await expect(codebases.renameCodebase(candidate.id, variant)).rejects.toBeInstanceOf(
+      codebases.CodebaseNameTakenError
+    );
+    expect((await codebases.getCodebase(candidate.id))?.name).toBe(candidate.name);
+    expect((await codebases.getCodebase(existing.id))?.name).toBe(name);
+    expect((await codebases.renameCodebase(existing.id, variant)).name).toBe(variant);
+  });
+}

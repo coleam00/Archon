@@ -345,12 +345,11 @@ const CODEBASE_IDENTITY_LOCK = JSON.stringify(['codebase-rename']);
  * and future runs across different roots.
  *
  * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
- * for `--project` and `/update-project`, so a duplicate is refused too. The
- * duplicate check lives in the UPDATE itself. On PostgreSQL that is not enough:
- * under READ COMMITTED two concurrent UPDATEs of different rows each evaluate
- * NOT EXISTS without seeing the other, so renames also take an advisory lock.
- * The waiting rename's UPDATE then reads a fresh snapshot that includes the
- * winner. SQLite serializes writers already.
+ * for `--project` and `/update-project`, so a duplicate is refused too. Compare
+ * names in JavaScript to match registration and chat lookup, including Unicode
+ * case conversion that SQLite's LOWER does not support. PostgreSQL serializes
+ * the check and UPDATE with the registration advisory lock; SQLite retries the
+ * whole transaction if another writer invalidates its read snapshot.
  */
 export async function renameCodebase(id: string, name: string): Promise<Codebase> {
   const current = await getCodebase(id);
@@ -374,6 +373,14 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
       await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         CODEBASE_IDENTITY_LOCK,
       ]);
+    }
+    const registered = await query<Pick<Codebase, 'name'>>(
+      'SELECT name FROM remote_agent_codebases WHERE id <> $1',
+      [id]
+    );
+    const normalizedName = name.toLowerCase();
+    if (registered.rows.some(project => project.name.toLowerCase() === normalizedName)) {
+      throw new CodebaseNameTakenError(name);
     }
     return query(
       `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
