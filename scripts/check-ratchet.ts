@@ -21,6 +21,9 @@ import ts from 'typescript';
  * A unit's identity is its naming path inside the file (`outer > inner`), so a function that
  * moves between touched files keeps it and is compared with its old score. A function with no
  * base counterpart is new and is not refused: the gate is the delta, not a threshold.
+ * Units that share an identity, such as two `xs.forEach(...)` callbacks in one function, cannot
+ * be paired one to one, so they compare as lists sorted highest first: no unit may score above
+ * the base unit in its position. A sibling added among them can be refused, and waived as usual.
  *
  * A deliberate increase lands with a `Ratchet-Allow:` trailer on one of the change's commits:
  * `Ratchet-Allow: <path>` for a file's line count, `Ratchet-Allow: <path>:<identity>` for a
@@ -171,15 +174,15 @@ function score(unit: FunctionUnit): number {
   return total;
 }
 
-/** Cognitive complexity per function identity. Same-identity units collapse to the highest. */
-export function cognitiveUnits(file: string, source: string): Map<string, number> {
+/** Cognitive complexity per function identity, highest first when units share one. */
+export function cognitiveUnits(file: string, source: string): Map<string, number[]> {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-  const units = new Map<string, number>();
+  const units = new Map<string, number[]>();
   const walk = (node: ts.Node, path: readonly string[]): void => {
     if (isFunctionUnit(node)) {
       const unitPath = [...path, unitName(node)];
       const identity = unitPath.join(' > ');
-      units.set(identity, Math.max(units.get(identity) ?? 0, score(node)));
+      units.set(identity, [...(units.get(identity) ?? []), score(node)]);
       node.forEachChild(child => walk(child, unitPath));
       return;
     }
@@ -191,6 +194,7 @@ export function cognitiveUnits(file: string, source: string): Map<string, number
     node.forEachChild(child => walk(child, path));
   };
   walk(sourceFile, []);
+  for (const scores of units.values()) scores.sort((a, b) => b - a);
   return units;
 }
 
@@ -272,7 +276,7 @@ function allowances(mergeBase: string, repo: string): Set<string> {
 
 interface Scores {
   lines: number;
-  units: Map<string, number>;
+  units: Map<string, number[]>;
 }
 
 interface ScoredFile {
@@ -317,13 +321,13 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
   }
 
   // Base units whose identity left their file: the candidates a moved function is compared with.
-  const moved = new Map<string, { file: string; score: number }>();
+  const moved = new Map<string, { file: string; scores: number[] }>();
   for (const file of files) {
     for (const [identity, before] of file.base?.units ?? []) {
       if (file.head?.units.has(identity)) continue;
       const current = moved.get(identity);
-      if (current === undefined || before > current.score) {
-        moved.set(identity, { file: file.path, score: before });
+      if (current === undefined || before[0] > current.scores[0]) {
+        moved.set(identity, { file: file.path, scores: before });
       }
     }
   }
@@ -341,14 +345,17 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
 
   for (const { path, base, head } of files) {
     if (head === null) continue;
-    for (const [identity, after] of head.units) {
+    for (const [identity, afterScores] of head.units) {
       const sameFile = base?.units.get(identity);
       const origin = sameFile === undefined ? moved.get(identity) : undefined;
-      const before = sameFile ?? origin?.score;
-      if (before === undefined || after <= before) continue;
+      const beforeScores = sameFile ?? origin?.scores ?? [];
+      const position = afterScores.findIndex(
+        (after, index) => index < beforeScores.length && after > beforeScores[index]
+      );
+      if (position === -1) continue;
       const from = origin === undefined ? '' : ` (base: ${origin.file})`;
       report(
-        `${path}: \`${identity}\` cognitive complexity ${before} -> ${after}${from}`,
+        `${path}: \`${identity}\` cognitive complexity ${beforeScores[position]} -> ${afterScores[position]}${from}`,
         `${path}:${identity}`
       );
     }

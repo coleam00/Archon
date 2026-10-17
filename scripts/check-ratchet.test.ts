@@ -29,14 +29,14 @@ describe('cognitiveUnits', () => {
       });
     `;
     expect(Object.fromEntries(cognitiveUnits('sample.ts', source))).toEqual({
-      nested: 3,
-      branches: 3,
-      mixed: 2,
-      run: 1,
-      outer: 0,
-      'outer > xs.map()': 1,
-      "describe('a')": 0,
-      "describe('a') > it('b')": 0,
+      nested: [3],
+      branches: [3],
+      mixed: [2],
+      run: [1],
+      outer: [0],
+      'outer > xs.map()': [1],
+      "describe('a')": [0],
+      "describe('a') > it('b')": [0],
     });
   });
 
@@ -55,10 +55,10 @@ describe('cognitiveUnits', () => {
       xs[ i ].then(v => v);
     }`;
     expect(Object.fromEntries(cognitiveUnits('sample.ts', source))).toEqual({
-      f: 0,
-      "f > run('a').catch()": 1,
-      "f > run('b').catch()": 3,
-      'f > xs[i].then()': 0,
+      f: [0],
+      "f > run('a').catch()": [1],
+      "f > run('b').catch()": [3],
+      'f > xs[i].then()': [0],
     });
   });
 
@@ -71,6 +71,11 @@ describe('cognitiveUnits', () => {
     expect(names('wrap(() => 1)')).toEqual(['wrap()', 'run(_).catch()']);
     expect(names('wrap(() => (x ? 1 : 2))')).toEqual(names('wrap(() => 1)'));
     expect(names('a, 1, this.b')).toEqual(['run(a,1,this.b).catch()']);
+  });
+
+  test('keeps every score of units that share an identity, highest first', () => {
+    const source = 'function f(xs) { xs.forEach(x => x); xs.forEach(x => (x ? 1 : 0)); }';
+    expect(cognitiveUnits('sample.ts', source).get('f > xs.forEach()')).toEqual([1, 0]);
   });
 
   test('counts a missing final newline as a line', () => {
@@ -127,6 +132,19 @@ describe('checkRatchet', () => {
       'src/a.ts: 4 -> 6 lines',
     ]);
     expect(result.remedies).toEqual(['Ratchet-Allow: src/a.ts:run', 'Ratchet-Allow: src/a.ts']);
+  });
+
+  test('refuses raising the lower of two callbacks that share an identity', () => {
+    const repo = repoOnBranch();
+    const siblings = (second: string): string =>
+      `export function f(xs: number[]) {\n  xs.forEach(x => (x ? 1 : 0));\n  xs.forEach(${second});\n}\n`;
+    write(repo, 'src/a.ts', siblings('x => x'));
+    commitAll(repo, 'siblings');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'src/a.ts', siblings('x => (x ? 1 : 0)'));
+    expect(checkRatchet(repo, 'main').failures).toEqual([
+      'src/a.ts: `f > xs.forEach()` cognitive complexity 0 -> 1',
+    ]);
   });
 
   test('allows each increase named by a trailer in the change', () => {
