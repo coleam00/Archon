@@ -26,7 +26,7 @@ export async function getProjectLocations(
     primaryPath = toRepoPath(project.default_cwd);
   }
   const worktreeBase = async (path: string): Promise<string> => {
-    const config = await loadRepoConfig(path, { strict: true });
+    const config = await loadRepoConfig(path);
     const repoLocal = resolveRepoLocalOverride(config.worktree?.path, path);
     return resolve(getWorktreeBase(toRepoPath(path), project.name, { repoLocal }).base);
   };

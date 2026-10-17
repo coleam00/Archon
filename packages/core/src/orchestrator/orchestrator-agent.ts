@@ -1993,65 +1993,70 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   if (conversation.codebase_id) {
     try {
       codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-      if (codebase) {
-        // Sync canonical source with remote before the AI reads codebase state.
-        // This path must remain non-destructive: users and agents can write to source/.
-        // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-        // Folder projects leave git synchronization to the user and agent.
-        if (codebase.kind === 'folder') {
-          getLog().debug(
-            { codebaseId: codebase.id, path: codebase.default_cwd },
-            'workspace.sync_skipped_folder_project'
-          );
-        } else {
-          try {
-            // Resolve the git remote: explicit repo config wins, otherwise
-            // auto-detect ('origin' if present, else the sole remote).
-            const repoPath = toRepoPath(codebase.default_cwd);
-            const repoConf = await loadRepoConfig(codebase.default_cwd);
-            remote =
-              repoConf.worktree?.remote?.trim() || (await getDefaultRemote(repoPath)) || undefined;
-            syncResult = await syncWorkspace(
-              repoPath,
-              codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
-              { remote }
-            );
-            getLog().debug(
-              {
-                codebaseId: codebase.id,
-                repoPath: codebase.default_cwd,
-                remote,
-                ...syncResult,
-              },
-              'workspace.sync_completed'
-            );
-          } catch (err) {
-            const error = err as Error;
-            syncError = error.message;
-            getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
-          }
-        }
-        const workflowCwd = conversation.cwd ?? codebase.default_cwd;
-        // Read workflows from the authoring repo rather than copying its `.archon` into
-        // this worktree first. Config still comes from `workflowCwd` — settings belong to
-        // the workspace being acted on.
-        const workflowSourceRoot = await resolveWorkflowSourceRoot(workflowCwd);
-        // Load config once for this codebase path; reuse below to avoid a second disk read
-        const loadedConfig = await loadConfig(workflowCwd);
-        config = loadedConfig;
-        const repoResult = await discoverWorkflowsWithConfig(
-          workflowCwd,
-          () => Promise.resolve(loadedConfig),
-          providerRegistry,
-          workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
+    } catch (error) {
+      getLog().warn({ err: error as Error }, 'repo_workflow_discovery_failed');
+    }
+  }
+  if (codebase) {
+    // Sync canonical source with remote before the AI reads codebase state.
+    // This path must remain non-destructive: users and agents can write to source/.
+    // Non-fatal: if fetch fails (network, no remote), proceed with local state.
+    // Folder projects leave git synchronization to the user and agent.
+    if (codebase.kind === 'folder') {
+      getLog().debug(
+        { codebaseId: codebase.id, path: codebase.default_cwd },
+        'workspace.sync_skipped_folder_project'
+      );
+    } else {
+      try {
+        // Resolve the git remote: explicit repo config wins, otherwise
+        // auto-detect ('origin' if present, else the sole remote).
+        const repoPath = toRepoPath(codebase.default_cwd);
+        const repoConf = await loadRepoConfig(codebase.default_cwd);
+        remote =
+          repoConf.worktree?.remote?.trim() || (await getDefaultRemote(repoPath)) || undefined;
+        syncResult = await syncWorkspace(
+          repoPath,
+          codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
+          { remote }
         );
-        const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));
-        for (const rw of repoResult.workflows) {
-          workflowMap.set(rw.workflow.name, rw);
-        }
-        workflows = Array.from(workflowMap.values());
-        allErrors.push(...repoResult.errors);
+        getLog().debug(
+          {
+            codebaseId: codebase.id,
+            repoPath: codebase.default_cwd,
+            remote,
+            ...syncResult,
+          },
+          'workspace.sync_completed'
+        );
+      } catch (err) {
+        const error = err as Error;
+        syncError = error.message;
+        getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
       }
+    }
+    const workflowCwd = conversation.cwd ?? codebase.default_cwd;
+    // Outside the discovery catch: a config that fails to load fails the turn,
+    // as it does for a run start, instead of listing no repository workflows.
+    const loadedConfig = await loadConfig(workflowCwd);
+    config = loadedConfig;
+    try {
+      // Read workflows from the authoring repo rather than copying its `.archon` into
+      // this worktree first. Config still comes from `workflowCwd` — settings belong to
+      // the workspace being acted on.
+      const workflowSourceRoot = await resolveWorkflowSourceRoot(workflowCwd);
+      const repoResult = await discoverWorkflowsWithConfig(
+        workflowCwd,
+        () => Promise.resolve(loadedConfig),
+        providerRegistry,
+        workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
+      );
+      const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));
+      for (const rw of repoResult.workflows) {
+        workflowMap.set(rw.workflow.name, rw);
+      }
+      workflows = Array.from(workflowMap.values());
+      allErrors.push(...repoResult.errors);
     } catch (error) {
       getLog().warn({ err: error as Error }, 'repo_workflow_discovery_failed');
     }

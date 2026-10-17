@@ -5564,6 +5564,27 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
     // discoverWorkflowsWithConfig should have been called twice (global + repo)
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
   });
+
+  test('a repository config that fails to load fails the turn instead of listing no repo workflows', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebaseForSync()));
+    const configError = new Error(
+      "Invalid model binding config in '/repos/test-repo/.archon/config.yaml': tiers.medium.thinking"
+    );
+    mockLoadConfig.mockRejectedValueOnce(configError);
+    mockSendQuery.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
+
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('tiers.medium.thinking')
+    );
+  });
 });
 
 // ─── handleMessage — workflow context injection ───────────────────────────────

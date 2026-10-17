@@ -14,7 +14,12 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { ServerResumeOutcome, WorkflowResumeTarget } from './services/workflow-resume-service';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
-import { clearConfigCache, loadConfig, toSafeConfig } from '@archon/core/config/config-loader';
+import {
+  clearConfigCache,
+  InvalidConfigError,
+  loadConfig,
+  toSafeConfig,
+} from '@archon/core/config/config-loader';
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
@@ -486,12 +491,6 @@ describe('server conversation admission configuration', () => {
     { name: 'default', yaml: '', env: undefined, limit: 10 },
     { name: 'environment only', yaml: '', env: '4', limit: 4 },
     { name: 'invalid environment preserves default', yaml: '', env: 'abc', limit: 10 },
-    ...['-1', '1.5', 'abc', 'true', '{}', '[]', '.inf', '0', 'null', '.nan'].map(value => ({
-      name: `invalid global YAML ${value} preserves default`,
-      yaml: `concurrency:\n  maxConversations: ${value}\n`,
-      env: undefined,
-      limit: 10,
-    })),
   ])('$name admits $limit conversations', async ({ yaml, env, limit }) => {
     const configPath = join(pluginsDir, 'config.yaml');
     await writeFile(configPath, yaml);
@@ -528,6 +527,29 @@ describe('server conversation admission configuration', () => {
       delete process.env.MAX_CONCURRENT_CONVERSATIONS;
     }
   });
+
+  test.each(['-1', '1.5', 'abc', 'true', '{}', '[]', '.inf', '0', 'null', '.nan'])(
+    'invalid global YAML maxConversations %s stops startup before admitting conversations',
+    async value => {
+      const configPath = join(pluginsDir, 'config.yaml');
+      await writeFile(configPath, `concurrency:\n  maxConversations: ${value}\n`);
+      clearConfigCache();
+      mockRegisterApiRoutes.mockClear();
+      try {
+        const { startServer } = await import('./index');
+        const error = await startServer({ port: 12345, skipPlatformAdapters: true }).catch(
+          (err: unknown) => err
+        );
+        expect(error).toBeInstanceOf(InvalidConfigError);
+        expect((error as Error).message).toContain(configPath);
+        expect((error as Error).message).toContain('concurrency.maxConversations');
+        expect(mockRegisterApiRoutes).not.toHaveBeenCalled();
+      } finally {
+        await unlink(configPath);
+        clearConfigCache();
+      }
+    }
+  );
 
   test('repository config cannot override server-wide conversation admission', async () => {
     const repoPath = trackTempRoot(await mkdtemp(join(tmpdir(), 'server-conversation-repo-')));
