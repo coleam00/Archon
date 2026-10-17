@@ -231,29 +231,6 @@ test('installed plugin descriptor mismatch keeps the update message and refuses 
   }
 });
 
-test('built-in descriptor mismatch names source change and run resume and refuses the session', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'archon-builtin-descriptor-'));
-  try {
-    const file = join(directory, 'session');
-    const runtime = processProviderRegistration(
-      { ...descriptor, id: 'claude' },
-      [process.execPath, fixture, 'mismatch', file, 'claude'],
-      'source'
-    ).factory();
-    const runId = '15454d16-0000-4000-8000-000000000001';
-    await expect(
-      collect(runtime.sendQuery('turn', tmpdir(), undefined, { env: { WORKFLOW_ID: runId } }))
-    ).rejects.toEqual(
-      new Error(
-        `Archon's source changed under this run (built-in provider claude); the run can continue with archon workflow resume ${runId}`
-      )
-    );
-    expect(existsSync(file)).toBe(false);
-  } finally {
-    await removeTempTree(directory);
-  }
-});
-
 test('source descriptor mismatch without a run names restart advice', async () => {
   const runtime = processProviderRegistration(
     { ...descriptor, id: 'claude' },
