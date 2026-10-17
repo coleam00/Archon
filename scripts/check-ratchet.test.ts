@@ -208,6 +208,23 @@ describe('checkRatchet', () => {
     ]);
   });
 
+  test('names the base file a failing score came from when a move merges two bases', () => {
+    const repo = repoOnBranch();
+    const f = (...callbacks: string[]): string =>
+      `export function f(xs: number[]) {\n${callbacks.map(c => `  xs.forEach(${c});\n`).join('')}}\n`;
+    const nested = 'x => (x ? (x ? 1 : 2) : 0)';
+    write(repo, 'src/a.ts', f(nested));
+    write(repo, 'src/b.ts', `${f('x => x')}\n`);
+    commitAll(repo, 'siblings in two files');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'src/a.ts', '');
+    write(repo, 'src/b.ts', f(nested, 'x => (x ? 1 : 0)'));
+    commitAll(repo, 'move and raise the own callback');
+    expect(checkRatchet(repo, 'main').failures).toEqual([
+      'src/b.ts: `f > xs.forEach()` cognitive complexity 0 -> 1',
+    ]);
+  });
+
   test('compares a renamed file with the file it came from', () => {
     const repo = repoOnBranch();
     renameSync(join(repo, 'src/a.ts'), join(repo, 'src/renamed.ts'));

@@ -352,14 +352,18 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
       // Head units beyond the file's own base count may have moved in, so the moved base scores
       // join the comparison; with no surplus they stay out and cannot excuse a raise.
       const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
-      const beforeScores = [...sameFile, ...(origin?.scores ?? [])].sort((a, b) => b - a);
+      const before = [
+        ...sameFile.map(score => ({ score, file: path })),
+        ...(origin?.scores.map(score => ({ score, file: origin.file })) ?? []),
+      ].sort((a, b) => b.score - a.score);
       const position = afterScores.findIndex(
-        (after, index) => index < beforeScores.length && after > beforeScores[index]
+        (after, index) => index < before.length && after > before[index].score
       );
       if (position === -1) continue;
-      const from = origin === undefined ? '' : ` (base: ${origin.file})`;
+      const { score, file } = before[position];
+      const from = file === path ? '' : ` (base: ${file})`;
       report(
-        `${path}: \`${identity}\` cognitive complexity ${beforeScores[position]} -> ${afterScores[position]}${from}`,
+        `${path}: \`${identity}\` cognitive complexity ${score} -> ${afterScores[position]}${from}`,
         `${path}:${identity}`
       );
     }
