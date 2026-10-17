@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import {

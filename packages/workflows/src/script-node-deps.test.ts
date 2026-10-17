@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *

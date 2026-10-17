@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Unit tests for the declared-input contract module (#2470, #2554).
  *

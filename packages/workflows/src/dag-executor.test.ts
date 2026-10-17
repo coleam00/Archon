@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
@@ -21,7 +22,7 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { chmod, mkdir, mkdtemp, writeFile, rm, readFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile, readFile } from 'fs/promises';
 import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
@@ -1546,7 +1547,7 @@ describe('DAG Loader -- cycle detection', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       /* ignore */
     }
@@ -2351,7 +2352,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
   });
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true });
+    await removeTempTree(tempDir);
   });
 
   it('inlines small output even when outputFileDir is provided', () => {
@@ -2595,7 +2596,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -3358,7 +3359,7 @@ describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -3441,7 +3442,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -3811,7 +3812,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   afterEach(async () => {
     // force: true already no-ops on a missing dir — any other failure (EBUSY/EPERM)
     // should surface, not be swallowed.
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
   it('bun script delivers the user message via env var, never spliced into source', async () => {
@@ -4132,7 +4133,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -4686,7 +4687,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -4894,7 +4895,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -5829,7 +5830,7 @@ describe('executeDagWorkflow -- tool events reach a streaming platform', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -5897,7 +5898,7 @@ describe('executeDagWorkflow -- provider event recording', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -6079,7 +6080,7 @@ describe('loadMcpConfig', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
   it('loads and parses a valid MCP config JSON', async () => {
@@ -6348,7 +6349,7 @@ describe('executeDagWorkflow -- skills options', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -6978,7 +6979,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -13940,7 +13941,7 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -14202,7 +14203,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -14956,7 +14957,7 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -15067,7 +15068,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -17066,7 +17067,7 @@ describe('executeDagWorkflow -- cancel node', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -17188,7 +17189,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       yield { type: 'result', sessionId: 'dag-session-id' };
     });
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -17857,7 +17858,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
   it('persists a future wait and returns without invoking a provider', async () => {
@@ -18493,7 +18494,7 @@ describe('executeDagWorkflow -- approval node', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -19483,7 +19484,7 @@ describe('executeDagWorkflow -- env var injection', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -19680,7 +19681,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -20353,7 +20354,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -20560,7 +20561,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -21343,7 +21344,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -23241,7 +23242,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -23529,7 +23530,7 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
       yield { type: 'agent_message_chunk', text: 'DAG AI response' };
       yield { type: 'result', sessionId: 'dag-session-id' };
     });
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
   it('persists false as failed while lifecycle completion remains successful', async () => {
@@ -23792,7 +23793,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -23963,7 +23964,7 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -24285,7 +24286,7 @@ describe('provider resolution -- regression for #1610', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -24396,7 +24397,7 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -24694,7 +24695,7 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -25955,7 +25956,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore
     }
@@ -30374,7 +30375,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore
     }
@@ -32119,7 +32120,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -32539,7 +32540,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -33359,7 +33360,7 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -35317,7 +35318,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -36109,7 +36110,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -36428,7 +36429,7 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -36782,7 +36783,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -36911,7 +36912,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -37063,7 +37064,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -37361,7 +37362,7 @@ describe('TokenUsage axis seam guard', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -37644,7 +37645,7 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
-    await rm(testDir, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(testDir);
   });
 
   /** Provider mock: the producer prompt returns the structured payload; every other
@@ -39471,7 +39472,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -40630,7 +40631,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }
@@ -42995,7 +42996,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
 
   afterEach(async () => {
     try {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     } catch {
       // ignore cleanup errors
     }

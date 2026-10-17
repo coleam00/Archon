@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * `@archon/paths` sits below `@archon/workflows` and cannot import its types, so it
  * mirrors the telemetry vocabularies this package owns. These checks make the mirrors

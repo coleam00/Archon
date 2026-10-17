@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { readSubrunMetadata } from './schemas/workflow-run';
 import { describe, it, expect } from 'bun:test';
 
