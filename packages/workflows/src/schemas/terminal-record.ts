@@ -16,6 +16,28 @@ export const runGraphSchema = z.object({
 export type RunGraph = z.infer<typeof runGraphSchema>;
 export const terminalStatusSchema = terminalWorkflowRunStatusSchema;
 
+/** Run metadata key where a completed run's host-assessed disposition waits for the record. */
+export const WORKTREE_DISPOSITION_METADATA_KEY = 'worktree_disposition';
+/** What happens to the worktree a run created once the run is terminal, and why it stays. */
+export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
+  z.object({ disposition: z.literal('release') }),
+  z.object({
+    disposition: z.literal('retained'),
+    reason: z.enum([
+      'resumable',
+      'cancelled',
+      'workspace_retained',
+      'in_use',
+      'uncommitted_changes',
+      'unpushed_commits',
+      'published_branch',
+      'check_failed',
+    ]),
+    detail: z.string().optional(),
+  }),
+]);
+export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;
+
 export const artifactManifestSchema = z.object({
   root: z.string().nullable(),
   files: z.array(
@@ -78,5 +100,7 @@ export const terminalRecordSchema = z.object({
     }),
   ]),
   artifacts: artifactManifestSchema,
+  /** Present only when the run holds proof that it created its worktree. */
+  worktree_disposition: worktreeDispositionSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

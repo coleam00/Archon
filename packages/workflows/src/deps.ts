@@ -16,7 +16,8 @@ import type {
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type { AttentionOption } from './schemas/dag-node';
-import { legacyOccurrenceStep, type RunAttention } from './schemas/workflow-run';
+import { legacyOccurrenceStep, type RunAttention, type WorkflowRun } from './schemas/workflow-run';
+import type { WorktreeDisposition } from './schemas/terminal-record';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -245,6 +246,18 @@ export interface StoredProviderCredential {
 export interface WorkflowDeps {
   providers: ProviderRegistry;
   store: IWorkflowStore;
+  /**
+   * Optional: release the worktree a completed run created. `assess` runs before the
+   * completion write and its result goes into the terminal record; it returns null when
+   * the run has no proof it created its checkout, and reports a failed check as a
+   * `check_failed` retention instead of throwing. `release` runs only after the
+   * completion write commits and only for a `release` disposition; it re-checks under
+   * the worktree lock and throws when it refuses, which the engine logs and ignores.
+   */
+  completedRunWorktree?: {
+    assess(run: WorkflowRun): Promise<WorktreeDisposition | null>;
+    release(run: WorkflowRun): Promise<void>;
+  };
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
   /** Seal a run-owned config layer before it is persisted in public run metadata. */
