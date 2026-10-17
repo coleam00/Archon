@@ -63,7 +63,7 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 - **Wrong** — a reachable path behaves incorrectly, reports false success, loses data, or opens an isolation or security hole.
 - **Untrue** — a comment, doc, name, type, or pull-request claim is false after the change.
 - **Undocumented** — user-facing behavior the change adds has no documentation where the project documents that kind of behavior.
-- **Unproved** — a test passes for the old or a plausibly wrong implementation; a new guard, check, or retry was never seen failing; behavior the change adds or fixes at a tool boundary, in persisted data, in user-visible output, or in failure semantics has no test that fails when it breaks; an acceptance item is met without the proof it names.
+- **Unproved** — a test passes for the old or a plausibly wrong implementation; a new guard, check, or retry was never seen failing; behavior the change adds or fixes at a tool boundary, in persisted data, in user-visible output, or in failure semantics has no test that fails when a plausible edit breaks it silently; an acceptance item is met without the proof it names.
 - **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes: dead code, an unused field, parameter, or extension point, a pass-through wrapper, a redundant gate or branch, a reimplemented primitive, speculative configuration or fallback.
 - **Doubly owned** — two declarations must agree and nothing enforces it; data or a decision gains a second owner; a vocabulary is re-enumerated at a use site; two sites on the touched path disagree. A wire or persisted contract without a type at the seam is doubly owned.
 
