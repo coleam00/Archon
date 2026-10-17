@@ -265,6 +265,9 @@ function createMockStore(): MockWorkflowStore {
     listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
       throw new Error('Unexpected listStateDocuments');
     }),
+    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
+      throw new Error('Unexpected getStateDocuments');
+    }),
     pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
       throw new Error('Unexpected pruneStateRevisions');
     }),

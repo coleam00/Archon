@@ -42,7 +42,7 @@ import { forgeSource, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, stateList, statePatch, statePut } from '../../.shared/state.ts';
+import { stateDocuments, stateGet, statePatch, statePut } from '../../.shared/state.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -53,11 +53,9 @@ interface Stored {
 
 function readStored(): Map<string, Stored> {
   const stored = new Map<string, Stored>();
-  for (const name of stateList(DECISIONS_PREFIX)) {
-    const read = stateGet(name);
-    if (read.value === null) continue;
-    const record = parseDecisionRecord(name, read.value);
-    stored.set(record.key, { revision: read.revision, record });
+  for (const { name, revision, value } of stateDocuments(DECISIONS_PREFIX)) {
+    const record = parseDecisionRecord(name, value);
+    stored.set(record.key, { revision, record });
   }
   return stored;
 }

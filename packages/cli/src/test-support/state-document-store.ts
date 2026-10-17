@@ -21,6 +21,18 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
     JSON.stringify([stateScopeKey(scope), name]);
   const rows = (scope: StateScope, name: string): StateRevision[] =>
     documents.get(key(scope, name)) ?? [];
+  /** Each document's latest revision under the prefix, ordered by name. */
+  const latestRevisions = (scope: StateScope, options?: { prefix?: string }): StateRevision[] => {
+    const prefix = stateNamePrefixSchema.parse(options?.prefix ?? '');
+    const scopeKey = stateScopeKey(scope);
+    return [...documents.entries()]
+      .flatMap(([id, history]) => {
+        const [owner, name] = JSON.parse(id) as [string, string];
+        const last = history.at(-1);
+        return owner === scopeKey && name.startsWith(prefix) && last ? [structuredClone(last)] : [];
+      })
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  };
   const commit = (
     input: Parameters<IStateDocumentStore['deleteStateDocument']>[0],
     operation: StateRevision['operation'],
@@ -70,27 +82,19 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
     listStateDocuments: async (
       scope,
       options
-    ): ReturnType<IStateDocumentStore['listStateDocuments']> => {
-      const prefix = stateNamePrefixSchema.parse(options?.prefix ?? '');
-      const scopeKey = stateScopeKey(scope);
-      return [...documents.entries()]
-        .flatMap(([id, history]) => {
-          const [owner, name] = JSON.parse(id) as [string, string];
-          const last = history.at(-1);
-          return owner === scopeKey && name.startsWith(prefix) && last
-            ? [
-                {
-                  name,
-                  revision: last.revision,
-                  updatedAt: last.createdAt,
-                  writer: structuredClone(last.writer),
-                  deleted: last.value === null,
-                },
-              ]
-            : [];
-        })
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    },
+    ): ReturnType<IStateDocumentStore['listStateDocuments']> =>
+      latestRevisions(scope, options).map(last => ({
+        name: last.name,
+        revision: last.revision,
+        updatedAt: last.createdAt,
+        writer: last.writer,
+        deleted: last.value === null,
+      })),
+    getStateDocuments: async (
+      scope,
+      options
+    ): ReturnType<IStateDocumentStore['getStateDocuments']> =>
+      latestRevisions(scope, options).filter(last => last.value !== null),
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       const cutoff = Date.now() - days * 86400000;
       let count = 0;

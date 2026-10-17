@@ -608,6 +608,7 @@ async function main(): Promise<number> {
             ...(typeof values.project === 'string' ? { project: values.project } : {}),
             ...(values.install === true ? { install: true } : {}),
             ...(values.raw === true ? { raw: true } : {}),
+            ...(values.values === true ? { values: true } : {}),
           },
           { storeKind }
         );

@@ -76,6 +76,24 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
     }
     return result;
   }
+  /** Each document's latest revision under the prefix, ordered by name. */
+  function latestRevisions(
+    scope: StateScope,
+    options: { prefix?: string }
+  ): Promise<StateRevision[]> {
+    const key = stateScopeKey(scope);
+    const prefix = stateNamePrefixSchema.parse(options.prefix ?? '');
+    return query(async () => {
+      const result: StateRevision[] = [];
+      for (const record of await documents()) {
+        if (stateScopeKey(record.scope) !== key || !record.name.startsWith(prefix)) continue;
+        const row = await latest(record.scope, record.name);
+        if (!row) throw new Error('State document has no revisions');
+        result.push(row);
+      }
+      return result.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    });
+  }
   function query<T>(call: () => Promise<T>): Promise<T> {
     return commit(root, [], async () => ({ result: await call(), changes: {} }));
   }
@@ -136,26 +154,16 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
         return Promise.all(numbers.map(number => read(scope, name, number)));
       });
     },
-    listStateDocuments: async (scope, options = {}) => {
-      const key = stateScopeKey(scope);
-      const prefix = stateNamePrefixSchema.parse(options.prefix ?? '');
-      return query(async () => {
-        const result = [];
-        for (const record of await documents()) {
-          if (stateScopeKey(record.scope) !== key || !record.name.startsWith(prefix)) continue;
-          const row = await latest(record.scope, record.name);
-          if (!row) throw new Error('State document has no revisions');
-          result.push({
-            name: row.name,
-            revision: row.revision,
-            updatedAt: row.createdAt,
-            writer: row.writer,
-            deleted: row.value === null,
-          });
-        }
-        return result.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-      });
-    },
+    listStateDocuments: async (scope, options = {}) =>
+      (await latestRevisions(scope, options)).map(row => ({
+        name: row.name,
+        revision: row.revision,
+        updatedAt: row.createdAt,
+        writer: row.writer,
+        deleted: row.value === null,
+      })),
+    getStateDocuments: async (scope, options = {}) =>
+      (await latestRevisions(scope, options)).filter(row => row.value !== null),
     pruneStateRevisions: async days => {
       z.number().int().nonnegative().parse(days);
       return commit(root, [], async () => {

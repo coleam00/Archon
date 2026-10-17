@@ -392,6 +392,35 @@ describe('the discoveries scripts', () => {
     expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({ decision: { comment: null } });
   }, 60_000);
 
+  test('facts and outcome each read the whole decision set in one state call, not one per document', () => {
+    const at = install();
+    const keys = Array.from({ length: 6 }, (_, index) => `old-defect-${String(index)}`);
+    for (const key of keys) seed(at, { ...stored(key, { kind: 'dropped' }), refs: [`${RUN}:review#0`] });
+    seed(at, stored('owed-defect', { ...PENDING, body: '<!-- archon-discovery owed-defect -->\nThe brief.' }));
+    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-discoveries-calls-'))), 'calls.jsonl');
+    const decisionReads = (): string[][] => {
+      const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+      writeFileSync(log, '');
+      return calls.filter(argv => argv[0] === 'state' && argv.some(arg => arg.startsWith('discoveries/decisions/')) && argv[1] !== 'patch');
+    };
+    const pass = { runId: 'pass-2', runs: [] };
+    const facts = script(at, 'facts', pass, { ARCHON_CALL_LOG: log });
+    expect(ok(facts, 'facts')).toMatchObject({ path: 'idle' });
+    expect(decisionReads()).toEqual([['state', 'list', '--prefix', 'discoveries/decisions/', '--values']]);
+    expect(readFileSync(join(facts.artifacts, 'drain/discovery-decisions.md'), 'utf8')).toContain('## old-defect-5');
+    const outcome = script(
+      at,
+      'outcome',
+      pass,
+      { INPUTS_PATH: 'idle', INPUTS_DECISIONS: 'null', INPUTS_SUMMARY: 'null', ARCHON_CALL_LOG: log },
+      { 'drain/queue.json': readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8') }
+    );
+    expect(ok(outcome, 'outcome').written).toEqual([
+      { key: 'owed-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/100' },
+    ]);
+    expect(decisionReads()).toEqual([['state', 'list', '--prefix', 'discoveries/decisions/', '--values']]);
+  }, 60_000);
+
   test('a rediscovery tracked with no new evidence keeps an owed evidence comment, and posts it', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('covered'), record('covered again')] });

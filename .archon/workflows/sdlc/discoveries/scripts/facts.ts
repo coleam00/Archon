@@ -36,8 +36,8 @@ import {
   claimDisposition,
   listRuns,
   runStatus,
+  stateDocuments,
   stateGet,
-  stateList,
   statePut,
 } from '../../.shared/state.ts';
 
@@ -53,10 +53,7 @@ function parseTime(name: string, value: string): number | undefined {
 }
 
 function readDecisions(): DecisionRecord[] {
-  return stateList(DECISIONS_PREFIX).flatMap(name => {
-    const value = stateGet(name).value;
-    return value === null ? [] : [parseDecisionRecord(name, value)];
-  });
+  return stateDocuments(DECISIONS_PREFIX).map(({ name, value }) => parseDecisionRecord(name, value));
 }
 
 /** Claim the run for this pass: false when another pass holds it or won the write. */
