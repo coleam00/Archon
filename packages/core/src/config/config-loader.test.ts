@@ -351,6 +351,18 @@ workflows:
 
       await expect(loadGlobalConfig()).rejects.toBe(permError);
     });
+
+    test.each(['false', '[]'])(
+      'a top level that is not a mapping fails the load: %s',
+      async content => {
+        mockFsReadFile.mockResolvedValue(content);
+
+        const error = (await loadGlobalConfig().catch(err => err)) as Error;
+
+        expect(error.message).toContain(join(archonHome, 'config.yaml'));
+        expect(error.message).toContain('not a map of settings');
+      }
+    );
   });
 
   describe('loadRepoConfig', () => {
@@ -433,9 +445,7 @@ ${field}:
       'a top level that is not a mapping fails the load: %s',
       async content => {
         mockFsReadFile.mockResolvedValue(content);
-        await expect(loadRepoConfig('/repo')).rejects.toThrow(
-          'Repository config must be a mapping'
-        );
+        await expect(loadRepoConfig('/repo')).rejects.toThrow(/not a map of settings/);
       }
     );
 
@@ -1342,9 +1352,9 @@ assistants:
     });
   });
 
-  // The loaders degrade an invalid `tiers`/`aliases`/`workflows` block to an
-  // empty config; a settings write must merge into what is actually on disk,
-  // or it replaces the operator's whole file with just the patch.
+  // The loaders refuse a file with an invalid `tiers`/`aliases`/`workflows`
+  // block; a settings write must merge into what is actually on disk so it can
+  // repair the block without replacing the rest of the file.
   describe('updateGlobalConfig over an invalid file', () => {
     const fileWithBadTier = `
 botName: MyBot
@@ -1466,7 +1476,7 @@ assistants:
       mockFsReadFile.mockResolvedValue('- botName: MyBot\n');
 
       await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
-        /top level is not a map/
+        /not a map of settings/
       );
       expect(mockFsWriteFile).not.toHaveBeenCalled();
     });

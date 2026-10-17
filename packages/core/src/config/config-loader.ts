@@ -207,14 +207,23 @@ function parseYaml(content: string): unknown {
   return Bun.YAML.parse(content);
 }
 
-/** Bun's YAML error names neither the file nor the line, so the message adds the file. */
-function parseConfigYaml(content: string, configPath: string): unknown {
+/**
+ * Parse a config file into its top-level map of settings; an empty file is `{}`.
+ * Bun's YAML error names neither the file nor the line, so the message adds the file.
+ */
+function parseConfigMapping(content: string, configPath: string): Record<string, unknown> {
+  let parsed: unknown;
   try {
-    return parseYaml(content);
+    parsed = parseYaml(content);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`'${configPath}' is not valid YAML (${reason}).`, { cause: error });
   }
+  if (parsed === null || parsed === undefined) return {};
+  if (!isConfigRecord(parsed)) {
+    throw new Error(`'${configPath}' is not a map of settings at its top level.`);
+  }
+  return parsed;
 }
 
 // Cache for loaded configs
@@ -323,9 +332,8 @@ function isConfigRecord(value: unknown): value is Record<string, unknown> {
  * the same one an explicitly selected `--config` run layer uses, so a value is
  * accepted or refused identically on both paths.
  *
- * Deliberately NOT inside the loaders' degrade-and-log `catch`: a setting the
- * provider would drop must refuse to load, because the run reports it as the
- * value the node ran at (#2582). Values are checked, not rewritten — narrowing
+ * A setting the provider would drop must refuse to load, because the run
+ * reports it as the value the node ran at (#2582). Values are checked, not rewritten — narrowing
  * stays with the defensive parsers at the execution boundary.
  *
  * Entries for unregistered providers pass through untouched. There is no owner
@@ -451,7 +459,7 @@ async function readConfigFileIfPresent(configPath: string): Promise<string | und
 /**
  * Read ~/.archon/config.yaml. A missing file is created from the documented
  * template and loads as empty. Every other failure throws, naming the file:
- * permissions, YAML syntax, or a rejected `tiers`/`aliases`, `streaming`,
+ * permissions, YAML syntax, a top level that is not a mapping, or a rejected `tiers`/`aliases`, `streaming`,
  * `attentionNotices`, `concurrency` or `workflows` block.
  */
 async function readGlobalConfig(configPath: string): Promise<GlobalConfig> {
@@ -460,13 +468,13 @@ async function readGlobalConfig(configPath: string): Promise<GlobalConfig> {
     await createDefaultConfig(configPath);
     return {};
   }
-  const parsed = parseConfigYaml(content, configPath);
+  const parsed = parseConfigMapping(content, configPath);
   validateWorkflowContinuationConfig(parsed, configPath);
   validateModelBindingConfig(parsed, configPath);
   validateStreamingConfig(parsed, configPath);
   validateAttentionNoticesConfig(parsed, configPath);
   validateConversationConcurrencyConfig(parsed, configPath);
-  return (parsed as GlobalConfig | null) ?? {};
+  return parsed as GlobalConfig;
 }
 
 /**
@@ -516,13 +524,10 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
 async function readRepoConfig(configPath: string): Promise<RepoConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  const raw = parseConfigYaml(content, configPath);
-  if (raw !== null && !isConfigRecord(raw)) {
-    throw new Error(`Repository config must be a mapping: ${configPath}`);
-  }
+  const raw = parseConfigMapping(content, configPath);
   validateWorkflowContinuationConfig(raw, configPath);
   validateModelBindingConfig(raw, configPath);
-  const parsed = (raw as RepoConfig | null) ?? {};
+  const parsed = raw as RepoConfig;
   const recommendedWorkflows = sanitizeRecommendedWorkflows(
     (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
     configPath
@@ -839,27 +844,15 @@ export function logConfig(config: MergedConfig): void {
 /**
  * Read ~/.archon/config.yaml for a settings write: the file's actual parsed
  * content, unvalidated, so a patch can repair a bad value and every unrelated
- * key survives. Unlike the loaders this never degrades — merging into a
- * fallback `{}` would replace the operator's whole file with just the patch.
- * Only a missing file starts empty; an unreadable file or invalid YAML throws.
+ * key survives, where the loaders would refuse the file. Only a missing file
+ * starts empty; an unreadable file, invalid YAML or a top level that is not a
+ * mapping throws, because merging into `{}` would replace the operator's whole
+ * file with just the patch.
  */
 async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(content);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot update '${configPath}': it is not valid YAML (${reason}).`, {
-      cause: error,
-    });
-  }
-  if (parsed === null || parsed === undefined) return {};
-  if (!isConfigRecord(parsed)) {
-    throw new Error(`Cannot update '${configPath}': its top level is not a map of settings.`);
-  }
-  return parsed as GlobalConfig;
+  return parseConfigMapping(content, configPath) as GlobalConfig;
 }
 
 /**
@@ -948,9 +941,9 @@ export async function updateGlobalConfig(
       merged.aliases = mergeBindingPatch(current.aliases, updates.aliases);
     }
 
-    // Refuse to persist what the loaders would then refuse to read or silently
-    // degrade: a bad value from the settings UI would otherwise brick every later
-    // config load, and a bad block already on disk must be repaired, not kept.
+    // Refuse to persist what the loaders would then refuse to read: a bad value
+    // from the settings UI would otherwise brick every later config load, and a
+    // bad block already on disk must be repaired, not kept.
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateStreamingConfig(merged, configPath);
