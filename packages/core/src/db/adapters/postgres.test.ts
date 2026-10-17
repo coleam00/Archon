@@ -155,6 +155,45 @@ describe('PostgresAdapter', () => {
       await expect(adapter.query('SELECT 1')).rejects.toThrow('connection lost');
     });
 
+    test('retries a deadlock victim and returns the retried result', async () => {
+      // Finish schema init first, so only this query reaches the mock below.
+      await adapter.query('SELECT 0');
+      let calls = 0;
+      mockPoolQuery = async () => {
+        calls++;
+        if (calls === 1) throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+        return { rows: [{ ok: true }], rowCount: 1 };
+      };
+
+      const result = await adapter.query('INSERT INTO t VALUES (1)');
+      expect(result.rows).toEqual([{ ok: true }]);
+      expect(calls).toBe(2);
+    });
+
+    test('gives up after four deadlocks and throws the last one', async () => {
+      await adapter.query('SELECT 0');
+      let calls = 0;
+      mockPoolQuery = async () => {
+        calls++;
+        throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+      };
+
+      await expect(adapter.query('INSERT INTO t VALUES (1)')).rejects.toThrow('deadlock detected');
+      expect(calls).toBe(4);
+    });
+
+    test('never retries an ordinary error', async () => {
+      await adapter.query('SELECT 0');
+      let calls = 0;
+      mockPoolQuery = async () => {
+        calls++;
+        throw Object.assign(new Error('duplicate key'), { code: '23505' });
+      };
+
+      await expect(adapter.query('INSERT INTO t VALUES (1)')).rejects.toThrow('duplicate key');
+      expect(calls).toBe(1);
+    });
+
     test('query without params passes undefined to pool', async () => {
       let capturedParams: unknown[] | undefined = ['sentinel'];
 
@@ -173,6 +212,37 @@ describe('PostgresAdapter', () => {
   // -------------------------------------------------------------------------
 
   describe('withTransaction()', () => {
+    test('a deadlocked transaction is rolled back and run again whole', async () => {
+      await adapter.query('SELECT 0');
+      const issued: string[] = [];
+      let inserts = 0;
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          if (sql.startsWith('INSERT') && ++inserts === 1)
+            throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+          return { rows: [], rowCount: 1 };
+        },
+        release: () => {},
+      };
+      let runs = 0;
+      const result = await adapter.withTransaction(async q => {
+        runs++;
+        await q('INSERT INTO t VALUES (1)');
+        return 'done';
+      });
+      expect(result).toBe('done');
+      expect(runs).toBe(2);
+      expect(issued).toEqual([
+        'BEGIN',
+        'INSERT INTO t VALUES (1)',
+        'ROLLBACK',
+        'BEGIN',
+        'INSERT INTO t VALUES (1)',
+        'COMMIT',
+      ]);
+    });
+
     test('issues BEGIN and COMMIT on success', async () => {
       const issued: string[] = [];
       mockClient = {
@@ -528,6 +598,111 @@ describe('PostgresAdapter', () => {
       expect(issued).toContain('ROLLBACK');
       // client.release() must be called in the finally block to avoid connection leaks
       expect(released).toBe(true);
+    });
+
+    /**
+     * Every CLI process boots an adapter. Converging on every boot took an exclusive
+     * lock on the workflow events table (DROP/CREATE TRIGGER) while live runs were
+     * inserting node events, and those inserts died as deadlock victims.
+     */
+    test('records a fingerprint after converging, and a later boot with it skips convergence', async () => {
+      const poolCalls: { sql: string; params?: unknown[] }[] = [];
+      let recorded: unknown;
+      mockPoolQuery = async (sql, params) => {
+        poolCalls.push({ sql, params });
+        if (sql.startsWith('UPDATE remote_agent_schema_version SET schema_fingerprint'))
+          recorded = params?.[0];
+        if (sql.startsWith('SELECT schema_fingerprint'))
+          return { rows: recorded ? [{ schema_fingerprint: recorded }] : [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      };
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const first = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await first.query('SELECT 1');
+      expect(issued).toContain('-- schema sql');
+      expect(typeof recorded).toBe('string');
+      expect(
+        poolCalls.some(c => c.sql.includes('ADD COLUMN IF NOT EXISTS schema_fingerprint'))
+      ).toBe(true);
+
+      issued.length = 0;
+      const second = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await second.query('SELECT 2');
+      // No transaction, no advisory lock, no DDL, no trigger rebuild.
+      expect(issued).toEqual([]);
+    });
+
+    test('a changed schema converges again even with an older fingerprint recorded', async () => {
+      mockPoolQuery = async sql =>
+        sql.startsWith('SELECT schema_fingerprint')
+          ? { rows: [{ schema_fingerprint: 'older' }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- new schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+      expect(issued).toContain('-- new schema sql');
+    });
+
+    test('no fingerprint is recorded when the notify trigger did not install', async () => {
+      let updated = false;
+      mockPoolQuery = async sql => {
+        if (sql.startsWith('UPDATE remote_agent_schema_version SET schema_fingerprint'))
+          updated = true;
+        return { rows: [], rowCount: 0 };
+      };
+      mockClient = {
+        query: async (sql: string) => {
+          if (sql.includes('archon_notify_workflow_event')) throw new Error('permission denied');
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+      expect(updated).toBe(false);
+    });
+
+    test('a failed fingerprint probe falls back to converging', async () => {
+      mockPoolQuery = async sql => {
+        if (sql.startsWith('SELECT schema_fingerprint'))
+          throw Object.assign(new Error('column "schema_fingerprint" does not exist'), {
+            code: '42703',
+          });
+        return { rows: [], rowCount: 0 };
+      };
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+      expect(issued).toContain('-- schema sql');
     });
 
     test('withTransaction() awaits schema init before opening a tx', async () => {
