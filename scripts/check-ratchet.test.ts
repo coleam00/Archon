@@ -189,6 +189,25 @@ describe('checkRatchet', () => {
     ]);
   });
 
+  test('compares a function moved beside one that shares its identity', () => {
+    const repo = repoOnBranch();
+    const f = (...callbacks: string[]): string =>
+      `export function f(xs: number[]) {\n${callbacks.map(c => `  xs.forEach(${c});\n`).join('')}}\n`;
+    write(repo, 'src/a.ts', f('x => x'));
+    write(repo, 'src/b.ts', `${f('x => (x ? 1 : 0)')}\n`);
+    commitAll(repo, 'siblings in two files');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'src/a.ts', '');
+    write(repo, 'src/b.ts', f('x => (x ? 1 : 0)', 'x => x'));
+    commitAll(repo, 'move');
+    expect(checkRatchet(repo, 'main').failures).toEqual([]);
+
+    write(repo, 'src/b.ts', f('x => (x ? 1 : 0)', 'x => (x ? 1 : 0)'));
+    expect(checkRatchet(repo, 'main').failures).toEqual([
+      'src/b.ts: `f > xs.forEach()` cognitive complexity 0 -> 1 (base: src/a.ts)',
+    ]);
+  });
+
   test('compares a renamed file with the file it came from', () => {
     const repo = repoOnBranch();
     renameSync(join(repo, 'src/a.ts'), join(repo, 'src/renamed.ts'));

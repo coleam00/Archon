@@ -24,6 +24,8 @@ import ts from 'typescript';
  * Units that share an identity, such as two `xs.forEach(...)` callbacks in one function, cannot
  * be paired one to one, so they compare as lists sorted highest first: no unit may score above
  * the base unit in its position. A sibling added among them can be refused, and waived as usual.
+ * When a file gains units of an identity that left another touched file, the moved base scores
+ * join that file's list.
  *
  * A deliberate increase lands with a `Ratchet-Allow:` trailer on one of the change's commits:
  * `Ratchet-Allow: <path>` for a file's line count, `Ratchet-Allow: <path>:<identity>` for a
@@ -346,9 +348,11 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
   for (const { path, base, head } of files) {
     if (head === null) continue;
     for (const [identity, afterScores] of head.units) {
-      const sameFile = base?.units.get(identity);
-      const origin = sameFile === undefined ? moved.get(identity) : undefined;
-      const beforeScores = sameFile ?? origin?.scores ?? [];
+      const sameFile = base?.units.get(identity) ?? [];
+      // Head units beyond the file's own base count may have moved in, so the moved base scores
+      // join the comparison; with no surplus they stay out and cannot excuse a raise.
+      const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
+      const beforeScores = [...sameFile, ...(origin?.scores ?? [])].sort((a, b) => b - a);
       const position = afterScores.findIndex(
         (after, index) => index < beforeScores.length && after > beforeScores[index]
       );
