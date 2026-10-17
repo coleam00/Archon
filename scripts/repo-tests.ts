@@ -53,7 +53,10 @@ const TEST_SHARDS: readonly TestShard[] = [
   ...new Set(ROOT_TEST_PLAN.map((step): TestShard => step.shard)),
 ];
 
-/** Each workspace runs its own `test` script, which owns that package's group splitting. */
+/**
+ * The command one plan step runs. Each workspace runs its own `test` script, which owns that
+ * package's group splitting and concurrency.
+ */
 export function planStepCommand(step: RootTestStep): string[] {
   if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
   if (step.kind === 'root') {
