@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-17
+
+Release binaries no longer hand a target repository's `.env` to providers.
+
+### Security
+
+- Release binaries, including the Claude, Codex and Pi provider plugins and the forge-github and chat-slack plugins, no longer load `.env` or `bunfig.toml` from their working directory. In v0.12.0 a provider started in a target repository loaded that repository's `.env` and undid Archon's strip of it, so a project's `ANTHROPIC_API_KEY` could reach Claude and override your subscription. Source installs were not affected. If you ran v0.12.0 in a repository whose `.env` holds provider keys, upgrade, then run `archon provider add` again for each provider you use. (#4426, #4427)
+
 ## [0.12.0] - 2026-10-17
 
 Providers become separate installs for release binaries. The SDLC pack gains intake, build and merge queues, a discoveries drain and attention pauses. Runs wait out usage and rate limits. Workflows can run without a database, keep durable state, and answer through one attention queue.
