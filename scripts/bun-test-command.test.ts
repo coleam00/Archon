@@ -111,7 +111,7 @@ describe('every runner assembles its command through bunTestCommand', () => {
       const source = await readFile(join(import.meta.dir, entry), 'utf8');
       if (/\[\s*'bun'\s*,\s*'test'/.test(source)) offenders.push(entry);
       // A runner that spawns tests without bunTestEnv lets them send telemetry.
-      if (source.includes('bunTestCommand(') && !source.includes('env: bunTestEnv()'))
+      if (source.includes('bunTestCommand(') && !source.includes('env: bunTestEnv('))
         offenders.push(`${entry} (env)`);
     }
     // A hand-built command on any runner path silently drops the default budget for that path.

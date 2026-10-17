@@ -143,7 +143,7 @@ function routeArgument(argument: string): RoutedArgument | undefined {
  */
 export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
-    ...bunTestEnv(env),
+    ...env,
     ARCHON_CLI_COMMAND:
       env.ARCHON_CLI_COMMAND ||
       JSON.stringify([
@@ -157,7 +157,7 @@ export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
 async function run(command: string[], cwd: string): Promise<number> {
   const child = Bun.spawn(command, {
     cwd,
-    env: cwd === REPO_ROOT ? rootTestEnv() : bunTestEnv(),
+    env: bunTestEnv(cwd === REPO_ROOT ? rootTestEnv() : process.env),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   return await child.exited;
