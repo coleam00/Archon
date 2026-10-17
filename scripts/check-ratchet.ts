@@ -57,20 +57,33 @@ function isFunctionUnit(node: ts.Node): node is FunctionUnit {
   );
 }
 
-const compactText = (node: ts.Node): string => node.getText().replace(/\s+/g, '');
+// A unit's name shows an argument only when it is a simple token. Any other argument, such as
+// a callback or an object literal, is `_`: its source would put one callback's body into a
+// sibling's identity, so editing `p.then(a => ...)` would rename the `.catch(...)` after it.
+function simpleToken(node: ts.Node): string | undefined {
+  if (
+    ts.isIdentifier(node) ||
+    node.kind === ts.SyntaxKind.ThisKeyword ||
+    ts.isStringLiteralLike(node) ||
+    ts.isNumericLiteral(node)
+  ) {
+    return node.getText();
+  }
+  if (!ts.isPropertyAccessExpression(node)) return undefined;
+  const object = simpleToken(node.expression);
+  return object === undefined ? undefined : `${object}.${node.name.text}`;
+}
 
-// Inner-call arguments stay in the name so `run('a').catch()` and `run('b').catch()` remain
-// distinct, but function arguments are left out: the source of `p.then(a => ...).catch(...)`
-// would put the `then` callback's body into the `catch` callback's identity.
+const token = (node: ts.Node): string => simpleToken(node) ?? '_';
+
 function calleeName(node: ts.Expression): string {
   if (ts.isPropertyAccessExpression(node))
     return `${calleeName(node.expression)}.${node.name.text}`;
   if (ts.isElementAccessExpression(node)) {
-    return `${calleeName(node.expression)}[${compactText(node.argumentExpression)}]`;
+    return `${calleeName(node.expression)}[${token(node.argumentExpression)}]`;
   }
   if (ts.isCallExpression(node)) {
-    const values = node.arguments.filter(argument => !ts.isFunctionLike(argument));
-    return `${calleeName(node.expression)}(${values.map(compactText).join(',')})`;
+    return `${calleeName(node.expression)}(${node.arguments.map(token).join(',')})`;
   }
   if (ts.isNonNullExpression(node) || ts.isParenthesizedExpression(node)) {
     return calleeName(node.expression);
@@ -82,13 +95,7 @@ function calleeName(node: ts.Expression): string {
 function callLabel(call: ts.CallExpression | ts.NewExpression): string {
   const callee = calleeName(call.expression);
   const argument = call.arguments?.find(candidate => !ts.isFunctionLike(candidate));
-  const label =
-    argument !== undefined &&
-    (ts.isIdentifier(argument) ||
-      ts.isStringLiteralLike(argument) ||
-      ts.isPropertyAccessExpression(argument))
-      ? argument.getText()
-      : '';
+  const label = argument === undefined ? '' : (simpleToken(argument) ?? '');
   return `${ts.isNewExpression(call) ? 'new ' : ''}${callee}(${label})`;
 }
 

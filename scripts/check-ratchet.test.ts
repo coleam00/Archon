@@ -44,7 +44,7 @@ describe('cognitiveUnits', () => {
     const names = (thenBody: string): string[] => [
       ...cognitiveUnits('sample.ts', `p.then(a => ${thenBody}).catch(e => (e ? 1 : 0));`).keys(),
     ];
-    expect(names('a')).toEqual(['p.then()', 'p.then().catch()']);
+    expect(names('a')).toEqual(['p.then()', 'p.then(_).catch()']);
     expect(names('(a ? a : 0)')).toEqual(names('a'));
   });
 
@@ -60,6 +60,17 @@ describe('cognitiveUnits', () => {
       "f > run('b').catch()": 3,
       'f > xs[i].then()': 0,
     });
+  });
+
+  test('does not rename a chained callback when a non-token inner argument changes', () => {
+    const names = (argument: string): string[] => [
+      ...cognitiveUnits('sample.ts', `run(${argument}).catch(e => (e ? 1 : 0));`).keys(),
+    ];
+    expect(names('{ retries: 1 }')).toEqual(['run(_).catch()']);
+    expect(names('{ retries: 2, onError: () => 0 }')).toContain('run(_).catch()');
+    expect(names('wrap(() => 1)')).toEqual(['wrap()', 'run(_).catch()']);
+    expect(names('wrap(() => (x ? 1 : 2))')).toEqual(names('wrap(() => 1)'));
+    expect(names('a, 1, this.b')).toEqual(['run(a,1,this.b).catch()']);
   });
 
   test('counts a missing final newline as a line', () => {
