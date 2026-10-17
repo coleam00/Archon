@@ -639,8 +639,9 @@ function usageLimitNotAGateMessage(
   attention: Extract<RunAttention, { kind: 'usage_limit' }>
 ): string {
   return (
-    `Run ${run.id} is waiting for a provider usage limit to reset at ${attention.resumeAt}, ` +
-    'not at a gate. It continues by itself; cancel or abandon it to stop it.'
+    `Run ${run.id} is not at a gate: it hit a provider usage or rate limit and tries again ` +
+    `by itself at ${attention.resumeAt}. Resume it to try sooner, or cancel or abandon it ` +
+    'to stop it.'
   );
 }
 
