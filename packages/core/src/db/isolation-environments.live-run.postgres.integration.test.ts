@@ -177,6 +177,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
     await seedRun(runId, conversationId, 'running');
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: runId, status: 'running' });
+    await expect(getLiveRunOwningEnv(env.id, undefined, runId)).resolves.toBeNull();
   });
 
   test('a paused run attached through run metadata (sub-run / container stamp) pins the env', async () => {

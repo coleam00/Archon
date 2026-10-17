@@ -11,7 +11,10 @@ import {
   getTerminalRecord,
   type TerminalRecordEvent,
 } from './terminal-record';
-import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
+import {
+  RUN_GRAPH_METADATA_KEY,
+  WORKTREE_DISPOSITION_METADATA_KEY,
+} from './schemas/terminal-record';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -379,5 +382,40 @@ describe('durable terminal projection', () => {
         { event_type: 'workflow_failed', data: { terminal_record: {} } },
       ])
     ).toThrow();
+  });
+
+  it('records why a run keeps the worktree it created, and nothing for one it did not', async () => {
+    const owned_worktree = {
+      envId: 'env-1',
+      creationId: '00000000-0000-4000-8000-000000000001',
+    };
+    const disposition = async (
+      status: 'completed' | 'failed' | 'cancelled',
+      metadata: Record<string, unknown>
+    ): Promise<unknown> =>
+      (await buildTerminalRecord({ run: { ...run, status, metadata }, events: [] }))
+        .worktree_disposition;
+
+    expect(await disposition('failed', { owned_worktree })).toEqual({
+      disposition: 'retained',
+      reason: 'resumable',
+    });
+    expect(await disposition('cancelled', { owned_worktree })).toEqual({
+      disposition: 'retained',
+      reason: 'cancelled',
+    });
+    const assessed = { disposition: 'retained', reason: 'unpushed_commits', detail: '2' };
+    expect(
+      await disposition('completed', {
+        owned_worktree,
+        [WORKTREE_DISPOSITION_METADATA_KEY]: assessed,
+      })
+    ).toEqual(assessed);
+    expect(await disposition('completed', { owned_worktree })).toBeUndefined();
+    expect(
+      await disposition('failed', {
+        [WORKTREE_DISPOSITION_METADATA_KEY]: { disposition: 'release' },
+      })
+    ).toBeUndefined();
   });
 });

@@ -200,7 +200,9 @@ mock.module(
   })
 );
 
-const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
+const { createWorkflowStore, createWorkflowDeps, completedRunWorktreeDeps } = await import(
+  './store-adapter'
+);
 
 describe('createWorkflowStore', () => {
   test('hydrates individual and batched event timestamps at the SQL store boundary', async () => {
@@ -417,6 +419,22 @@ describe('createWorkflowDeps', () => {
       email: '42+connected@users.noreply.github.com',
     });
     expect(mockGetUserGithubAuthor).toHaveBeenCalledWith('user-1');
+  });
+  test('only the SQL host gets the SQL completed-run worktree release', () => {
+    expect(createWorkflowDeps().completedRunWorktree).toEqual({
+      assess: expect.any(Function),
+      release: expect.any(Function),
+    });
+    expect(createWorkflowDeps(createWorkflowStore(), 'files').completedRunWorktree).toBeUndefined();
+  });
+  test('a completed-run worktree loader failure is a check_failed retention', async () => {
+    const worktree = completedRunWorktreeDeps(() => Promise.reject(new Error('module missing')));
+    const run = { id: 'run-1' } as Parameters<typeof worktree.assess>[0];
+    expect(await worktree.assess(run)).toEqual({
+      disposition: 'retained',
+      reason: 'check_failed',
+      detail: 'module missing',
+    });
   });
   test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
     const deps = createWorkflowDeps();

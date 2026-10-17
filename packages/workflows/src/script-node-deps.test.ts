@@ -247,7 +247,7 @@ function createMockStore(): IWorkflowStore {
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
-    failWorkflowRun: mock(() => Promise.resolve()),
+    failWorkflowRun: mock(() => Promise.resolve({ failed: true })),
     pauseWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
     clearWorkflowWaitContext: mock((id: string, _wait: unknown, completion: { stepName: string }) =>
