@@ -14,7 +14,7 @@
 import { join } from 'node:path';
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
 import { artifactsDir } from './io.ts';
-import { ghIssueComments } from './pr.ts';
+import { ghGraphql, ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
@@ -233,12 +233,7 @@ function gh(...args: string[]): string {
 }
 
 function graphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
-  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(fields)) {
-    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
-  }
-  const parsed = record(JSON.parse(gh(...args)));
-  const repository = record(record(parsed?.data)?.repository);
+  const repository = record(ghGraphql(host, query, fields).repository);
   if (repository === undefined) throw new Error('gh api graphql returned no repository');
   return repository;
 }
