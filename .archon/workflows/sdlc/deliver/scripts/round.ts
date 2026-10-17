@@ -20,6 +20,9 @@
  *   what the deciding review's contract coverage did not mark met, carried from the
  *   previous round when this round ran no review.
  * - INPUTS_CI / INPUTS_CI_RERUN: the CI agent's state, and whether it re-ran failed jobs.
+ * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
+ *   ended; "null" when the threads node did not run (the forge source, or no pull request).
+ * - INPUTS_SETTLE_NEEDS_HUMAN: whether settle-threads found a thread only a person can settle.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
@@ -32,6 +35,7 @@ type Ended =
   | 'delivered'
   | 'implement_blocked'
   | 'review_open'
+  | 'threads_open'
   | 'replan'
   | 'needs_human'
   | 'ci_pr_caused'
@@ -49,37 +53,36 @@ const reviewSummary = rereviewed ? process.env.INPUTS_REREVIEW_SUMMARY : process
 const ci = text(process.env.INPUTS_CI);
 const ciRerun = text(process.env.INPUTS_CI_RERUN);
 const prUrl = text(process.env.INPUTS_PR_URL);
+const threadsOpen = text(process.env.INPUTS_THREADS_OPEN);
 const contractLeft = nullableJson(
   rereviewed ? process.env.INPUTS_REREVIEW_CONTRACT_LEFT : process.env.INPUTS_REVIEW_CONTRACT_LEFT
 );
 
-/** The reason this round ended, and whether another round can change it. */
-function decide(): { reason: Ended; again: boolean } {
+/** The reason this round ended, whether another round can change it, and the deciding node's summary. */
+function decide(): { reason: Ended; again: boolean; summary: string | undefined } {
   // A validation red the change did not cause still goes to review; CI judges it again.
   const handedOff = green === 'true' || redCause === 'inherited' || redCause === 'environment';
-  if (!handedOff) return { reason: 'implement_blocked', again: false };
+  if (!handedOff) return { reason: 'implement_blocked', again: false, summary: process.env.INPUTS_IMPLEMENT_SUMMARY };
   if (reviewReady !== 'true') {
     // Neither a new plan nor evidence only a person can produce comes from another round.
-    if (reviewAction === 'replan' || reviewAction === 'needs_human') return { reason: reviewAction, again: false };
-    return { reason: 'review_open', again: true };
+    if (reviewAction === 'replan' || reviewAction === 'needs_human') {
+      return { reason: reviewAction, again: false, summary: reviewSummary };
+    }
+    return { reason: 'review_open', again: true, summary: reviewSummary };
   }
-  if (ci === 'green') return { reason: 'delivered', again: false };
-  if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true };
-  return { reason: 'ci_other', again: false };
+  const ciSummary = process.env.INPUTS_CI_SUMMARY;
+  if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true, summary: ciSummary };
+  if (ci !== 'green') return { reason: 'ci_other', again: false, summary: ciSummary };
+  // An open thread is unjudged work; one settle-threads could not settle needs a person.
+  if (Number(threadsOpen) > 0) {
+    return text(process.env.INPUTS_SETTLE_NEEDS_HUMAN) === 'true'
+      ? { reason: 'needs_human', again: false, summary: process.env.INPUTS_SETTLE_SUMMARY }
+      : { reason: 'threads_open', again: true, summary: process.env.INPUTS_THREADS_SUMMARY };
+  }
+  return { reason: 'delivered', again: false, summary: ciSummary };
 }
 
-const ciSummary = process.env.INPUTS_CI_SUMMARY;
-const SUMMARY_OF: Record<Ended, string | undefined> = {
-  delivered: ciSummary,
-  implement_blocked: process.env.INPUTS_IMPLEMENT_SUMMARY,
-  review_open: reviewSummary,
-  replan: reviewSummary,
-  needs_human: reviewSummary,
-  ci_pr_caused: ciSummary,
-  ci_other: ciSummary,
-};
-
-const { reason, again } = decide();
+const { reason, again, summary } = decide();
 const capped = again && round >= ROUND_CAP;
 
 emit({
@@ -98,5 +101,6 @@ emit({
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(SUMMARY_OF[reason])}`,
+  threads_checked: threadsOpen !== 'null' && threadsOpen !== '',
+  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(summary)}`,
 });
