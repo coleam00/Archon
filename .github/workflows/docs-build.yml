@@ -41,8 +41,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check API reference coverage
-        run: bun run --cwd packages/docs-web test src/api.test.ts
+      # The Test Suite skips a docs-only change, so the docs package's own tests run here.
+      - name: Docs package tests
+        run: bun run --cwd packages/docs-web test
 
       # A declared exclusion from `bun run validate` (scripts/validate-ci-parity.test.ts):
       # the gate must run on a Bun-only checkout, and this build needs the Node setup above.

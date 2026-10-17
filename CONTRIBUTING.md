@@ -28,7 +28,8 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only), and `tests`.
+`generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only),
+`package-tests`, and `script-tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
@@ -60,7 +61,11 @@ bun run validate --only workflow-fixtures   # when changing pack or fixture exec
 ```
 
 `scripts/validate.ts` owns the check commands and CI selects them by ID.
-CI runs formatting and every default check on ready pull requests. Workflow fixtures run
+CI runs formatting and every default check on ready pull requests, except that a change
+touching only prose (Markdown outside pack `commands/` and `.shared/`, and the docs site)
+skips the test, service and binary jobs. A push to `dev` or `main` skips those jobs only when
+a pull request run already passed every job on the same tree, and otherwise runs them, so a
+prose change's test-visible effects are checked on `dev`. Workflow fixtures run
 when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or
 `packages/cli/src/commands/workflow.ts` changes; both fixture jobs still report success
 when their execution steps skip. Dispatch runs fixtures regardless of paths.

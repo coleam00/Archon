@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 /**
  * Decides the `Test Suite` aggregate check in `.github/workflows/test.yml` from the results of
  * the jobs it needs. A gate that reads only this check has to be able to trust it, so every
- * needed job is judged, including on a documentation-only change:
+ * needed job is judged, including when the `changes` decision skips the gated jobs (a prose-only
+ * pull request, or a push a pull request run already proved):
  *   - a job gated on the `changes` decision may be `skipped` only when that decision is "false";
  *   - every other job, including the ones that run for every event, must be `success`;
  *   - `failure`, `cancelled` and any unexpected `skipped` fail the check.

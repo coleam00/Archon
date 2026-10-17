@@ -21,7 +21,8 @@ describe('validate check selection', () => {
       'lint',
       'format',
       'installer',
-      'tests',
+      'package-tests',
+      'script-tests',
     ]);
     expect(selectChecks(['workflow-fixtures', 'format']).map(check => check.id)).toEqual([
       'format',
@@ -41,7 +42,10 @@ describe('validate check selection', () => {
   });
 
   test('a selection runs in declaration order, not argument order', () => {
-    expect(selectChecks(['tests', 'lint']).map(check => check.id)).toEqual(['lint', 'tests']);
+    expect(selectChecks(['script-tests', 'lint']).map(check => check.id)).toEqual([
+      'lint',
+      'script-tests',
+    ]);
   });
 
   test('an unknown id fails instead of selecting nothing', () => {
@@ -70,10 +74,10 @@ describe('validate check selection', () => {
 
 describe('validate argument parsing', () => {
   test('--only accepts repetition and comma-separated ids', () => {
-    expect(parseOnly(['--only', 'lint,format', '--only=tests'])).toEqual([
+    expect(parseOnly(['--only', 'lint,format', '--only=script-tests'])).toEqual([
       'lint',
       'format',
-      'tests',
+      'script-tests',
     ]);
   });
 

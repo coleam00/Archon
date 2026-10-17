@@ -18,6 +18,9 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * its own working directory and its own process. When nothing names an owner the run
  * fails: the root cannot guess a working directory, and answering with a full green suite
  * is what made a mistyped path look like a pass.
+ *
+ * `--plan <kind>` walks only the plan steps of that kind. CI runs the workspace half and the
+ * root half on separate runners so they finish side by side.
  */
 
 /** One step of the no-argument run. */
@@ -111,14 +114,29 @@ async function run(command: string[], cwd: string): Promise<number> {
   return await child.exited;
 }
 
-async function runPlan(): Promise<number> {
+async function runPlan(kind?: RootTestStep['kind']): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
+    if (kind !== undefined && step.kind !== kind) continue;
     const command =
       step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : bunTestCommand(step.selectors);
     const code = await run(command, REPO_ROOT);
     if (code !== 0) return code;
   }
   return 0;
+}
+
+/**
+ * The plan half `--plan <kind>` selects, or `undefined` when the arguments are not a `--plan`
+ * request. `bun test` has no `--plan` flag, so the form cannot shadow a forwarded argument.
+ */
+export function planKind(requested: readonly string[]): RootTestStep['kind'] | undefined {
+  if (requested[0] !== '--plan') return undefined;
+  const kinds = [...new Set(ROOT_TEST_PLAN.map((step): RootTestStep['kind'] => step.kind))];
+  const kind = kinds.find((candidate): boolean => candidate === requested[1]);
+  if (requested.length !== 2 || kind === undefined) {
+    throw new Error(`Usage: bun run test --plan <${kinds.join('|')}>`);
+  }
+  return kind;
 }
 
 /**
@@ -175,7 +193,16 @@ async function runRequested(requested: string[]): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) {
-  const requested = Bun.argv.slice(2);
-  process.exit(requested.length > 0 ? await runRequested(requested) : await runPlan());
+async function main(requested: string[]): Promise<number> {
+  let kind: RootTestStep['kind'] | undefined;
+  try {
+    kind = planKind(requested);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  if (kind !== undefined) return await runPlan(kind);
+  return requested.length > 0 ? await runRequested(requested) : await runPlan();
 }
+
+if (import.meta.main) process.exit(await main(Bun.argv.slice(2)));

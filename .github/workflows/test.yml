@@ -23,6 +23,10 @@ jobs:
   changes:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     outputs:
       run-tests: ${{ steps.decision.outputs.run-tests }}
       run-fixtures: ${{ steps.decision.outputs.run-fixtures }}
@@ -36,13 +40,18 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH and picks
-      # the commits to compare itself: a pull request's whole diff, a push's own commits.
+      # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH. A pull
+      # request is judged on its whole diff. A push skips only when a pull request run
+      # already passed every job on the same tree (proofFromPullRequestRun in the script),
+      # and otherwise runs the suite.
       # Assign before echoing. A failing command substituted into another command's arguments
       # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
       # empty decision that every downstream `== 'true'` gate reads as "skip".
       - name: Decide whether tests are needed
         id: decision
+        env:
+          # A push asks the API whether a pull request run already passed this tree.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           run_tests=$(bun scripts/should-run-test-suite.ts)
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
@@ -84,7 +93,7 @@ jobs:
         run: |
           case "$RUN_FIXTURES" in
             true) echo "Workflow fixtures selected." ;;
-            false) echo "Workflow fixtures skipped: no fixture inputs changed." ;;
+            false) echo "Workflow fixtures skipped: the changes job decided they are not needed." ;;
             *) echo "Invalid fixture decision: $RUN_FIXTURES" >&2; exit 1 ;;
           esac
 
@@ -92,18 +101,23 @@ jobs:
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
   # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
   test:
-    if: ${{ !github.event.pull_request.draft }}
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
     strategy:
-      # Both legs must always report. With the default fail-fast, an ubuntu
+      # Every leg must always report. With the default fail-fast, an ubuntu
       # failure cancels windows, so a windows-only break stays invisible until
       # the next round — and a cancelled leg blocks a merge once it is a
       # required check.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # The workspace packages and the root script tests each run on their own runner.
+        # Serial, the root half added 11-17 minutes after the packages on Windows
+        # (measured for #4396).
+        shard: [packages, scripts]
     runs-on: ${{ matrix.os }}
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
-    # every other PR queues behind it. A healthy Windows leg takes about 11 minutes.
+    # every other PR queues behind it. A healthy Windows shard takes about 20 minutes.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -123,15 +137,15 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Compile Slack chat conformance fixture
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'scripts'
         run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
 
       - name: Run compiled Slack chat conformance
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'scripts'
         run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
 
       - name: Build and smoke-test Slack chat release binary
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'scripts'
         run: |
           bun build --compile packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
           bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
@@ -152,7 +166,7 @@ jobs:
         run: uv run python -c "print('uv warm')"
 
       - name: Install Caddy for deployment recipe tests
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'scripts'
         run: |
           mkdir -p "$RUNNER_TEMP/caddy"
           curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
@@ -160,15 +174,21 @@ jobs:
           echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
           docker compose version
 
-      - name: Validate (Linux)
-        if: runner.os == 'Linux'
-        run: bun run validate --only installer,tests
+      - name: Validate (Linux, packages)
+        if: runner.os == 'Linux' && matrix.shard == 'packages'
+        run: bun run validate --only package-tests
 
-      # The generated-file and import-boundary checks run here as well as in `static`
-      # because their scripts normalize Windows path separators, and only a Windows run
-      # proves that; they cost seconds. The installer check is POSIX-only (validate skips
-      # it on Windows). The test check uses the shared 20 s per-test budget in
-      # scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      - name: Validate (Linux, scripts)
+        if: runner.os == 'Linux' && matrix.shard == 'scripts'
+        run: bun run validate --only installer,script-tests
+
+      # The generated-file and import-boundary checks ride the Windows scripts shard as
+      # well as `static` because their scripts normalize Windows path separators, and only
+      # a Windows run proves that; they cost seconds. The installer check is POSIX-only
+      # (validate skips it on Windows). The test checks use the shared 20 s per-test budget
+      # in scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      #
+      # The temp-disk and git-launcher settings below apply to both Windows shards.
       #
       # Temp goes to the runner's local disk (`runner.temp`, D:). C: is the remote-backed
       # OS disk that Windows background maintenance also reads from: measured on this
@@ -180,14 +200,23 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
-      - name: Validate (Windows)
-        if: runner.os == 'Windows'
+      - name: Validate (Windows, packages)
+        if: runner.os == 'Windows' && matrix.shard == 'packages'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          bun run validate --only cli-import-boundary,package-edges,generated-files,tests
+          bun run validate --only package-tests
+
+      - name: Validate (Windows, scripts)
+        if: runner.os == 'Windows' && matrix.shard == 'scripts'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-import-boundary,package-edges,generated-files,script-tests
 
   # Windows fixtures run beside the Windows tests rather than after them: they are the
   # second-slowest Windows check, and serial they made that leg the critical path.
@@ -226,7 +255,7 @@ jobs:
         run: |
           case "$RUN_FIXTURES" in
             true) echo "Workflow fixtures selected." ;;
-            false) echo "Workflow fixtures skipped: no fixture inputs changed." ;;
+            false) echo "Workflow fixtures skipped: the changes job decided they are not needed." ;;
             *) echo "Invalid fixture decision: $RUN_FIXTURES" >&2; exit 1 ;;
           esac
 
@@ -546,8 +575,8 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      # The script judges every needed job, including on a documentation-only change, and
-      # reads which jobs that change may skip from this file.
+      # The script judges every needed job, including when the decision skips the gated
+      # jobs, and reads which jobs may skip from this file.
       - name: Report test-suite outcome
         env:
           NEEDS: ${{ toJSON(needs) }}
