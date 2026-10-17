@@ -3607,6 +3607,21 @@ describe('failed-run lock release', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
+  test('the stale sweep keeps an environment no run owns whose commits are on no remote', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockCountCommitsMissingFromRemotes.mockResolvedValueOnce(3);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual([]);
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason:
+        'stale but 3 unpushed commit(s); remove it explicitly with archon complete stale-failed --force',
+    });
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
   // The count mock answers only for the revs that shape should ask about, so a sweep
   // that skipped the worktree-gone or branch-gone shape would see 0 and remove the env.
   test.each([

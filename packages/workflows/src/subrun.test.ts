@@ -494,14 +494,14 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  failWorkflowRun = (id: string, error: string): Promise<void> => {
+  failWorkflowRun = (id: string, error: string): Promise<{ failed: boolean }> => {
     const r = this.runs.get(id);
     if (r) {
       r.status = 'failed';
       r.completed_at = new Date();
       r.metadata = { ...r.metadata, error };
     }
-    return Promise.resolve();
+    return Promise.resolve({ failed: r !== undefined });
   };
 
   pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (

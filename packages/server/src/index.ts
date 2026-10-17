@@ -105,6 +105,7 @@ import {
 } from '@archon/core';
 import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
+import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import {
   createLogger,
   logArchonPaths,
@@ -115,6 +116,7 @@ import {
   getSourceWebDistDir,
 } from '@archon/paths';
 import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { resolveGitHubTokenFromEnv } from '@archon/core/github-auth/config';
 import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
@@ -180,6 +182,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
     throw new fileStoreUnsupportedError('the server (server routes read SQL)');
   }
+  // Every host bash and script node leads its own process group, so a run's cancel ends
+  // that run's node trees, and each node's watcher ends its tree if the server dies.
+  // The server never ends every tree at once, so the handle is not kept.
+  recordNodeProcessTrees();
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
@@ -443,7 +449,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       activePlatforms.push('GitHub (App)');
       getLog().info({ slug: githubAppAuthProvider.slug }, 'github.adapter_mode_app');
     } else if (ghAuthMode.kind === 'pat') {
-      const patToken = process.env.GITHUB_TOKEN;
+      const patToken = resolveGitHubTokenFromEnv();
       const webhookSecret = process.env.WEBHOOK_SECRET;
       if (!patToken || !webhookSecret) {
         throw new Error('GitHub PAT mode misconfigured: GITHUB_TOKEN and WEBHOOK_SECRET required');

@@ -60,6 +60,20 @@ CI runs again. A flake or infrastructure failure outside the change gets one re-
 of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
 the run not ready, and a defect outside the change becomes a discovery.
 
+Unresolved review threads on the pull request are work too, whoever opened them: a
+person, a review bot, or no one in a project without outside reviewers. After CI,
+each round's `threads` node lists the unresolved threads in `threads.md`, quoted as
+untrusted review data, and puts a ready pull request back to draft while any is
+open, so the round ends `threads_open` instead of ready. The next round's
+implementer judges each thread like a blocking finding, fixing it or declining it
+with evidence; `settle-threads` checks each disposition at the pushed head and
+writes the reply, and `threads` posts the replies, resolves those threads, and reads
+the pull request back. A thread no agent can settle ends the run `needs_human`.
+`settle-threads` runs before CI and a failed one skips it, so the pull request stays
+the draft the previous round left; a failed `threads` node puts it back to draft
+before the run fails. The
+pack's own review verdict is unchanged: threads gate delivery, not the review.
+
 A pull request counts as ready only at the commit its review comment stamps. The
 comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
@@ -98,6 +112,10 @@ Keep `gh` as the default until a compatible release passes a real-PR check.
 
 The merge queue reads through `gh` alone and refuses `forge`: its gate needs a pull
 request's unresolved review threads, which the forge contract does not report.
+Delivery reads, answers and resolves review threads through `gh` alone for the same
+reason. On the `forge` source it never calls `gh` for them: its `threads` node does
+not run, and the report records `threads_checked: false` and says the threads were
+not checked.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -112,7 +130,7 @@ other value of `ARCHON_SDLC_FORGE` refuses too. A container execution receives n
 only the project's configured env, never `~/.archon/.env`, so select `gh` for it in
 the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
 
-`archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
+`archon-ship-block`, `archon-deliver-block`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
 can act after worktree setup and before any agent spends: on `forge`, host metadata
 must advertise every operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`,
@@ -133,15 +151,17 @@ has an empty `GH_TOKEN=` line to remove. The operations still refuse on their ow
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, and `publish-review` upserts the one marked review comment. Every pack
+request, `publish-review` upserts the one marked review comment, and deliver's
+`threads` posts the thread replies `settle-threads` declared and resolves those
+threads. Every pack
 label is declared in `.shared/labels.ts`, and every stage writes labels through its
 `writeLabels`, which adds and removes them as a delta so labels another writer adds
 survive. On the `forge` source it still writes the whole label set back, because
 the forge contract has no single-label add or remove yet. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
-[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver` and
-`archon-ship` that is the `report` node, which also runs when a node fails, so a
-workflow that includes `archon-deliver` runs after a failed delivery and must gate
+[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
+`archon-ship-block` that is the `report` node, which also runs when a node fails, so a
+workflow that includes `archon-deliver-block` runs after a failed delivery and must gate
 on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
@@ -264,6 +284,28 @@ the directory only; the agent chooses between the project's file and the default
 and no script opens either. The default is a file rather than text in the prompt
 because a prompt carrying the default would hold it even after a project replaced
 it.
+
+## A stage pauses where nothing takes it forward
+
+Each stage a person runs, `archon-deliver`, `archon-plan`, `archon-triage`,
+`archon-review` and `archon-ship`, is a public entry around a `-block` workflow that
+holds the stage's graph. The entry runs the block and then
+[`archon-attention`](attention/archon-attention.yaml), whose one `decide` agent judges
+whether the ending has a next step. When it has none (a delivery that ended not
+ready, a plan or triage stopped on a question for a person, a review that is Ready on
+a draft pull request), the run pauses as one `select` attention item labelled
+`stage: <workflow>`. It says what ended and why it matters, the agent's
+recommendation with its confidence and evidence, the choices and what each does, what
+waiting costs, and the links. The run continues on the answer: `rerun` runs the block
+again with the item and the person's note added to its work, `ready` takes the pull
+request out of draft, and `finish` keeps the outcome as it stands. The entry returns
+the block's typed outcome as its last pass left it. A stage that fails raises no item:
+the run fails at the failed node, as the block alone would.
+
+A workflow that composes a stage includes its `-block`: the queues, intake, upkeep,
+the review eval, and `archon-ship-block` and `archon-deliver-block` themselves. The
+composer owns what follows the stage's ending and asks through its own attention item
+when it needs a person, so one decision never raises two items.
 
 ## A node's streams are the operator's channel
 
@@ -411,7 +453,7 @@ are the operator's and stay outside the pack and the repository.
   label, and open issues the operator dispositioned (`--dispositions`, a JSON array
   of `{number, contract, route?, note?}`), each with its title and body at creation.
   It also pins which workflow judges each row: a listed maintainer's issue runs
-  through intake in eval mode; an outside author's runs through `archon-triage`
+  through intake in eval mode; an outside author's runs through `archon-triage-block`
   directly on the same creation text with `publish=false`, because eval intake never
   triages an outside item; and some maintainer issues get a second `trust: outside`
   row, which must take the outside path with no agent node. A group that finds
@@ -508,7 +550,7 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
+- **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
@@ -549,7 +591,7 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   now.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship`, which
+item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
 changes its checkout, so every run needs its own worktree:
 
 ```json
@@ -608,7 +650,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   sync and wait for their delta review and CI: a sweep merges at most one pull request. A
   push, by the sweep or anyone else, makes the verdict stale, and so does a comment
   published before verdicts were stamped: one such pull request gets a delta review in
-  the same run, through an included `archon-review` continuing from its last report,
+  the same run, through an included `archon-review-block` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
   gets one rerun of its failed jobs; the record stores the head it re-ran at and
   refuses a second rerun there. What the build queue can fix (a verdict that is
@@ -762,6 +804,47 @@ To seed decisions an operator already made, put one record per key with
 `archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
 JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
 parse refuses every pass, naming the document.
+
+## Worktree cleanup
+
+[`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
+`archon isolation cleanup --merged` across every project registered on the install. It
+removes each worktree whose pull request merged, with the branch Archon created and its
+remote branch. A worktree with uncommitted changes, a run that can still claim it, or a
+commit its pull request did not carry stays and is reported. With `include_closed: "true"`
+it also removes worktrees whose pull request was closed without merging. It runs in place
+and creates no worktree of its own.
+
+A worktree that never opened a pull request is not its concern. A completed run removes
+its own worktree when the checkout is clean, every commit is on a remote, and the branch
+was never published; otherwise the run's terminal record says why it stayed.
+
+A server already runs a merged sweep on its cleanup schedule, so this binding is for
+installs that run only the CLI. The pack installs no binding. A native schedule starts a
+pass every few hours:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "build-host-worktree-cleanup",
+  "binding": {
+    "bindingId": "worktree-cleanup",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "worktree-cleanup:build-host-1",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-worktree-cleanup",
+      "inputs": { "include_closed": "false" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
+}
+```
 
 ## Composition validation
 

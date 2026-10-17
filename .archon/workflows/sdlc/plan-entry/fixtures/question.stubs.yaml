@@ -1,0 +1,35 @@
+# Dry-run fixture: the plan stops on a question only a person can answer, so the run
+# pauses as one attention item instead of ending with the question in plan.md. The
+# real settle script renders every field of the item from the decide agent's answer.
+stage__plan:
+  ready: false
+  open_questions:
+    - "stub: should a relative MCP path resolve against the workflow file or the checkout?"
+  summary: "stub: stopped on one open question"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+attend__decide:
+  decision: ask
+  reason: "stub: the plan names a call only a person can make"
+  pull_request: null
+  attention:
+    what: "stub: the plan stopped on where relative MCP paths resolve"
+    why: "stub: either answer changes what existing relative paths mean"
+    recommendation:
+      choice: rerun
+      why: "stub: the checkout keeps every existing path meaning the same"
+      evidence: "stub: plan.md, open question 1"
+      confidence: medium
+      would_change: "stub: a project document that rules on it"
+    choices:
+      - { id: rerun, label: "stub: plan again with my answer", does: "stub: plans again with the note as the answer" }
+      - { id: finish, label: "stub: leave it", does: "stub: ends the run with the question open" }
+    if_unanswered: "stub: the run stays paused and spends nothing"
+    links: ["stub: plan.md"]
+fixture:
+  inputs:
+    work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
+  expect: paused
+  reached: [stage__plan, attend__settle]
+  resolved-text-contains:
+    attend__ask: "**What it is.** stub: the plan stopped on where relative MCP paths resolve\n\n**Why it matters.** stub: either answer changes what existing relative paths mean\n\n**Recommendation: `rerun`** (medium confidence). stub: the checkout keeps every existing path meaning the same\nEvidence: stub: plan.md, open question 1\nWhat would change it: stub: a project document that rules on it\n\n**Choices.**\n- `rerun` (stub: plan again with my answer): stub: plans again with the note as the answer\n- `finish` (stub: leave it): stub: ends the run with the question open\n\n**If nobody answers.** stub: the run stays paused and spends nothing\n\n**Evidence links.**\n- stub: plan.md"
+exec-code: true

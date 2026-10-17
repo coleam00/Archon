@@ -247,7 +247,9 @@ const mockFindWorkflowRunsByIdPrefix = mock<typeof WorkflowDb.findWorkflowRunsBy
 const mockResumeWorkflowRun = mock<typeof WorkflowDb.resumeWorkflowRun>(() =>
   Promise.resolve(makeWorkflowRun({ id: 'run-id' }))
 );
-const mockFailWorkflowRun = mock<typeof WorkflowDb.failWorkflowRun>(() => Promise.resolve());
+const mockFailWorkflowRun = mock<typeof WorkflowDb.failWorkflowRun>(() =>
+  Promise.resolve({ failed: true })
+);
 const mockUpdateWorkflowRun = mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve());
 // /workflow abandon cascade-cancels the sub-run tree (#2121 Phase 2), walking it
 // via findChildRuns. This entry is load-bearing: mock.module MERGES over the real

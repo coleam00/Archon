@@ -296,9 +296,9 @@ Four rules enforced at `loader.ts:370-439`:
 
 | File | Mode | Key Features |
 |------|------|-------------|
-| `sdlc/ship/archon-ship.yaml` | `nodes:` | `include:` composition, `when:` routing on structured output, `trigger_rule: none_failed_min_one_success` |
-| `sdlc/review/archon-review.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, conditional lenses, `script:` publish |
-| `sdlc/deliver/archon-deliver.yaml` | `nodes:` | Composed delivery tail, bounded correction loop, `script:` gates |
+| `sdlc/ship/archon-ship-block.yaml` | `nodes:` | `include:` composition, `when:` routing on structured output, `trigger_rule: none_failed_min_one_success` |
+| `sdlc/review/archon-review-block.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, conditional lenses, `script:` publish |
+| `sdlc/deliver/archon-deliver-block.yaml` | `nodes:` | Composed delivery tail, bounded correction loop, `script:` gates |
 
 ---
 

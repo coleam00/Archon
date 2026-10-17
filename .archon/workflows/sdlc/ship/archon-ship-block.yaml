@@ -1,4 +1,4 @@
-name: archon-ship
+name: archon-ship-block
 description: |
   Ground an issue or request against the current repository before spending on
   it, then take the least speculative path: investigate an unknown cause, plan
@@ -6,11 +6,9 @@ description: |
   no work remains. Actionable paths converge on the reviewed delivery tail.
   One governed run, one artifact store, no inherited issue assumptions.
 
-  Use when: an issue or request should be taken from current-truth check
-  through to a reviewed PR — "fix this issue", "implement issue #123", "take
-  this work item to a PR".
-  NOT for: bypassing triage with already-prepared work (deliver directly),
-  reviewing an existing PR, or merging.
+  The graph of archon-ship, as a building block for a workflow that composes the
+  stage and owns what follows its ending. It never pauses for a person: run
+  archon-ship, which adds that pause, by hand.
 
 inputs:
   target:
@@ -68,7 +66,7 @@ nodes:
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
     depends_on: [forge]
     with:
       target: "$INPUTS.target"
@@ -98,7 +96,7 @@ nodes:
   # The planner makes the design calls. Calls only a person can make come back as
   # open questions, which stop the run before delivery.
   - id: planned
-    include: archon-plan
+    include: archon-plan-block
     with:
       work: >-
         Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
@@ -126,7 +124,7 @@ nodes:
       required: [pull_request]
 
   - id: deliver
-    include: archon-deliver
+    include: archon-deliver-block
     with:
       errors: "$INPUTS.errors"
       part: "$INPUTS.part"
@@ -203,6 +201,7 @@ nodes:
             - delivered
             - implement_blocked
             - review_open
+            - threads_open
             - replan
             - ci_pr_caused
             - ci_other
@@ -214,7 +213,7 @@ nodes:
             - needs_contract
             - refuted
             - not_rooted
-            # a planning stop, or a review that needs a check only a person can make
+            # a planning stop, or a review or review thread that needs a person
             - needs_human
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }

@@ -91,7 +91,7 @@ Repository workflows use **git worktrees** by default unless disabled by workflo
 
 Worktrees separate repository changes from your checkout and let work on different branches proceed in parallel. They are not an execution or security sandbox.
 
-Failed runs can retain resumable worktrees. Use `archon workflow resume <id>` to continue or `archon workflow abandon <id>` to cancel and remove the worktree while keeping the branch. `archon isolation cleanup` removes eligible merged or stale environments, preserving live runs and failed runs that still hold a cleanup lock. See [cleanup rules](/reference/cli/#isolation-cleanup-days).
+Failed runs can retain resumable worktrees. Use `archon workflow resume <id>` to continue or `archon workflow abandon <id>` to cancel and remove the worktree while keeping the branch. `archon isolation cleanup` removes eligible merged or stale environments, preserving live runs and failed runs that still hold a cleanup lock. A completed run removes its own worktree when it is clean and every commit is on a remote, keeping the branch; age-based cleanup never deletes commits that exist on no remote. Installs without a server can schedule merged cleanup with the SDLC pack's `archon-worktree-cleanup` workflow. See [cleanup rules](/reference/cli/#isolation-cleanup-days).
 
 Worktrees live at `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Each worktree gets its own branch, so you can inspect the work, create a PR from it, or discard it.
 

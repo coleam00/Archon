@@ -306,9 +306,9 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-ship carries its target through triage.md without downstream target prose', () => {
-      const content = BUNDLED_WORKFLOWS['archon-ship'];
-      const parsed = parseWorkflow(content, 'archon-ship.yaml', providerRegistry);
+    it('archon-ship-block carries its target through triage.md without downstream target prose', () => {
+      const content = BUNDLED_WORKFLOWS['archon-ship-block'];
+      const parsed = parseWorkflow(content, 'archon-ship-block.yaml', providerRegistry);
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.target?.default).toBe('');
@@ -341,10 +341,10 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('Original work item:');
     });
 
-    it('archon-deliver preserves the conditional-lens bindings', () => {
+    it('archon-deliver-block preserves the conditional-lens bindings', () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
@@ -372,10 +372,10 @@ describe('bundled-defaults', () => {
     // review, later ones by delta (the code lens plus the lenses route selects after
     // review findings, the general code reviewer alone after a CI fix). One named exception: the post-review reshape,
     // which adopts or declines the structure pass's findings and goes straight to CI.
-    it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
+    it('archon-deliver-block reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
@@ -398,7 +398,7 @@ describe('bundled-defaults', () => {
           (dependents.get(id) ?? []).some(next => {
             if (seen.has(next)) return false;
             seen.add(next);
-            return isInclude(next, 'archon-review') || reviewedAfter(next, seen);
+            return isInclude(next, 'archon-review-block') || reviewedAfter(next, seen);
           });
         for (const node of nodes) {
           if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
@@ -443,11 +443,12 @@ describe('bundled-defaults', () => {
     // One round loop owns delivery: implement, pr, review, then simplify and one CI
     // agent once the review passes. The pr step runs every round and owns the push;
     // a red the change caused drives another round, whose fix is reviewed before CI
-    // runs again. The graph has no engine wait and no separate ready-mark node.
-    it('archon-deliver runs one round loop that ends in a single CI agent', () => {
+    // runs again. After CI the round answers and reads the pull request's review
+    // threads. The graph has no engine wait and no separate ready-mark node.
+    it('archon-deliver-block runs one round loop that ends in a single CI agent', () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
@@ -476,7 +477,9 @@ describe('bundled-defaults', () => {
         'simplify',
         'reshape',
         'rereview',
+        'settle-threads',
         'ci',
+        'threads',
         'round',
       ]);
       expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
@@ -496,10 +499,20 @@ describe('bundled-defaults', () => {
       }
       const raw = (name: string) =>
         Bun.YAML.parse(BUNDLED_WORKFLOWS[name]) as { requires?: unknown; nodes: RawNode[] };
-      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
+      for (const name of [
+        'archon-deliver-block',
+        'archon-pr',
+        'archon-ship-block',
+        'archon-upkeep',
+      ]) {
         expect(raw(name).requires).toBeUndefined();
       }
-      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
+      for (const name of [
+        'archon-deliver-block',
+        'archon-pr',
+        'archon-ship-block',
+        'archon-upkeep',
+      ]) {
         const [first, ...rest] = raw(name).nodes;
         expect(first).toMatchObject({ id: 'forge', script: 'forge-check' });
         const roots = rest.filter(
@@ -508,7 +521,7 @@ describe('bundled-defaults', () => {
         expect(roots.length).toBeGreaterThan(0);
         for (const node of roots) expect(node.depends_on).toEqual(['forge']);
       }
-      const rounds = raw('archon-deliver').nodes.find(node => node.id === 'rounds');
+      const rounds = raw('archon-deliver-block').nodes.find(node => node.id === 'rounds');
       const ci = rounds?.loop_group?.nodes.find(node => node.id === 'ci');
       expect(ci?.with).toEqual({ pr: '$pr.output', source: '$forge.output.source' });
     });
@@ -530,14 +543,14 @@ describe('bundled-defaults', () => {
             : undefined;
         return [...(format?.properties?.reason?.enum ?? [])];
       };
-      const deliver = parse('archon-deliver');
+      const deliver = parse('archon-deliver-block');
       const rounds = deliver.nodes.find(node => node.id === 'rounds');
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       const round = reasons(rounds.loop_group.nodes.find(node => node.id === 'round'));
       expect(round.length).toBeGreaterThan(0);
       const delivered = reasons(deliver.nodes.find(node => node.id === 'report'));
       expect([...delivered].sort()).toEqual([...round, 'failed'].sort());
-      const ship = reasons(parse('archon-ship').nodes.find(node => node.id === 'report'));
+      const ship = reasons(parse('archon-ship-block').nodes.find(node => node.id === 'report'));
       expect(ship).toEqual(expect.arrayContaining(delivered));
     });
 
@@ -560,10 +573,10 @@ describe('bundled-defaults', () => {
       );
     });
 
-    it('archon-review exposes the three-way action contract behind a successful preflight', () => {
+    it('archon-review-block exposes the three-way action contract behind a successful preflight', () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
@@ -912,13 +925,13 @@ describe('bundled-defaults', () => {
   describe('run-owned public actions (#2909)', () => {
     it('records a PR identity and uses it for review and the body update', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
-      const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
+      const deliver = BUNDLED_WORKFLOWS['archon-deliver-block'];
       const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::update-pr-body'];
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
       expect(deliver).toContain('scope: "$pr.output"');
-      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
+      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver-block.yaml', providerRegistry);
       if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
       expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
@@ -954,7 +967,7 @@ describe('bundled-defaults', () => {
       });
       expect(prParsed.workflow.returns).toBe('publish');
 
-      const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
+      const deliverParsed = parseWorkflow(deliver, 'archon-deliver-block.yaml', providerRegistry);
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
       const updateNode = deliverParsed.workflow.nodes.find(node => node.id === 'update-pr-body');
       expect(updateNode?.kind).toBe('agent');
@@ -976,8 +989,8 @@ describe('bundled-defaults', () => {
 
     it('returns the published verdict or the scope message through the terminal adapter', async () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
         providerRegistry
       );
       if (!parsed.workflow) throw new Error(parsed.error.error);
@@ -1038,12 +1051,12 @@ describe('bundled-defaults', () => {
 
     it('shows the mismatch command in the top-level summary alongside cleanup', async () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
         providerRegistry
       );
       if (!parsed.workflow) throw new Error(parsed.error.error);
-      const owner = BUNDLED_WORKFLOW_OWNERS['archon-review'];
+      const owner = BUNDLED_WORKFLOW_OWNERS['archon-review-block'];
       if (!owner) throw new Error('review has no owner');
       qualifyWorkflowResources(parsed.workflow, { ...owner, source: 'bundled' });
       const workflow = resolveWorkflow(parsed.workflow);
@@ -1064,8 +1077,8 @@ describe('bundled-defaults', () => {
 
     it('publishes the review report from a deterministic node, not the reviewer', () => {
       const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);

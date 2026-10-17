@@ -172,6 +172,7 @@ import {
   type ExecNodeEnvironmentContext,
 } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
+import type { RunExitReason } from './schemas/run-terminal-reason';
 import {
   CONTINUATION_RETRY_MS,
   executionClaim,
@@ -204,6 +205,10 @@ import {
   type ProviderEventHandler,
 } from './provider-events';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import {
+  WORKTREE_DISPOSITION_METADATA_KEY,
+  type WorktreeDisposition,
+} from './schemas/terminal-record';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { evaluateCondition } from './condition-evaluator';
@@ -1017,6 +1022,58 @@ async function waitForNodeRetry(
     const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
     await new Promise(resolve => setTimeout(resolve, sliceMs));
     remaining -= sliceMs;
+  }
+}
+
+// A subprocess has no message stream to piggyback a check on, so it polls on its own timer,
+// short enough that a cancel stops its tree within about a second.
+const SUBPROCESS_STOP_CHECK_INTERVAL_MS = 1_000;
+
+/**
+ * `runSubprocess` for a node of `runId`, ending its tree when that run stops; the
+ * rejection is then marked `cancelled`. Only this run's status aborts it, so another
+ * run's subprocess is never signalled.
+ */
+async function runSubprocessUntilRunStops(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  nodeId: string,
+  ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
+): ReturnType<typeof runSubprocess> {
+  const controller = new AbortController();
+  let reading = false;
+  const poll = setInterval(() => {
+    if (reading) return;
+    reading = true;
+    store
+      .getWorkflowRunStatus(runId)
+      .then(status => {
+        if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
+        clearInterval(poll);
+        getLog().info(
+          { workflowRunId: runId, nodeId, status },
+          'dag.stop_detected_during_subprocess'
+        );
+        controller.abort();
+      })
+      // A failed status read is not a stop signal: keep polling, as the streaming check does.
+      .catch((statusErr: unknown) => {
+        getLog().warn(
+          { err: statusErr as Error, workflowRunId: runId, nodeId },
+          'dag.status_check_failed'
+        );
+      })
+      .finally(() => {
+        reading = false;
+      });
+  }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
+  try {
+    return await runSubprocess(execContext, cmd, args, {
+      ...options,
+      abortSignal: controller.signal,
+    });
+  } finally {
+    clearInterval(poll);
   }
 }
 
@@ -3696,7 +3753,10 @@ async function executeBashNode(
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
-    const { stdout, stderr, credentialValues } = await runSubprocess(
+    const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
+      deps.store,
+      workflowRun.id,
+      node.id,
       execContext,
       bashPath,
       ['-c', finalScript],
@@ -3756,6 +3816,8 @@ async function executeBashNode(
       errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
@@ -3779,7 +3841,13 @@ async function executeBashNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4071,20 +4139,28 @@ async function executeScriptNode(
 
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
-    const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
-      cwd,
-      timeout: node.timeout,
-      endTreeOnTimeout: true,
-      env: subprocessEnv,
-      protectedEnvKeys,
-      protectedCredentialValues,
-      retention: {
-        logDir,
-        workflowRunId: workflowRun.id,
-        nodeId: node.id,
-        label: '<script>',
-      },
-    });
+    const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
+      deps.store,
+      workflowRun.id,
+      node.id,
+      execContext,
+      cmd,
+      args,
+      {
+        cwd,
+        timeout: node.timeout,
+        endTreeOnTimeout: true,
+        env: subprocessEnv,
+        protectedEnvKeys,
+        protectedCredentialValues,
+        retention: {
+          logDir,
+          workflowRunId: workflowRun.id,
+          nodeId: node.id,
+          label: '<script>',
+        },
+      }
+    );
 
     // Trim trailing newline from stdout (common shell behavior)
     const trimmedStdout = stdout.replace(/\n$/, '');
@@ -4124,6 +4200,8 @@ async function executeScriptNode(
       errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (execContext.kind === 'host' && err.code === 'EACCES') {
@@ -4144,7 +4222,13 @@ async function executeScriptNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4828,36 +4912,53 @@ async function executeLoopGroupBody(
         );
         const resumedBashPath = resolveBashPath();
         try {
-          await runSubprocess(execContext, resumedBashPath, ['-c', resumedSubstitutedBash], {
-            cwd,
-            timeout: node.timeout,
-            protectedEnvKeys: config.protectedEnvKeys,
-            protectedCredentialValues: config.protectedCredentialValues,
-            retention: {
-              logDir,
-              workflowRunId: workflowRun.id,
-              nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
-              label: '<until_bash>',
-            },
-            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: '',
-              loopPrevOutput: '',
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: ctx.currentExecution ?? null,
-            }),
-          });
+          await runSubprocessUntilRunStops(
+            deps.store,
+            workflowRun.id,
+            node.id,
+            execContext,
+            resumedBashPath,
+            ['-c', resumedSubstitutedBash],
+            {
+              cwd,
+              timeout: node.timeout,
+              protectedEnvKeys: config.protectedEnvKeys,
+              protectedCredentialValues: config.protectedCredentialValues,
+              retention: {
+                logDir,
+                workflowRunId: workflowRun.id,
+                nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
+                label: '<until_bash>',
+              },
+              env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+                artifactsDir,
+                stateDir,
+                logDir,
+                workflowId: workflowRun.id,
+                baseBranch,
+                userMessage: workflowRun.user_message,
+                loopUserInput: '',
+                loopPrevOutput: '',
+                rejectionReason: '',
+                issueContext,
+                adoptedRunDir: currentAdoptedRunDir(),
+                typedArtifactsFile,
+                nodeExecution: ctx.currentExecution ?? null,
+              }),
+            }
+          );
           resumedBashComplete = true;
         } catch (e) {
-          const bashErr = e as NodeJS.ErrnoException;
+          const bashErr = e as RawSubprocessRejection;
+          if (bashErr.cancelled) {
+            return {
+              state: 'failed',
+              output: '',
+              error: bashErr.message,
+              failureKind: 'cancelled',
+              ...usage,
+            };
+          }
           if (
             bashErr.code === 'ENOENT' ||
             bashErr.code === 'EACCES' ||
@@ -5294,36 +5395,53 @@ async function executeLoopGroupBody(
             ),
           }
         );
-        await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
-          cwd,
-          timeout: node.timeout,
-          protectedEnvKeys: config.protectedEnvKeys,
-          protectedCredentialValues: config.protectedCredentialValues,
-          retention: {
-            logDir,
-            workflowRunId: workflowRun.id,
-            nodeId: `${node.id}-iteration-${String(i)}`,
-            label: '<until_bash>',
-          },
-          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-            artifactsDir,
-            stateDir,
-            logDir,
-            workflowId: workflowRun.id,
-            baseBranch,
-            userMessage: workflowRun.user_message,
-            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-            loopPrevOutput: prevIterationOutput,
-            rejectionReason: '',
-            issueContext,
-            adoptedRunDir: currentAdoptedRunDir(),
-            typedArtifactsFile,
-            nodeExecution: ctx.currentExecution ?? null,
-          }),
-        });
+        await runSubprocessUntilRunStops(
+          deps.store,
+          workflowRun.id,
+          node.id,
+          execContext,
+          groupBashPath,
+          ['-c', substitutedBash],
+          {
+            cwd,
+            timeout: node.timeout,
+            protectedEnvKeys: config.protectedEnvKeys,
+            protectedCredentialValues: config.protectedCredentialValues,
+            retention: {
+              logDir,
+              workflowRunId: workflowRun.id,
+              nodeId: `${node.id}-iteration-${String(i)}`,
+              label: '<until_bash>',
+            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+              loopPrevOutput: prevIterationOutput,
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: ctx.currentExecution ?? null,
+            }),
+          }
+        );
         bashComplete = true;
       } catch (e) {
-        const bashErr = e as NodeJS.ErrnoException;
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
+          return {
+            state: 'failed',
+            output: '',
+            error: bashErr.message,
+            failureKind: 'cancelled',
+            ...usage,
+          };
+        }
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
@@ -6810,36 +6928,54 @@ async function executeLoopNode(
             }),
           }
         );
-        await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
-          cwd,
-          timeout: node.timeout,
-          protectedEnvKeys: config.protectedEnvKeys,
-          protectedCredentialValues: config.protectedCredentialValues,
-          retention: {
-            logDir,
-            workflowRunId: workflowRun.id,
-            nodeId: `${node.id}-iteration-${String(i)}`,
-            label: '<until_bash>',
-          },
-          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-            artifactsDir,
-            stateDir,
-            logDir,
-            workflowId: workflowRun.id,
-            baseBranch,
-            userMessage: workflowRun.user_message,
-            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-            loopPrevOutput: prevIterationOutput,
-            rejectionReason: '',
-            issueContext,
-            adoptedRunDir: currentAdoptedRunDir(),
-            typedArtifactsFile,
-            nodeExecution: execution,
-          }),
-        });
+        await runSubprocessUntilRunStops(
+          deps.store,
+          workflowRun.id,
+          node.id,
+          execContext,
+          loopBashPath,
+          ['-c', substitutedBash],
+          {
+            cwd,
+            timeout: node.timeout,
+            protectedEnvKeys: config.protectedEnvKeys,
+            protectedCredentialValues: config.protectedCredentialValues,
+            retention: {
+              logDir,
+              workflowRunId: workflowRun.id,
+              nodeId: `${node.id}-iteration-${String(i)}`,
+              label: '<until_bash>',
+            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+              loopPrevOutput: prevIterationOutput,
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: execution,
+            }),
+          }
+        );
         bashComplete = true; // exit 0 = complete
       } catch (e) {
-        const bashErr = e as NodeJS.ErrnoException;
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
+          return failLoopNode(bashErr.message, {
+            failureKind: 'cancelled',
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          });
+        }
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the loop with a clear actionable error instead.
@@ -11777,6 +11913,32 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
 }
 
 /**
+ * Decide what happens to a completed run's worktree. The check is optional cleanup, so a
+ * failure leaves the disposition unset and never blocks the completion write.
+ */
+async function assessCompletedWorktree(
+  deps: WorkflowDeps,
+  workflowRun: WorkflowRun
+): Promise<{ completedRun: WorkflowRun; worktreeDisposition?: WorktreeDisposition | null }> {
+  if (!deps.completedRunWorktree) return { completedRun: workflowRun };
+  try {
+    // Read fresh: a pre-created run's `owned_worktree` proof is stamped on the row after
+    // this object was loaded.
+    const completedRun = (await deps.store.getWorkflowRun(workflowRun.id)) ?? workflowRun;
+    return {
+      completedRun,
+      worktreeDisposition: await deps.completedRunWorktree.assess(completedRun),
+    };
+  } catch (err) {
+    getLog().warn(
+      { err, workflowRunId: workflowRun.id },
+      'workflow.completed_worktree_assess_failed'
+    );
+    return { completedRun: workflowRun };
+  }
+}
+
+/**
  * Execute a complete DAG workflow.
  * Called from executeWorkflow() in executor.ts.
  */
@@ -12255,6 +12417,33 @@ export async function executeDagWorkflow(
   };
 
   /**
+   * The engine's terminal failure write. The live `workflow_failed` event is published only
+   * when this call committed the failure: a run another writer already finished (a
+   * cancellation during the failure notification, or a competing failure) keeps that
+   * writer's outcome and announcement. A rejected write throws the typed marker, which the
+   * outer executor catch rethrows without emitting.
+   */
+  const failRun = async (failMsg: string, exitReason: RunExitReason, site: string) => {
+    const emitter = getWorkflowEventEmitter();
+    try {
+      const { failed } = await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
+        { workflowRunId: workflowRun.id, site }
+      );
+      if (failed) {
+        emitter.emit({
+          type: 'workflow_failed',
+          runId: workflowRun.id,
+          workflowName: workflow.name,
+          error: failMsg,
+        });
+      }
+    } finally {
+      emitter.unregisterRun(workflowRun.id);
+    }
+  };
+
+  /**
    * Fail the run on a budget refusal. Returns normally, like the other engine refusals,
    * so the outer executor catch does not emit a second failure. A run paused or cancelled
    * meanwhile keeps its status; its next pass rebuilds the ledger and refuses again.
@@ -12281,21 +12470,10 @@ export async function executeDagWorkflow(
         'dag.workflow_error_log_write_failed'
       );
     });
-    const emitter = getWorkflowEventEmitter();
-    emitter.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitter.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'budget_refused' }),
-      { workflowRunId: workflowRun.id, site: 'dag.run_budget_refused_fail' }
-    );
+    await failRun(failMsg, 'budget_refused', 'dag.run_budget_refused_fail');
   };
 
   const startRefusal = runBudget && runBudgetStartRefusal(runBudget);
@@ -12501,31 +12679,15 @@ export async function executeDagWorkflow(
         );
       }
     );
-    const emitterForFail = getWorkflowEventEmitter();
-    emitterForFail.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    // Terminal write LAST: nothing above depends on it and all of it used to run
-    // unconditionally, so a rejection must not silence the log file, the live event,
-    // or the user's notification. Terminal telemetry is reported by the run store
-    // after this write commits, so a rejected write sends none.
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
-        // A first-node failure completes nothing, but it is still a node failure.
-        exitReason: anyFailed ? 'node_error' : 'no_nodes_completed',
-      }),
-      { workflowRunId: workflowRun.id, site: 'dag.no_nodes_completed_fail' }
+    await failRun(
+      failMsg,
+      // A first-node failure completes nothing, but it is still a node failure.
+      anyFailed ? 'node_error' : 'no_nodes_completed',
+      'dag.no_nodes_completed_fail'
     );
-    // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-    // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-    // catch recognizes the marker and rethrows without re-emitting.
     return;
   }
 
@@ -12545,28 +12707,10 @@ export async function executeDagWorkflow(
         );
       }
     );
-    const emitterForFail = getWorkflowEventEmitter();
-    emitterForFail.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
-    // Terminal write LAST: nothing above depends on it and all of it used to run
-    // unconditionally, so a rejection must not silence the log file, the live event,
-    // or the user's notification. Terminal telemetry is reported by the run store
-    // after this write commits, so a rejected write sends none.
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'node_error' }),
-      { workflowRunId: workflowRun.id, site: 'dag.node_failure_fail' }
-    );
-    // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-    // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-    // catch recognizes the marker and rethrows without re-emitting.
+    await failRun(failMsg, 'node_error', 'dag.node_failure_fail');
     return;
   }
 
@@ -12628,32 +12772,12 @@ export async function executeDagWorkflow(
           );
         }
       );
-      const emitterForEvidence = getWorkflowEventEmitter();
-      emitterForEvidence.emit({
-        type: 'workflow_failed',
-        runId: workflowRun.id,
-        workflowName: workflow.name,
-        error: failMsg,
-      });
-      emitterForEvidence.unregisterRun(workflowRun.id);
       await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
         workflowId: workflowRun.id,
       });
-      // Terminal write LAST: nothing above depends on it and all of it used to run
-      // unconditionally, so a rejection must not silence the evidence event, the log
-      // file, the live event, or the user's notification. The metadata merge above
-      // still precedes it, so `metadata.evidence_validation` is present the moment the
-      // run reads as failed.
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason: 'evidence_missing' }),
-        {
-          workflowRunId: workflowRun.id,
-          site: 'dag.evidence_gate_fail',
-        }
-      );
-      // The ordinary path does NOT throw — the outer executor.ts catch would duplicate the
-      // workflow_failed event emitted above. A rejected terminal write DOES throw, and that
-      // catch recognizes the marker and rethrows without re-emitting.
+      // The metadata merge above precedes the terminal write, so
+      // `metadata.evidence_validation` is present the moment the run reads as failed.
+      await failRun(failMsg, 'evidence_missing', 'dag.evidence_gate_fail');
       return;
     }
     getLog().info({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_passed');
@@ -12756,6 +12880,8 @@ export async function executeDagWorkflow(
   });
   emitter.unregisterRun(workflowRun.id);
 
+  const { completedRun, worktreeDisposition } = await assessCompletedWorktree(deps, workflowRun);
+
   await requireTerminalStatusWrite(
     deps.store.completeWorkflowRun(
       workflowRun.id,
@@ -12786,10 +12912,27 @@ export async function executeDagWorkflow(
               ),
             }
           : {}),
+        ...(worktreeDisposition
+          ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
+          : {}),
       }
     ),
     { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
   );
+
+  // The terminal record already carries the decision. Removing the checkout is cleanup
+  // of terminal data, so a refusal or failure leaves it in place and the run completed.
+  if (worktreeDisposition?.disposition === 'release') {
+    try {
+      await deps.completedRunWorktree?.release(completedRun);
+      getLog().info({ workflowRunId: workflowRun.id }, 'workflow.completed_worktree_released');
+    } catch (err) {
+      getLog().warn(
+        { err, workflowRunId: workflowRun.id },
+        'workflow.completed_worktree_release_failed'
+      );
+    }
+  }
 
   // terminalOutput (computed above, before the completion write) is the run's
   // summary for the parent conversation and the `workflow:` re-entry path.

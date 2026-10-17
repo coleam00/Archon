@@ -262,6 +262,33 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
       status: 'paused',
     });
   });
+
+  test('excludeRunId leaves out the deciding run but not another claimant', async () => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: 'task-exclude',
+      working_path: '/tmp/ops-client',
+      branch_name: '' as never,
+    });
+    await seedConversation('conv-exclude', env.id);
+    await seedRunAt('run-deciding', 'conv-exclude', 'running', '2026-08-02T00:00:00.000Z');
+    const deciding = { id: 'run-deciding', status: 'running' };
+
+    await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual(deciding);
+    await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toBeNull();
+
+    await seedRunAt('run-other', 'conv-exclude', 'failed', '2026-08-01T00:00:00.000Z');
+    const other = { id: 'run-other', status: 'failed' };
+    await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toEqual(other);
+    // The exclusion's placeholder follows the release filter's parameters.
+    await expect(
+      getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 }, 'run-deciding')
+    ).resolves.toEqual(other);
+    await expect(
+      getLiveRunOwningEnv(env.id, { kind: 'settled' }, 'run-deciding')
+    ).resolves.toBeNull();
+  });
 });
 
 test.each(['pending', 'running', 'paused', 'failed'])(
