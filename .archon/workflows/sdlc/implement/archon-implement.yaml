@@ -64,9 +64,10 @@ nodes:
   # arrives as bound inputs, no artifact bridge: green, the declared cause of any
   # red, and the summary carrying the evidence for it. The guard needs all three,
   # because an iteration whose remaining red is inherited or environmental can
-  # honestly have nothing left to change. `baseline` is the checkout the engine
-  # observed when this implement invocation started, so a correction round is
-  # measured from its own start and changes already in the checkout do not count.
+  # honestly have nothing left to change. `changes` is the engine's delta from the
+  # checkout it observed when this implement invocation started to this node's start,
+  # so a correction round is measured from its own start and changes already in the
+  # checkout do not count.
   - id: assert-changed
     script: assert-changed
     runtime: bun
@@ -75,4 +76,4 @@ nodes:
       green: "$implement.output.green"
       red_cause: "$implement.output.red_cause"
       summary: "$implement.output.summary"
-      baseline: "$implement.execution.checkoutStart"
+      changes: "$implement.execution.checkoutChanges"

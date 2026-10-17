@@ -9594,6 +9594,13 @@ nodes:
     expect(result.error?.error).toContain("no node 'ghost' exists");
   });
 
+  it('accepts a whole checkoutChanges binding and names that member when misplaced', () => {
+    expect(load('$implement.execution.checkoutChanges').error).toBeNull();
+    expect(load('n=$implement.execution.checkoutChanges').error?.error).toContain(
+      "uses '$<node>.execution.checkoutChanges' inside other text"
+    );
+  });
+
   it('rejects the reference on a workflow: node, which cannot pass it to the child run', () => {
     const result = parseWorkflow(
       `

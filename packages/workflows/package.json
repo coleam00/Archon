@@ -221,7 +221,7 @@
     ],
     [
       "src/checkout-observation.test.ts",
-      "src/implement-guard-conformance.test.ts"
+      "src/checkout-changes.test.ts"
     ],
     [
       "src/structured-output.test.ts"

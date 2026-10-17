@@ -1374,12 +1374,12 @@ or loop node starts, and records it on that node's execution record. A binding c
 observation of an upstream node's invocation:
 
 ```yaml
-  - id: assert-changed
-    script: assert-changed
+  - id: scope
+    script: scope
     runtime: bun
     depends_on: [implement]
     with:
-      baseline: "$implement.execution.checkoutStart"   # arrives as INPUTS_BASELINE (JSON)
+      start: "$implement.execution.checkoutStart"   # arrives as INPUTS_START (JSON)
 ```
 
 The value is the checkout observation from the start of `implement`'s invocation: the
@@ -1395,6 +1395,32 @@ guess.
 
 The reference is valid only as the whole value of a `command:` or `script:` binding, and
 only for a producer that executes against the checkout. Anything else is a load error.
+
+### Reading what changed since a node started: `$node.execution.checkoutChanges`
+
+To ask which paths a step changed, bind the engine's delta instead of comparing two
+observations yourself:
+
+```yaml
+  - id: assert-changed
+    script: assert-changed
+    runtime: bun
+    depends_on: [implement]
+    with:
+      changes: "$implement.execution.checkoutChanges"   # arrives as INPUTS_CHANGES (JSON)
+```
+
+The value compares the start of `implement`'s invocation with the start of the node that
+binds it. A path counts when its content, mode, or type differs; a dirty start the step left
+untouched, staging, an empty commit, and committing bytes that were already dirty count for
+nothing. `{"status": "known", "changed": 0}` is an established empty delta. A non-empty one
+also names a manifest under `$ARTIFACTS_DIR` listing the changed paths, sorted by their raw
+bytes, with a path that is not valid UTF-8 carried as `{"base64": ...}`. A delta the engine
+cannot establish is `{"status": "unknown", "reason": ..., "side": ...}`, never an empty
+list: `not_git`, `unavailable`, `incomplete` (an observation could not identify every path),
+`manifest_unreadable`, or `git_failed`. The delta is computed from the recorded
+observations, so a resumed run reads its producer's persisted start. Whether a delta counts
+as work is the consuming node's decision. The same placement rules as `checkoutStart` apply.
 Every `bash:` and `script:` node, and the agent's shell in an AI node (see
 [Durable state documents](#durable-state-documents) for the provider exception), also
 receives its own execution identity, including this attempt's observation, as JSON in the

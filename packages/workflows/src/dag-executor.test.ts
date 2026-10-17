@@ -43605,6 +43605,27 @@ describe('executeDagWorkflow -- node checkout starts (#3375)', () => {
     expect(execution.attempt.checkoutStart).toMatchObject({ worktree: { status: 'dirty' } });
   });
 
+  it('binds the delta from a producer invocation start to the consumer start', async () => {
+    const deps = await run([
+      { id: 'producer', kind: 'exec', runtime: 'sh', script: 'echo changed > a.txt' },
+      {
+        id: 'consumer',
+        kind: 'exec',
+        runtime: 'bun',
+        depends_on: ['producer'],
+        with: { changes: '$producer.execution.checkoutChanges' },
+        script: 'console.log(process.env.INPUTS_CHANGES);',
+      },
+    ]);
+    const [consumer] = terminal(deps, 'consumer');
+    expect(consumer?.eventType).toBe('node_completed');
+    expect(JSON.parse(consumer?.data.node_output ?? '')).toMatchObject({
+      status: 'known',
+      changed: 1,
+      manifest: { pointer: { run_id: 'checkout-run' } },
+    });
+  });
+
   it('fails a binding whose producer records no checkout start', async () => {
     const deps = await run([
       { id: 'gate', kind: 'exec', runtime: 'sh', script: 'true' },

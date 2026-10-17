@@ -46,6 +46,7 @@
  */
 import { z } from 'zod';
 import type { NodeOutput } from './schemas';
+import type { CheckoutObservation } from './schemas/checkout-observation';
 import { findSimilar } from './utils/fuzzy-match';
 import { hasTruncationMarker } from './utils/output-truncation';
 
@@ -276,18 +277,26 @@ export function parseWholeOutputRef(text: string): { nodeId: string; field?: str
 }
 
 /**
- * `$<node>.execution.checkoutStart` (#3375): the checkout observation the engine recorded
- * when the producer's invocation started. It reads an engine-owned execution fact, never
- * producer output, and is valid only as a whole `with:` binding value. It is the only
- * `.execution` member; the grammar names it in full so nothing else parses as one.
+ * `$<node>.execution.<member>` (#3375, #3774): an engine-owned execution fact about the
+ * producer's invocation, never producer output, valid only as a whole `with:` binding
+ * value. `checkoutStart` is the checkout observation recorded when that invocation
+ * started; `checkoutChanges` is the path delta from that observation to the consuming
+ * node's own start. The grammar names both in full so nothing else parses as a member.
  */
-export const EXECUTION_CHECKOUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.execution\.checkoutStart`;
+const EXECUTION_CHECKOUT_MEMBERS = ['checkoutStart', 'checkoutChanges'] as const;
+export type ExecutionCheckoutMember = (typeof EXECUTION_CHECKOUT_MEMBERS)[number];
+
+export const EXECUTION_CHECKOUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.execution\.(${EXECUTION_CHECKOUT_MEMBERS.join('|')})`;
 
 const WHOLE_EXECUTION_CHECKOUT_REF_PATTERN = new RegExp(`^${EXECUTION_CHECKOUT_REF_SOURCE}$`);
 
-/** The producer id of a string that is exactly one whole execution checkout reference. */
-export function parseWholeExecutionCheckoutRef(text: string): string | undefined {
-  return WHOLE_EXECUTION_CHECKOUT_REF_PATTERN.exec(text.trim())?.[1];
+/** The producer and member of a string that is exactly one whole execution checkout reference. */
+export function parseWholeExecutionCheckoutRef(
+  text: string
+): { producer: string; member: ExecutionCheckoutMember } | undefined {
+  const match = WHOLE_EXECUTION_CHECKOUT_REF_PATTERN.exec(text.trim());
+  if (match === null) return undefined;
+  return { producer: match[1], member: match[2] as ExecutionCheckoutMember };
 }
 
 /**
@@ -297,9 +306,10 @@ export function parseWholeExecutionCheckoutRef(text: string): string | undefined
  */
 export function resolveExecutionCheckoutStart(
   producer: NodeOutput | undefined,
-  nodeId: string
-): JsonValue {
-  const ref = `$${nodeId}.execution.checkoutStart`;
+  nodeId: string,
+  member: ExecutionCheckoutMember = 'checkoutStart'
+): CheckoutObservation {
+  const ref = `$${nodeId}.execution.${member}`;
   if (producer === undefined) {
     throw new Error(
       `'${ref}' references node '${nodeId}', which has not run before this reference. Add '${nodeId}' to depends_on.`
@@ -314,7 +324,7 @@ export function resolveExecutionCheckoutStart(
             'Only prompt, command, bash, script, and loop nodes record one, and runs recorded before this field existed have none.'
     );
   }
-  return start as JsonValue;
+  return start;
 }
 
 /**

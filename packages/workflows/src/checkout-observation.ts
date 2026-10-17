@@ -36,7 +36,7 @@ const HEAD_READ_ATTEMPTS = 3;
 const GIT_TIMEOUT_MS = 120_000;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
-interface GitResult {
+export interface GitResult {
   code: number;
   stdout: Buffer;
 }
@@ -53,7 +53,7 @@ const REPOSITORY_SELECTORS = new Set([
  * Run git read-only. Repository-selecting variables are dropped so the observation reads
  * the checkout at `cwd`, not whatever repository the engine process happened to inherit.
  */
-function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
@@ -143,7 +143,7 @@ async function probeContainerMarker(
 }
 
 /** Encode raw path bytes: UTF-8 text when lossless, base64 otherwise. */
-function encodePath(raw: Buffer): CheckoutPath {
+export function encodePath(raw: Buffer): CheckoutPath {
   const decoded = raw.toString('utf8');
   return Buffer.from(decoded, 'utf8').equals(raw) ? decoded : { base64: raw.toString('base64') };
 }
@@ -658,17 +658,11 @@ export async function recordCheckoutSample(
   };
   if (sample.worktree.status === 'clean') return { ...base, worktree: { status: 'clean' } };
   const { manifest, staged, unstaged, untracked } = sample.worktree;
-  const bytes = Buffer.from(JSON.stringify(manifest), 'utf8');
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  const relativePath = `${MANIFEST_DIR}/${sha256}.json`;
-  const absolute = join(run.artifactsDir, ...relativePath.split('/'));
-  await mkdir(dirname(absolute), { recursive: true });
-  try {
-    await writeFile(absolute, bytes, { flag: 'wx' });
-  } catch (error) {
-    // Same digest means same bytes: an existing file is this manifest already.
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-  }
+  const { relativePath, sha256 } = await writeContentAddressed(
+    run.artifactsDir,
+    MANIFEST_DIR,
+    manifest
+  );
   return {
     ...base,
     worktree: {
@@ -686,6 +680,29 @@ export async function recordCheckoutSample(
       },
     },
   };
+}
+
+/**
+ * Write a JSON document under the run's artifacts, named by the SHA-256 of its exact
+ * bytes. The file is complete before any pointer to it exists, and the same digest
+ * means the same bytes, so an existing file is this document already.
+ */
+export async function writeContentAddressed(
+  artifactsDir: string,
+  dir: string,
+  document: unknown
+): Promise<{ relativePath: string; sha256: string }> {
+  const bytes = Buffer.from(JSON.stringify(document), 'utf8');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const relativePath = `${dir}/${sha256}.json`;
+  const absolute = join(artifactsDir, ...relativePath.split('/'));
+  await mkdir(dirname(absolute), { recursive: true });
+  try {
+    await writeFile(absolute, bytes, { flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  return { relativePath, sha256 };
 }
 
 /** Sample and record in one step, for node starts where the artifacts directory exists. */

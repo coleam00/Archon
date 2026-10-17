@@ -30,8 +30,9 @@ import {
   type NodeInvocation,
   type McpUnavailable,
 } from './schemas/node-execution';
-import type { CheckoutObservation } from './schemas/checkout-observation';
+import type { CheckoutChanges, CheckoutObservation } from './schemas/checkout-observation';
 import { observeCheckout } from './checkout-observation';
+import { computeCheckoutChanges } from './checkout-changes';
 /**
  * DAG Workflow Executor
  *
@@ -318,6 +319,11 @@ export interface ShellInputContext {
   issueContext?: string;
   nodeOutputs: Map<string, NodeOutput>;
   loopBodyScopes: readonly LoopBodyScope[];
+  /**
+   * `$<node>.execution.checkoutChanges` values for the node being resolved, by producer id,
+   * computed by {@link resolveCheckoutChangeBindings} once that node's own start exists.
+   */
+  checkoutChanges?: ReadonlyMap<string, CheckoutChanges>;
 }
 
 /**
@@ -560,14 +566,61 @@ export function resolveNodeBindings(
           'boolean, null, or array for a literal value.'
       );
     }
-    const checkoutProducer =
+    const checkoutRef =
       typeof rawValue === 'string' ? parseWholeExecutionCheckoutRef(rawValue) : undefined;
-    resolved[name] =
-      checkoutProducer !== undefined
-        ? resolveExecutionCheckoutStart(ctx.nodeOutputs.get(checkoutProducer), checkoutProducer)
-        : resolveWorkflowValue(rawValue, ctx, runInputs, true);
+    if (checkoutRef === undefined) {
+      resolved[name] = resolveWorkflowValue(rawValue, ctx, runInputs, true);
+    } else if (checkoutRef.member === 'checkoutStart') {
+      resolved[name] = resolveExecutionCheckoutStart(
+        ctx.nodeOutputs.get(checkoutRef.producer),
+        checkoutRef.producer
+      ) as JsonValue;
+    } else {
+      const changes = ctx.checkoutChanges?.get(checkoutRef.producer);
+      if (changes === undefined) {
+        throw new Error(
+          `unreachable: node '${consumerId}' binding '${name}' reads '$${checkoutRef.producer}.execution.checkoutChanges' before the engine computed it`
+        );
+      }
+      resolved[name] = changes as JsonValue;
+    }
   }
   return resolved;
+}
+
+/**
+ * Compute the `$<node>.execution.checkoutChanges` values a node's bindings read (#3774):
+ * the delta from each producer invocation's recorded start to `end`, this attempt's own
+ * start. It reads manifests and Git trees, so it runs before the synchronous
+ * {@link resolveNodeBindings}, which only looks the values up. Exported for the dry-run
+ * simulator, which must compute them the same way.
+ */
+export async function resolveCheckoutChangeBindings(
+  withMap: Record<string, JsonValue | BindingDirective> | undefined,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>,
+  end: CheckoutObservation | undefined,
+  cwd: string,
+  run: { runId: string; artifactsDir: string }
+): Promise<ReadonlyMap<string, CheckoutChanges> | undefined> {
+  let changes: Map<string, CheckoutChanges> | undefined;
+  for (const value of Object.values(withMap ?? {})) {
+    const ref = typeof value === 'string' ? parseWholeExecutionCheckoutRef(value) : undefined;
+    if (ref?.member !== 'checkoutChanges' || changes?.has(ref.producer) === true) continue;
+    const start = resolveExecutionCheckoutStart(
+      nodeOutputs.get(ref.producer),
+      ref.producer,
+      'checkoutChanges'
+    );
+    // Every node kind the loader lets read a binding records its own start.
+    if (end === undefined) {
+      throw new Error(
+        `unreachable: a node reading '$${ref.producer}.execution.checkoutChanges' has no checkout start`
+      );
+    }
+    changes ??= new Map();
+    changes.set(ref.producer, await computeCheckoutChanges(cwd, start, end, run));
+  }
+  return changes;
 }
 
 function resolveBindingDirective(
@@ -2561,8 +2614,17 @@ async function executeNodeInternal(
     // nearest-wins, the same precedence the shell env channel documents. A binding
     // that cannot be satisfied throws here and fails the node via the catch below.
     const runInputs = resolveRunInputs(workflowRun);
+    const checkoutChanges = await resolveCheckoutChangeBindings(
+      nodeWith,
+      ctx.nodeOutputs,
+      execution.attempt.checkoutStart,
+      ctx.cwd,
+      { runId: workflowRun.id, artifactsDir }
+    );
     const nodeBindings =
-      nodeWith !== undefined ? resolveNodeBindings(node.id, nodeWith, ctx, runInputs) : undefined;
+      nodeWith !== undefined
+        ? resolveNodeBindings(node.id, nodeWith, { ...ctx, checkoutChanges }, runInputs)
+        : undefined;
     const promptInputs =
       nodeBindings !== undefined ? { ...(runInputs ?? {}), ...nodeBindings } : runInputs;
     // An inline prompt and a command file loaded only now resolve alike: variables,
@@ -3972,8 +4034,18 @@ async function executeScriptNode(
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
   // sanctioned injection-safe channel, matching executeBashNode (#2115).
+  const checkoutChanges =
+    node.runtime !== 'sh'
+      ? await resolveCheckoutChangeBindings(
+          node.with,
+          ctx.nodeOutputs,
+          execution.attempt.checkoutStart,
+          cwd,
+          { runId: workflowRun.id, artifactsDir }
+        )
+      : undefined;
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...buildNodeShellEnvironment(node, ctx, envVars, {
+    ...buildNodeShellEnvironment(node, { ...ctx, checkoutChanges }, envVars, {
       artifactsDir,
       stateDir,
       logDir,

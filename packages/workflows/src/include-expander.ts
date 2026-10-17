@@ -234,12 +234,15 @@ function applyOutputRefRename(text: string, rename: (id: string) => string): str
   });
 }
 
-/** `$<id>.execution.checkoutStart` names a sibling node too, so its id follows the same rename. */
+/** `$<id>.execution.<member>` names a sibling node too, so its id follows the same rename. */
 function applyExecutionCheckoutRefRename(text: string, rename: (id: string) => string): string {
-  return text.replace(new RegExp(EXECUTION_CHECKOUT_REF_SOURCE, 'g'), (match, id: string) => {
-    const renamed = rename(id);
-    return renamed === id ? match : `$${renamed}.execution.checkoutStart`;
-  });
+  return text.replace(
+    new RegExp(EXECUTION_CHECKOUT_REF_SOURCE, 'g'),
+    (match, id: string, member: string) => {
+      const renamed = rename(id);
+      return renamed === id ? match : `$${renamed}.execution.${member}`;
+    }
+  );
 }
 
 function applyLoopPrevOutputRefRename(text: string, rename: (id: string) => string): string {

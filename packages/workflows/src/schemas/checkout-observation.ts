@@ -121,3 +121,48 @@ export const checkoutObservationSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type CheckoutObservation = z.infer<typeof checkoutObservationSchema>;
+
+export const CHECKOUT_CHANGES_VERSION = 1;
+
+/** The artifact file a non-empty delta points at: changed paths, sorted by raw path bytes. */
+export const checkoutChangesManifestSchema = z.object({
+  version: z.literal(CHECKOUT_CHANGES_VERSION),
+  paths: z.array(checkoutPathSchema),
+});
+export type CheckoutChangesManifest = z.infer<typeof checkoutChangesManifestSchema>;
+
+/**
+ * Which paths' content, mode, or type differ between two checkout observations (#3774):
+ * a producer invocation's start and the consuming node's own start.
+ *
+ * A delta is a fact, never a verdict on whether work happened. Paths whose identity at
+ * the end equals the start do not count, so a dirty start the step left untouched, an
+ * empty commit, and committing bytes that were already dirty are all zero. Like an
+ * observation's manifest, the paths live in the run's artifacts (`manifest.pointer`),
+ * never inline.
+ *
+ * `unknown` is a delta that cannot be established, never an empty list: `not_git` and
+ * `unavailable` when either observation is, `incomplete` when either could not identify
+ * every path, `manifest_unreadable` when a recorded manifest is missing, does not match
+ * its digest, or belongs to another run, and `git_failed` when the commits' trees could
+ * not be read. `side` names the observation the reason is about.
+ */
+export const checkoutChangesSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('known'),
+    changed: z.number().int().nonnegative(),
+    /** Present exactly when `changed` is positive. */
+    manifest: z
+      .object({
+        pointer: artifactPointerSchema,
+        sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .optional(),
+  }),
+  z.object({
+    status: z.literal('unknown'),
+    reason: z.enum(['not_git', 'unavailable', 'incomplete', 'manifest_unreadable', 'git_failed']),
+    side: z.enum(['start', 'end']).optional(),
+  }),
+]);
+export type CheckoutChanges = z.infer<typeof checkoutChangesSchema>;

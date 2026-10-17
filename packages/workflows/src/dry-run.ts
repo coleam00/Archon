@@ -15,6 +15,7 @@ import {
   nodeTemplateReferences,
   substituteNodeOutputRefs,
   substituteWaitMessage,
+  resolveCheckoutChangeBindings,
   resolveNodeBindings,
   resolveAttentionOptions,
   substituteLoopBodyText,
@@ -546,8 +547,10 @@ interface DryRunContext {
    */
   sourceRoots: WorkflowSourceRoots;
   stubs: DryRunStubs;
-  /** Nodes whose execution record some binding reads (`$<node>.execution.checkoutStart`). */
+  /** Nodes whose execution record some binding reads (`$<node>.execution.<member>`). */
   checkoutProducers: ReadonlySet<string>;
+  /** Nodes that bind `$<node>.execution.checkoutChanges`, which is measured to their own start. */
+  checkoutChangeConsumers: ReadonlySet<string>;
   /**
    * The run's EFFECTIVE `$INPUTS` map — declared defaults layered under caller-supplied
    * values, the same merge a real run performs at executor.ts (`defaultRunInputs`).
@@ -1372,9 +1375,21 @@ async function simulateNode(
           ? node.source.with
           : readComposedBindings(node)
         : undefined;
+    // The executor computes `$<node>.execution.checkoutChanges` from this node's own start
+    // the same way; the simulated start is the checkout executed code runs in.
+    const bindingContext: ShellInputContext = {
+      ...bindingShellContext(ctx, outputs),
+      checkoutChanges: await resolveCheckoutChangeBindings(
+        nodeWith,
+        outputs,
+        execution?.attempt.checkoutStart,
+        ctx.execWorkspace,
+        { runId: 'dry-run', artifactsDir: ctx.artifactsDir }
+      ),
+    };
     const nodeBindings =
       nodeWith !== undefined
-        ? resolveNodeBindings(node.id, nodeWith, bindingShellContext(ctx, outputs), ctx.inputs)
+        ? resolveNodeBindings(node.id, nodeWith, bindingContext, ctx.inputs)
         : undefined;
     const commandInputs =
       isAgentNode(node) && nodeBindings !== undefined
@@ -1394,7 +1409,7 @@ async function simulateNode(
         node,
         resolvedText,
         ctx,
-        inputEnvVars(node, bindingShellContext(ctx, outputs), ctx.inputs),
+        inputEnvVars(node, bindingContext, ctx.inputs),
         execution
       );
       if ('error' in executed) {
@@ -1488,7 +1503,13 @@ async function simulatedExecution(
   ctx: DryRunContext
 ): Promise<NodeExecutionMetadata | undefined> {
   const executes = isExecNode(node) && ctx.execCode && !Object.hasOwn(ctx.stubs, node.id);
-  if (!executes && !ctx.checkoutProducers.has(node.id)) return undefined;
+  if (
+    !executes &&
+    !ctx.checkoutProducers.has(node.id) &&
+    !ctx.checkoutChangeConsumers.has(node.id)
+  ) {
+    return undefined;
+  }
   if (!isExecNode(node) && !isAgentNode(node) && !isLoopNode(node)) return undefined;
   const checkoutStart = await observeCheckout(
     ctx.execWorkspace,
@@ -1506,13 +1527,16 @@ async function simulatedExecution(
   );
 }
 
-/** Producers some node binds with `$<node>.execution.checkoutStart`, at any depth. */
-function collectCheckoutProducers(
+/**
+ * Producers some node binds with `$<node>.execution.<member>`, and the nodes that bind
+ * `checkoutChanges`, at any depth.
+ */
+function collectCheckoutBindings(
   nodes: readonly DagNode[],
-  into = new Set<string>()
-): Set<string> {
+  into = { checkoutProducers: new Set<string>(), checkoutChangeConsumers: new Set<string>() }
+): { checkoutProducers: Set<string>; checkoutChangeConsumers: Set<string> } {
   for (const node of nodes) {
-    if (isLoopGroupNode(node)) collectCheckoutProducers(node.loop_group.nodes as DagNode[], into);
+    if (isLoopGroupNode(node)) collectCheckoutBindings(node.loop_group.nodes as DagNode[], into);
     const nodeWith = isExecNode(node)
       ? node.with
       : isAgentNode(node)
@@ -1521,9 +1545,10 @@ function collectCheckoutProducers(
           : readComposedBindings(node)
         : undefined;
     for (const value of Object.values(nodeWith ?? {})) {
-      const producer =
-        typeof value === 'string' ? parseWholeExecutionCheckoutRef(value) : undefined;
-      if (producer !== undefined) into.add(producer);
+      const ref = typeof value === 'string' ? parseWholeExecutionCheckoutRef(value) : undefined;
+      if (ref === undefined) continue;
+      into.checkoutProducers.add(ref.producer);
+      if (ref.member === 'checkoutChanges') into.checkoutChangeConsumers.add(node.id);
     }
   }
   return into;
@@ -1606,7 +1631,7 @@ export async function dryRunWorkflow(options: {
     execWorkspace: options.execWorkspace ?? options.cwd,
     sourceRoots: options.sourceRoots ?? liveSourceRoots(options.cwd),
     stubs: options.stubs ?? {},
-    checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
+    ...collectCheckoutBindings(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     loopBodyScopes: [],
     artifactsDir: join(tempRoot, 'artifacts'),
