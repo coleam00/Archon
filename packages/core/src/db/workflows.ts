@@ -39,21 +39,43 @@ import {
   resourceStartOccupancy,
   type TransactionQuery,
 } from './resource-slots';
-import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
+import { insertWorkflowEvent } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import {
   normalizeWorkflowRun,
   parseJsonObject,
-  readWorkflowRunOrigin,
   type WorkflowRunRow,
 } from './workflow-run-normalization';
 import { workflowRunOriginSchema } from '@archon/workflows/schemas/workflow-run';
-import {
-  assertPublicConversation,
-  ensureWorkflowOriginAnchor,
-  notOriginAnchor,
-} from './workflow-origin-anchor';
+import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
+import { getLog, jsonIntExtract, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
+import { getWorkflowRun, getWorkflowRunStatus } from './workflow-run-reads';
+export {
+  getWorkflowRun,
+  getRunByIsolationEnvId,
+  findWorkflowRunsByIdPrefix,
+  getWorkflowRunStatus,
+  getActiveWorkflowRun,
+  getPausedWorkflowRun,
+  STALE_PENDING_AGE_MS,
+  getActiveWorkflowRunByPath,
+  findChildRuns,
+  getRunAncestry,
+  isRunTranscriptConversation,
+  getWorkflowRunByWorkerPlatformId,
+  listConversationDetachBlockers,
+} from './workflow-run-reads';
+export {
+  getRunningWorkflows,
+  listDashboardRuns,
+  listRunsNeedingAttention,
+  listAttentionQueueRows,
+  listWorkflowRuns,
+  findOpenWorkRuns,
+  findAdoptingRuns,
+  listNotifiedTerminalRuns,
+} from './workflow-run-lists';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -66,15 +88,12 @@ import type {
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  queuedRunAttention,
-  isAttentionQueueRow,
   isScheduledWorkflowResume,
   workflowRunStatusSchema,
   pausedUsageLimitWait,
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
-  RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
   CAPACITY_WAIT_METADATA_KEY,
   SOURCE_RELEASE_METADATA_KEY,
@@ -84,12 +103,6 @@ import {
   answeredPauseContinuation,
 } from '@archon/workflows/schemas/workflow-run';
 import { resourceResumeBlocker, resumeRefusal } from '@archon/workflows/resource-start-store';
-import type {
-  DashboardWorkflowRun,
-  ListDashboardRunsOptions,
-  DashboardRunsResult,
-} from '../schemas/workflow-run';
-import { createLogger } from '@archon/paths';
 import type {
   FanOutCancelReason,
   WorkflowCancellationEventDetails,
@@ -118,13 +131,6 @@ export type WorkflowRunInsert = Parameters<
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('db.workflows');
-  return cachedLog;
-}
-
 /**
  * Days of inactivity after which a 'running' run is treated as an orphan (its
  * executor presumed dead) and becomes eligible for resume. Bound as a query
@@ -143,10 +149,6 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
-}
-
-function normalizeMetadata(raw: unknown): Record<string, unknown> {
-  return parseJsonObject(raw) ?? {};
 }
 
 /**
@@ -517,125 +519,6 @@ export async function recordWorkflowRunCheckoutBaseline(
   return run.checkout_baseline;
 }
 
-export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_get_failed');
-    throw new Error(`Failed to get workflow run: ${err.message}`);
-  }
-}
-
-/**
- * Find the workflow run that owns a container isolation environment
- * (`metadata.isolation_env_id === envId`, stamped at run creation for container
- * runs). Used by `isolation cleanup` to decide whether a container is reapable:
- * a paused/running run must NOT be pruned. Returns the newest match, or null when
- * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
- */
-export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
-  const extract = getDialect().jsonText('metadata', 'isolation_env_id');
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE ${extract} = $1
-       ORDER BY started_at DESC LIMIT 1`,
-      [envId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
-    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
-  }
-}
-
-/**
- * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
- * short id shown in listings). Returns up to two matches so callers can detect
- * an ambiguous prefix. Scoped to `codebaseId` in the query, so it never crosses
- * projects. Run ids are UUIDs, so `idPrefix` is rejected unless it's within the
- * UUID charset — that keeps it out of LIKE-wildcard territory (`%` / `_`).
- */
-export async function findWorkflowRunsByIdPrefix(
-  idPrefix: string,
-  codebaseId: string
-): Promise<WorkflowRun[]> {
-  if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND CAST(id AS TEXT) LIKE $2 LIMIT 2',
-      [codebaseId, `${idPrefix.toLowerCase()}%`]
-    );
-    return result.rows.map(normalizeWorkflowRun);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_find_by_prefix_failed');
-    throw new Error(`Failed to find workflow runs by id prefix: ${err.message}`);
-  }
-}
-
-export async function getWorkflowRunStatus(id: string): Promise<string | null> {
-  try {
-    const result = await pool.query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-    return result.rows[0]?.status ?? null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_get_status_failed');
-    throw new Error(`Failed to get workflow run status: ${err.message}`);
-  }
-}
-
-export async function getActiveWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'running'
-       ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_get_active_failed');
-    throw new Error(`Failed to get active workflow run: ${err.message}`);
-  }
-}
-
-/**
- * Find a paused workflow run for a conversation (or its parent).
- * Used by the message handler to give the chat agent the open approval gate as
- * context for the turn (#2565).
- * Non-throwing: returns null on DB error so the caller can fall through to normal routing.
- */
-export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'
-       ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, conversationId }, 'db.workflow_run_get_paused_failed');
-    return null;
-  }
-}
-
 /**
  * Atomically cancel every RESUMABLE run belonging to a conversation.
  *
@@ -718,190 +601,6 @@ export async function cancelResumableRunsForConversation(
   }
   for (const run of cancelledRuns) await reportRunTerminal(run.id);
   return cancelledRuns;
-}
-
-/**
- * Find the workflow run currently holding the lock on `workingPath`.
- *
- * The lock is held by any row in `(running, paused)` or `pending` younger
- * than `STALE_PENDING_AGE_MS` (orphaned pre-creates beyond that window are
- * ignored — they're from crashed or resume-replaced dispatches).
- *
- * When called from a dispatch that already pre-created its own row, pass
- * `self` (`id` + `startedAt`) so:
- *   1. Self is never returned.
- *   2. If two dispatches both have rows, the deterministic older-wins
- *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
- *      The newer dispatch sees the older row and aborts; the older dispatch
- *      sees nothing.
- *
- * `self.excludeRunIds` (#2121 Phase 2) additionally excludes the caller's
- * ancestor run-id chain: a `workflow:` sub-run shares its parent's checkout, so
- * the parent's own running/paused row must not count as a lock against the child.
- *
- * Returns the holding row, or null if the path is free.
- */
-export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
-
-export async function getActiveWorkflowRunByPath(
-  workingPath: string,
-  self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
-): Promise<WorkflowRun | null> {
-  const isPostgres = getDatabaseType() === 'postgresql';
-  const stalePendingCutoff = isPostgres
-    ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
-    : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
-
-  // Build params + clauses dynamically. Self exclusion + tiebreaker travel
-  // together — the tiebreaker references both ids and timestamps.
-  const params: unknown[] = [workingPath];
-  const clauses: string[] = [
-    'working_path = $1',
-    `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
-  ];
-  let selfIdParam: string | undefined;
-  if (self !== undefined) {
-    params.push(self.id);
-    // Captured at push time — the tiebreaker below must reference THIS
-    // placeholder, and excludeRunIds params may land in between.
-    selfIdParam = `$${String(params.length)}`;
-    clauses.push(`id != ${selfIdParam}`);
-  }
-  // Exclude the caller's ancestor chain (#2121 Phase 2): a `workflow:` sub-run
-  // shares the parent's checkout, so the parent's own running/paused row on this
-  // path must NOT count as a lock against the child. Each id is a separate
-  // placeholder so both dialects bind positionally (no array binding).
-  if (self?.excludeRunIds && self.excludeRunIds.length > 0) {
-    const placeholders = self.excludeRunIds.map(id => {
-      params.push(id);
-      return `$${String(params.length)}`;
-    });
-    clauses.push(`id NOT IN (${placeholders.join(', ')})`);
-  }
-  if (self !== undefined) {
-    // Older-wins tiebreaker. (started_at, id) is a total order so both
-    // dispatches always agree on which is "first." Without this, two rows
-    // with similar timestamps could mutually see each other and both abort.
-    //
-    // Serialize Date to ISO string — bun:sqlite rejects Date bindings.
-    //
-    // Format-aware comparison:
-    //   PostgreSQL: started_at is TIMESTAMPTZ; cast the ISO param to
-    //     timestamptz so the comparison is chronological, not lexical.
-    //   SQLite: started_at is TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
-    //     ISO param has "YYYY-MM-DDTHH:MM:SS.mmmZ". Lexical comparison is
-    //     WRONG: char 11 is space (0x20) in the column vs T (0x54) in the
-    //     param, so every column value lex-sorts before every ISO param —
-    //     making `started_at < $param` always TRUE regardless of actual
-    //     time. Wrap both sides in datetime() to force chronological
-    //     comparison via SQLite's date/time functions.
-    params.push(self.startedAt.toISOString());
-    const startedAtParam = `$${String(params.length)}`;
-    // NOT params.length - 1: excludeRunIds placeholders may sit between the self
-    // id and startedAt — a positional back-reference here once pointed the id
-    // tiebreak at an ancestor id instead of self (caught by the SQL-shape test).
-    // selfIdParam is always set when `self` is (same guard above).
-    const idParam = selfIdParam ?? '$2';
-    const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
-    const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
-    clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
-  }
-
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE ${clauses.join(' AND ')}
-       ORDER BY started_at ASC, id ASC LIMIT 1`,
-      params
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, workingPath }, 'db.workflow_run_get_active_by_path_failed');
-    throw new Error(`Failed to get active workflow run by path: ${err.message}`);
-  }
-}
-
-/**
- * Find every run spawned as a child of `parentRunId` (#2121 Phase 2), oldest
- * first. Callers filter further by `metadata.parent_node_id` (a parent may have
- * several `workflow:` nodes) or by status (the abandon cascade cancels
- * non-terminal children).
- */
-export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
-      [parentRunId]
-    );
-    return result.rows.map(row => normalizeWorkflowRun(row));
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, parentRunId }, 'db.workflow_run_find_children_failed');
-    throw new Error(`Failed to find child workflow runs: ${err.message}`);
-  }
-}
-
-/**
- * Safety cap on the `parent_run_id` walk. The load-time and runtime cycle guards
- * prevent creating a cyclic run tree, but a hand-edited DB must never hang the
- * walk — deeper than the runtime depth cap (5) so a legitimately deep-but-bounded
- * tree still resolves fully.
- */
-const MAX_RUN_ANCESTRY_DEPTH = 32;
-
-/**
- * Walk `parent_run_id` from `runId` up to the root, returning ancestors nearest
- * first (the immediate parent at index 0). Depth-capped and cycle-safe (a
- * repeated id stops the walk). Used by the runtime cycle guard and to build the
- * path-lock exclusion set for a shared-checkout sub-run.
- */
-export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
-  const ancestors: WorkflowRun[] = [];
-  const seen = new Set<string>([runId]);
-  let current = await getWorkflowRun(runId);
-  let depth = 0;
-  while (current?.parent_run_id && depth < MAX_RUN_ANCESTRY_DEPTH) {
-    const parentId = current.parent_run_id;
-    if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
-    const parent = await getWorkflowRun(parentId);
-    if (!parent) break; // parent deleted (ON DELETE SET NULL orphan) — chain ends
-    ancestors.push(parent);
-    seen.add(parentId);
-    current = parent;
-    depth++;
-  }
-  return ancestors;
-}
-
-export async function getRunningWorkflows(): Promise<
-  { id: string; conversation_id: string | null; workflow_name: string; started_at: string }[]
-> {
-  try {
-    const result = await pool.query<{
-      id: string;
-      conversation_id: string | null;
-      parent_conversation_id: string | null;
-      user_id: string | null;
-      origin: unknown;
-      workflow_name: string;
-      started_at: string;
-    }>(
-      "SELECT id, conversation_id, parent_conversation_id, user_id, CAST(origin AS TEXT) AS origin, workflow_name, started_at FROM remote_agent_workflow_runs WHERE status = 'running' ORDER BY started_at ASC LIMIT 100",
-      []
-    );
-    return result.rows.map(row => ({
-      id: row.id,
-      workflow_name: row.workflow_name,
-      started_at: row.started_at,
-      conversation_id: readWorkflowRunOrigin(row)?.conversationId ?? null,
-    }));
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_runs_get_running_failed');
-    return []; // Non-critical: don't break health check
-  }
 }
 
 export async function findResumableRun(
@@ -1260,47 +959,6 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);
-  }
-}
-
-/**
- * Whether a run executes in this conversation as its own transcript: a hidden
- * worker conversation, or a CLI run's conversation. A foreground run started from
- * a chat executes in that chat (`conversation_id = parent_conversation_id`), and
- * the chat stays its owner's, so it does not count.
- */
-export async function isRunTranscriptConversation(conversationId: string): Promise<boolean> {
-  const result = await pool.query<{ found: number }>(
-    `SELECT 1 AS found FROM remote_agent_workflow_runs
-     WHERE conversation_id = $1
-       AND (parent_conversation_id IS NULL OR parent_conversation_id <> conversation_id)
-     LIMIT 1`,
-    [conversationId]
-  );
-  return result.rows.length > 0;
-}
-
-/**
- * Find the most recent workflow run for a worker platform conversation ID.
- * Joins with conversations table to resolve platform_conversation_id → DB id.
- */
-export async function getWorkflowRunByWorkerPlatformId(
-  platformConversationId: string
-): Promise<WorkflowRun | null> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-       JOIN remote_agent_conversations c ON r.conversation_id = c.id
-       WHERE c.platform_conversation_id = $1 AND ${notOriginAnchor('c.id')}
-       ORDER BY r.started_at DESC LIMIT 1`,
-      [platformConversationId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_get_by_worker_platform_id_failed');
-    throw new Error(`Failed to get workflow run by worker platform ID: ${err.message}`);
   }
 }
 
@@ -2109,24 +1767,6 @@ export async function labelAttentionWait(
   }
 }
 
-/**
- * Read one run row for a read-merge-write of its metadata. SQLite takes its write
- * lock before the read, so the merge acts on the row it read.
- */
-async function lockedRunRow(
-  query: TransactionQuery,
-  id: string
-): Promise<{ status: WorkflowRunStatus; metadata: unknown } | undefined> {
-  if (getDatabaseType() === 'sqlite') {
-    await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-  }
-  const result = await query<{ status: WorkflowRunStatus; metadata: unknown }>(
-    `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
-    [id]
-  );
-  return result.rows[0];
-}
-
 async function writeWaitContext(
   query: TransactionQuery,
   id: string,
@@ -2274,359 +1914,6 @@ export type {
   DashboardRunsResult,
 } from '../schemas/workflow-run';
 
-function dashboardStatuses(
-  status: NonNullable<ListDashboardRunsOptions['status']>
-): WorkflowRunStatus[] {
-  return [...new Set(Array.isArray(status) ? status : [status])];
-}
-
-/**
- * Build WHERE clauses shared between the list and count queries.
- * Returns the clauses array and values array (mutated in place).
- */
-function buildDashboardWhereClauses(
-  options: ListDashboardRunsOptions | undefined,
-  values: unknown[]
-): string[] {
-  const whereClauses: string[] = [];
-
-  if (options?.status) {
-    const placeholders = dashboardStatuses(options.status).map(status => {
-      values.push(status);
-      return `$${String(values.length)}`;
-    });
-    whereClauses.push(`r.status IN (${placeholders.join(', ')})`);
-  }
-  if (options?.codebaseId) {
-    values.push(options.codebaseId);
-    whereClauses.push(`r.codebase_id = $${String(values.length)}`);
-  }
-  if (options?.search) {
-    const pattern = `%${options.search}%`;
-    values.push(pattern, pattern);
-    whereClauses.push(
-      `(r.workflow_name LIKE $${String(values.length - 1)} OR r.user_message LIKE $${String(values.length)})`
-    );
-  }
-  if (options?.after) {
-    values.push(options.after);
-    whereClauses.push(`r.started_at >= $${String(values.length)}`);
-  }
-  if (options?.before) {
-    values.push(options.before);
-    whereClauses.push(`r.started_at < $${String(values.length)}`);
-  }
-
-  return whereClauses;
-}
-
-type JoinedWorkflowRunRow = WorkflowRunRow &
-  Pick<
-    DashboardWorkflowRun,
-    'codebase_name' | 'platform_type' | 'worker_platform_id' | 'parent_platform_id'
-  >;
-
-type DashboardRunRow = JoinedWorkflowRunRow & {
-  // COUNT is BIGINT on PostgreSQL, which node-postgres returns as text.
-  agents_completed: number | string | null;
-  agents_failed: number | string | null;
-  agents_total: number | string | null;
-};
-
-function toCount(value: number | string | null): number | null {
-  return value === null ? null : Number(value);
-}
-
-/** SQL fragment reading an integer from a JSON column at a dotted key path. */
-function jsonIntExtract(col: string, path: string): string {
-  return `CAST(${getDialect().jsonText(col, path)} AS INTEGER)`;
-}
-
-/**
- * List workflow runs with enriched JOINs for the dashboard Command Center.
- * Supports server-side search, status/date filtering, and offset-based pagination.
- * Returns runs, total matching count, and per-status counts for the filter bar.
- */
-export async function listDashboardRuns(
-  options?: ListDashboardRunsOptions
-): Promise<DashboardRunsResult> {
-  // Build shared WHERE for both queries
-  const listValues: unknown[] = [];
-  const whereClauses = buildDashboardWhereClauses(options, listValues);
-
-  const limit = options?.limit ?? 50;
-  const offset = options?.offset ?? 0;
-  listValues.push(limit);
-  const limitParam = `$${String(listValues.length)}`;
-  listValues.push(offset);
-  const offsetParam = `$${String(listValues.length)}`;
-
-  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-  // Build count query with the same base filters MINUS the status filter.
-  // This lets us compute per-status counts across the full filtered set.
-  const countValues: unknown[] = [];
-  const countWhereClauses = buildDashboardWhereClauses(
-    options ? { ...options, status: undefined } : undefined,
-    countValues
-  );
-  const countWhereStr =
-    countWhereClauses.length > 0 ? `WHERE ${countWhereClauses.join(' AND ')}` : '';
-
-  try {
-    const [listResult, countResult] = await Promise.all([
-      pool.query<DashboardRunRow>(
-        `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
-                c.platform_type,
-                c.platform_conversation_id AS worker_platform_id,
-                pc.platform_conversation_id AS parent_platform_id,
-                cb.name AS codebase_name,
-                (SELECT COUNT(*) FROM remote_agent_workflow_events e
-                 WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_completed') AS agents_completed,
-                (SELECT COUNT(*) FROM remote_agent_workflow_events e
-                 WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_failed') AS agents_failed,
-                (SELECT ${jsonIntExtract('e.data', 'totalAgents')}
-                 FROM remote_agent_workflow_events e
-                 WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
-                 ORDER BY e.created_at DESC LIMIT 1) AS agents_total
-         FROM remote_agent_workflow_runs r
-         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
-         LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
-         LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
-         ${whereStr}
-         ORDER BY r.started_at DESC
-         LIMIT ${limitParam} OFFSET ${offsetParam}`,
-        listValues
-      ),
-      pool.query<{ status: string; cnt: string }>(
-        `SELECT r.status, COUNT(*) AS cnt
-         FROM remote_agent_workflow_runs r
-         ${countWhereStr}
-         GROUP BY r.status`,
-        countValues
-      ),
-    ]);
-
-    const counts = {
-      all: 0,
-      running: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      pending: 0,
-      paused: 0,
-    };
-    for (const row of countResult.rows) {
-      const n = Number(row.cnt);
-      counts.all += n;
-      if (row.status in counts) {
-        counts[row.status as keyof Omit<typeof counts, 'all'>] = n;
-      }
-    }
-
-    // Total for the current filter (with status applied)
-    const total = options?.status
-      ? dashboardStatuses(options.status).reduce((sum, status) => sum + counts[status], 0)
-      : counts.all;
-
-    const activeByRun = await listActiveWorkflowNodeIds(listResult.rows.map(run => run.id));
-    const runs = listResult.rows.map(run => {
-      const activeNodes = activeByRun.get(run.id) ?? [];
-      const hasSingleActiveNode = activeNodes.length === 1;
-      return normalizeWorkflowRun({
-        ...run,
-        agents_completed: toCount(run.agents_completed),
-        agents_failed: toCount(run.agents_failed),
-        agents_total: toCount(run.agents_total),
-        active_nodes: activeNodes,
-        current_step_name: hasSingleActiveNode ? (activeNodes[0] ?? null) : null,
-        current_step_status: hasSingleActiveNode ? ('running' as const) : null,
-        total_steps: null,
-      });
-    });
-
-    return { runs, total, counts };
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'list_dashboard_runs_failed');
-    throw new Error(`Failed to list dashboard runs: ${err.message}`);
-  }
-}
-
-/** Paused runs that are attention queue items on their own (`queuedRunAttention`). */
-export function listRunsNeedingAttention(
-  query: IDatabase['query'] = pool.query
-): Promise<DashboardWorkflowRun[]> {
-  return listPausedRuns(query, run => queuedRunAttention(run) !== undefined);
-}
-
-/** The rows the attention queue reads (see `IWorkflowStore.listAttentionQueueRows`). */
-export function listAttentionQueueRows(
-  query: IDatabase['query'] = pool.query
-): Promise<DashboardWorkflowRun[]> {
-  return listPausedRuns(query, isAttentionQueueRow);
-}
-
-async function listPausedRuns(
-  query: IDatabase['query'],
-  keep: (run: DashboardWorkflowRun) => boolean
-): Promise<DashboardWorkflowRun[]> {
-  const result = await query<JoinedWorkflowRunRow>(
-    `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
-            c.platform_type,
-            c.platform_conversation_id AS worker_platform_id,
-            pc.platform_conversation_id AS parent_platform_id,
-            cb.name AS codebase_name
-     FROM remote_agent_workflow_runs r
-     LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
-     LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
-     LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
-     WHERE r.status = 'paused'
-     ORDER BY r.started_at DESC`
-  );
-  const runs: DashboardWorkflowRun[] = [];
-  for (const row of result.rows) {
-    let run: DashboardWorkflowRun;
-    try {
-      run = normalizeWorkflowRun({
-        ...row,
-        agents_completed: null,
-        agents_failed: null,
-        agents_total: null,
-        active_nodes: [],
-        current_step_name: null,
-        current_step_status: null,
-        total_steps: null,
-      });
-    } catch {
-      // Parser errors can quote stored data, including message text.
-      getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
-      continue;
-    }
-    if (keep(run)) runs.push(run);
-  }
-  return runs;
-}
-
-/**
- * List workflow runs with optional filters.
- */
-export async function listWorkflowRuns(options?: {
-  conversationId?: string;
-  status?: WorkflowRunStatus | WorkflowRunStatus[];
-  limit?: number;
-  codebaseId?: string;
-  /**
-   * Non-enforcing "mine" filter: when set, restrict to runs attributed to this
-   * user (`user_id = $N`). Absent → all runs (default visibility stays open).
-   */
-  userId?: string;
-}): Promise<WorkflowRun[]> {
-  const whereClauses: string[] = [];
-  const values: unknown[] = [];
-
-  if (options?.conversationId) {
-    values.push(options.conversationId);
-    whereClauses.push(`conversation_id = $${String(values.length)}`);
-  }
-  if (options?.userId) {
-    values.push(options.userId);
-    whereClauses.push(`user_id = $${String(values.length)}`);
-  }
-  if (options?.status !== undefined) {
-    const statuses = Array.isArray(options.status) ? options.status : [options.status];
-    if (statuses.length > 0) {
-      const startIdx = values.length + 1;
-      values.push(...statuses);
-      const placeholders = statuses.map((_, i) => `$${String(startIdx + i)}`).join(', ');
-      whereClauses.push(`status IN (${placeholders})`);
-    }
-  }
-  if (options?.codebaseId) {
-    values.push(options.codebaseId);
-    whereClauses.push(`remote_agent_workflow_runs.codebase_id = $${String(values.length)}`);
-  }
-
-  const limit = options?.limit ?? 50;
-  values.push(limit);
-  const limitParam = `$${String(values.length)}`;
-
-  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs ${whereStr} ORDER BY started_at DESC LIMIT ${limitParam}`,
-      values
-    );
-    return result.rows.map(normalizeWorkflowRun);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_list_failed');
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
-  }
-}
-
-/**
- * The open-work inbox (#2747): runs that ended with work on the table. Status-
- * derived v1 semantics — terminal AND failed AND no run has adopted or
- * superseded it (the NOT EXISTS closes the row behaviorally when a successor
- * claims it). Deletion is hard in this store, so "not deleted" holds by
- * construction. Paused/waiting/cancelled runs are excluded by design: they are
- * live or already judged.
- */
-export async function findOpenWorkRuns(options?: {
-  codebaseId?: string;
-  limit?: number;
-}): Promise<WorkflowRun[]> {
-  const values: unknown[] = [];
-  let codebaseClause = '';
-  if (options?.codebaseId) {
-    values.push(options.codebaseId);
-    codebaseClause = `AND codebase_id = $${String(values.length)}`;
-  }
-  const limit = options?.limit ?? 50;
-  values.push(limit);
-  const limitParam = `$${String(values.length)}`;
-
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-       WHERE r.status = 'failed'
-         ${codebaseClause}
-         AND NOT EXISTS (
-           SELECT 1 FROM remote_agent_workflow_runs a
-           WHERE a.adopted_from_run_id = r.id
-         )
-       ORDER BY r.started_at DESC
-       LIMIT ${limitParam}`,
-      values
-    );
-    return result.rows.map(normalizeWorkflowRun);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_open_work_list_failed');
-    throw new Error(`Failed to list open workflow runs: ${err.message}`);
-  }
-}
-
-/**
- * Runs that adopted or superseded `runId` (#2747) — the reverse direction of
- * `adopted_from_run_id`, same column, no second column. Newest first.
- */
-export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
-      [runId]
-    );
-    return result.rows.map(normalizeWorkflowRun);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, runId }, 'db.workflow_run_adopters_lookup_failed');
-    throw new Error(`Failed to find adopting runs: ${err.message}`);
-  }
-}
-
 /**
  * Update last_activity_at timestamp for a workflow run.
  * Used for activity-based staleness detection.
@@ -2706,42 +1993,4 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');
     throw new Error(`Failed to delete workflow run: ${err.message}`);
   }
-}
-
-export async function listConversationDetachBlockers(
-  query: TransactionQuery,
-  conversationId: string
-): Promise<readonly Pick<WorkflowRun, 'id' | 'status'>[]> {
-  const result = await query<Pick<WorkflowRun, 'id' | 'status'>>(
-    `SELECT id, status FROM remote_agent_workflow_runs
-     WHERE (conversation_id = $1 OR parent_conversation_id = $1)
-       AND (status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})
-            OR status IN (${RESUMABLE_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')}))
-     ORDER BY id`,
-    [conversationId]
-  );
-  return result.rows;
-}
-
-export async function listNotifiedTerminalRuns(): Promise<WorkflowRun[]> {
-  const field = (alias: string, key: string): string => getDialect().jsonText(`${alias}.data`, key);
-  const baseline = field('e', 'baseline');
-  const nonBaseline =
-    getDatabaseType() === 'postgresql'
-      ? `COALESCE(${baseline}, 'false') <> 'true'`
-      : `COALESCE(${baseline}, 0) = 0`;
-  const result = await pool.query<WorkflowRunRow>(
-    `
-    SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-    WHERE r.status IN (${TERMINAL_WORKFLOW_STATUSES.map((_, i) => `$${String(i + 1)}`).join(', ')})
-      AND EXISTS (SELECT 1 FROM remote_agent_workflow_events e
-        WHERE e.workflow_run_id = r.id AND e.event_type = 'attention_notice_sent'
-          AND ${nonBaseline} AND ${field('e', 'key')} <> 'terminal'
-          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events t
-            WHERE t.workflow_run_id = r.id AND t.event_type = 'attention_notice_sent'
-              AND ${field('t', 'key')} = 'terminal'
-              AND ${field('t', 'destination')} = ${field('e', 'destination')}))`,
-    [...TERMINAL_WORKFLOW_STATUSES]
-  );
-  return result.rows.map(normalizeWorkflowRun);
 }

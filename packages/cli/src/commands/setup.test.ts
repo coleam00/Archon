@@ -2,15 +2,7 @@
  * Tests for setup command utility functions
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import {
-  existsSync,
-  readFileSync,
-  mkdirSync,
-  mkdtempSync,
-  writeFileSync,
-  rmSync,
-  readdirSync,
-} from 'fs';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, readdirSync } from 'fs';
 import { join, dirname, relative, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
@@ -28,17 +20,16 @@ import {
   checkExistingConfig,
   generateEnvContent,
   generateWebhookSecret,
-  detectClaudeExecutablePath,
   writeScopedEnv,
   serializeEnv,
   resolveScopedEnvPath,
-  writeHomePiModelConfig,
   buildDefaultModelChoices,
   readInstallDefaultModel,
   writeInstallDefaults,
   setupCommand,
 } from './setup';
 import * as setupModule from './setup';
+import * as providerAuth from './setup-provider-auth';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -53,13 +44,8 @@ describe('setup command', () => {
     mkdirSync(TEST_DIR, { recursive: true });
   });
 
-  afterEach(() => {
-    // Clean up test directory
-    try {
-      rmSync(TEST_DIR, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  afterEach(async () => {
+    await removeTempTree(TEST_DIR);
   });
 
   describe('generateWebhookSecret', () => {
@@ -524,85 +510,6 @@ ARCHON_CODEX_ACCOUNT_ID=account1
   });
 });
 
-describe('detectClaudeExecutablePath probe order', () => {
-  // Use spies on the exported probe wrappers so each tier can be controlled
-  // independently without touching the real filesystem or shell.
-  let fileExistsSpy: ReturnType<typeof spyOn>;
-  let npmRootSpy: ReturnType<typeof spyOn>;
-  let whichSpy: ReturnType<typeof spyOn>;
-
-  beforeEach(() => {
-    fileExistsSpy = spyOn(setupModule, 'probeFileExists').mockReturnValue(false);
-    npmRootSpy = spyOn(setupModule, 'probeNpmRoot').mockReturnValue(null);
-    whichSpy = spyOn(setupModule, 'probeWhichClaude').mockReturnValue(null);
-  });
-
-  afterEach(() => {
-    fileExistsSpy.mockRestore();
-    npmRootSpy.mockRestore();
-    whichSpy.mockRestore();
-  });
-
-  it('returns the native installer path when present (tier 1 wins)', () => {
-    // Native path exists; subsequent probes must not be called.
-    fileExistsSpy.mockImplementation(
-      (p: string) => p.includes('.local/bin/claude') || p.includes('.local\\bin\\claude')
-    );
-    const result = detectClaudeExecutablePath();
-    expect(result).toBeTruthy();
-    expect(result).toMatch(/\.local[\\/]bin[\\/]claude/);
-    // Tier 2 / 3 must not have been consulted.
-    expect(npmRootSpy).not.toHaveBeenCalled();
-    expect(whichSpy).not.toHaveBeenCalled();
-  });
-
-  it('falls through to npm cli.js when native is missing (tier 2 wins)', () => {
-    // Use path.join so the expected result matches whatever separator the
-    // production code produces on the current platform (backslash on Windows,
-    // forward slash elsewhere).
-    const npmRoot = join('fake', 'npm', 'root');
-    const expectedCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
-    npmRootSpy.mockReturnValue(npmRoot);
-    fileExistsSpy.mockImplementation((p: string) => p === expectedCliJs);
-    const result = detectClaudeExecutablePath();
-    expect(result).toBe(expectedCliJs);
-    // Tier 3 must not have been consulted.
-    expect(whichSpy).not.toHaveBeenCalled();
-  });
-
-  it('falls through to which/where when native and npm probes both miss (tier 3 wins)', () => {
-    npmRootSpy.mockReturnValue('/fake/npm/root');
-    // Native miss, npm cli.js miss, but `which claude` returns a path that exists.
-    whichSpy.mockReturnValue('/opt/homebrew/bin/claude');
-    fileExistsSpy.mockImplementation((p: string) => p === '/opt/homebrew/bin/claude');
-    const result = detectClaudeExecutablePath();
-    expect(result).toBe('/opt/homebrew/bin/claude');
-  });
-
-  it('returns null when every probe misses', () => {
-    // All defaults already return false/null; nothing to override.
-    expect(detectClaudeExecutablePath()).toBeNull();
-  });
-
-  it('does not return a which-resolved path that fails the existsSync check', () => {
-    // `which` returns a path string but the file is not actually present
-    // (stale PATH entry, dangling symlink, etc.) — must not be returned.
-    npmRootSpy.mockReturnValue('/fake/npm/root');
-    whichSpy.mockReturnValue('/stale/path/claude');
-    fileExistsSpy.mockReturnValue(false);
-    expect(detectClaudeExecutablePath()).toBeNull();
-  });
-
-  it('skips npm tier when probeNpmRoot returns null (e.g. npm not installed)', () => {
-    // npm probe fails; tier 3 must still run.
-    whichSpy.mockReturnValue('/usr/local/bin/claude');
-    fileExistsSpy.mockImplementation((p: string) => p === '/usr/local/bin/claude');
-    const result = detectClaudeExecutablePath();
-    expect(result).toBe('/usr/local/bin/claude');
-    expect(npmRootSpy).toHaveBeenCalled();
-  });
-});
-
 /**
  * Tests for the three-path env write model (#1303).
  *
@@ -627,10 +534,10 @@ describe('writeScopedEnv (#1303)', () => {
     process.env.ARCHON_HOME = HOME_DIR;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
-    rmSync(ROOT, { recursive: true, force: true });
+    await removeTempTree(ROOT);
   });
 
   it('fresh home scope writes content with no backup', () => {
@@ -887,74 +794,6 @@ describe('writeScopedEnv (#1303)', () => {
   });
 });
 
-describe('writeHomePiModelConfig', () => {
-  let tmpDir: string;
-  let originalHome: string | undefined;
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'archon-pi-config-'));
-    originalHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = tmpDir;
-  });
-
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-    if (originalHome !== undefined) {
-      process.env.ARCHON_HOME = originalHome;
-    } else {
-      delete process.env.ARCHON_HOME;
-    }
-  });
-
-  it('writes fresh assistants.pi.model block when config is empty', () => {
-    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    expect(content).toContain('assistants:');
-    expect(content).toContain('pi:');
-    expect(content).toContain('model: "anthropic/claude-haiku-4-5"');
-  });
-
-  it('writes fresh block when config does not exist yet', () => {
-    // No config.yaml pre-created — function must create it.
-    writeHomePiModelConfig('openai/gpt-4o');
-    expect(existsSync(join(tmpDir, 'config.yaml'))).toBe(true);
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    expect(content).toContain('pi:');
-    expect(content).toContain('model: "openai/gpt-4o"');
-  });
-
-  it('skips write when existing config already contains pi: (idempotent)', () => {
-    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  pi:\n    model: "old"\n');
-    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    expect(content).toContain('model: "old"');
-    expect(content).not.toContain('claude-haiku-4-5');
-  });
-
-  it('does not write pi: block when config has assistants: but no pi: (shows note instead)', () => {
-    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  claude:\n    model: sonnet\n');
-    writeHomePiModelConfig('openai/gpt-4o');
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    // Should NOT have injected a pi: key — only a note() was shown.
-    expect(content).not.toContain('pi:');
-  });
-
-  it('escapes double quotes in the model name', () => {
-    writeHomePiModelConfig('vendor/"weird-model"');
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    expect(content).toContain('\\"weird-model\\"');
-  });
-
-  it('does not false-positive on api: substring (regex guard for includes bug)', () => {
-    // A config with `api:` but no `pi:` should fall through to the append branch,
-    // not the idempotent-skip branch.
-    writeFileSync(join(tmpDir, 'config.yaml'), '# config\napi:\n  key: abc\n');
-    writeHomePiModelConfig('openai/gpt-4o');
-    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
-    expect(content).toContain('pi:');
-  });
-});
-
 describe('buildDefaultModelChoices (#1999)', () => {
   it('leads with "Keep SDK default" when no current model and ends with the free-text escape', () => {
     const choices = buildDefaultModelChoices('claude', undefined);
@@ -1054,8 +893,8 @@ describe('readInstallDefaultModel (#1999)', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'archon-default-model-'));
   });
 
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tmpDir);
   });
 
   const configAt = (content: string): string => {
@@ -1178,7 +1017,7 @@ describe('setup provider selection', () => {
       const confirm = spyOn(prompts, 'confirm').mockImplementation(
         async options => options.message === 'Run `archon doctor` now to verify your setup?'
       );
-      const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
+      const detect = spyOn(providerAuth, 'detectClaudeExecutablePath').mockReturnValue(null);
       const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
       const install = mock(async (_ids: readonly string[]) => undefined);
       const diagnose = mock(async (id: string) => [
@@ -1192,6 +1031,7 @@ describe('setup provider selection', () => {
       const doctor = spyOn(doctorModule, 'doctorCommand').mockResolvedValue(0);
       try {
         expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
+        expect(detect).toHaveBeenCalled();
         expect(doctor).toHaveBeenCalledWith();
         expect(process.env).toMatchObject({ DEFAULT_AI_ASSISTANT: 'codex' });
         expect(install).toHaveBeenCalledWith(['claude', 'codex']);

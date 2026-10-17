@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, it, mock } from 'bun:test';
 
 const commandName = '__archon_pack__bundled:test-pack:test-flow::blank';

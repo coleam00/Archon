@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';

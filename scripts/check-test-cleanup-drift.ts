@@ -413,7 +413,6 @@ export function buildLedger(entries: readonly (readonly [string, number])[]): Ma
  */
 export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger([
   ['packages/cli/src/commands/doctor.test.ts', 2],
-  ['packages/cli/src/commands/setup.test.ts', 4],
   ['packages/cli/src/commands/telemetry.test.ts', 2],
   ['packages/cli/src/commands/validate.test.ts', 1],
   ['packages/cli/src/commands/workflow.test.ts', 2],
@@ -436,7 +435,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/providers/src/community/pi/resource-loader.test.ts', 1],
   ['packages/server/src/routes/api.workflow-runs.test.ts', 2],
   ['packages/server/src/routes/api.workflows.test.ts', 29],
-  ['packages/workflows/src/dag-executor.test.ts', 50],
   ['packages/workflows/src/dry-run.test.ts', 1],
   ['packages/workflows/src/executor-preamble.test.ts', 1],
   ['packages/workflows/src/executor.test.ts', 2],

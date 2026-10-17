@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect, mock, type Mock } from 'bun:test';
 
