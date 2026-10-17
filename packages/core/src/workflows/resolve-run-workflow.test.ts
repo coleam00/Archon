@@ -149,6 +149,31 @@ describe('resolveRunWorkflow', () => {
     }
   });
 
+  test('refuses the run when its config fails to load', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-config-error-run-')));
+    await writeWorkflow(root, 'Legacy live graph');
+    const configError = new Error(
+      `Invalid model binding config in '${join(root, '.archon', 'config.yaml')}': tiers.medium.thinking`
+    );
+
+    const result = await resolveRunWorkflow(
+      {
+        ...workflowDeps(),
+        loadConfig: async () => {
+          throw configError;
+        },
+      },
+      makeRun(),
+      root,
+      {}
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: `Failed to load workflows: ${configError.message}`,
+    });
+  });
+
   test('reports a missing legacy workflow', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-legacy-run-')));
 

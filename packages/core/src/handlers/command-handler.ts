@@ -698,7 +698,7 @@ export async function startWorkflow(
     getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
     return {
       success: false,
-      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+      message: `Failed to load workflows: ${err.message}`,
     };
   }
 
@@ -797,7 +797,7 @@ async function handleWorkflowCommand(
         getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_list_failed');
         return {
           success: false,
-          message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+          message: `Failed to load workflows: ${err.message}`,
         };
       }
 
@@ -856,7 +856,7 @@ async function handleWorkflowCommand(
         getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_reload_failed');
         return {
           success: false,
-          message: `Failed to reload workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+          message: `Failed to reload workflows: ${err.message}`,
         };
       }
     }
