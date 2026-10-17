@@ -55,86 +55,23 @@ async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<voi
   }
 }
 
-function renderEntries(record: Readonly<Record<string, unknown>>, indent = '  '): string {
-  return Object.entries(record)
-    .map(([name, value]) => `${indent}${JSON.stringify(name)}: ${JSON.stringify(value)},`)
-    .join('\n');
-}
-
-function renderRecord(
-  comment: string,
-  exportName: string,
-  recordType: string,
-  record: Readonly<Record<string, unknown>>
-): string {
-  return [
-    `// ${comment}`,
-    `export const ${exportName}: ${recordType} = {`,
-    renderEntries(record),
-    '};',
-  ].join('\n');
-}
-
-function renderScriptPacks(packs: BundleRecords['scriptPacks']): string {
-  return [
-    '// Bundled script packs',
-    'export const BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> = {',
-    ...Object.entries(packs).map(([name, pack]) =>
-      [
-        `  ${JSON.stringify(name)}: {`,
-        ...Object.entries(pack).map(([field, entries]) =>
-          [`    ${JSON.stringify(field)}: {`, renderEntries(entries, '      '), '    },'].join('\n')
-        ),
-        '  },',
-      ].join('\n')
-    ),
-    '};',
-  ].join('\n');
-}
-
 function renderFile(records: BundleRecords): string {
-  return [
-    '/**',
-    ' * AUTO-GENERATED — DO NOT EDIT.',
-    ' *',
-    ' * Written by scripts/build-binaries.sh for the compiled binary; never committed.',
-    ' * Source of truth: bundle-index.json selects packs; bundle-inventory.ts selects files.',
-    ' */',
-    '',
-    "import type { BundledWorkflowOwner } from './bundle-inventory';",
-    "import type { BundledScriptPack } from './bundled-script-pack';",
-    '',
-    renderRecord(
-      'Bundled commands',
-      'BUNDLED_COMMANDS',
-      'Record<string, string>',
-      records.commands
-    ),
-    '',
-    renderRecord(
-      'Bundled workflows',
-      'BUNDLED_WORKFLOWS',
-      'Record<string, string>',
-      records.workflows
-    ),
-    '',
-    renderRecord(
-      'Authored workflow paths beneath the bundled scope',
-      'BUNDLED_WORKFLOW_PATHS',
-      'Record<string, string>',
-      records.workflowPaths
-    ),
-    '',
-    renderRecord(
-      'Packaged workflow owners',
-      'BUNDLED_WORKFLOW_OWNERS',
-      'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>',
-      records.workflowOwners
-    ),
-    '',
-    renderScriptPacks(records.scriptPacks),
-    '',
-  ].join('\n');
+  return `/**
+ * AUTO-GENERATED — DO NOT EDIT.
+ *
+ * Written by scripts/build-binaries.sh for the compiled binary; never committed.
+ * Source of truth: bundle-index.json selects packs; bundle-inventory.ts selects files.
+ */
+
+import type { BundledWorkflowOwner } from './bundle-inventory';
+import type { BundledScriptPack } from './bundled-script-pack';
+
+export const BUNDLED_COMMANDS: Record<string, string> = ${JSON.stringify(records.commands)};
+export const BUNDLED_WORKFLOWS: Record<string, string> = ${JSON.stringify(records.workflows)};
+export const BUNDLED_WORKFLOW_PATHS: Record<string, string> = ${JSON.stringify(records.workflowPaths)};
+export const BUNDLED_WORKFLOW_OWNERS: Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>> = ${JSON.stringify(records.workflowOwners)};
+export const BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> = ${JSON.stringify(records.scriptPacks)};
+`;
 }
 
 async function main(): Promise<void> {

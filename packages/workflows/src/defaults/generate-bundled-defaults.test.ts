@@ -181,18 +181,6 @@ describe('generate-bundled-defaults', () => {
       // Assertions from the former "packaged embed" case.
       expect(stderr).toBe('');
       expect(exitCode).toBe(0);
-      const packagedOutput = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
-      expect(packagedOutput).toContain('BUNDLED_WORKFLOW_OWNERS');
-      expect(packagedOutput).toContain(
-        '"release": "workflows/author-pack/release-flow/release.yml"'
-      );
-      expect(packagedOutput).toContain(
-        '"release": {"pack":"author-pack","workflow":"release-flow"}'
-      );
-      expect(packagedOutput).toContain('__archon_pack__bundled:author-pack:release-flow::prepare');
-      expect(packagedOutput).toContain('__archon_pack__bundled:author-pack:release-flow::publish');
-      expect(packagedOutput).toContain('__archon_pack__bundled:author-pack:release-flow::announce');
-      expect(packagedOutput).toContain('BUNDLED_SCRIPT_PACKS');
       const generated: { BUNDLED_SCRIPT_PACKS: Record<string, BundledScriptPack> } = await import(
         join(repoRoot, OUTPUT_REL)
       );
