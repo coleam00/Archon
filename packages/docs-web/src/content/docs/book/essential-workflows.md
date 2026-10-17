@@ -205,7 +205,7 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 Reviews a change through specialist lenses and produces one evidence-based verdict. On every round but a light one, a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) runs the general code reviewer, plus every lens the route agent selects because a finding it raised is still open or the delta touches its area, on the correction delta only (code a merge of the base brought in is left out), judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
 
-**When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
+**When to use it**: A PR or your working diff needs judging. It never edits code. On a PR it posts or edits its review comment, and on a draft PR your `ready` answer marks the PR ready for review.
 
 ```bash
 archon workflow run archon-review --input scope=87 --branch fix/login-redirect
