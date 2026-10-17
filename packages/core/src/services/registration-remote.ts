@@ -23,7 +23,7 @@ export async function registrationRemotes(path: string): Promise<{
   selected: string | null;
   names: string[];
 }> {
-  const config = await loadRepoConfig(path, { strict: true }).catch((error: unknown) => {
+  const config = await loadRepoConfig(path).catch((error: unknown) => {
     throw new ProjectRegistrationError(
       `Cannot read registration config at ${path}/.archon/config.yaml: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error }

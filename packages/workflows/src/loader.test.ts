@@ -2038,17 +2038,16 @@ nodes:
       expect(mockLoadConfig).toHaveBeenCalledWith(testDir);
     });
 
-    it('should default to loadDefaults: true when config load fails', async () => {
+    it('rejects with the config error instead of listing with defaults', async () => {
       const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
+      const configError = new Error("Invalid model binding config in 'config.yaml': tiers.medium");
       const mockLoadConfig = mock(async () => {
-        throw new Error('Config not found');
+        throw configError;
       });
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
-
-      // With config failure, defaults to true, so archon-* should appear
-      const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-review');
-      expect(archonWorkflow).toBeDefined();
+      await expect(
+        discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry)
+      ).rejects.toBe(configError);
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {

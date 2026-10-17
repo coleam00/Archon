@@ -163,6 +163,8 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
+The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
+
 ## Provider concurrency caps
 
 `concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of these two caps applies across plugin processes. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.

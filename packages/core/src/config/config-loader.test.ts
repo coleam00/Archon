@@ -119,10 +119,9 @@ describe('config-loader', () => {
     });
   });
 
-  test('invalid streaming keys or modes never reach the safe projection or the file', async () => {
+  test('invalid streaming keys or modes refuse to load and never reach the file', async () => {
     mockFsReadFile.mockResolvedValue('streaming:\n  Not A Platform: stream\n  streamtest: fast\n');
-    expect(await loadGlobalConfig()).toEqual({});
-    expect(toSafeConfig(await loadConfig()).streaming).toEqual({ streamtest: 'stream' });
+    await expect(loadGlobalConfig()).rejects.toThrow('Invalid streaming config');
     await expect(updateGlobalConfig({ streaming: { 'matrix-chat': 'stream' } })).rejects.toThrow(
       'Invalid streaming config'
     );
@@ -146,10 +145,9 @@ describe('config-loader', () => {
     'attentionNotices:\n  - platform: matrix-chat\n    destination: ops\n  - platform: matrix-chat\n    destination: ops\n',
     'attentionNotices:\n  - platform: matrix-chat\n    destination: ""\n',
     'attentionNotices:\n  - platform: Matrix Chat\n    destination: ops\n',
-  ])('an invalid attention notice route degrades to no routes: %s', async yaml => {
+  ])('an invalid attention notice route refuses to load: %s', async yaml => {
     mockFsReadFile.mockResolvedValue(yaml);
-    expect(await loadGlobalConfig()).toEqual({});
-    expect((await loadConfig()).attentionNotices).toEqual([]);
+    await expect(loadConfig()).rejects.toThrow('Invalid attentionNotices config');
   });
 
   test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
@@ -174,14 +172,9 @@ describe('config-loader', () => {
     }
   );
 
-  test('invalid conversation limits degrade with diagnostics and cannot be persisted', async () => {
+  test('invalid conversation limits refuse to load and cannot be persisted', async () => {
     mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
-    mockLogger.error.mockClear();
-    expect((await loadConfig()).concurrency.maxConversations).toBe(10);
-    expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(InvalidConfigError) }),
-      'config_load_error'
-    );
+    await expect(loadConfig()).rejects.toThrow(/Invalid concurrency config.*maxConversations/);
     await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
       /Invalid concurrency config.*maxConversations/
     );
@@ -241,21 +234,15 @@ concurrency:
     ] as const)(
       'rejects retired thinking in global %s config and names effort',
       async (field, entry) => {
-        mockLogger.error.mockClear();
         mockFsReadFile.mockResolvedValue(`
 ${field}:
   ${entry}: { provider: claude, model: opus, thinking: adaptive }
 `);
 
-        const config = await loadGlobalConfig();
+        const error = (await loadGlobalConfig().catch(err => err)) as Error;
 
-        expect(config).toEqual({});
-        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
-          { err: Error },
-          string,
-        ];
-        expect(event).toBe('config_load_error');
-        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+        expect(error.message).toContain(join(archonHome, 'config.yaml'));
+        expect(error.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
       }
     );
 
@@ -268,7 +255,7 @@ ${field}:
       'rejects invalid tool attention policy %s at config ingress',
       async threshold => {
         mockFsReadFile.mockResolvedValue(`workflows:\n  toolCallAttentionMs: ${threshold}\n`);
-        expect(await loadGlobalConfig()).toEqual({});
+        await expect(loadGlobalConfig()).rejects.toThrow('Invalid workflows config');
       }
     );
 
@@ -280,10 +267,7 @@ workflows:
   quotaDeadlineMs: -1
 `);
 
-      const config = await loadGlobalConfig();
-
-      expect(config).toEqual({});
-      expect(mockLogger.error).toHaveBeenCalled();
+      await expect(loadGlobalConfig()).rejects.toThrow('Invalid workflows config');
     });
 
     test('rejects quota continuation delays beyond the persisted timestamp range', async () => {
@@ -293,10 +277,7 @@ workflows:
   quotaDeadlineMs: 31536000000001
 `);
 
-      const config = await loadGlobalConfig();
-
-      expect(config).toEqual({});
-      expect(mockLogger.error).toHaveBeenCalled();
+      await expect(loadGlobalConfig()).rejects.toThrow('Invalid workflows config');
     });
 
     test('parses deprecated quota settings at the persisted timestamp bound, with a warning', async () => {
@@ -355,42 +336,20 @@ workflows:
       expect(mockFsReadFile).toHaveBeenCalledTimes(2);
     });
 
-    test('logs error for invalid YAML syntax', async () => {
-      mockLogger.error.mockClear();
+    test('invalid YAML fails the load and names the file', async () => {
+      mockFsReadFile.mockResolvedValue('worktree: [');
 
-      // Simulate YAML parse error (SyntaxError has no .code property)
-      const syntaxError = new SyntaxError('YAML Parse error: Multiline implicit key');
-      mockFsReadFile.mockRejectedValue(syntaxError);
+      const error = (await loadGlobalConfig().catch(err => err)) as Error;
 
-      const config = await loadGlobalConfig();
-
-      // Should fall back to empty config
-      expect(config).toEqual({});
-
-      // Should log error via structured logger
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: syntaxError }),
-        'config_invalid_yaml'
-      );
+      expect(error.message).toContain(join(archonHome, 'config.yaml'));
+      expect(error.message).toContain('not valid YAML');
     });
 
-    test('logs error for permission denied', async () => {
-      mockLogger.error.mockClear();
-
-      const permError = new Error('Permission denied') as NodeJS.ErrnoException;
-      permError.code = 'EACCES';
+    test('an unreadable config fails the load', async () => {
+      const permError = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
       mockFsReadFile.mockRejectedValue(permError);
 
-      const config = await loadGlobalConfig();
-
-      // Should fall back to empty config
-      expect(config).toEqual({});
-
-      // Should log error via structured logger
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: permError, code: 'EACCES' }),
-        'config_permission_denied'
-      );
+      await expect(loadGlobalConfig()).rejects.toBe(permError);
     });
   });
 
@@ -441,77 +400,42 @@ workflows:
     ] as const)(
       'rejects retired thinking in repository %s config and names effort',
       async (field, entry) => {
-        mockLogger.error.mockClear();
         mockFsReadFile.mockResolvedValue(`
 assistant: codex
 ${field}:
   ${entry}: { provider: claude, model: opus, thinking: adaptive }
 `);
 
-        const config = await loadRepoConfig('/test/repo');
+        const error = (await loadRepoConfig('/test/repo').catch(err => err)) as Error;
 
-        expect(config).toEqual({});
-        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
-          { err: Error },
-          string,
-        ];
-        expect(event).toBe('config_load_error');
-        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+        expect(error.message).toContain(join('/test/repo', '.archon', 'config.yaml'));
+        expect(error.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
       }
     );
 
-    test('logs error for invalid YAML syntax', async () => {
-      mockLogger.error.mockClear();
+    test('invalid YAML fails the load and names the file', async () => {
+      mockFsReadFile.mockResolvedValue('worktree: [');
 
-      // Simulate YAML parse error (SyntaxError has no .code property)
-      const syntaxError = new SyntaxError('YAML Parse error: Multiline implicit key');
-      mockFsReadFile.mockRejectedValue(syntaxError);
+      const error = (await loadRepoConfig('/test/repo').catch(err => err)) as Error;
 
-      const config = await loadRepoConfig('/test/repo');
-
-      // Should fall back to empty config
-      expect(config).toEqual({});
-
-      // Should log error via structured logger
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: syntaxError }),
-        'config_invalid_yaml'
-      );
+      expect(error.message).toContain(join('/test/repo', '.archon', 'config.yaml'));
+      expect(error.message).toContain('not valid YAML');
     });
 
-    test('logs error for permission denied', async () => {
-      mockLogger.error.mockClear();
-
-      const permError = new Error('Permission denied') as NodeJS.ErrnoException;
-      permError.code = 'EACCES';
+    test('an unreadable config fails the load', async () => {
+      const permError = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
       mockFsReadFile.mockRejectedValue(permError);
 
-      const config = await loadRepoConfig('/test/repo');
-
-      // Should fall back to empty config
-      expect(config).toEqual({});
-
-      // Should log error via structured logger
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: permError, code: 'EACCES' }),
-        'config_permission_denied'
-      );
+      await expect(loadRepoConfig('/test/repo')).rejects.toBe(permError);
     });
 
-    test('strict config reads use defaults only for missing files and preserve read failures', async () => {
-      const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
-      mockFsReadFile.mockRejectedValue(missing);
-      expect(await loadRepoConfig('/repo', { strict: true })).toEqual({});
-      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
-      mockFsReadFile.mockRejectedValue(denied);
-      expect(await loadRepoConfig('/repo', { strict: true }).catch(error => error)).toBe(denied);
-    });
-
-    test.each(['worktree: [', 'false', '[]'])(
-      'strict config reads reject invalid configuration: %s',
+    test.each(['false', '[]'])(
+      'a top level that is not a mapping fails the load: %s',
       async content => {
         mockFsReadFile.mockResolvedValue(content);
-        await expect(loadRepoConfig('/repo', { strict: true })).rejects.toThrow();
+        await expect(loadRepoConfig('/repo')).rejects.toThrow(
+          'Repository config must be a mapping'
+        );
       }
     );
 

@@ -207,6 +207,16 @@ function parseYaml(content: string): unknown {
   return Bun.YAML.parse(content);
 }
 
+/** Bun's YAML error names neither the file nor the line, so the message adds the file. */
+function parseConfigYaml(content: string, configPath: string): unknown {
+  try {
+    return parseYaml(content);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`'${configPath}' is not valid YAML (${reason}).`, { cause: error });
+  }
+}
+
 // Cache for loaded configs
 let cachedGlobalConfig: GlobalConfig | null = null;
 
@@ -251,22 +261,6 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   providers:        # optional cap on simultaneous attempts per provider; unlisted = unlimited
 #     pi: 1
 `;
-
-/**
- * Log config error with specific message based on error type
- */
-function logConfigError(configPath: string, error: unknown): void {
-  const err = error as { code?: string; message?: string };
-  const message = err.message ?? String(error);
-
-  if (err.code === 'EACCES' || err.code === 'EPERM') {
-    getLog().error({ configPath, err: error, code: err.code }, 'config_permission_denied');
-  } else if (error instanceof SyntaxError || message.includes('YAML')) {
-    getLog().error({ configPath, err: error }, 'config_invalid_yaml');
-  } else {
-    getLog().error({ configPath, err: error }, 'config_load_error');
-  }
-}
 
 /**
  * Create default config file if it doesn't exist
@@ -439,41 +433,48 @@ function validateConversationConcurrencyConfig(parsed: unknown, configPath: stri
 }
 
 /**
- * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
- * or unreadable. A missing file is created from the documented template; any
- * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
- * `streaming`, `attentionNotices`, `concurrency` or `workflows` block — is logged and the
- * install falls back to defaults.
+ * Read a config file, or `undefined` when it does not exist.
+ *
+ * Only a missing file falls back to defaults. An unreadable file fails the load,
+ * as do invalid YAML and a block a validator refuses: degrading would silently
+ * replace every setting in the file, including models and concurrency.
  */
-async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
+async function readConfigFileIfPresent(configPath: string): Promise<string | undefined> {
   try {
-    const content = await readConfigFile(configPath);
-    const parsed = parseYaml(content);
-    validateWorkflowContinuationConfig(parsed, configPath);
-    validateModelBindingConfig(parsed, configPath);
-    validateStreamingConfig(parsed, configPath);
-    validateAttentionNoticesConfig(parsed, configPath);
-    validateConversationConcurrencyConfig(parsed, configPath);
-    return (parsed as GlobalConfig | null) ?? {};
+    return await readConfigFile(configPath);
   } catch (error) {
-    const err = error as { code?: string };
-    if (err.code === 'ENOENT') {
-      // File doesn't exist - create default config
-      await createDefaultConfig(configPath);
-    } else {
-      // Log specific error message based on error type
-      logConfigError(configPath, error);
-    }
-    return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
   }
 }
 
 /**
- * Load global config from ~/.archon/config.yaml
- * Creates default config if file doesn't exist
+ * Read ~/.archon/config.yaml. A missing file is created from the documented
+ * template and loads as empty. Every other failure throws, naming the file:
+ * permissions, YAML syntax, or a rejected `tiers`/`aliases`, `streaming`,
+ * `attentionNotices`, `concurrency` or `workflows` block.
+ */
+async function readGlobalConfig(configPath: string): Promise<GlobalConfig> {
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) {
+    await createDefaultConfig(configPath);
+    return {};
+  }
+  const parsed = parseConfigYaml(content, configPath);
+  validateWorkflowContinuationConfig(parsed, configPath);
+  validateModelBindingConfig(parsed, configPath);
+  validateStreamingConfig(parsed, configPath);
+  validateAttentionNoticesConfig(parsed, configPath);
+  validateConversationConcurrencyConfig(parsed, configPath);
+  return (parsed as GlobalConfig | null) ?? {};
+}
+
+/**
+ * Load global config from ~/.archon/config.yaml, creating it from the template
+ * when missing.
  *
- * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults.
+ * Throws when the file cannot be read or parsed, or when any block, including
+ * `assistants.*`, names a value Archon cannot honour.
  */
 export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfig> {
   if (cachedGlobalConfig && !forceReload) {
@@ -481,7 +482,7 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
   }
 
   const configPath = getArchonConfigPath();
-  const parsed = await readGlobalConfigOrDegrade(configPath);
+  const parsed = await readGlobalConfig(configPath);
   validateAssistantDefaults(parsed, configPath);
   cachedGlobalConfig = parsed;
   return cachedGlobalConfig;
@@ -512,53 +513,38 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
   return cleaned;
 }
 
-/** Missing config uses defaults; strict reads propagate all other failures. */
-async function readRepoConfig(configPath: string, strict = false): Promise<RepoConfig> {
-  try {
-    const content = await readConfigFile(configPath);
-    const raw = parseYaml(content);
-    if (strict && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
-      throw new Error(`Repository config must be a mapping: ${configPath}`);
-    }
-    validateWorkflowContinuationConfig(raw, configPath);
-    validateModelBindingConfig(raw, configPath);
-    const parsed = (raw as RepoConfig | null) ?? {};
-    const recommendedWorkflows = sanitizeRecommendedWorkflows(
-      (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
-      configPath
-    );
-    if (recommendedWorkflows !== undefined) {
-      parsed.recommendedWorkflows = recommendedWorkflows;
-    } else {
-      delete parsed.recommendedWorkflows;
-    }
-    return parsed;
-  } catch (error) {
-    const err = error as { code?: string };
-    if (err.code === 'ENOENT') {
-      // File doesn't exist - expected, use defaults
-      return {};
-    }
-    if (strict) throw error;
-    // Log specific error message based on error type
-    logConfigError(configPath, error);
-    return {};
+async function readRepoConfig(configPath: string): Promise<RepoConfig> {
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) return {};
+  const raw = parseConfigYaml(content, configPath);
+  if (raw !== null && !isConfigRecord(raw)) {
+    throw new Error(`Repository config must be a mapping: ${configPath}`);
   }
+  validateWorkflowContinuationConfig(raw, configPath);
+  validateModelBindingConfig(raw, configPath);
+  const parsed = (raw as RepoConfig | null) ?? {};
+  const recommendedWorkflows = sanitizeRecommendedWorkflows(
+    (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
+    configPath
+  );
+  if (recommendedWorkflows !== undefined) {
+    parsed.recommendedWorkflows = recommendedWorkflows;
+  } else {
+    delete parsed.recommendedWorkflows;
+  }
+  return parsed;
 }
 
 /**
- * Load repository config from .archon/config.yaml
- * Returns empty object if no config found
+ * Load repository config from .archon/config.yaml. A missing file loads as `{}`.
  *
- * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults unless `strict` is requested for a location check.
+ * Every other failure throws, naming the file: an unreadable file, invalid
+ * YAML, a top level that is not a mapping, or a refused `workflows`, `tiers`,
+ * `aliases`, `assistants.*` or `worktree.postCreate` value.
  */
-export async function loadRepoConfig(
-  repoPath: string,
-  options: { strict?: boolean } = {}
-): Promise<RepoConfig> {
+export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
-  const parsed = await readRepoConfig(configPath, options.strict);
+  const parsed = await readRepoConfig(configPath);
   validateWorktreePostCreate(parsed.worktree);
   validateAssistantDefaults(parsed, configPath);
   return parsed;
@@ -858,13 +844,8 @@ export function logConfig(config: MergedConfig): void {
  * Only a missing file starts empty; an unreadable file or invalid YAML throws.
  */
 async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
-  let content: string;
-  try {
-    content = await readConfigFile(configPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  }
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) return {};
   let parsed: unknown;
   try {
     parsed = parseYaml(content);
