@@ -84,6 +84,10 @@ function holdersTable(name: string): string {
 });
 
 describe('releaseTags', () => {
+  test('ignores rehearsal and release-candidate tags', () => {
+    expect(releaseTags('v0.12.0-rehearsal.1\nv0.11.1\nv0.12.0-rc.1\n')).toEqual(['v0.11.1']);
+  });
+
   test('keeps release tags and drops tags of any other shape', () => {
     expect(releaseTags('v0.9.0\narchive/fork-0.5.0\nv0.10.0\nnightly\n')).toEqual([
       'v0.9.0',
@@ -96,5 +100,8 @@ describe('releaseTags', () => {
       'git tag listed no release tags'
     );
     expect(() => releaseTags('')).toThrow('git tag listed no release tags');
+    expect(() => releaseTags('v0.12.0-rehearsal.1\nv0.12.0-rc.1\n')).toThrow(
+      'git tag listed no release tags'
+    );
   });
 });
