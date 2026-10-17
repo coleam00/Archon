@@ -263,11 +263,11 @@ describe("deliver's reasons", () => {
 
   // A dry run ends after one round, so any round's reason can reach both reports.
   it('reach the deliver and ship reports from every round ending', () => {
-    const round = reasons('deliver/archon-deliver.yaml', ['rounds', 'round']);
-    const report = reasons('deliver/archon-deliver.yaml', ['report']);
+    const round = reasons('deliver/archon-deliver-block.yaml', ['rounds', 'round']);
+    const report = reasons('deliver/archon-deliver-block.yaml', ['report']);
     expect(round).toContain('threads_open');
     expect(report).toEqual([...round, 'failed']);
-    expect(reasons('ship/archon-ship.yaml', ['report'])).toEqual(expect.arrayContaining(report));
+    expect(reasons('ship/archon-ship-block.yaml', ['report'])).toEqual(expect.arrayContaining(report));
   });
 });
 
