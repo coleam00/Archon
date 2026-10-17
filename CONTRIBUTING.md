@@ -29,7 +29,7 @@ or `bun run test <path>` for root scripts. Keep package tests isolated through t
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only),
-`package-tests`, and `script-tests`.
+`package-tests`, `cli-tests`, and `script-tests`.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
@@ -66,7 +66,11 @@ touching only prose or files no check reads skips the test, service and binary j
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
 `.shared/`, `.claude/skills/`, the generated provider-capability page, the docs manifest), and `INERT_PATHS`
-lists the non-prose files no check reads. A push to `dev` or `main` skips those jobs only when
+lists the non-prose files no check reads. On a pull request, `workspaceTestInputs` in the same
+file decides whether the `cli` and `packages` legs of the `test` job run: a change limited to
+root `scripts/` files that no package test or CI entry point reads skips them, the
+`test-scripts` job still runs, and the `test-suite` check accepts the skip because the gate
+said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`. Workflow fixtures run
 when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or

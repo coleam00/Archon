@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { resolvePackageTestGroups } from './package-test-groups';
+import { resolvePackageTestConcurrency, resolvePackageTestGroups } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 /**
@@ -13,6 +13,11 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * runner makes the argument mean what it says.
  *
  * Execution and inventory share the resolver for manifest groups or file discovery.
+ *
+ * A package may set `testConcurrency` to run that many groups at once. Each group is still
+ * its own process, so isolation is unchanged. Concurrent groups buffer their output and print
+ * it whole when they exit, so logs never interleave; a start line names each group, so a hung
+ * run shows which groups were in flight.
  */
 
 const packageDir = process.cwd();
@@ -37,7 +42,51 @@ const requested = Bun.argv.slice(2);
 // from `bun run` appending the argument to a chain whose other selectors still matched.
 if (requested.length > 0) process.exit(await run(requested));
 
-for (const group of resolvePackageTestGroups(packageDir, manifest)) {
-  const code = await run(group);
-  if (code !== 0) process.exit(code);
+const groups = resolvePackageTestGroups(packageDir, manifest);
+const concurrency = resolvePackageTestConcurrency(manifest);
+
+const runBuffered = async (group: string[]): Promise<number> => {
+  console.log(`▶ ${group[0]}`);
+  const child = Bun.spawn(bunTestCommand(group), {
+    cwd: packageDir,
+    env: bunTestEnv(),
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  return code;
+};
+
+/**
+ * Runs the groups `concurrency` at a time and returns the first failure's code. After a
+ * failure no new group starts, but the running ones finish so their output is not lost.
+ */
+async function runGroups(): Promise<number> {
+  if (concurrency === 1) {
+    for (const group of groups) {
+      const code = await run(group);
+      if (code !== 0) return code;
+    }
+    return 0;
+  }
+  let next = 0;
+  let firstFailure = 0;
+  const worker = async (): Promise<void> => {
+    while (firstFailure === 0 && next < groups.length) {
+      const code = await runBuffered(groups[next++]);
+      if (firstFailure === 0) firstFailure = code;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, groups.length) }, worker));
+  return firstFailure;
 }
+
+// Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
+process.exitCode = await runGroups();

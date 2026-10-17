@@ -19,30 +19,59 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * fails: the root cannot guess a working directory, and answering with a full green suite
  * is what made a mistyped path look like a pass.
  *
- * `--plan <kind>` walks only the plan steps of that kind. CI runs the workspace half and the
- * root half on separate runners so they finish side by side.
+ * `--plan <shard>` walks only the plan steps of that shard. CI runs each shard on its own
+ * runner so they finish side by side.
  */
 
-/** One step of the no-argument run. */
-export type RootTestStep = { kind: 'workspaces' } | { kind: 'root'; selectors: string[] };
+/**
+ * One step of the no-argument run. A `workspace` step runs one package alone; the
+ * `workspaces` step runs every package no `workspace` step names, so no package can fall
+ * between them.
+ */
+export type RootTestStep =
+  | { kind: 'workspace'; shard: string; package: string }
+  | { kind: 'workspaces'; shard: string }
+  | { kind: 'root'; shard: string; selectors: readonly string[] };
 
 /**
  * The no-argument run. `scripts/test-inventory.test.ts` reads the same array to prove
  * every tracked test is collected, so execution and inventory cannot drift apart.
+ *
+ * Root steps run serially. Under `bun test --parallel`, `./scripts/` timed out
+ * (`docker-safe-directory.test.ts`) and on Linux CI the git fixtures of
+ * `.archon/scripts/__tests__/deliver-checks-harness.ts` failed in every intake test.
  */
-export const ROOT_TEST_PLAN: readonly RootTestStep[] = [
-  { kind: 'workspaces' },
-  { kind: 'root', selectors: ['./scripts/'] },
-  { kind: 'root', selectors: ['./.archon/scripts/'] },
+export const ROOT_TEST_PLAN = [
+  { kind: 'workspace', shard: 'cli', package: '@archon/cli' },
+  { kind: 'workspaces', shard: 'packages' },
+  { kind: 'root', shard: 'scripts', selectors: ['./scripts/'] },
+  { kind: 'root', shard: 'scripts', selectors: ['./.archon/scripts/'] },
+] as const satisfies readonly RootTestStep[];
+
+export type TestShard = (typeof ROOT_TEST_PLAN)[number]['shard'];
+
+const TEST_SHARDS: readonly TestShard[] = [
+  ...new Set(ROOT_TEST_PLAN.map((step): TestShard => step.shard)),
 ];
 
-/** Each workspace runs its own `test` script, which owns that package's group splitting. */
-const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
+/**
+ * The command one plan step runs. Each workspace runs its own `test` script, which owns that
+ * package's group splitting and concurrency.
+ */
+export function planStepCommand(step: RootTestStep): string[] {
+  if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
+  if (step.kind === 'root') return bunTestCommand(step.selectors);
+  // A negated filter alone already leaves out the root package, so no `'*'` goes beside it.
+  const solo = ROOT_TEST_PLAN.flatMap((other: RootTestStep): string[] =>
+    other.kind === 'workspace' ? ['--filter', `!${other.package}`] : []
+  );
+  return ['bun', ...(solo.length > 0 ? solo : ['--filter', '*']), '--parallel', 'test'];
+}
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Directories the root tests directly. Every other test belongs to a workspace package. */
-const ROOT_OWNED_DIRECTORIES = ROOT_TEST_PLAN.flatMap((step): string[] =>
+const ROOT_OWNED_DIRECTORIES = ROOT_TEST_PLAN.flatMap((step: RootTestStep): string[] =>
   step.kind === 'root'
     ? step.selectors.map((selector): string =>
         normalizePath(relative(REPO_ROOT, resolve(REPO_ROOT, selector)))
@@ -114,29 +143,26 @@ async function run(command: string[], cwd: string): Promise<number> {
   return await child.exited;
 }
 
-async function runPlan(kind?: RootTestStep['kind']): Promise<number> {
+async function runPlan(shard?: TestShard): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
-    if (kind !== undefined && step.kind !== kind) continue;
-    const command =
-      step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : bunTestCommand(step.selectors);
-    const code = await run(command, REPO_ROOT);
+    if (shard !== undefined && step.shard !== shard) continue;
+    const code = await run(planStepCommand(step), REPO_ROOT);
     if (code !== 0) return code;
   }
   return 0;
 }
 
 /**
- * The plan half `--plan <kind>` selects, or `undefined` when the arguments are not a `--plan`
+ * The shard `--plan <shard>` selects, or `undefined` when the arguments are not a `--plan`
  * request. `bun test` has no `--plan` flag, so the form cannot shadow a forwarded argument.
  */
-export function planKind(requested: readonly string[]): RootTestStep['kind'] | undefined {
+export function planShard(requested: readonly string[]): TestShard | undefined {
   if (requested[0] !== '--plan') return undefined;
-  const kinds = [...new Set(ROOT_TEST_PLAN.map((step): RootTestStep['kind'] => step.kind))];
-  const kind = kinds.find((candidate): boolean => candidate === requested[1]);
-  if (requested.length !== 2 || kind === undefined) {
-    throw new Error(`Usage: bun run test --plan <${kinds.join('|')}>`);
+  const shard = TEST_SHARDS.find((candidate): boolean => candidate === requested[1]);
+  if (requested.length !== 2 || shard === undefined) {
+    throw new Error(`Usage: bun run test --plan <${TEST_SHARDS.join('|')}>`);
   }
-  return kind;
+  return shard;
 }
 
 /**
@@ -194,14 +220,14 @@ async function runRequested(requested: string[]): Promise<number> {
 }
 
 async function main(requested: string[]): Promise<number> {
-  let kind: RootTestStep['kind'] | undefined;
+  let shard: TestShard | undefined;
   try {
-    kind = planKind(requested);
+    shard = planShard(requested);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
-  if (kind !== undefined) return await runPlan(kind);
+  if (shard !== undefined) return await runPlan(shard);
   return requested.length > 0 ? await runRequested(requested) : await runPlan();
 }
 
