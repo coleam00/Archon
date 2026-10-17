@@ -31,20 +31,21 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
 export type RootTestStep =
   | { kind: 'workspace'; shard: string; package: string }
   | { kind: 'workspaces'; shard: string }
-  | { kind: 'root'; shard: string; selectors: readonly string[]; parallel?: true };
+  | { kind: 'root'; shard: string; selectors: readonly string[] };
 
 /**
  * The no-argument run. `scripts/test-inventory.test.ts` reads the same array to prove
  * every tracked test is collected, so execution and inventory cannot drift apart.
  *
- * Only `./.archon/scripts/` runs with `bun test --parallel`: `./scripts/` timed out under it
- * (`docker-safe-directory.test.ts`) and costs about two minutes serial.
+ * Root steps run serially. Under `bun test --parallel`, `./scripts/` timed out
+ * (`docker-safe-directory.test.ts`) and on Linux CI the git fixtures of
+ * `.archon/scripts/__tests__/deliver-checks-harness.ts` failed in every intake test.
  */
 export const ROOT_TEST_PLAN = [
   { kind: 'workspace', shard: 'cli', package: '@archon/cli' },
   { kind: 'workspaces', shard: 'packages' },
   { kind: 'root', shard: 'scripts', selectors: ['./scripts/'] },
-  { kind: 'root', shard: 'scripts', selectors: ['./.archon/scripts/'], parallel: true },
+  { kind: 'root', shard: 'scripts', selectors: ['./.archon/scripts/'] },
 ] as const satisfies readonly RootTestStep[];
 
 export type TestShard = (typeof ROOT_TEST_PLAN)[number]['shard'];
@@ -59,9 +60,7 @@ const TEST_SHARDS: readonly TestShard[] = [
  */
 export function planStepCommand(step: RootTestStep): string[] {
   if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
-  if (step.kind === 'root') {
-    return bunTestCommand(step.parallel ? ['--parallel', ...step.selectors] : step.selectors);
-  }
+  if (step.kind === 'root') return bunTestCommand(step.selectors);
   // A negated filter alone already leaves out the root package, so no `'*'` goes beside it.
   const solo = ROOT_TEST_PLAN.flatMap((other: RootTestStep): string[] =>
     other.kind === 'workspace' ? ['--filter', `!${other.package}`] : []
