@@ -57,8 +57,21 @@ function isFunctionUnit(node: ts.Node): node is FunctionUnit {
   );
 }
 
+// Built from names only: the source of `p.then(a => ...).catch(...)` would put the `then`
+// callback's body into the `catch` callback's identity, so editing one renames the other.
+function calleeName(node: ts.Expression): string {
+  if (ts.isPropertyAccessExpression(node))
+    return `${calleeName(node.expression)}.${node.name.text}`;
+  if (ts.isCallExpression(node)) return `${calleeName(node.expression)}()`;
+  if (ts.isNonNullExpression(node) || ts.isParenthesizedExpression(node)) {
+    return calleeName(node.expression);
+  }
+  if (ts.isIdentifier(node) || node.kind === ts.SyntaxKind.ThisKeyword) return node.getText();
+  return '<expr>';
+}
+
 function callLabel(call: ts.CallExpression | ts.NewExpression): string {
-  const callee = call.expression.getText().replace(/\s+/g, '');
+  const callee = calleeName(call.expression);
   const argument = call.arguments?.find(candidate => !ts.isFunctionLike(candidate));
   const label =
     argument !== undefined &&

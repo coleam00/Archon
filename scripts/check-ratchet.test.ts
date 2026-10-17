@@ -40,6 +40,14 @@ describe('cognitiveUnits', () => {
     });
   });
 
+  test('names a chained callback by the chain shape, not earlier callback bodies', () => {
+    const names = (thenBody: string): string[] => [
+      ...cognitiveUnits('sample.ts', `p.then(a => ${thenBody}).catch(e => (e ? 1 : 0));`).keys(),
+    ];
+    expect(names('a')).toEqual(['p.then()', 'p.then().catch()']);
+    expect(names('(a ? a : 0)')).toEqual(names('a'));
+  });
+
   test('counts a missing final newline as a line', () => {
     expect([lineCount(''), lineCount('a\n'), lineCount('a\nb')]).toEqual([0, 1, 2]);
   });
