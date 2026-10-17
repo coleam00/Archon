@@ -1996,7 +1996,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     };
     for (const assertFn of [assertApprovable, assertRejectable]) {
       expect(() => assertFn(withMeta(waiting))).toThrow(
-        'Run run-1 is waiting for a provider usage limit to reset at 2026-08-28T15:00:00.000Z'
+        'Run run-1 is not at a gate: it hit a provider usage or rate limit and tries again by itself at 2026-08-28T15:00:00.000Z'
       );
     }
   });
