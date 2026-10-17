@@ -70,9 +70,8 @@ interface RepoGitContext {
 // worktree.remote from .archon/config.yaml before falling back to runtime git
 // detection. A reachable remote with a known symbolic HEAD is required unless
 // worktree.baseBranch is configured.
-// loadRepoConfig returns {} for a missing or unreadable config, so those degrade
-// to git detection; it throws only when `assistants.*` names a setting the
-// provider cannot honour, which cleanup surfaces rather than working around.
+// A missing config falls back to git detection; a config that fails to load
+// throws, and cleanup surfaces that rather than working around it.
 async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<RepoGitContext> {
   const repoConfig = await loadRepoConfig(cwd);
   const remote = configuredRemote(repoConfig);

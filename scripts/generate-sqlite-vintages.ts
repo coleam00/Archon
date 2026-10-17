@@ -36,22 +36,22 @@
 import { spawnSync } from 'child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { isFinalReleaseTag } from './release-tags';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const ADAPTER_REPO_PATH = 'packages/core/src/db/adapters/sqlite.ts';
 const FIXTURES_DIR = join(REPO_ROOT, 'packages/core/src/db/fixtures/sqlite-vintages');
 const CHECK_ONLY = process.argv.includes('--check');
 const SCHEMA_SIGNATURE = 'private createSchema(): void {';
-const RELEASE_TAG = /^v[\w.-]+$/;
 
 /**
- * The release tags in `git tag` output (`v` followed by word characters, dots or
- * dashes), in the given order; tags of any other shape are ignored. Throws when
+ * The final release tags in `git tag` output (`v<major>.<minor>.<patch>`), in the
+ * given order; tags of any other shape are ignored. Throws when
  * none is left: an empty tag set would make write mode delete every checked-in
  * fixture while exiting 0, so no release history means this script cannot run.
  */
 export function releaseTags(gitTagOutput: string): string[] {
-  const tags = gitTagOutput.split('\n').filter(tag => RELEASE_TAG.test(tag));
+  const tags = gitTagOutput.split('\n').filter(isFinalReleaseTag);
   if (tags.length === 0) {
     throw new Error(
       'git tag listed no release tags — cannot regenerate vintage fixtures (shallow or broken checkout?)'
@@ -62,7 +62,7 @@ export function releaseTags(gitTagOutput: string): string[] {
 
 /**
  * Deliberately `spawnSync` rather than `@archon/git`: this script must run in the
- * `schema-upgrade` CI job with no `bun install` (it imports nothing outside Node
+ * `schema-upgrade` CI job with no `bun install` (only local modules and Node
  * builtins), and reads history — `git show <ref>:<path>` — rather than
  * manipulating worktrees, which is what `@archon/git` covers. The argument array
  * means no ref ever reaches a shell.

@@ -2226,9 +2226,11 @@ sub-pipeline.**
 ### Gates, failure, and cost
 
 - **A child pause pauses the whole tree.** When the child pauses for an answer, the child run
-  pauses **and** the parent pauses "blocked on child". Answer the **child** by its own run
-  id (for example `/workflow approve <childRunId>`; the id is shown in the pause message). When the
-  child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
+  pauses **and** the parent pauses "blocked on child". Answer the **child** by its own full
+  run id (for example `archon workflow approve <childRunId>`). Read it from
+  `archon workflow get <parentRunId> --json` at `.metadata.approval.childRunId`. The stored
+  pause message contains only a short child label; a surface notice may include the full child
+  command. When the child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
   finds the child finished, and threads its output onward.
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.

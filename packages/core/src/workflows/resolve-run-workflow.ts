@@ -53,7 +53,7 @@ export async function resolveRunWorkflow(
     log.error({ err, cwd: workflowCwd, runId: run.id }, 'workflow.resume_discovery_failed');
     return {
       ok: false,
-      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+      message: `Failed to load workflows: ${err.message}`,
     };
   }
 

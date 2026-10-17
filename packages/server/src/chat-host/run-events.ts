@@ -1,3 +1,6 @@
+import { ChildRunRedirectError } from '@archon/core/operations/workflow-operations';
+import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowCommandSurface } from '@archon/workflows/deps';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { ChatRunEvent } from '@archon/chat-contract';
 import {
@@ -100,7 +103,10 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
   }
 }
 
-export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervisor>): () => void {
+export function subscribeChatRunEvents(
+  plugins: ReadonlyMap<string, ChatSupervisor>,
+  platforms: ReadonlyMap<string, WorkflowCommandSurface>
+): () => void {
   const log = createLogger('server.chat-events');
   const emitter = getWorkflowEventEmitter();
   let stopped = false;
@@ -132,6 +138,24 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
             : projected;
         if (routed.type === 'approval_pending' || routed.type === 'terminal')
           routed.authoredOutcome = run.outcome ?? undefined;
+        const approval = run.metadata.approval;
+        if (
+          routed.type === 'approval_pending' &&
+          isApprovalContext(approval) &&
+          approval.type === 'child_workflow' &&
+          approval.childRunId &&
+          approval.nodeId === routed.nodeId &&
+          approval.pauseId === routed.pauseId
+        ) {
+          const surface = platforms.get(platform);
+          if (!surface) throw new Error(`Chat platform ${platform} is unavailable`);
+          routed.message = new ChildRunRedirectError(
+            run.id,
+            [approval.childRunId],
+            routed.nodeId,
+            'approve'
+          ).messageFor(surface);
+        }
         if (routed.type === 'terminal') {
           const cost = runTotalCostUsd(run);
           if (cost !== undefined) routed.totalCostUsd = cost;

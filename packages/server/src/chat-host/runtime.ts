@@ -64,7 +64,7 @@ export function createChatHost(
     attentionDestinations,
     start(): void {
       unsubscribe ??= installed.length
-        ? subscribeChatRunEvents(supervisors)
+        ? subscribeChatRunEvents(supervisors, platforms)
         : (): void => undefined;
       for (const supervisor of supervisors.values()) supervisor.start();
     },

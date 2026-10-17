@@ -109,7 +109,10 @@ const mockGetWorkflowRun = mock<
 
 // Capture the real exports before mock.module replaces '@archon/core', so the mock
 // re-exports them instead of a hand-declared copy that could drift.
-import { CancelRefusedError } from '@archon/core/operations/workflow-operations';
+import {
+  ChildRunRedirectError,
+  CancelRefusedError,
+} from '@archon/core/operations/workflow-operations';
 mock.module('@archon/core', () => ({
   workflowOperations: {
     CancelRefusedError,
@@ -199,6 +202,7 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
   };
 
   const fakeAdapter = {
+    formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
     getApp: () => fakeApp,
     getTriggeringMessage: (id: string) => triggerMap.get(id),
     clearTriggeringMessage: (id: string) => {
@@ -268,6 +272,7 @@ describe('SlackWorkflowBridge', () => {
   beforeEach(() => {
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
     mockGetConversationId.mockReset();
     mockSubscribe.mockClear();
     mockRespondToWorkflow.mockClear();
@@ -366,6 +371,139 @@ describe('SlackWorkflowBridge', () => {
     expect(buttons?.[0]?.action_id).toBe('respond:0');
     expect(buttons?.[1]?.action_id).toBe('respond:1');
   });
+
+  test.each(['pause-one', 'later-pause'])(
+    'child card uses matching structured context (%s)',
+    async pauseId => {
+      const { adapter, posted, triggerMap } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+      mockGetWorkflowRun.mockResolvedValue({
+        metadata: {
+          approval: {
+            nodeId: 'sub',
+            pauseId,
+            type: 'child_workflow',
+            childRunId: 'child-full-id',
+            message: 'Waiting',
+          },
+        },
+        outcome: null,
+      });
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv',
+        transcriptPath: '/logs',
+      });
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'sub',
+        pauseId: 'pause-one',
+        message: 'Waiting',
+      });
+      const card = posted.at(-1);
+      if (pauseId === 'pause-one') {
+        expect(card?.text).toContain('/archon-workflow approve child-full-id');
+        expect(JSON.stringify(card?.blocks)).toContain('/archon-workflow approve child-full-id');
+      } else {
+        expect(JSON.stringify(card)).not.toContain('child-full-id');
+      }
+      expect(JSON.stringify(card)).not.toContain('/workflow ');
+    }
+  );
+
+  test.each(['failed', 'missing'] as const)(
+    'approval lookup %s posts an unavailable note without response controls',
+    async lookup => {
+      const { adapter, posted, updated, triggerMap } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+      if (lookup === 'failed') {
+        mockGetWorkflowRun.mockRejectedValueOnce(new Error('database unavailable'));
+      } else {
+        mockGetWorkflowRun.mockResolvedValueOnce(null);
+      }
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv',
+        transcriptPath: '/logs',
+      });
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'sub',
+        pauseId: 'pause-one',
+        message: 'Sub-run is paused awaiting review.',
+      });
+      const note = posted.at(-1);
+      expect(note?.thread_ts).toBe('111.0');
+      expect(note?.text).toContain('Approval details unavailable');
+      expect(note?.text).toContain('r1');
+      expect(note?.blocks).toBeUndefined();
+      expect(posted).toHaveLength(2);
+      expect(JSON.stringify(posted)).not.toContain('respond:');
+      expect(JSON.stringify(updated)).toContain('paused');
+    }
+  );
+
+  test.each(['approve', 'reject'] as const)(
+    '%s on a blocked parent redirects to the child',
+    async decision => {
+      const { adapter, posted, updated, dispatchAction } = makeFakeAdapter();
+      const resume = mock(async () => 'resumed' as const);
+      (decision === 'approve' ? mockApproveWorkflow : mockRejectWorkflow).mockRejectedValueOnce(
+        new ChildRunRedirectError('r1', ['child-full-id'], 'sub', decision)
+      );
+      new SlackWorkflowBridge(adapter as never, resume).attach();
+      await dispatchAction(`${decision}:r1:sub`, {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '2.000' },
+      });
+      expect(posted.at(-1)?.text).toContain(`/archon-workflow ${decision} child-full-id`);
+      expect(posted.at(-1)?.text).not.toContain('Could not record');
+      expect(resume).not.toHaveBeenCalled();
+      expect(updated).toHaveLength(0);
+    }
+  );
+
+  test.each(['approve', 'reject'] as const)(
+    '%s logs a failed child redirect delivery with the run and Slack error',
+    async decision => {
+      const { adapter, fakeApp, posted, updated, dispatchAction } = makeFakeAdapter();
+      const resume = mock(async () => 'resumed' as const);
+      const slackError = new Error('Slack post failed');
+      fakeApp.client.chat.postMessage.mockRejectedValueOnce(slackError);
+      (decision === 'approve' ? mockApproveWorkflow : mockRejectWorkflow).mockRejectedValueOnce(
+        new ChildRunRedirectError('r1', ['child-full-id'], 'sub', decision)
+      );
+      new SlackWorkflowBridge(adapter as never, resume).attach();
+      await dispatchAction(`${decision}:r1:sub`, {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '2.000' },
+      });
+      expect(fakeApp.client.chat.postMessage).toHaveBeenCalledWith({
+        channel: 'C1',
+        thread_ts: '2.000',
+        text: expect.stringContaining(`/archon-workflow ${decision} child-full-id`),
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { err: slackError, runId: 'r1' },
+        'slack.bridge_action_notify_failed'
+      );
+      expect(posted).toHaveLength(0);
+      expect(resume).not.toHaveBeenCalled();
+      expect(updated).toHaveLength(0);
+    }
+  );
 
   test('approval_pending updates the run status with a persisted authored outcome', async () => {
     const { adapter, updated, triggerMap } = makeFakeAdapter();
@@ -936,6 +1074,69 @@ describe('SlackWorkflowBridge', () => {
     });
   }
   describe('cancel button owner outcomes (#2325)', () => {
+    for (const tracked of [true, false]) {
+      test.each(['stopped', 'already_finished'] as const)(
+        `a failed %s result delivery logs the Slack error without reclassifying cancellation (tracked=${String(tracked)})`,
+        async outcome => {
+          const { adapter, fakeApp, posted, triggerMap, dispatchAction } = makeFakeAdapter();
+          new SlackWorkflowBridge(adapter as never).attach();
+          if (tracked) {
+            triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+            mockGetConversationId.mockReturnValue('C1:111.0');
+            await dispatchEvent({
+              type: 'workflow_started',
+              runId: 'r1',
+              workflowName: 'assist',
+              conversationId: 'conv-db-uuid',
+              transcriptPath: '/logs/r1.jsonl',
+            });
+          }
+          mockCancelWorkflow.mockResolvedValueOnce(
+            outcome === 'stopped'
+              ? {
+                  kind: 'stopped',
+                  pid: 4242,
+                  cascadeFailures: 2,
+                  blockedParentRunId: 'parent-run',
+                  cleanupWarnings: ['Container env-a remains allocated.'],
+                }
+              : { kind: 'cooperative', cancelled: false }
+          );
+          const slackError = new Error('Slack post failed');
+          posted.length = 0;
+          fakeApp.client.chat.postMessage.mockClear();
+          fakeApp.client.chat.postMessage.mockRejectedValueOnce(slackError);
+
+          await dispatchAction('cancel:r1', {
+            user: { id: 'U123' },
+            channel: { id: 'C1' },
+            message: { ts: '1.000' },
+          });
+
+          expect(fakeApp.client.chat.postMessage).toHaveBeenCalledTimes(1);
+          const note = fakeApp.client.chat.postMessage.mock.calls[0]?.[0];
+          expect(note?.thread_ts).toBe(tracked ? '111.0' : '1.000');
+          if (outcome === 'stopped') {
+            expect(note?.text).toContain("Stopped the run's live owner process (pid 4242)");
+            expect(note?.text).toContain('2 sub-run(s) could not be cancelled');
+            expect(note?.text).toContain('Parent run `parent-run`');
+            expect(note?.text).toContain('Container env-a remains allocated.');
+          } else {
+            expect(note?.text).toContain('already finished');
+          }
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            { err: slackError, runId: 'r1' },
+            'slack.bridge_action_notify_failed'
+          );
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.anything(),
+            'slack.bridge_cancel_failed'
+          );
+          expect(posted).toHaveLength(0);
+        }
+      );
+    }
+
     async function clickCancel(): Promise<ReturnType<typeof makeFakeAdapter>['posted']> {
       const { adapter, posted, triggerMap, dispatchAction } = makeFakeAdapter();
       triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });

@@ -1416,9 +1416,10 @@ export async function discoverWorkflows(
 /**
  * Discover workflows with config-aware default loading.
  *
- * Wraps discoverWorkflows with the standard pattern: try loadConfig to read
- * defaults.loadDefaultWorkflows, fall back to true on config load failure.
- * Logs config failures at warn level for observability.
+ * Wraps discoverWorkflows with the standard pattern: loadConfig supplies
+ * defaults.loadDefaultWorkflows and the command settings. A config that fails to
+ * load rejects the discovery with that error, so listing surfaces report it
+ * instead of listing with defaults.
  *
  * When `cwd` is `null` (no project context), `loadConfig` is not invoked and
  * `loadDefaults` keeps its initial value of `true`. The per-project opt-out
@@ -1454,18 +1455,11 @@ export async function discoverWorkflowsWithConfig(
   // workflowSourceConfigFrom); only the live branch below still needs to read them.
   let envVarNames: readonly string[] | undefined = sourceConfig?.env_var_names;
   if (cwd !== null && sourceConfig === undefined) {
-    try {
-      const cfg = await loadConfig(cwd);
-      loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
-      commandFolder = cfg.commands?.folder;
-      loadDefaultCommands = cfg.defaults?.loadDefaultCommands;
-      envVarNames = cfg.envVars && Object.keys(cfg.envVars);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, cwd },
-        'config_load_failed_using_default_workflow_discovery'
-      );
-    }
+    const cfg = await loadConfig(cwd);
+    loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
+    commandFolder = cfg.commands?.folder;
+    loadDefaultCommands = cfg.defaults?.loadDefaultCommands;
+    envVarNames = cfg.envVars && Object.keys(cfg.envVars);
   }
   return discoverWorkflows(cwd, {
     providers,

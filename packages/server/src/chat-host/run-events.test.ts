@@ -7,9 +7,10 @@ import { chatRunEventSchema, type ConnectedChat, type ChatRunEvent } from '@arch
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { terminalWorkflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
-import { createWorkflowRun } from '@archon/core/db/workflows';
+import { createWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import { ChatSupervisor } from './supervisor';
+import { ChatPluginPlatform } from './platform';
 import { subscribeChatRunEvents, projectRunEvent } from './run-events';
 import { descriptor } from './fixtures/descriptor';
 
@@ -85,7 +86,7 @@ test.each([false, true])(
       ['fixture-chat', make('fixture-chat', first)],
       ['other-chat', make('other-chat', second)],
     ]);
-    const unsubscribe = subscribeChatRunEvents(plugins);
+    const unsubscribe = subscribeChatRunEvents(plugins, new Map());
     try {
       const runs = await Promise.all(
         ['fixture-chat', 'other-chat', 'web'].map(platform => createRun(platform, background))
@@ -189,7 +190,7 @@ test('a stalled plugin does not delay run events for another plugin', async () =
       }),
     ],
   ]);
-  const unsubscribe = subscribeChatRunEvents(plugins);
+  const unsubscribe = subscribeChatRunEvents(plugins, new Map());
   try {
     const stalled = await createRun('fixture-chat');
     const healthy = await createRun('other-chat');
@@ -223,7 +224,7 @@ test('a cancelled run carries its cancellation reason to the plugin', async () =
   supervisor.runEvent = async event => {
     delivered.push(event);
   };
-  const unsubscribe = subscribeChatRunEvents(new Map([['fixture-chat', supervisor]]));
+  const unsubscribe = subscribeChatRunEvents(new Map([['fixture-chat', supervisor]]), new Map());
   try {
     const run = await createRun('fixture-chat');
     getWorkflowEventEmitter().emit({
@@ -295,3 +296,72 @@ test('approval projections resolve choices through the workflow owner', () => {
     expect(projected).toMatchObject({ decisions: getApprovalDecisions({ decisions }) });
   }
 });
+
+test.each(['matching', 'stale-pause', 'stale-node', 'missing-platform'] as const)(
+  'child guidance routing: %s',
+  async identity => {
+    const delivered: ChatRunEvent[] = [];
+    const supervisor = new ChatSupervisor(
+      { descriptor, argv: [process.execPath] },
+      () => {},
+      () => {}
+    );
+    let routed!: () => void;
+    const finished = new Promise<void>(resolve => {
+      routed = resolve;
+    });
+    supervisor.runEvent = async event => {
+      delivered.push(event);
+      if (event.type === 'terminal') routed();
+    };
+    const platform = new ChatPluginPlatform(
+      { ...descriptor, workflowCommand: { prefix: '/archon-workflow ' } },
+      supervisor,
+      {}
+    );
+    const unsubscribe = subscribeChatRunEvents(
+      new Map([[descriptor.id, supervisor]]),
+      identity === 'missing-platform' ? new Map() : new Map([[descriptor.id, platform]])
+    );
+    try {
+      const run = await createRun(descriptor.id);
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1",
+        [run.id]
+      );
+      await pauseWorkflowRun(run.id, {
+        nodeId: 'sub',
+        pauseId: 'current',
+        type: 'child_workflow',
+        childRunId: 'child-full-id',
+        message: 'Waiting',
+      });
+      const emitter = getWorkflowEventEmitter();
+      emitter.emit({
+        type: 'approval_pending',
+        runId: run.id,
+        nodeId: identity === 'stale-node' ? 'other' : 'sub',
+        pauseId: identity === 'stale-pause' ? 'old' : 'current',
+        message: 'Waiting',
+      });
+      emitter.emit({
+        type: 'workflow_completed',
+        runId: run.id,
+        workflowName: 'fixture',
+        duration: 0,
+      });
+      await finished;
+      const card = delivered.find(event => event.type === 'approval_pending');
+      if (identity === 'matching') {
+        expect(card?.message).toContain('/archon-workflow approve child-full-id');
+        expect(card?.message).not.toContain('/workflow ');
+      } else if (identity === 'missing-platform') {
+        expect(card).toBeUndefined();
+      } else {
+        expect(card?.message).toBe('Waiting');
+      }
+    } finally {
+      unsubscribe();
+    }
+  }
+);

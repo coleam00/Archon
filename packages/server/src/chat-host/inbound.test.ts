@@ -428,3 +428,29 @@ const operator: RunActor = { kind: 'operator' };
 // @ts-expect-error An operator cannot cross the chat identity boundary.
 const chatActor: ChatActor = operator;
 void chatActor;
+
+test.each(['approve', 'reject'] as const)(
+  'blocked parent %s redirects with the configured spelling',
+  async decision => {
+    const parent = await run();
+    await pauseWorkflowRun(parent.id, {
+      nodeId: 'sub',
+      pauseId: 'child-pause',
+      type: 'child_workflow',
+      childRunId: 'child-full-id',
+      message: 'Waiting',
+    });
+    const response = await action({
+      runId: parent.id,
+      action: decision,
+      response: { nodeId: 'sub', pauseId: 'child-pause' },
+      sender: { platformUserId: 'starter' },
+    });
+    expect(response).toMatchObject({
+      status: 'refused',
+      message: expect.stringContaining(`/fixture-workflow ${decision} child-full-id`),
+    });
+    expect(resume).not.toHaveBeenCalled();
+    expect((await getWorkflowRun(parent.id))?.metadata.approval).not.toHaveProperty('resolved');
+  }
+);
