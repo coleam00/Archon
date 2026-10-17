@@ -1,6 +1,6 @@
 /**
- * Shared mocks and fixture builders for `orchestrator/orchestrator-agent.test.ts`.
- * Importing this module registers every `mock.module()` that suite relies on.
+ * Shared mocks and fixture builders for the `handleMessage` suites in `orchestrator/`.
+ * Importing this module registers every `mock.module()` those suites rely on.
  */
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
