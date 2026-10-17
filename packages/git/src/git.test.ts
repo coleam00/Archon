@@ -3873,47 +3873,32 @@ branch refs/heads/feature/auth
       execSpy.mockRestore();
     });
 
-    test('calls git config with correct arguments', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
-
-      await git.addSafeDirectory(repo('/workspace/repo'));
-
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
+    test('concurrent registrations against one global config all succeed', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-concurrent-')));
+      const configPath = join(root, 'gitconfig');
+      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = configPath;
+      try {
+        await writeFile(configPath, '[user]\n\tname = other\n');
+        const paths = Array.from({ length: 8 }, (_, i) => repo(`/workspace/wt-${i}`));
+        await Promise.all(paths.map(path => git.addSafeDirectory(path)));
+        const { stdout } = await git.execFileAsync('git', [
           'config',
           '--global',
-          '--fixed-value',
-          '--replace-all',
+          '--get-all',
           'safe.directory',
-          '/workspace/repo',
-          '/workspace/repo',
-        ],
-        { timeout: 10000 }
-      );
+        ]);
+        expect(stdout.trim().split('\n').sort()).toEqual([...paths].sort());
+        expect(
+          (await git.execFileAsync('git', ['config', '--global', 'user.name'])).stdout.trim()
+        ).toBe('other');
+      } finally {
+        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+      }
     });
 
-    test('uses execFileAsync (not shell exec)', async () => {
-      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
-
-      await git.addSafeDirectory(repo('/workspace/path with spaces'));
-
-      // If this were shell exec, spaces in the path would cause issues.
-      // execFileAsync passes args as array, so path with spaces is safe.
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
-          'config',
-          '--global',
-          '--fixed-value',
-          '--replace-all',
-          'safe.directory',
-          '/workspace/path with spaces',
-          '/workspace/path with spaces',
-        ],
-        { timeout: 10000 }
-      );
-    });
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;

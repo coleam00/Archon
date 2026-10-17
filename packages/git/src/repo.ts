@@ -3,6 +3,7 @@ import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
 import { readdir, open, readFile, realpath, rename, stat, unlink, appendFile } from 'fs/promises';
+import type { FileHandle } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
@@ -609,16 +610,35 @@ export async function syncRepository(
   return { ok: true, value: undefined };
 }
 
-async function editSafeDirectory(
+const CONFIG_LOCK_WAIT_MS = 10000;
+
+/**
+ * Take Git's writer lock for a config file. Another writer holding it (EEXIST),
+ * whether Archon or git itself, is waited out; any other failure, or a lock
+ * still held at the deadline, throws with its original error.
+ */
+async function acquireConfigLock(lockPath: string): Promise<FileHandle> {
+  const deadline = Date.now() + CONFIG_LOCK_WAIT_MS;
+  for (let delay = 10; ; delay = Math.min(delay * 2, 200)) {
+    try {
+      return await open(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      if (Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function editConfigFile(
   configPath: string,
-  path: RepoPath,
-  grant: boolean
+  edit: (lockPath: string) => Promise<void>
 ): Promise<void> {
   const config = await realpath(configPath);
   const lockPath = `${config}.lock`;
   // Use Git's writer lock and publish only the finished edit. Readers retain
   // their accepted trust even if a repair fails after removing the old entry.
-  const lock = await open(lockPath, 'wx', 0o600);
+  const lock = await acquireConfigLock(lockPath);
   let published = false;
   let closed = false;
   try {
@@ -626,33 +646,7 @@ async function editSafeDirectory(
     await lock.writeFile(await readFile(config));
     await lock.close();
     closed = true;
-    try {
-      await execFileAsync(
-        'git',
-        ['config', '--file', lockPath, '--fixed-value', '--unset-all', 'safe.directory', path],
-        { timeout: 10000 }
-      );
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
-    }
-    if (grant) {
-      // Git writes into the last matching section, after any included resets.
-      await appendFile(lockPath, '\n[safe]\n');
-      await execFileAsync(
-        'git',
-        [
-          'config',
-          '--file',
-          lockPath,
-          '--fixed-value',
-          '--replace-all',
-          'safe.directory',
-          path,
-          path,
-        ],
-        { timeout: 10000 }
-      );
-    }
+    await edit(lockPath);
     await rename(lockPath, config);
     published = true;
   } finally {
@@ -673,10 +667,42 @@ async function editSafeDirectory(
   }
 }
 
+async function replaceSafeDirectory(lockPath: string, path: RepoPath): Promise<void> {
+  await execFileAsync(
+    'git',
+    ['config', '--file', lockPath, '--fixed-value', '--replace-all', 'safe.directory', path, path],
+    { timeout: 10000 }
+  );
+}
+
+async function editSafeDirectory(
+  configPath: string,
+  path: RepoPath,
+  grant: boolean
+): Promise<void> {
+  await editConfigFile(configPath, async lockPath => {
+    try {
+      await execFileAsync(
+        'git',
+        ['config', '--file', lockPath, '--fixed-value', '--unset-all', 'safe.directory', path],
+        { timeout: 10000 }
+      );
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
+    }
+    if (grant) {
+      // Git writes into the last matching section, after any included resets.
+      await appendFile(lockPath, '\n[safe]\n');
+      await replaceSafeDirectory(lockPath, path);
+    }
+  });
+}
+
 /**
  * Add a directory to git's global safe.directory config.
  * Grants persist after setup failure: revocation could remove trust that a
  * concurrent setup accepted for the same path.
+ * Writes take Git's config lock and wait for another writer instead of failing.
  * Uses execFileAsync (no shell interpolation) for safety.
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
@@ -710,20 +736,20 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     const values = entries.map(entry => entry.value);
     const grants = entries.filter(entry => entry.value === path);
     if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
-    if (grants.length === 0 && !values.includes('')) {
-      await execFileAsync(
-        'git',
-        ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
-        { timeout: 10000 }
-      );
-      return;
-    }
     const home = process.env.HOME || homedir();
     const homeConfig = join(home, '.gitconfig');
     const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
-    const target = await realpath(
-      process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
-    );
+    // Git's --global write target: ~/.gitconfig unless only the XDG file exists.
+    const targetPath =
+      process.env.GIT_CONFIG_GLOBAL ??
+      (existsSync(homeConfig) || !existsSync(xdgConfig) ? homeConfig : xdgConfig);
+    // git config --global creates a missing file; the lock-and-rename edit needs one.
+    await (await open(targetPath, 'a')).close();
+    if (grants.length === 0 && !values.includes('')) {
+      await editConfigFile(targetPath, lockPath => replaceSafeDirectory(lockPath, path));
+      return;
+    }
+    const target = await realpath(targetPath);
     // Publish effective trust before removing duplicate grants in earlier sources.
     await editSafeDirectory(target, path, true);
     for (const source of new Set(grants.map(entry => entry.source))) {
