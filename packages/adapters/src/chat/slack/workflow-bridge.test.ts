@@ -1074,6 +1074,69 @@ describe('SlackWorkflowBridge', () => {
     });
   }
   describe('cancel button owner outcomes (#2325)', () => {
+    for (const tracked of [true, false]) {
+      test.each(['stopped', 'already_finished'] as const)(
+        `a failed %s result delivery logs the Slack error without reclassifying cancellation (tracked=${String(tracked)})`,
+        async outcome => {
+          const { adapter, fakeApp, posted, triggerMap, dispatchAction } = makeFakeAdapter();
+          new SlackWorkflowBridge(adapter as never).attach();
+          if (tracked) {
+            triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+            mockGetConversationId.mockReturnValue('C1:111.0');
+            await dispatchEvent({
+              type: 'workflow_started',
+              runId: 'r1',
+              workflowName: 'assist',
+              conversationId: 'conv-db-uuid',
+              transcriptPath: '/logs/r1.jsonl',
+            });
+          }
+          mockCancelWorkflow.mockResolvedValueOnce(
+            outcome === 'stopped'
+              ? {
+                  kind: 'stopped',
+                  pid: 4242,
+                  cascadeFailures: 2,
+                  blockedParentRunId: 'parent-run',
+                  cleanupWarnings: ['Container env-a remains allocated.'],
+                }
+              : { kind: 'cooperative', cancelled: false }
+          );
+          const slackError = new Error('Slack post failed');
+          posted.length = 0;
+          fakeApp.client.chat.postMessage.mockClear();
+          fakeApp.client.chat.postMessage.mockRejectedValueOnce(slackError);
+
+          await dispatchAction('cancel:r1', {
+            user: { id: 'U123' },
+            channel: { id: 'C1' },
+            message: { ts: '1.000' },
+          });
+
+          expect(fakeApp.client.chat.postMessage).toHaveBeenCalledTimes(1);
+          const note = fakeApp.client.chat.postMessage.mock.calls[0]?.[0];
+          expect(note?.thread_ts).toBe(tracked ? '111.0' : '1.000');
+          if (outcome === 'stopped') {
+            expect(note?.text).toContain("Stopped the run's live owner process (pid 4242)");
+            expect(note?.text).toContain('2 sub-run(s) could not be cancelled');
+            expect(note?.text).toContain('Parent run `parent-run`');
+            expect(note?.text).toContain('Container env-a remains allocated.');
+          } else {
+            expect(note?.text).toContain('already finished');
+          }
+          expect(mockLogger.error).toHaveBeenCalledWith(
+            { err: slackError, runId: 'r1' },
+            'slack.bridge_cancel_handler_failed'
+          );
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.anything(),
+            'slack.bridge_cancel_failed'
+          );
+          expect(posted).toHaveLength(0);
+        }
+      );
+    }
+
     async function clickCancel(): Promise<ReturnType<typeof makeFakeAdapter>['posted']> {
       const { adapter, posted, triggerMap, dispatchAction } = makeFakeAdapter();
       triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
