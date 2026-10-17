@@ -78,3 +78,23 @@ describe('ApprovalPanel', () => {
     expect(html.match(/<button /g)?.length).toBe(2);
   });
 });
+
+test.each(['/workflow approve child-full-id', 'Sub-run is paused awaiting review.'])(
+  'child approval renders command-free guidance from structured identity (%s)',
+  message => {
+    const run = toRun({
+      id: 'parent',
+      workflow_name: 'parent',
+      codebase_id: null,
+      status: 'paused',
+      started_at: '2026-10-05T10:00:00Z',
+      metadata: {
+        approval: { nodeId: 'sub', type: 'child_workflow', childRunId: 'child-full-id', message },
+      },
+    });
+    const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
+    expect(html).toContain('child-full-id');
+    expect(html).not.toContain('/workflow ');
+    expect(html).not.toContain('/archon-workflow ');
+  }
+);

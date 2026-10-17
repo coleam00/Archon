@@ -5308,6 +5308,33 @@ describe('workflowStatusCommand', () => {
     expect(parsed.runs).toEqual([expect.objectContaining({ id: 'run-project-a', events: [] })]);
   });
 
+  it('does not expose stored child-block command prose in human status', async () => {
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'parent',
+          workflow_name: 'parent-flow',
+          working_path: '/test/path',
+          status: 'paused',
+          started_at: new Date(),
+          active_nodes: [],
+          metadata: {
+            approval: {
+              nodeId: 'sub',
+              type: 'child_workflow',
+              childRunId: 'child-full-id',
+              message: '/workflow approve child-full-id',
+            },
+          },
+        },
+      ])
+    );
+    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
+    const printed = consoleSpy.mock.calls.flat().join(' ');
+    expect(printed).toContain('parent-flow');
+    expect(printed).not.toContain('/workflow ');
+  });
+
   it('should print message when no active runs', async () => {
     mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
 

@@ -1769,9 +1769,17 @@ nodes:
       .join('\n');
     expect(sent).toContain(`Approve it by run id: \`/archon-workflow approve ${child!.id}\``);
     expect(sent.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
-    // The persisted gate message is read on every surface, so it keeps the chat grammar.
-    expect((parentRun?.metadata.approval as { message: string }).message).toContain(
-      `\`/workflow approve ${child!.id}\``
+    expect(parentRun?.metadata.approval).toMatchObject({
+      type: 'child_workflow',
+      nodeId: 'sub',
+      childRunId: child!.id,
+      pauseId: expect.any(String),
+    });
+    expect((parentRun?.metadata.approval as { message: string }).message).not.toContain(
+      '/workflow '
+    );
+    expect((parentRun?.metadata.approval as { message: string }).message).not.toContain(
+      '/archon-workflow '
     );
   });
 

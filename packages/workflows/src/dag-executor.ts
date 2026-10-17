@@ -8078,8 +8078,6 @@ async function executeWorkflowNode(
   // child completion.
   const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
     const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
-    // The persisted gate message is read on every surface (web, CLI status, chat), so it
-    // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
@@ -8090,7 +8088,7 @@ async function executeWorkflowNode(
     const paused = await pauseGateRespectingExternalTransition(
       deps,
       parentRun.id,
-      { message: approveChild({}), nodeId: executionNodeId, type: 'child_workflow', childRunId },
+      { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
       { event: serializeNodeStateRecord(suspended) }
     );
     if (!paused) return serializeNodeOutput(execution);
