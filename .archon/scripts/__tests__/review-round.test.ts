@@ -162,7 +162,7 @@ describe('review-round', () => {
     writeFileSync(join(cwd, 'reviewed-head'), newer);
     const root = join(import.meta.dir, '../../..');
     const parsed = parseWorkflow(readFileSync(join(root,
-      '.archon/workflows/sdlc/review/archon-review.yaml'), 'utf8'), 'archon-review.yaml', providerRegistry);
+      '.archon/workflows/sdlc/review/archon-review-block.yaml'), 'utf8'), 'archon-review-block.yaml', providerRegistry);
     if (!parsed.workflow) throw new Error(parsed.error.error);
     qualifyWorkflowResources(parsed.workflow, { source: 'project', pack: 'sdlc', workflow: 'review' });
     const { stubs } = parseFixtureFile(

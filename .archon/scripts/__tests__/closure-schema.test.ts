@@ -54,7 +54,7 @@ const closureSchema = {
 
 test('triage decision and verdict closure schemas conform to the closure reader type', () => {
   expectTypeOf<SchemaValue<typeof closureSchema>>().toEqualTypeOf<Closure>();
-  const workflow = Bun.YAML.parse(readFileSync(join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml'), 'utf8')) as {
+  const workflow = Bun.YAML.parse(readFileSync(join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage-block.yaml'), 'utf8')) as {
     nodes: { id: string; output_format: { properties: Record<string, { anyOf: unknown[] }> } }[];
   };
   const triage = workflow.nodes.find(node => node.id === 'triage')!;

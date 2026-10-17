@@ -1,6 +1,8 @@
 # Dry-run fixture, the stop-answer decision: a round ends on a question the
 # contract does not answer, so the answer agent asks. The run pauses as one
 # attention item whose answer is a declared choice, and the ruling node records it.
+# The round includes archon-ship-block, which never pauses, so the triage question
+# raises no item of its own: the queue's is the only one.
 # The queue's own scripts reach the state store and the forge, so they are stubbed
 # here and proved by .archon/scripts/__tests__/build-queue.test.ts.
 facts:

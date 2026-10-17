@@ -23,7 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parsePrRecord, record, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
-import { ghGraphql, markPrDraft } from '../../.shared/pr.ts';
+import { ghGraphql, setPrDraft } from '../../.shared/pr.ts';
 
 interface ThreadComment {
   readonly author: string | null;
@@ -169,7 +169,7 @@ function threadsReport(url: string, threads: readonly Thread[]): string {
 /** Puts the pull request back to draft after a failure, naming why when that fails too. */
 function draftAfterFailure(pr: QualifiedPr): string {
   try {
-    markPrDraft(pr, 'gh');
+    setPrDraft(pr, true, 'gh');
     return '';
   } catch (error) {
     return `; it may still be ready: ${error instanceof Error ? error.message : String(error)}`;
@@ -191,7 +191,7 @@ try {
   }
   const open = read.threads.filter(thread => !thread.resolved);
   writeFileSync(join(artifactsDir(), 'threads.md'), threadsReport(pr.url, open));
-  if (open.length > 0 && read.open && !read.draft) markPrDraft(pr, 'gh');
+  if (open.length > 0 && read.open && !read.draft) setPrDraft(pr, true, 'gh');
   emit({
     open: open.length,
     summary:

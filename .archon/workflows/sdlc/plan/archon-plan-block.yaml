@@ -1,4 +1,4 @@
-name: archon-plan
+name: archon-plan-block
 description: |
   Turn decided intent — a feature request, an investigation report, an idea —
   into an implementable plan: the approach chosen with alternatives rejected for
@@ -6,9 +6,9 @@ description: |
   proves it. Advisory: it reads and reports — the repository is left exactly as
   it was found.
 
-  Use when: what to build is known but how is not yet decided — "plan this
-  feature", "turn this investigation into a plan", "how should we build this".
-  NOT for: root-causing a bug (investigate), or building the plan (implement).
+  The graph of archon-plan, as a building block for a workflow that composes the
+  stage and owns what follows its ending. It never pauses for a person: run
+  archon-plan, which adds that pause, by hand.
 
 model: large
 

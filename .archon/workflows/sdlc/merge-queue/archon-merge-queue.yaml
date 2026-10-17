@@ -175,7 +175,7 @@ nodes:
   # The sweep left the checkout at the head of the pull request it names, so the
   # review's own head check holds.
   - id: review
-    include: archon-review
+    include: archon-review-block
     depends_on: [sweep]
     when: "$sweep.output.review_url != '' && $INPUTS.mode == 'live'"
     with:
