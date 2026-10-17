@@ -48,7 +48,7 @@
     "@earendil-works/pi-ai": "^1.0.4",
     "@earendil-works/pi-coding-agent": "^1.0.4",
     "@github/copilot-sdk": "~1.0.16",
-    "@openai/codex": "0.160.0",
+    "@openai/codex": "0.163.0",
     "@opencode-ai/sdk": "^1.18.34",
     "@sinclair/typebox": "^0.34.41",
     "jsonrepair": "^3.14.0",
