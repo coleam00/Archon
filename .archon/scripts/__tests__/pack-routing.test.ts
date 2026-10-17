@@ -263,11 +263,11 @@ describe("deliver's reasons", () => {
 
   // A dry run ends after one round, so any round's reason can reach both reports.
   it('reach the deliver and ship reports from every round ending', () => {
-    const round = reasons('deliver/archon-deliver.yaml', ['rounds', 'round']);
-    const report = reasons('deliver/archon-deliver.yaml', ['report']);
+    const round = reasons('deliver/archon-deliver-block.yaml', ['rounds', 'round']);
+    const report = reasons('deliver/archon-deliver-block.yaml', ['report']);
     expect(round).toContain('threads_open');
     expect(report).toEqual([...round, 'failed']);
-    expect(reasons('ship/archon-ship.yaml', ['report'])).toEqual(expect.arrayContaining(report));
+    expect(reasons('ship/archon-ship-block.yaml', ['report'])).toEqual(expect.arrayContaining(report));
   });
 });
 
@@ -417,7 +417,7 @@ describe('review lens gating', () => {
   // name the same lenses; this holds the three in step.
   it('gates every lens node on the route or recorded boolean of the same name', async () => {
     const source = await Bun.file(
-      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
+      join(import.meta.dir, '../../workflows/sdlc/review/archon-review-block.yaml')
     ).text();
     const workflow = Bun.YAML.parse(source) as {
       nodes: {

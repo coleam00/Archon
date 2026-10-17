@@ -1,0 +1,38 @@
+# Dry-run fixture: triage finds the item blocked on another, a question for a person,
+# so the run pauses as one attention item carrying it. The real verdict and settle
+# scripts run; the item's choices are the ones the decide agent declared.
+stage__triage:
+  decision: { contract: BLOCKED, blocked_reason: "stub: waits on the forge contract's merge operation", blocked_by: ["https://github.com/example/repo/issues/1"] }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: l, reason: "stub: size" }
+  complexity: { value: high, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: blocked on an owned prerequisite; see triage.md"
+attend__decide:
+  decision: ask
+  reason: "stub: the item waits on another"
+  pull_request: null
+  attention:
+    what: "stub: the item is blocked on issue 1"
+    why: "stub: building it first would duplicate the merge operation"
+    recommendation:
+      choice: finish
+      why: "stub: the blocker is real"
+      evidence: "stub: triage.md"
+      confidence: high
+      would_change: "stub: issue 1 merging"
+    choices:
+      - { id: rerun, label: "stub: triage again", does: "stub: triages again with the note" }
+      - { id: finish, label: "stub: leave it blocked", does: "stub: ends the run with the verdict BLOCKED" }
+    if_unanswered: "stub: the run stays paused and spends nothing"
+    links: ["https://github.com/example/repo/issues/1"]
+fixture:
+  expect: paused
+  reached: [stage__verdict, attend__settle]
+  resolved-text-contains:
+    attend__ask: "**Choices.**\n- `rerun` (stub: triage again): stub: triages again with the note\n- `finish` (stub: leave it blocked): stub: ends the run with the verdict BLOCKED"
+exec-code: true

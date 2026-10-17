@@ -548,7 +548,7 @@ Workflow names are resolved using a 4-tier fallback hierarchy. This applies cons
 1. **Exact match** - `archon-investigate` matches `archon-investigate`
 2. **Case-insensitive** - `Archon-Investigate` matches `archon-investigate`
 3. **Suffix match** - `investigate` matches `archon-investigate` (looks for `-investigate` suffix)
-4. **Substring match** - `deliv` matches `archon-deliver`
+4. **Substring match** - `vestig` matches `archon-investigate`
 
 If multiple workflows match at the same tier, an error lists the candidates:
 ```
