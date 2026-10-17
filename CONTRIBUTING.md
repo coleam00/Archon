@@ -30,7 +30,7 @@ or `bun run test <path>` for root scripts. Keep package tests isolated through t
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `format`, `installer` (POSIX only),
 `package-tests`, and `script-tests`.
-The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
+The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
 drift, the workflow persistence boundary, and SDK type restatements. Install the Biome
