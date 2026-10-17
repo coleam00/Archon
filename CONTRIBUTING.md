@@ -62,8 +62,11 @@ bun run validate --only workflow-fixtures   # when changing pack or fixture exec
 
 `scripts/validate.ts` owns the check commands and CI selects them by ID.
 CI runs formatting and every default check on ready pull requests, except that a change
-touching only prose (Markdown outside pack `commands/` and `.shared/`, and the docs site)
-skips the test, service and binary jobs. A push to `dev` or `main` skips those jobs only when
+touching only prose or files no check reads skips the test, service and binary jobs.
+`scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
+count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
+`.shared/`, `.claude/skills/`, the generated provider-capability page, the docs manifest), and `INERT_PATHS`
+lists the non-prose files no check reads. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`. Workflow fixtures run
 when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or
