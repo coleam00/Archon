@@ -434,6 +434,16 @@ The GitHub Release is distinct from the git tag — without it, the release won'
 
 If the user merges the PR themselves and comes back, still offer to tag, release, and sync.
 
+### Step 9.5: Add the new tag's SQLite vintage fixture
+
+A release tag is a released schema shape. Once `vx.y.z` exists, `check:sqlite-vintages` (the `schema-upgrade` CI job) fails on every PR until the fixture for it is committed. Generate it on a branch off dev and open a PR:
+
+```bash
+git fetch --tags origin
+bun run generate:sqlite-vintages   # writes packages/core/src/db/fixtures/sqlite-vintages/vx.y.z.sql
+bun run check:sqlite-vintages
+```
+
 ### Step 10: Wait for Release Workflow and Update Homebrew Formula
 
 > **Note**: The `update-homebrew` CI job in `.github/workflows/release.yml` runs automatically
@@ -522,7 +532,7 @@ rm -rf "$TMP_DIR"
 
 **Update `homebrew/archon.rb` in the main repo atomically with version AND SHAs:**
 
-Rewrite the formula file using the exact template below. Do NOT edit in place with sed — the whole file should be regenerated from this template so there is zero risk of partial updates.
+Rewrite the formula file using the exact template below. Before using it, diff it against the current `homebrew/archon.rb`: if the current formula has a block the template lacks, update the template first (v0.12.0's first regeneration dropped `caveats` this way). Do NOT edit in place with sed — the whole file should be regenerated from this template so there is zero risk of partial updates.
 
 ```bash
 cat > homebrew/archon.rb << EOF
@@ -573,6 +583,20 @@ class Archon < Formula
     end
 
     bin.install binary_name => "archon"
+  end
+
+  def caveats
+    <<~EOS
+      Archon ships without AI providers. Add the ones you use:
+        archon setup
+      or directly:
+        archon provider add <claude|codex|pi>
+
+      Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
+
+      After `brew upgrade archon`, run `archon provider add` again for each
+      provider you use; installed providers must match the CLI version.
+    EOS
   end
 
   test do
