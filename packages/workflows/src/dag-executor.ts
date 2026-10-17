@@ -1025,6 +1025,58 @@ async function waitForNodeRetry(
   }
 }
 
+// A subprocess has no message stream to piggyback a check on, so it polls on its own timer,
+// short enough that a cancel stops its tree within about a second.
+const SUBPROCESS_STOP_CHECK_INTERVAL_MS = 1_000;
+
+/**
+ * `runSubprocess` for a node of `runId`, ending its tree when that run stops; the
+ * rejection is then marked `cancelled`. Only this run's status aborts it, so another
+ * run's subprocess is never signalled.
+ */
+async function runSubprocessUntilRunStops(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  nodeId: string,
+  ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
+): ReturnType<typeof runSubprocess> {
+  const controller = new AbortController();
+  let reading = false;
+  const poll = setInterval(() => {
+    if (reading) return;
+    reading = true;
+    store
+      .getWorkflowRunStatus(runId)
+      .then(status => {
+        if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
+        clearInterval(poll);
+        getLog().info(
+          { workflowRunId: runId, nodeId, status },
+          'dag.stop_detected_during_subprocess'
+        );
+        controller.abort();
+      })
+      // A failed status read is not a stop signal: keep polling, as the streaming check does.
+      .catch((statusErr: unknown) => {
+        getLog().warn(
+          { err: statusErr as Error, workflowRunId: runId, nodeId },
+          'dag.status_check_failed'
+        );
+      })
+      .finally(() => {
+        reading = false;
+      });
+  }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
+  try {
+    return await runSubprocess(execContext, cmd, args, {
+      ...options,
+      abortSignal: controller.signal,
+    });
+  } finally {
+    clearInterval(poll);
+  }
+}
+
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -3705,7 +3757,10 @@ async function executeBashNode(
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
-    const { stdout, stderr, credentialValues } = await runSubprocess(
+    const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
+      deps.store,
+      workflowRun.id,
+      node.id,
       execContext,
       bashPath,
       ['-c', finalScript],
@@ -3765,6 +3820,8 @@ async function executeBashNode(
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
@@ -3788,7 +3845,13 @@ async function executeBashNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4081,20 +4144,28 @@ async function executeScriptNode(
 
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
-    const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
-      cwd,
-      timeout,
-      endTreeOnTimeout: true,
-      env: subprocessEnv,
-      protectedEnvKeys,
-      protectedCredentialValues,
-      retention: {
-        logDir,
-        workflowRunId: workflowRun.id,
-        nodeId: node.id,
-        label: '<script>',
-      },
-    });
+    const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
+      deps.store,
+      workflowRun.id,
+      node.id,
+      execContext,
+      cmd,
+      args,
+      {
+        cwd,
+        timeout,
+        endTreeOnTimeout: true,
+        env: subprocessEnv,
+        protectedEnvKeys,
+        protectedCredentialValues,
+        retention: {
+          logDir,
+          workflowRunId: workflowRun.id,
+          nodeId: node.id,
+          label: '<script>',
+        },
+      }
+    );
 
     // Trim trailing newline from stdout (common shell behavior)
     const trimmedStdout = stdout.replace(/\n$/, '');
@@ -4134,6 +4205,8 @@ async function executeScriptNode(
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
+    } else if (err.cancelled) {
+      errorMsg = `${label} cancelled`;
     } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (execContext.kind === 'host' && err.code === 'EACCES') {
@@ -4154,7 +4227,13 @@ async function executeScriptNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure ? 'output_contract' : isTimeout ? 'timeout' : 'exec_failed',
+          failureKind: contractFailure
+            ? 'output_contract'
+            : err.cancelled
+              ? 'cancelled'
+              : isTimeout
+                ? 'timeout'
+                : 'exec_failed',
           ...(contractFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
@@ -4838,36 +4917,53 @@ async function executeLoopGroupBody(
         );
         const resumedBashPath = resolveBashPath();
         try {
-          await runSubprocess(execContext, resumedBashPath, ['-c', resumedSubstitutedBash], {
-            cwd,
-            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
-            protectedEnvKeys: config.protectedEnvKeys,
-            protectedCredentialValues: config.protectedCredentialValues,
-            retention: {
-              logDir,
-              workflowRunId: workflowRun.id,
-              nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
-              label: '<until_bash>',
-            },
-            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: '',
-              loopPrevOutput: '',
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: ctx.currentExecution ?? null,
-            }),
-          });
+          await runSubprocessUntilRunStops(
+            deps.store,
+            workflowRun.id,
+            node.id,
+            execContext,
+            resumedBashPath,
+            ['-c', resumedSubstitutedBash],
+            {
+              cwd,
+              timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+              protectedEnvKeys: config.protectedEnvKeys,
+              protectedCredentialValues: config.protectedCredentialValues,
+              retention: {
+                logDir,
+                workflowRunId: workflowRun.id,
+                nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
+                label: '<until_bash>',
+              },
+              env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+                artifactsDir,
+                stateDir,
+                logDir,
+                workflowId: workflowRun.id,
+                baseBranch,
+                userMessage: workflowRun.user_message,
+                loopUserInput: '',
+                loopPrevOutput: '',
+                rejectionReason: '',
+                issueContext,
+                adoptedRunDir: currentAdoptedRunDir(),
+                typedArtifactsFile,
+                nodeExecution: ctx.currentExecution ?? null,
+              }),
+            }
+          );
           resumedBashComplete = true;
         } catch (e) {
-          const bashErr = e as NodeJS.ErrnoException;
+          const bashErr = e as RawSubprocessRejection;
+          if (bashErr.cancelled) {
+            return {
+              state: 'failed',
+              output: '',
+              error: bashErr.message,
+              failureKind: 'cancelled',
+              ...usage,
+            };
+          }
           if (
             bashErr.code === 'ENOENT' ||
             bashErr.code === 'EACCES' ||
@@ -5304,36 +5400,53 @@ async function executeLoopGroupBody(
             ),
           }
         );
-        await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
-          cwd,
-          timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
-          protectedEnvKeys: config.protectedEnvKeys,
-          protectedCredentialValues: config.protectedCredentialValues,
-          retention: {
-            logDir,
-            workflowRunId: workflowRun.id,
-            nodeId: `${node.id}-iteration-${String(i)}`,
-            label: '<until_bash>',
-          },
-          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-            artifactsDir,
-            stateDir,
-            logDir,
-            workflowId: workflowRun.id,
-            baseBranch,
-            userMessage: workflowRun.user_message,
-            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-            loopPrevOutput: prevIterationOutput,
-            rejectionReason: '',
-            issueContext,
-            adoptedRunDir: currentAdoptedRunDir(),
-            typedArtifactsFile,
-            nodeExecution: ctx.currentExecution ?? null,
-          }),
-        });
+        await runSubprocessUntilRunStops(
+          deps.store,
+          workflowRun.id,
+          node.id,
+          execContext,
+          groupBashPath,
+          ['-c', substitutedBash],
+          {
+            cwd,
+            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+            protectedEnvKeys: config.protectedEnvKeys,
+            protectedCredentialValues: config.protectedCredentialValues,
+            retention: {
+              logDir,
+              workflowRunId: workflowRun.id,
+              nodeId: `${node.id}-iteration-${String(i)}`,
+              label: '<until_bash>',
+            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+              loopPrevOutput: prevIterationOutput,
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: ctx.currentExecution ?? null,
+            }),
+          }
+        );
         bashComplete = true;
       } catch (e) {
-        const bashErr = e as NodeJS.ErrnoException;
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
+          return {
+            state: 'failed',
+            output: '',
+            error: bashErr.message,
+            failureKind: 'cancelled',
+            ...usage,
+          };
+        }
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
@@ -6820,36 +6933,54 @@ async function executeLoopNode(
             }),
           }
         );
-        await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
-          cwd,
-          timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
-          protectedEnvKeys: config.protectedEnvKeys,
-          protectedCredentialValues: config.protectedCredentialValues,
-          retention: {
-            logDir,
-            workflowRunId: workflowRun.id,
-            nodeId: `${node.id}-iteration-${String(i)}`,
-            label: '<until_bash>',
-          },
-          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
-            artifactsDir,
-            stateDir,
-            logDir,
-            workflowId: workflowRun.id,
-            baseBranch,
-            userMessage: workflowRun.user_message,
-            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-            loopPrevOutput: prevIterationOutput,
-            rejectionReason: '',
-            issueContext,
-            adoptedRunDir: currentAdoptedRunDir(),
-            typedArtifactsFile,
-            nodeExecution: execution,
-          }),
-        });
+        await runSubprocessUntilRunStops(
+          deps.store,
+          workflowRun.id,
+          node.id,
+          execContext,
+          loopBashPath,
+          ['-c', substitutedBash],
+          {
+            cwd,
+            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+            protectedEnvKeys: config.protectedEnvKeys,
+            protectedCredentialValues: config.protectedCredentialValues,
+            retention: {
+              logDir,
+              workflowRunId: workflowRun.id,
+              nodeId: `${node.id}-iteration-${String(i)}`,
+              label: '<until_bash>',
+            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+              loopPrevOutput: prevIterationOutput,
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: execution,
+            }),
+          }
+        );
         bashComplete = true; // exit 0 = complete
       } catch (e) {
-        const bashErr = e as NodeJS.ErrnoException;
+        const bashErr = e as RawSubprocessRejection;
+        if (bashErr.cancelled) {
+          return failLoopNode(bashErr.message, {
+            failureKind: 'cancelled',
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...(loopTokensUnknown ? { tokensUnknown: true } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          });
+        }
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the loop with a clear actionable error instead.

@@ -22789,6 +22789,83 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
   });
 });
 
+describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-exec-stop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  // The subprocess writes `started`, then waits on a grandchild that would write `leaked`.
+  // The store reports the run cancelled once `started` exists.
+  async function runUntilCancelled(
+    name: string,
+    nodeInput: unknown
+  ): Promise<{ store: MockWorkflowStore; leaked: boolean }> {
+    const store = createMockStore();
+    store.getWorkflowRunStatus.mockImplementation(async () =>
+      existsSync(join(testDir, 'started')) ? 'cancelled' : 'running'
+    );
+    const trees = recordNodeProcessTrees();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(name),
+          workflow: { name, nodes: [dagNodeSchema.parse(nodeInput)] },
+        })
+      );
+    } finally {
+      trees.release();
+    }
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    return { store, leaked: existsSync(join(testDir, 'leaked')) };
+  }
+
+  // Each case starts a background job that would write `leaked` after the cancel.
+  it.skipIf(process.platform === 'win32').each([
+    [
+      'bash',
+      { id: 'hang', bash: 'touch started; (sleep 2; touch leaked) & wait' },
+      "Bash node 'hang' cancelled",
+    ],
+    [
+      'loop until_bash',
+      {
+        id: 'hang',
+        loop: {
+          prompt: 'work',
+          fresh_context: false,
+          max_iterations: 2,
+          until_bash: 'touch started; (sleep 2; touch leaked) & wait',
+        },
+      },
+      'Command cancelled',
+    ],
+  ] as const)(
+    'ends the %s tree and records the node cancelled',
+    async (kind, nodeInput, error) => {
+      const { store, leaked } = await runUntilCancelled(`stop-${kind}`, nodeInput);
+      const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'hang',
+          data: expect.objectContaining({ error, failure_kind: 'cancelled' }),
+        })
+      );
+      expect(leaked).toBe(false);
+    },
+    testTimeout(15000)
+  );
+});
+
 describe('resolveNodeMcp', () => {
   let testDir: string;
   const claude = getProviderCapabilities('claude');

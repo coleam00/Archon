@@ -237,6 +237,70 @@ test.skipIf(process.platform !== 'win32')(
   15_000
 );
 
+// A stopped run aborts its node: the whole tree ends, whichever process holds the work.
+async function runAbortedWrapper(): Promise<{
+  error: RawSubprocessRejection | undefined;
+  leaked: boolean;
+}> {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
+  const started = join(dir, 'started');
+  const marker = join(dir, 'marker');
+  const grandchild =
+    "require('fs').writeFileSync(process.env.STARTED, ''); " +
+    "setTimeout(() => require('fs').writeFileSync(process.env.MARKER, 'leaked'), 1500);";
+  const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
+  const controller = new AbortController();
+  const node = runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
+    cwd: dir,
+    timeout: 30_000,
+    env: { STARTED: started, MARKER: marker },
+    endTreeOnTimeout: true,
+    abortSignal: controller.signal,
+    retention: { standalone: true },
+  }).then(
+    () => undefined,
+    (e: unknown) => e as RawSubprocessRejection
+  );
+  await waitUntil('the grandchild to start', () => existsSync(started));
+  controller.abort();
+  const error = await node;
+  await new Promise<void>(resolve => setTimeout(resolve, 2000));
+  return { error, leaked: existsSync(marker) };
+}
+
+test('aborting a recorded node ends the wrapper and its grandchild', async () => {
+  const trees = recordNodeProcessTrees();
+  try {
+    const { error, leaked } = await runAbortedWrapper();
+    expect(error?.message).toBe('Command cancelled');
+    expect(error?.cancelled).toBe(true);
+    expect(error && isSubprocessTimeout(error)).toBe(false);
+    expect(leaked).toBe(false);
+  } finally {
+    trees.release();
+  }
+}, 15_000);
+
+test('an unrecorded node ignores the abort, because its owner ends it', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
+  const controller = new AbortController();
+  controller.abort();
+  const { stdout } = await runSubprocess(
+    { kind: 'host' },
+    process.execPath,
+    ['-e', 'await Bun.sleep(200); console.log("finished")'],
+    {
+      cwd: dir,
+      timeout: 5000,
+      env: {},
+      endTreeOnTimeout: true,
+      abortSignal: controller.signal,
+      retention: { standalone: true },
+    }
+  );
+  expect(stdout.trim()).toBe('finished');
+});
+
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {
   const error = Object.assign(new Error('deadline'), { timedOut: true, code: 7 });
   expect(isSubprocessTimeout(error)).toBe(true);
