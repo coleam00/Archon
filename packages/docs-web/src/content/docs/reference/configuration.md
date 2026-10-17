@@ -163,7 +163,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
-The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
+The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
 
 ## Provider concurrency caps
 
@@ -930,11 +930,10 @@ Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
 
 ### Config Parse Errors
 
-If your config file has invalid YAML syntax, you'll see error messages like:
+If your config file has invalid YAML syntax, Archon stops with an error naming the file:
 
 ```
-[Config] Failed to parse global config at ~/.archon/config.yaml: <error details>
-[Config] Using default configuration. Please fix the YAML syntax in your config file.
+'/Users/you/.archon/config.yaml' is not valid YAML (YAML Parse error: Unexpected token).
 ```
 
 Common YAML syntax issues:
@@ -942,4 +941,4 @@ Common YAML syntax issues:
 - Missing colons after keys
 - Unquoted values with special characters
 
-The application will continue running with default settings until the config file is fixed.
+Archon does not fall back to default settings: startup, `archon doctor`, run starts and workflow listings fail with this error until the file is fixed.
