@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
-import { planRequestedRuns } from './repo-tests';
+import { planKind, planRequestedRuns } from './repo-tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const fromRoot = (path: string): string => join(REPO_ROOT, path);
@@ -130,6 +130,23 @@ describe('planRequestedRuns', () => {
   });
 });
 
+describe('planKind', () => {
+  test.each(['workspaces', 'root'] as const)('--plan %s selects that half', kind => {
+    expect(planKind(['--plan', kind])).toBe(kind);
+  });
+
+  test.each([[['--plan', 'nope']], [['--plan']], [['--plan', 'root', 'scripts/']]])(
+    'rejects the malformed request %j',
+    requested => {
+      expect(() => planKind(requested)).toThrow('Usage: bun run test --plan <workspaces|root>');
+    }
+  );
+
+  test.each([[[]], [['scripts/']], [['-t', '--plan']]])('leaves %j to the router', requested => {
+    expect(planKind(requested)).toBeUndefined();
+  });
+});
+
 /**
  * `planRequestedRuns` above decides where a run goes. These cover what the script does with
  * that plan, which is the half that enforces the invariant rather than describing it.
@@ -157,6 +174,13 @@ describe('repo-tests exit codes', () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain('No argument named a test path this runner can place');
+  });
+
+  test('exits non-zero with the usage for an unknown plan half', () => {
+    const { exitCode, stderr } = invoke(['--plan', 'nope']);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Usage: bun run test --plan <workspaces|root>');
   });
 
   test('propagates a failing run instead of reporting success', () => {

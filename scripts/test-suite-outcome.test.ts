@@ -15,9 +15,9 @@ function needs(runTests: string, results: Record<string, string>): Record<string
   };
 }
 
-/** Every gated job skipped, as on a documentation-only change. */
-const docsOnlySkips = Object.fromEntries([...GATED].map(job => [job, 'skipped']));
-const ALWAYS = ['static', 'test', 'workflow-fixtures', 'workflow-fixtures-windows'];
+/** Every gated job skipped, as on a prose-only pull request or a push a pull request run proved. */
+const decisionSkips = Object.fromEntries([...GATED].map(job => [job, 'skipped']));
+const ALWAYS = ['static', 'workflow-fixtures', 'workflow-fixtures-windows'];
 const alwaysSuccess = Object.fromEntries(ALWAYS.map(job => [job, 'success']));
 const allSuccess = {
   ...Object.fromEntries([...GATED].map(job => [job, 'success'])),
@@ -26,7 +26,7 @@ const allSuccess = {
 
 describe('Test Suite aggregate outcome', () => {
   test('reads the gated jobs from test.yml; jobs that run for every event are not gated', () => {
-    expect(GATED.has('test')).toBe(false);
+    expect(GATED.has('test')).toBe(true);
     expect(GATED.has('static')).toBe(false);
     expect(GATED.has('workflow-fixtures-windows')).toBe(false);
     expect(GATED.has('workflow-fixtures')).toBe(false);
@@ -37,17 +37,17 @@ describe('Test Suite aggregate outcome', () => {
     expect(testSuiteFailures(needs('true', allSuccess), GATED)).toEqual([]);
   });
 
-  test('passes a documentation-only change that skips the gated jobs', () => {
-    const results = { ...docsOnlySkips, ...alwaysSuccess };
+  test('passes a decision that skips the gated jobs', () => {
+    const results = { ...decisionSkips, ...alwaysSuccess };
     expect(testSuiteFailures(needs('false', results), GATED)).toEqual([]);
   });
 
   test.each(
     ALWAYS.flatMap(job => ['failure', 'cancelled', 'skipped'].map(result => [job, result]))
-  )('fails always-run %s with %s even on docs-only changes', (job, result) => {
+  )('fails always-run %s with %s even when the gated jobs skip', (job, result) => {
     expect(
       testSuiteFailures(
-        needs('false', { ...docsOnlySkips, ...alwaysSuccess, [job]: result }),
+        needs('false', { ...decisionSkips, ...alwaysSuccess, [job]: result }),
         GATED
       )
     ).toEqual([`${job} finished with ${result}`]);
@@ -68,11 +68,11 @@ describe('Test Suite aggregate outcome', () => {
   });
 
   test('fails when the decision itself did not succeed or wrote no decision', () => {
-    const failed = { ...needs('false', docsOnlySkips), changes: { result: 'failure' } };
+    const failed = { ...needs('false', decisionSkips), changes: { result: 'failure' } };
     expect(testSuiteFailures(failed, GATED)).toEqual([
       'changes finished with failure and run-tests=undefined',
     ]);
-    expect(testSuiteFailures(needs('', docsOnlySkips), GATED)).toEqual([
+    expect(testSuiteFailures(needs('', decisionSkips), GATED)).toEqual([
       'changes finished with success and run-tests=',
     ]);
   });
@@ -81,7 +81,7 @@ describe('Test Suite aggregate outcome', () => {
     const result = Bun.spawnSync(['bun', SCRIPT], {
       env: {
         ...process.env,
-        NEEDS: JSON.stringify(needs('false', { ...docsOnlySkips, 'workflow-fixtures': 'failure' })),
+        NEEDS: JSON.stringify(needs('false', { ...decisionSkips, 'workflow-fixtures': 'failure' })),
       },
       stdout: 'pipe',
       stderr: 'pipe',
@@ -143,14 +143,19 @@ describe('fixture CI wiring', () => {
       expect(record(report?.env).RUN_FIXTURES).toBe('${{ needs.changes.outputs.run-fixtures }}');
       expect(report?.run).toContain('case "$RUN_FIXTURES" in');
       expect(report?.run).toContain(
-        'false) echo "Workflow fixtures skipped: no fixture inputs changed."'
+        'false) echo "Workflow fixtures skipped: the changes job decided they are not needed."'
       );
       expect(report?.run).toContain('exit 1');
     }
   );
 
-  test.each(['test', 'static'])('%s runs independently of the selector', id => {
-    expect(record(jobs[id]).needs).toBeUndefined();
-    expect(record(jobs[id]).if).toBe('${{ !github.event.pull_request.draft }}');
+  test('static runs independently of the selector', () => {
+    expect(record(jobs.static).needs).toBeUndefined();
+    expect(record(jobs.static).if).toBe('${{ !github.event.pull_request.draft }}');
+  });
+
+  test('test runs only when the change decision selects it', () => {
+    expect(record(jobs.test).needs).toBe('changes');
+    expect(record(jobs.test).if).toBe("needs.changes.outputs.run-tests == 'true'");
   });
 });

@@ -1,14 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import {
+  collectBundleSources,
+  readBundleIndex,
+} from '../packages/workflows/src/defaults/bundle-inventory';
 import {
   changedFilesBetween,
   diffRange,
+  proofFromPullRequestRun,
   shouldRunTestSuite,
   shouldRunWorkflowFixtures,
   type EventPayload,
+  type GitHubGet,
 } from './should-run-test-suite';
 
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
@@ -27,7 +33,13 @@ function runDecision(
   writeFileSync(eventPath, JSON.stringify(payload));
   const result = Bun.spawnSync(['bun', SCRIPT, ...args], {
     cwd,
-    env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath },
+    // An empty token keeps every push decision here away from the GitHub API.
+    env: {
+      ...process.env,
+      GITHUB_EVENT_NAME: eventName,
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: '',
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -69,6 +81,7 @@ describe('test-suite change decision', () => {
 
   test.each([
     ['.archon/workflows/sdlc/implement/commands/implement.md', 'a packaged command prompt'],
+    ['.archon/workflows/sdlc/.shared/policy/triage.md', 'a pack .shared/ document'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],
   ])('runs for %s, which is %s rather than prose', file => {
@@ -83,6 +96,29 @@ describe('test-suite change decision', () => {
         'packages/docs-web/src/content/docs/guides/authoring-workflows.md',
       ])
     ).toBe(false);
+  });
+
+  test.each([
+    '.archon/workflows/sdlc/README.md',
+    '.archon/workflows/sdlc/CONSTITUTION.md',
+    '.archon/workflows/sdlc/validate/README.md',
+  ])('skips pack prose %s, which the bundle does not embed', file => {
+    expect(shouldRunTestSuite([file])).toBe(false);
+  });
+
+  /** `bundle-inventory.ts` selects what the binary embeds, so it owns this family. */
+  test('every Markdown file the bundle embeds runs the suite', async () => {
+    const repoRoot = resolve(import.meta.dir, '..');
+    const sources = await collectBundleSources(
+      join(repoRoot, '.archon/workflows'),
+      await readBundleIndex()
+    );
+    const markdown = sources
+      .map(source => relative(repoRoot, source.sourcePath).replaceAll('\\', '/'))
+      .filter(path => path.endsWith('.md'));
+
+    expect(markdown.length).toBeGreaterThan(0);
+    for (const file of markdown) expect([file, shouldRunTestSuite([file])]).toEqual([file, true]);
   });
 
   /**
@@ -108,7 +144,7 @@ describe('test-suite change decision', () => {
     expect(diffRange('workflow_dispatch', {})).toBeNull();
   });
 
-  test('a push is judged on what it added', () => {
+  test('a push spans what it added', () => {
     expect(diffRange('push', { before: 'previous-tip', after: 'new-tip' })).toEqual({
       base: 'previous-tip',
       head: 'new-tip',
@@ -136,13 +172,28 @@ describe('test-suite change decision', () => {
    * A force-push leaves `github.event.before` unreachable. The decision must still be a decision:
    * an empty stdout here is read as "skip" by every downstream gate.
    */
-  test('an unreadable diff resolves to running the suite, with the cause on stderr', () => {
+  test('an unreadable diff resolves to running the fixtures, with the cause on stderr', () => {
     const unreachable = '1'.repeat(40);
-    const result = runDecision(trackTempRoot, 'push', { before: unreachable, after: 'HEAD' });
+    const result = runDecision(
+      trackTempRoot,
+      'push',
+      { before: unreachable, after: 'HEAD' },
+      process.cwd(),
+      ['--workflow-fixtures']
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('true');
     expect(result.stderr).toContain(`Could not compare ${unreachable}..HEAD`);
+  });
+
+  test('a push without API credentials runs the suite and says why', () => {
+    const result = runDecision(trackTempRoot, 'push', { before: 'HEAD~1', after: 'HEAD' });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('true');
+    expect(result.stderr).toContain('No pull request run proves this push');
+    expect(result.stderr).toContain('GITHUB_TOKEN');
   });
 
   test('a bad event stays fatal, so the step cannot publish an empty decision', () => {
@@ -293,10 +344,8 @@ describe('diff mode', () => {
 describe('inert paths', () => {
   test.each([
     '.gitignore',
-    '.gitattributes',
     'LICENSE',
     '.env.example',
-    'Caddyfile.example',
     '.archon/config.example.yaml',
     'assets/logo.png',
   ])('skips %s, which no check reads', file => {
@@ -311,6 +360,8 @@ describe('inert paths', () => {
     ['scripts/install.ps1', 'test:install'],
     ['.github/workflows/test.yml', 'the gate itself'],
     ['packages/web/public/favicon.png', 'the web build'],
+    ['Caddyfile.example', 'reverse-proxy.test.ts and caddy-recipe.test.ts'],
+    ['.gitattributes', 'every checkout'],
   ])('runs for %s, which is read by %s', file => {
     expect(shouldRunTestSuite([file])).toBe(true);
   });
@@ -363,5 +414,274 @@ describe('workflow fixture selection', () => {
     const result = runDecision(track, 'pull_request', {}, process.cwd(), ['--workflow-fixtures']);
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toBe('');
+  });
+});
+
+describe('a push proven by its pull request run', () => {
+  const PUSH = { head: 'squash-commit' };
+  const PR_BASE = 'pr-base';
+  const PR_HEAD = 'pr-head';
+  const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/7';
+  const JOBS = 'actions/runs/7/jobs?filter=latest&per_page=100';
+  const EVENTS = (page: number) => `issues/4/events?per_page=100&page=${page}`;
+
+  /** The API answers for a squash merge of a pull request whose head contained its base. */
+  function provenApi(head = PUSH.head): Record<string, unknown> {
+    return {
+      [`commits/${head}/pulls`]: [
+        { number: 3, merge_commit_sha: 'other', head: { sha: 'other-head' } },
+        { number: 4, merge_commit_sha: head, base: { sha: PR_BASE }, head: { sha: PR_HEAD } },
+      ],
+      [EVENTS(1)]: [{ event: 'labeled' }, { event: 'head_ref_force_pushed' }],
+      [`compare/${PR_BASE}...${PR_HEAD}`]: { status: 'ahead' },
+      [`git/commits/${head}`]: { tree: { sha: 'tree-a' } },
+      [`git/commits/${PR_HEAD}`]: { tree: { sha: 'tree-a' } },
+      [`actions/workflows/test.yml/runs?head_sha=${PR_HEAD}&event=pull_request&status=success`]: {
+        workflow_runs: [{ id: 7, html_url: RUN_URL }],
+      },
+      [JOBS]: {
+        total_count: 2,
+        jobs: [
+          { name: 'changes', conclusion: 'success' },
+          { name: 'test (windows-latest, packages)', conclusion: 'success' },
+        ],
+      },
+    };
+  }
+
+  const getFrom =
+    (answers: Record<string, unknown>): GitHubGet =>
+    async path => {
+      if (!(path in answers)) throw new Error(`unexpected GET ${path}`);
+      return answers[path];
+    };
+
+  const prove = (answers: Record<string, unknown>) =>
+    proofFromPullRequestRun(PUSH, getFrom(answers));
+
+  test('a synced squash merge whose run passed every job skips, naming its evidence', async () => {
+    const proof = await prove(provenApi());
+
+    expect(proof.proven).toBe(true);
+    if (proof.proven) {
+      expect(proof.evidence).toContain('#4');
+      expect(proof.evidence).toContain(RUN_URL);
+    }
+  });
+
+  test('a head identical to its base also proves', async () => {
+    const answers = provenApi();
+    answers[`compare/${PR_BASE}...${PR_HEAD}`] = { status: 'identical' };
+
+    expect((await prove(answers)).proven).toBe(true);
+  });
+
+  test.each([
+    [
+      'a head that diverged from the base its run merged with',
+      (answers: Record<string, unknown>) => {
+        answers[`compare/${PR_BASE}...${PR_HEAD}`] = { status: 'diverged' };
+      },
+      'does not contain its base pr-base (diverged)',
+    ],
+    [
+      'a pull request whose base was retargeted after its run',
+      (answers: Record<string, unknown>) => {
+        answers[EVENTS(1)] = [{ event: 'labeled' }, { event: 'base_ref_changed' }];
+      },
+      "#4's base was changed",
+    ],
+    [
+      'a base change past the first page of events',
+      (answers: Record<string, unknown>) => {
+        answers[EVENTS(1)] = Array.from({ length: 100 }, () => ({ event: 'labeled' }));
+        answers[EVENTS(2)] = [{ event: 'base_ref_changed' }];
+      },
+      "#4's base was changed",
+    ],
+    [
+      'a head whose tree differs from the pushed tree',
+      (answers: Record<string, unknown>) => {
+        answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
+      },
+      'differ',
+    ],
+    [
+      'a run that skipped a gated job (a prose-only pull request)',
+      (answers: Record<string, unknown>) => {
+        answers[JOBS] = {
+          total_count: 2,
+          jobs: [
+            { name: 'changes', conclusion: 'success' },
+            { name: 'test (windows-latest, packages)', conclusion: 'skipped' },
+          ],
+        };
+      },
+      'test (windows-latest, packages)=skipped',
+    ],
+    [
+      'a run whose latest attempt failed a job',
+      (answers: Record<string, unknown>) => {
+        answers[JOBS] = {
+          total_count: 1,
+          jobs: [{ name: 'static', conclusion: 'failure' }],
+        };
+      },
+      'static=failure',
+    ],
+    [
+      'a run with more jobs than were read',
+      (answers: Record<string, unknown>) => {
+        answers[JOBS] = {
+          total_count: 3,
+          jobs: [{ name: 'changes', conclusion: 'success' }],
+        };
+      },
+      '3 jobs, 1 read',
+    ],
+    [
+      'a push no pull request was merged as (a direct push)',
+      (answers: Record<string, unknown>) => {
+        answers[`commits/${PUSH.head}/pulls`] = [
+          { number: 3, merge_commit_sha: 'other', head: { sha: 'other-head' } },
+        ];
+      },
+      'no pull request was merged as squash-commit',
+    ],
+    [
+      'a head with no successful run',
+      (answers: Record<string, unknown>) => {
+        answers[
+          `actions/workflows/test.yml/runs?head_sha=${PR_HEAD}&event=pull_request&status=success`
+        ] = { workflow_runs: [] };
+      },
+      'no successful pull_request run of test.yml at pr-head',
+    ],
+    [
+      'an API answer missing a field',
+      (answers: Record<string, unknown>) => {
+        answers[`git/commits/${PR_HEAD}`] = {};
+      },
+      'could not check pull request runs',
+    ],
+  ])('%s runs the suite', async (_case, change, reason) => {
+    const answers = provenApi();
+    change(answers);
+    const proof = await prove(answers);
+
+    expect(proof.proven).toBe(false);
+    if (!proof.proven) expect(proof.reason).toContain(reason);
+  });
+
+  test('an API failure runs the suite and carries the cause', async () => {
+    const proof = await proofFromPullRequestRun(PUSH, async path => {
+      throw new Error(`GET ${path} answered 502`);
+    });
+
+    expect(proof).toEqual({
+      proven: false,
+      reason: `could not check pull request runs: GET commits/${PUSH.head}/pulls answered 502`,
+    });
+  });
+
+  /**
+   * The workflow's own path: the script reads the push event and asks a stub of the GitHub API.
+   * The pushed commit only changes Markdown, so a decision that ignored the proof and followed
+   * the diff would print `false` for the suite.
+   */
+  describe('the script', () => {
+    const trackTempRoot = trackTempRoots();
+
+    function docsOnlyPush(): { repo: string; before: string; after: string } {
+      const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-push-')));
+      const git = (...args: string[]): string => {
+        const r = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+        if (r.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.toString()}`);
+        return r.stdout.toString().trim();
+      };
+      git('init', '-q', '-b', 'dev');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      const commit = (file: string): string => {
+        writeFileSync(join(repo, file), `${file}\n`);
+        git('add', file);
+        git('commit', '-q', '-m', file);
+        return git('rev-parse', 'HEAD');
+      };
+      const before = commit('seed.ts');
+      return { repo, before, after: commit('GUIDE.md') };
+    }
+
+    async function runPush(
+      answers: Record<string, unknown>,
+      push: { repo: string; before: string; after: string },
+      args: readonly string[] = []
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+      const prefix = '/repos/owner/repo/';
+      using server = Bun.serve({
+        port: 0,
+        fetch(request) {
+          const url = new URL(request.url);
+          const path = url.pathname.slice(prefix.length) + url.search;
+          return path in answers
+            ? Response.json(answers[path])
+            : new Response('not found', { status: 404 });
+        },
+      });
+      const eventDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-event-')));
+      const eventPath = join(eventDir, 'event.json');
+      writeFileSync(eventPath, JSON.stringify({ before: push.before, after: push.after }));
+      // Async spawn: a synchronous one would block the stub server this test runs.
+      const child = Bun.spawn(['bun', SCRIPT, ...args], {
+        cwd: push.repo,
+        env: {
+          ...process.env,
+          GITHUB_EVENT_NAME: 'push',
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_TOKEN: 'test-token',
+          GITHUB_REPOSITORY: 'owner/repo',
+          GITHUB_API_URL: server.url.origin,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout: stdout.trim(), stderr };
+    }
+
+    test('a proven push skips the suite and logs its evidence', async () => {
+      const push = docsOnlyPush();
+      const result = await runPush(provenApi(push.after), push);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('false');
+      expect(result.stderr).toContain(RUN_URL);
+    });
+
+    test('an unproven push runs the suite even when its diff is prose', async () => {
+      const push = docsOnlyPush();
+      const answers = provenApi(push.after);
+      answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
+      const result = await runPush(answers, push);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('true');
+      expect(result.stderr).toContain('No pull request run proves this push');
+    });
+
+    test('an unproven push decides fixtures from its diff', async () => {
+      const push = docsOnlyPush();
+      const answers = provenApi(push.after);
+      answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
+      const result = await runPush(answers, push, ['--workflow-fixtures']);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('false');
+      expect(result.stderr).toContain('No pull request run proves this push');
+    });
   });
 });
