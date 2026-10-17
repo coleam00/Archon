@@ -1,6 +1,6 @@
 // @archon-test-isolated
 // The harness mocks @archon/paths so discovery never reads the real home or bundled workflows.
-import './dag/test-harness';
+import './dag/test-utils';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';

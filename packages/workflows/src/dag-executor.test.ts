@@ -86,7 +86,7 @@ import {
   expectLoopGateEvidence,
   loaderBypassingWorkflow,
   readTranscript,
-} from './dag/test-harness';
+} from './dag/test-utils';
 import {
   checkTriggerRule,
   substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
