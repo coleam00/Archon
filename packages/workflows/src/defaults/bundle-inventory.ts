@@ -33,7 +33,7 @@ export async function bundlesPackagedResources(pack: string): Promise<boolean> {
   return (await readBundleIndex()).includes(pack);
 }
 
-type Owner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
+export type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
 type Script = BundledScriptPack['scripts'][string];
 
 /** Selection is shared by generation and live capture. Reading bytes is a separate step so
@@ -43,7 +43,7 @@ export type BundleSourceFile = {
   /** Path beneath the capture's bundled scope, always using forward slashes. */
   readonly relativePath: string;
 } & (
-  | { readonly kind: 'workflow'; readonly name: string; readonly owner: Owner }
+  | { readonly kind: 'workflow'; readonly name: string; readonly owner: BundledWorkflowOwner }
   | { readonly kind: 'command'; readonly name: string }
   | {
       readonly kind: 'pack-file';
@@ -144,7 +144,7 @@ export async function collectBundleSources(
     }
     files.push(file);
   };
-  const workflowFile = (path: string, owner: Owner): void => {
+  const workflowFile = (path: string, owner: BundledWorkflowOwner): void => {
     const name = basename(path, extname(path));
     validateName(name, path);
     add({
@@ -252,4 +252,51 @@ export async function readBundleContent(file: BundleSourceFile): Promise<string>
     throw new Error(`Bundled default "${file.sourcePath}" is empty.`);
   }
   return content;
+}
+
+export interface BundleRecords {
+  commands: Record<string, string>;
+  workflows: Record<string, string>;
+  workflowPaths: Record<string, string>;
+  workflowOwners: Readonly<Partial<Record<string, BundledWorkflowOwner>>>;
+  scriptPacks: Record<string, BundledScriptPack>;
+}
+
+/** The records source builds read and the binary embeds. Key order is part of the
+ * contract: name resolution and telemetry signature matching iterate these records. */
+export async function readBundleRecords(
+  files: readonly BundleSourceFile[]
+): Promise<BundleRecords> {
+  const commands = new Map<string, string>();
+  const workflows = new Map<string, string>();
+  const workflowPaths = new Map<string, string>();
+  const workflowOwners = new Map<string, BundledWorkflowOwner>();
+  const scriptPacks = new Map<
+    string,
+    { files: Record<string, string>; scripts: Record<string, Script> }
+  >();
+  for (const file of files) {
+    const content = await readBundleContent(file);
+    if (file.kind === 'command') commands.set(file.name, content);
+    else if (file.kind === 'workflow') {
+      workflows.set(file.name, content);
+      workflowPaths.set(file.name, file.relativePath);
+      workflowOwners.set(file.name, file.owner);
+    } else {
+      let pack = scriptPacks.get(file.pack);
+      if (pack === undefined) scriptPacks.set(file.pack, (pack = { files: {}, scripts: {} }));
+      pack.files[file.packPath] = content;
+      if (file.entry)
+        pack.scripts[file.entry.name] = { path: file.packPath, runtime: file.entry.runtime };
+    }
+  }
+  const sorted = <T>(entries: ReadonlyMap<string, T>): Record<string, T> =>
+    Object.fromEntries([...entries].sort(([a], [b]) => a.localeCompare(b)));
+  return {
+    commands: sorted(commands),
+    workflows: sorted(workflows),
+    workflowPaths: sorted(workflowPaths),
+    workflowOwners: sorted(workflowOwners),
+    scriptPacks: sorted(scriptPacks),
+  };
 }
