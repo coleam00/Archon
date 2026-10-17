@@ -3988,6 +3988,27 @@ branch refs/heads/feature/auth
       }
     );
 
+    test('fails with the lock error when the config lock is held past the wait', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-held-')));
+      const configPath = join(root, 'gitconfig');
+      await writeFile(configPath, '');
+      const lockPath = `${await realpath(configPath)}.lock`;
+      await writeFile(lockPath, '');
+      // Every clock read jumps 6 s, so the 10 s wait expires within a few retries.
+      let now = Date.now();
+      const clock = spyOn(Date, 'now').mockImplementation(() => (now += 6000));
+      try {
+        await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
+          await expect(git.addSafeDirectory(repo('/workspace/held'))).rejects.toThrow('EEXIST');
+        });
+      } finally {
+        clock.mockRestore();
+      }
+      expect(await readFile(configPath, 'utf8')).toBe('');
+      expect(await Bun.file(lockPath).exists()).toBe(true);
+    });
+
     test.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([
       ['new grant', ''],
       ['duplicate repair', '[safe]\n\tdirectory = /workspace/read-only\n'.repeat(2)],

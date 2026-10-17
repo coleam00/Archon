@@ -127,17 +127,28 @@ fi
     expect(scan.exitCode).toBe(7);
     expect(scan.stderr.toString()).toContain('scan-failed');
     await writeFile(join(bin, 'find'), `#!/bin/sh\n${scripts.find}\n`, { mode: 0o755 });
+    // A held config lock is waited for: nothing is written until its holder releases it.
+    const startWhileLocked = async (): Promise<void> => {
+      const before = await Bun.file(config).text();
+      await writeFile(`${config}.lock`, '');
+      const startup = Bun.spawn(['bash', resolve(import.meta.dir, '../docker-entrypoint.sh')], {
+        env,
+      });
+      await Bun.sleep(1000);
+      expect(startup.exitCode).toBeNull();
+      expect(await Bun.file(config).text()).toBe(before);
+      await unlink(`${config}.lock`);
+      expect(await startup.exited).toBe(0);
+      expect(
+        git('config', '--global', '--null', '--get-all', 'safe.directory')
+          .split('\0')
+          .filter(value => value === repo)
+      ).toHaveLength(1);
+    };
     git('config', '--global', '--add', 'safe.directory', repo);
-    await writeFile(`${config}.lock`, '');
-    expect(() =>
-      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
-    ).toThrow();
-    await unlink(`${config}.lock`);
+    await startWhileLocked();
     git('config', '--global', '--fixed-value', '--unset-all', 'safe.directory', repo);
-    await writeFile(`${config}.lock`, '');
-    expect(() =>
-      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
-    ).toThrow();
+    await startWhileLocked();
   }
 );
 
