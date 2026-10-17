@@ -31,7 +31,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { defaultBaselines, SCHEMA_REPO_PATH } from './schema-upgrade-baselines';
 
-const SCHEMA_PATH = resolve(import.meta.dir, '..', 'migrations', '000_combined.sql');
+const SCHEMA_PATH = resolve(import.meta.dir, '..', SCHEMA_REPO_PATH);
 
 interface Baseline {
   ref: string;
