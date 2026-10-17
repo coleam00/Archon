@@ -194,7 +194,7 @@ Nodes are sorted topologically (Kahn's algorithm). Nodes in the same layer run c
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `timeout` | number (ms) | 120000 (2 min) | Total execution timeout for the subprocess |
+| `timeout` | number (ms) | none | Total execution timeout for the subprocess. Omitted: the node runs until it exits |
 
 ---
 

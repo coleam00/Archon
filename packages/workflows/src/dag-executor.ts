@@ -3283,9 +3283,6 @@ async function executeNodeInternal(
   return completed;
 }
 
-/** Default timeout for subprocess nodes (bash, script): 2 minutes */
-const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
-
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
 const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
@@ -3735,7 +3732,6 @@ async function executeBashNode(
     }
   );
 
-  const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   const subprocessEnv: NodeJS.ProcessEnv = buildNodeShellEnvironment(node, ctx, envVars, {
@@ -3766,7 +3762,7 @@ async function executeBashNode(
       ['-c', finalScript],
       {
         cwd,
-        timeout,
+        timeout: node.timeout,
         endTreeOnTimeout: true,
         env: subprocessEnv,
         protectedEnvKeys,
@@ -3817,7 +3813,7 @@ async function executeBashNode(
     if (contractFailure) {
       errorMsg = err.message;
     } else if (isTimeout) {
-      errorMsg = `${label} timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
@@ -4035,7 +4031,6 @@ async function executeScriptNode(
   // longer substitutes now that delivery moved to env vars (#2115).
   await warnOnLiteralUserVars(node, node.script, platform, conversationId, nodeContext);
 
-  const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
@@ -4153,7 +4148,7 @@ async function executeScriptNode(
       args,
       {
         cwd,
-        timeout,
+        timeout: node.timeout,
         endTreeOnTimeout: true,
         env: subprocessEnv,
         protectedEnvKeys,
@@ -4202,7 +4197,7 @@ async function executeScriptNode(
     if (contractFailure) {
       errorMsg = err.message;
     } else if (isTimeout) {
-      errorMsg = `${label} timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
     } else if (err.treeSurvived) {
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
@@ -4926,7 +4921,7 @@ async function executeLoopGroupBody(
             ['-c', resumedSubstitutedBash],
             {
               cwd,
-              timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+              timeout: node.timeout,
               protectedEnvKeys: config.protectedEnvKeys,
               protectedCredentialValues: config.protectedCredentialValues,
               retention: {
@@ -5409,7 +5404,7 @@ async function executeLoopGroupBody(
           ['-c', substitutedBash],
           {
             cwd,
-            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+            timeout: node.timeout,
             protectedEnvKeys: config.protectedEnvKeys,
             protectedCredentialValues: config.protectedCredentialValues,
             retention: {
@@ -6942,7 +6937,7 @@ async function executeLoopNode(
           ['-c', substitutedBash],
           {
             cwd,
-            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
+            timeout: node.timeout,
             protectedEnvKeys: config.protectedEnvKeys,
             protectedCredentialValues: config.protectedCredentialValues,
             retention: {

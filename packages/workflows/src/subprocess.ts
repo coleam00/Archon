@@ -223,7 +223,8 @@ export async function runSubprocess(
   args: string[],
   options: {
     cwd: string;
-    timeout: number;
+    /** Absent means no deadline: the subprocess runs until it exits. */
+    timeout?: number;
     /** Host setup only: end the group on deadline, command exit, or owner death. */
     ownProcessGroup?: true;
     /**
@@ -369,7 +370,7 @@ export async function execOwnedProcessGroup(
   args: string[],
   options: {
     cwd: string;
-    timeout: number;
+    timeout?: number;
     env: NodeJS.ProcessEnv;
     /**
      * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
@@ -442,12 +443,15 @@ export async function execOwnedProcessGroup(
       disarm();
     });
   }
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop(!node || node.endTreeOnTimeout);
-    child.stdout?.destroy();
-    child.stderr?.destroy();
-  }, options.timeout);
+  const timer =
+    options.timeout === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          stop(!node || node.endTreeOnTimeout);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }, options.timeout);
   const abortSignal = recorder ? node?.abortSignal : undefined;
   const abort = (): void => {
     cancelled = true;

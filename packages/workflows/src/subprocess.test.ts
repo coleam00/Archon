@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import {
 const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
 
-function runHostBash(script: string, timeout = 5000): ReturnType<typeof runSubprocess> {
+function runHostBash(script: string, timeout?: number): ReturnType<typeof runSubprocess> {
   return runSubprocess({ kind: 'host' }, '/bin/bash', ['-c', script], {
     cwd: import.meta.dir,
     timeout,
@@ -43,7 +43,7 @@ posixOnly('ending recorded node trees ends the in-flight node and its descendant
   const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
   const trees = recordNodeProcessTrees();
   try {
-    const node = runHostBash(`/bin/sleep 30 & echo $! > '${pidFile}'; wait`, 30_000);
+    const node = runHostBash(`/bin/sleep 30 & echo $! > '${pidFile}'; wait`);
     const settled = node.then(
       () => 'resolved',
       () => 'rejected'
@@ -67,7 +67,7 @@ posixOnly('a node whose root exited stays endable while its job holds the output
   const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-'))), 'pid');
   const trees = recordNodeProcessTrees();
   try {
-    const node = runHostBash(`/bin/sleep 30 & echo $! > '${pidFile}'`, 30_000);
+    const node = runHostBash(`/bin/sleep 30 & echo $! > '${pidFile}'`);
     const settled = node.then(
       () => 'settled',
       () => 'settled'
@@ -137,6 +137,20 @@ posixOnly('no node subprocess starts after the recorded trees are ended', async 
     );
     expect(existsSync(marker)).toBe(false);
   } finally {
+    trees.release();
+  }
+});
+
+posixOnly('a recorded node without a declared timeout arms no deadline', async () => {
+  const trees = recordNodeProcessTrees();
+  const timers = spyOn(globalThis, 'setTimeout');
+  try {
+    await runHostBash('printf undeclared');
+    expect(timers).not.toHaveBeenCalled();
+    await runHostBash('printf declared', 5000);
+    expect(timers.mock.calls.map(call => call[1])).toEqual([5000]);
+  } finally {
+    timers.mockRestore();
     trees.release();
   }
 });
@@ -237,7 +251,8 @@ test.skipIf(process.platform !== 'win32')(
   15_000
 );
 
-// A stopped run aborts its node: the whole tree ends, whichever process holds the work.
+// A stopped run aborts its node: the whole tree ends, whichever process holds the work,
+// with no declared deadline to fall back on.
 async function runAbortedWrapper(): Promise<{
   error: RawSubprocessRejection | undefined;
   leaked: boolean;
@@ -252,7 +267,6 @@ async function runAbortedWrapper(): Promise<{
   const controller = new AbortController();
   const node = runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
     cwd: dir,
-    timeout: 30_000,
     env: { STARTED: started, MARKER: marker },
     endTreeOnTimeout: true,
     abortSignal: controller.signal,
