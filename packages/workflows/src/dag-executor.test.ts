@@ -5770,7 +5770,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         base_revision: null,
         maintainer_can_modify: null,
       };
-      await writeFile(join(testDir, 'body.md'), 'A body');
+      const body = { type: 'archon_artifact', run_id: 'det-retry-run', path: 'pr-body.md' };
+      const artifacts = join(testDir, 'artifacts');
+      await mkdir(artifacts, { recursive: true });
+      await writeFile(join(artifacts, body.path), 'A body');
       const ghPr = {
         number: 42,
         url: pr.url,
@@ -5864,7 +5867,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
           base: 'dev',
           existing: 'null',
           title: 'A title',
-          body: join(testDir, 'body.md'),
+          body: JSON.stringify(body),
           draft: 'true',
         },
         script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};

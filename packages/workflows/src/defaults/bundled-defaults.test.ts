@@ -951,6 +951,10 @@ describe('bundled-defaults', () => {
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      expect(publish.with?.body).toEqual({ from: '$prepare.output.body' });
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:pr::pr']).toContain(
+        'gh pr view <number> --repo <host>/<owner>/<repo>'
+      );
       expect(publish.timeout).toBe(180000);
       expect(publish.retry).toBeUndefined();
       expect(publish.output_type).toBe('pull-request');

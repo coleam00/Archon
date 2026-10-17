@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  PACK,
   PR,
   PR_URL,
   forgeOperation,
@@ -30,6 +31,7 @@ const REPORT = 'Round 1: ready';
 
 /** The engine's typed-artifact listing for a run with no typed artifacts yet. */
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
+const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
 interface Target {
   readonly headRepo?: { host: string; path: string };
@@ -43,9 +45,9 @@ interface Target {
  * first lands and reads back. The fake forge reports that pushed commit as the head.
  */
 function publishPr(
-  options: ScriptOptions & { target?: Target; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
+  options: ScriptOptions & { target?: Target; prepareBody?: boolean; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
 ): ScriptRun & { head: string; cwd: string } {
-  const { target = {}, forgeAt, ...rest } = options;
+  const { target = {}, prepareBody = true, forgeAt, ...rest } = options;
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
@@ -62,17 +64,38 @@ function publishPr(
       // The engine binds a field prepare declared null as empty text.
       INPUTS_EXISTING: target.existing == null ? '' : JSON.stringify(target.existing),
       INPUTS_TITLE: 'A title',
-      INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+      WORKFLOW_ID: 'run',
+      INPUTS_BODY: prepareBody ? JSON.stringify(PREPARED_BODY) : '',
       INPUTS_DRAFT: 'true',
       TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
     },
-    artifacts: { 'pr-body.md': 'A body', 'listing.json': EMPTY_LISTING, ...rest.artifacts },
+    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
   });
   return { ...run, head, cwd };
 }
 
 describe('publish-pr opens the pull request at most once', () => {
+  it('keeps prepare schema and command aligned with the body pointer publish accepts', () => {
+    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
+      nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
+    };
+    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties.body).toEqual({
+      type: ['object', 'null'],
+      properties: {
+        type: { type: 'string', enum: [PREPARED_BODY.type] },
+        run_id: { type: 'string' },
+        path: { type: 'string', enum: [PREPARED_BODY.path] },
+      },
+      required: Object.keys(PREPARED_BODY),
+    });
+    const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
+    expect(command).toContain(
+      `{"type": "${PREPARED_BODY.type}", "run_id": "$WORKFLOW_ID", "path": "${PREPARED_BODY.path}"}`
+    );
+    expect(command).toContain(`$ARTIFACTS_DIR/${PREPARED_BODY.path}`);
+  });
+
   it.each(['gh', 'forge'] as const)(
     'refuses another create through %s while the earlier write is unresolved',
     source => {
@@ -116,6 +139,72 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
     expect(result.gh.every(call => call.includes('--repo ghe.example.com/example/repo'))).toBe(true);
     expect(result.forge).toEqual([]);
+  });
+
+  it.each(['gh', 'forge'] as const)('refuses to open a pull request through %s without a body, leaving no claim', source => {
+    const result = publishPr({
+      source,
+      forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+      prepareBody: false,
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('prepare wrote no body');
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+  });
+
+  it.each(['gh', 'forge'] as const)('requires the declared body before creating through %s', source => {
+    for (const leftover of ['', 'An old body']) {
+      const result = publishPr({
+        source,
+        target: { existing: 42 },
+        inputs: { INPUTS_BRANCH: 'selected', INPUTS_BODY: 'null' },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+        artifacts: { 'pr-body.md': leftover },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('prepare wrote no body');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
+  });
+
+  it.each(['gh', 'forge'] as const)('rejects a body pointer outside its declared contract through %s', source => {
+    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: 'other-body.md' }, { path: '../pr-body.md' }]) {
+      const result = publishPr({
+        source,
+        inputs: { INPUTS_BODY: JSON.stringify({ ...PREPARED_BODY, ...override }) },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('prepare must declare the pr-body.md artifact from this run');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
+  });
+
+  it.each(['gh', 'forge'] as const)('reads the body before claiming a create through %s', source => {
+    for (const directory of [false, true]) {
+      const result = publishPr({
+        source,
+        prepareBody: false,
+        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
+        artifacts: directory ? { 'pr-body.md/entry': 'a directory cannot be a PR body' } : {},
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(directory ? 'EISDIR' : 'ENOENT');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+    }
   });
 
   it('reuses the open pull request for that head instead of opening a second one', () => {
@@ -238,12 +327,15 @@ describe('publish-pr opens the pull request at most once', () => {
   it('reads back the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       target: { existing: 42 },
+      prepareBody: false,
       gh: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr list'))).toBe(false);
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
   });
 
   it('adopts a named pull request whose head repository differs only in case', () => {
@@ -342,6 +434,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
     const result = publishPr({
       target: { head: 'archon/task-local' },
+      prepareBody: false,
       inputs: { INPUTS_BRANCH: 'feature' },
       gh: { pr: { headRefName: 'feature' } },
     });
@@ -364,9 +457,24 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
+  it('refuses a caller-selected branch without a body when an unnamed PR has another head', () => {
+    const result = publishPr({
+      target: { existing: 42 },
+      prepareBody: false,
+      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
+      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('prepare wrote no body');
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
+  });
+
   it('continues a named pull request on its own head even when the caller also selected a branch', () => {
     const result = publishPr({
       target: { existing: 42 },
+      prepareBody: false,
       inputs: { INPUTS_PULL_REQUEST: '42', INPUTS_BRANCH: 'build/7-an-issue-run12345' },
       gh: { pr: { headRefName: 'feature' } },
     });
