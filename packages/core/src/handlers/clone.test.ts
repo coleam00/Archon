@@ -30,6 +30,7 @@ import { createMockLogger } from '../test/mocks/logger';
 
 const realExecFileAsync = gitUtils.execFileAsync;
 const realAddSafeDirectory = gitUtils.addSafeDirectory;
+const realStat = fsPromises.stat;
 
 // Capture the real functions before the re-export is replaced by the module mock.
 const { findCommandFiles: discoverCommandFiles, isPathInside } = await import(
@@ -719,6 +720,7 @@ describe('cloneRepository', () => {
           Object.assign(process.env, env);
           spyExecFileAsync.mockImplementation(realExecFileAsync);
           spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
+          spyFsStat.mockImplementation(realStat);
           await fsPromises.writeFile(
             env.GIT_CONFIG_GLOBAL,
             '[safe]\n directory = /workspace/other\n'
