@@ -154,12 +154,12 @@ mock.module('@archon/core/utils/commands', () => ({
 }));
 
 import {
-  registerApiRoutes,
   resolveAuthContext,
   resolveWebUserId,
   resolveRunActor,
   requireWebUser,
-} from './api';
+} from './api-request-auth';
+import { registerApiRoutes } from './api';
 
 function makeApp(
   webAdapter?: WebAdapter,

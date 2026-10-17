@@ -3,7 +3,6 @@ import {
   ActiveWorktreeEnvironmentsError,
   WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
-import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
 import { deleteWebPushSubscription } from '@archon/core/db/web-push-subscriptions';
@@ -33,25 +32,20 @@ import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { DASHBOARD_STREAM } from '../adapters/web/transport';
-import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
-import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
 import type {
-  Conversation,
   ConversationLockManager,
   AttachedFile,
   HandleMessageContext,
   GlobalConfig,
   TiersPatch,
-  User,
   SchemaVersionInfo,
 } from '@archon/core';
 import {
-  handleMessage,
   getDatabaseType,
   getSchemaVersion,
   loadConfig,
@@ -95,7 +89,6 @@ import {
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
   isWorktreeRegistered,
@@ -104,7 +97,6 @@ import {
   toWorktreePath,
 } from '@archon/git';
 import {
-  createLogger,
   canonicalizeProjectPath,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
@@ -144,18 +136,36 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { MessageRow } from '@archon/core/schemas/message';
-import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('api');
-  return cachedLog;
-}
+import {
+  apiError,
+  getLog,
+  getValidatedBody,
+  getValidatedQuery,
+  jsonError,
+  openApiRouteRegistrar,
+  WEB_AUTH_REQUIRED,
+} from './api-route-kit';
+import {
+  authorizeConversation,
+  authorizeDispatchConversation,
+  requireConversationVisibility,
+  requireWebUser,
+  resolveAuthContext,
+  resolveRunActor,
+  resolveWebUserId,
+} from './api-request-auth';
+import {
+  toApiCodebase,
+  toApiConversation,
+  toApiDashboardWorkflowRun,
+  toApiMessage,
+  toApiWorkflowRun,
+} from './api-serializers';
+import { createOrchestratorDispatch, persistUploadedFiles } from './api-message-dispatch';
+import { toCleanEntry, validatePresetEntry } from './api-preset-entry';
 
 interface RawWorkflowFile {
   absolutePath: string;
@@ -321,10 +331,6 @@ function findBundledWorkflow(
   return match;
 }
 import * as conversationDb from '@archon/core/db/conversations';
-import {
-  isConversationVisible,
-  type ConversationVisibility,
-} from '@archon/core/db/conversation-visibility';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
@@ -332,7 +338,6 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as messageDb from '@archon/core/db/messages';
-import * as userDb from '@archon/core/db/users';
 import {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
@@ -365,15 +370,11 @@ import {
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
 import {
-  getAuth,
   isWebAuthEnabled,
   getSignupMode,
   isApiGateEnabled,
   isConversationOwnershipEnforced,
 } from '../auth';
-// Imported from the pure config module rather than the barrel: route tests mock
-// '../auth', and the header name must stay the real implementation under them.
-import { DEFAULT_WEB_AUTH_HEADER, webAuthHeaderName } from '../auth/config';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -446,11 +447,7 @@ import {
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import { validateAliasName } from './alias-name';
-import {
-  TIER_NAMES,
-  isTierName,
-  validEffortsForProvider,
-} from '@archon/workflows/model-validation';
+import { TIER_NAMES, isTierName } from '@archon/workflows/model-validation';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import {
   providerListResponseSchema,
@@ -484,11 +481,8 @@ import {
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import { introspectOpencodeCredentials } from '@archon/providers/community/opencode';
-import { messageSchema } from './schemas/conversation.schemas';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
-  workflowRunSchema,
-  dashboardWorkflowRunSchema,
   runsNeedingAttentionResponseSchema,
   runAttentionSchema,
   RUN_ATTENTION_SCHEMA_NAME,
@@ -538,19 +532,6 @@ function resolveRunArtifactDir(
 // =========================================================================
 // OpenAPI route configs (module-scope — pure config, no runtime dependencies)
 // =========================================================================
-
-/** Helper to build a JSON error response entry for createRoute configs. */
-function jsonError(description: string): {
-  content: { 'application/json': { schema: typeof errorSchema } };
-  description: string;
-} {
-  return { content: { 'application/json': { schema: errorSchema } }, description };
-}
-
-/** The identity routes' 401, named after the default trusted header. */
-const WEB_AUTH_REQUIRED = jsonError(
-  `Web auth required (${DEFAULT_WEB_AUTH_HEADER} header missing)`
-);
 
 /**
  * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
@@ -1963,220 +1944,6 @@ const getUpdateCheckRoute = createRoute({
   },
 });
 
-function apiError(
-  c: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503,
-  message: string,
-  detail?: string
-): Response {
-  return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
-}
-
-interface WebUserContext {
-  userId: User['id'];
-  role: User['role'];
-}
-
-/**
- * Trusted proxy headers require a proxy that strips client-supplied values, or
- * a loopback-only server. Missing identity leaves solo requests unattributed;
- * the API gate maps it to 401 when authentication is required.
- */
-export async function resolveAuthContext(c: Context): Promise<WebUserContext | undefined> {
-  const auth = getAuth();
-  if (auth) {
-    try {
-      const session = await auth.api.getSession({ headers: c.req.raw.headers });
-      if (session?.user) {
-        const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'web',
-          session.user.id,
-          session.user.name ?? session.user.email ?? undefined
-        );
-        return { userId: user.id, role: user.role };
-      }
-    } catch (err) {
-      // Proxy-authenticated installs can keep attributing requests during a
-      // session-backend outage. Without a header the API gate fails closed.
-      getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
-    }
-  }
-
-  const headerName = webAuthHeaderName();
-  const headerVal = c.req.header(headerName)?.trim();
-  if (!headerVal) return undefined;
-  try {
-    const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-    return { userId: user.id, role: user.role };
-  } catch (err) {
-    // Attribution is best-effort; the strict credential guard reports 503.
-    getLog().warn(
-      { err: err as Error, headerPresent: true, path: c.req.path },
-      'web.user_resolve_failed'
-    );
-    return undefined;
-  }
-}
-
-export async function resolveRunActor(c: Context): Promise<RunActor> {
-  const identity = await resolveAuthContext(c);
-  if (identity) return { kind: 'user', userId: identity.userId };
-  const headerName = webAuthHeaderName();
-  const suppliedIdentity = Boolean(c.req.header(headerName)?.trim());
-  return { kind: isWebAuthEnabled() || suppliedIdentity ? 'unidentified' : 'operator' };
-}
-
-export async function resolveWebUserId(c: Context): Promise<string | undefined> {
-  return (await resolveAuthContext(c))?.userId;
-}
-
-/**
- * Credential endpoints must distinguish missing identity (401) from a backend
- * outage (503). Unlike soft attribution, a session outage cannot use a header
- * fallback here.
- */
-export async function requireWebUser(
-  c: Context,
-  failMessage = 'Web authentication required'
-): Promise<WebUserContext | { error: Response }> {
-  const auth = getAuth();
-  if (auth) {
-    let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
-    try {
-      session = await auth.api.getSession({ headers: c.req.raw.headers });
-    } catch (err) {
-      getLog().error({ err: err as Error }, 'web.session_resolve_failed');
-      return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
-    }
-    if (session?.user) {
-      try {
-        const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'web',
-          session.user.id,
-          session.user.name ?? session.user.email ?? undefined
-        );
-        return { userId: user.id, role: user.role };
-      } catch (err) {
-        getLog().error({ err: err as Error }, 'web.user_resolve_failed');
-        return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
-      }
-    }
-  }
-
-  const headerName = webAuthHeaderName();
-  const headerVal = c.req.header(headerName)?.trim();
-  if (!headerVal) return { error: apiError(c, 401, failMessage) };
-  try {
-    const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-    return { userId: user.id, role: user.role };
-  } catch (err) {
-    getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
-    return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
-  }
-}
-
-/**
- * Which conversations this request may reach. Under ownership enforcement the
- * caller resolves on the strict path, so neither a missing identity (401) nor an
- * identity-backend outage (503) can fall back to the whole install.
- */
-async function requireConversationVisibility(
-  c: Context
-): Promise<ConversationVisibility | { error: Response }> {
-  if (!isConversationOwnershipEnforced()) return { kind: 'all' };
-  const web = await requireWebUser(c, 'Authentication required');
-  if ('error' in web) return web;
-  return { kind: 'owner', userId: web.userId };
-}
-
-/**
- * Bare platform IDs must resolve uniquely across platforms. Dispatch always uses
- * the web adapter's row. SSE prefers web chats but also carries run transcripts
- * from other platforms, so an unambiguous non-web row can be the fallback.
- */
-type ConversationKey =
-  | { platformId: string }
-  | { webPlatformId: string }
-  | { webFirstPlatformId: string }
-  | { id: string };
-
-async function loadConversation(key: ConversationKey): Promise<Conversation | null> {
-  if ('platformId' in key) return conversationDb.findConversationByPlatformId(key.platformId);
-  if ('webPlatformId' in key) {
-    return conversationDb.getConversationByPlatformId('web', key.webPlatformId);
-  }
-  if ('webFirstPlatformId' in key) {
-    return (
-      (await conversationDb.getConversationByPlatformId('web', key.webFirstPlatformId)) ??
-      (await conversationDb.findConversationByPlatformId(key.webFirstPlatformId))
-    );
-  }
-  return conversationDb.getConversationById(key.id);
-}
-
-/**
- * The authorization every route naming a conversation goes through. Identity is
- * resolved before the row is loaded, so a refused caller learns nothing about
- * which ids exist, and a non-owner gets the same 404 as a missing row because
- * web conversation ids are guessable. A run's own transcript stays readable to
- * any signed-in user, as the run itself is; writing to it stays the owner's.
- *
- * Throws when the conversation lookup fails; callers map that to their 500.
- */
-async function authorizeConversation(
-  c: Context,
-  key: ConversationKey,
-  access: 'read' | 'write'
-): Promise<
-  { conversation: Conversation; visibility: ConversationVisibility } | { error: Response }
-> {
-  const visibility = await requireConversationVisibility(c);
-  if ('error' in visibility) return visibility;
-  const conversation = await loadConversation(key);
-  if (!conversation) return { error: apiError(c, 404, 'Conversation not found') };
-  if (isConversationVisible(conversation, visibility)) return { conversation, visibility };
-  if (access === 'read' && (await workflowDb.isRunTranscriptConversation(conversation.id))) {
-    return { conversation, visibility };
-  }
-  getLog().warn(
-    {
-      conversationId: conversation.id,
-      platformType: conversation.platform_type,
-      access,
-      ownerPresent: conversation.user_id !== null,
-    },
-    'api.conversation_access_denied'
-  );
-  return { error: apiError(c, 404, 'Conversation not found') };
-}
-
-/**
- * Dispatch uses the web adapter's identity and the same caller that authorized
- * the row. Solo installs may dispatch to an absent row, but never through a
- * failed lookup.
- */
-async function authorizeDispatchConversation(
-  c: Context,
-  platformId: string
-): Promise<{ conversation: Conversation | null; actor: RunActor } | { error: Response }> {
-  try {
-    if (isConversationOwnershipEnforced()) {
-      const access = await authorizeConversation(c, { webPlatformId: platformId }, 'write');
-      if ('error' in access) return access;
-      const actor: RunActor =
-        access.visibility.kind === 'owner'
-          ? { kind: 'user', userId: access.visibility.userId }
-          : await resolveRunActor(c);
-      return { conversation: access.conversation, actor };
-    }
-    const conversation = await conversationDb.getConversationByPlatformId('web', platformId);
-    return { conversation, actor: await resolveRunActor(c) };
-  } catch (err: unknown) {
-    getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
-    return { error: apiError(c, 500, 'Failed to load conversation') };
-  }
-}
-
 /**
  * Register all /api/* routes on the Hono app.
  */
@@ -2188,6 +1955,7 @@ export function registerApiRoutes(
   attention?: { webPush: WebPushDestination; router: AttentionRouter },
   registration: Pick<CloneOptions, 'githubAppAuth'> = {}
 ): void {
+  const registerOpenApiRoute = openApiRouteRegistrar(app);
   const {
     assertRunActionAllowed,
     signalWorkflowWait,
@@ -2557,41 +2325,6 @@ export function registerApiRoutes(
   // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
   // prefs are model names, not secrets. Highest-precedence resolver layer.
 
-  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
-  function validatePresetEntry(
-    label: string,
-    entry: { provider: string; model: string; effort?: EffortLevel }
-  ): string | null {
-    if (!isRegisteredProvider(entry.provider)) {
-      return `${label}: ${missingProviderMessage(providerRegistry, entry.provider)}`;
-    }
-    if (entry.effort !== undefined) {
-      const validEfforts = validEffortsForProvider(providerRegistry, entry.provider);
-      if (validEfforts === null) {
-        return `Provider '${entry.provider}' does not support effort (${label}).`;
-      }
-      if (!validEfforts.includes(entry.effort)) {
-        return (
-          `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
-          `Valid: ${validEfforts.join(', ')}`
-        );
-      }
-    }
-    return null;
-  }
-
-  function toCleanEntry(entry: { provider: string; model: string; effort?: EffortLevel }): {
-    provider: string;
-    model: string;
-    effort?: EffortLevel;
-  } {
-    return {
-      provider: entry.provider,
-      model: entry.model,
-      ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-    };
-  }
-
   registerOpenApiRoute(userAiPrefsGetRoute, async c => {
     const web = await requireWebUser(c, 'Web authentication required to read AI preferences');
     if ('error' in web) return web.error;
@@ -2680,223 +2413,7 @@ export function registerApiRoutes(
     }
   });
 
-  // Shared lock/dispatch/error handling for message and workflow endpoints
-  /** Maximum allowed upload size per file (10 MB) */
-  const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-  /** Maximum number of files per message (enforced server-side) */
-  const MAX_FILES_PER_MESSAGE = 5;
-  /**
-   * Binary (non-text) MIME types explicitly allowed for upload.
-   * All text/* types are accepted separately via isAllowedUploadType().
-   */
-  const ALLOWED_UPLOAD_BINARY_MIME_TYPES = new Set([
-    'image/png',
-    'image/jpeg',
-    'image/gif',
-    'image/webp',
-    'application/pdf',
-    // application/json is a structured text type browsers may report for .json files
-    'application/json',
-  ]);
-
-  /** Extensions accepted when browser reports an empty MIME type (code/config files). */
-  const ALLOWED_UPLOAD_EXTENSIONS = new Set([
-    '.md',
-    '.txt',
-    '.csv',
-    '.xml',
-    '.html',
-    '.htm',
-    '.json',
-    '.yaml',
-    '.yml',
-    '.toml',
-    '.ini',
-    '.cfg',
-    '.conf',
-    '.env',
-    '.log',
-    '.css',
-    '.js',
-    '.jsx',
-    '.ts',
-    '.tsx',
-    '.mjs',
-    '.cjs',
-    '.py',
-    '.rb',
-    '.go',
-    '.java',
-    '.c',
-    '.cpp',
-    '.cc',
-    '.cxx',
-    '.h',
-    '.hpp',
-    '.cs',
-    '.php',
-    '.sh',
-    '.bash',
-    '.zsh',
-    '.fish',
-    '.rs',
-    '.swift',
-    '.kt',
-    '.scala',
-    '.r',
-    '.sql',
-  ]);
-
-  /** Returns true if the MIME type is allowed for upload. */
-  function isAllowedUploadType(mimeType: string, fileName: string): boolean {
-    // All text/* types are acceptable (covers .md, .py, .rs, .go, .sh, .yaml, etc.)
-    if (mimeType.startsWith('text/')) return true;
-    if (ALLOWED_UPLOAD_BINARY_MIME_TYPES.has(mimeType)) return true;
-    // Browsers assign empty MIME types to many code/config extensions — fall back to extension
-    if (!mimeType) {
-      const dotIndex = fileName.lastIndexOf('.');
-      if (dotIndex !== -1) {
-        return ALLOWED_UPLOAD_EXTENSIONS.has(fileName.slice(dotIndex).toLowerCase());
-      }
-    }
-    return false;
-  }
-
-  async function persistUploadedFiles(
-    conversationId: string,
-    fileEntries: File[]
-  ): Promise<
-    { ok: true; savedFiles: AttachedFile[] } | { ok: false; status: 400 | 500; error: string }
-  > {
-    if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Maximum ${MAX_FILES_PER_MESSAGE.toString()} files per message`,
-      };
-    }
-
-    const archonHome = getArchonHome();
-    const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-    if (!isPathInside(archonHome, uploadDir, { lexical: true })) {
-      return { ok: false, status: 400, error: 'Invalid conversation ID' };
-    }
-
-    // Validate all files before writing any to disk.
-    for (const entry of fileEntries) {
-      const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-      if (!isAllowedUploadType(entry.type, entry.name)) {
-        return {
-          ok: false,
-          status: 400,
-          error: `File "${displayName}" has an unsupported type: ${entry.type}`,
-        };
-      }
-      if (entry.size > MAX_UPLOAD_BYTES) {
-        return {
-          ok: false,
-          status: 400,
-          error: `File "${displayName}" exceeds the 10 MB size limit`,
-        };
-      }
-    }
-
-    const savedFiles: AttachedFile[] = [];
-    try {
-      await mkdir(uploadDir, { recursive: true });
-      for (const entry of fileEntries) {
-        const fileId = randomUUID();
-        const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
-        const filePath = join(uploadDir, `${fileId}_${safeName}`);
-        await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
-        const normalizedMime =
-          entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
-        savedFiles.push({
-          path: filePath,
-          name: safeName || fileId,
-          mimeType: normalizedMime,
-          size: entry.size,
-        });
-      }
-    } catch (writeErr: unknown) {
-      for (const f of savedFiles) {
-        await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-          if (err.code !== 'ENOENT') {
-            getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
-          }
-        });
-      }
-      getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
-      return {
-        ok: false,
-        status: 500,
-        error: 'Failed to save uploaded file. Check available disk space.',
-      };
-    }
-
-    return { ok: true, savedFiles };
-  }
-
-  async function dispatchToOrchestrator(
-    conversationId: string,
-    message: string,
-    extraContext: Omit<HandleMessageContext, 'isolationHints'>,
-    filesToCleanup?: AttachedFile[]
-  ): Promise<{ accepted: boolean; status: string }> {
-    const result = await lockManager.acquireLock(conversationId, async () => {
-      // Emit lock:true at handler start so the UI knows processing has begun.
-      // Fire-and-forget — if no SSE stream is connected yet, the event is buffered.
-      webAdapter.emitLockEvent(conversationId, true);
-      try {
-        await handleMessage(webAdapter, conversationId, message, {
-          isolationHints: { workflowType: 'thread', workflowId: conversationId },
-          ...extraContext,
-        });
-      } catch (error) {
-        getLog().error({ err: error, conversationId }, 'handle_message_failed');
-        try {
-          await webAdapter.emitSSE(
-            conversationId,
-            JSON.stringify({
-              type: 'error',
-              message: `Failed to process message: ${(error as Error).message ?? 'unknown error'}. Try /reset if the problem persists.`,
-              classification: 'transient',
-              timestamp: Date.now(),
-            })
-          );
-        } catch (sseError) {
-          getLog().error({ err: sseError, conversationId }, 'sse_error_emit_failed');
-        }
-      } finally {
-        await webAdapter.emitLockEvent(conversationId, false);
-        // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
-        // has had a chance to read them. Doing this in the HTTP handler's finally block
-        // would delete files while the fire-and-forget lock handler is still running.
-        // The directory is shared with uploads that have not written their first file yet.
-        if (filesToCleanup) {
-          for (const f of filesToCleanup) {
-            await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
-              }
-            });
-          }
-        }
-      }
-    });
-
-    if (result.status === 'queued-conversation' || result.status === 'queued-capacity') {
-      // Intentionally fire-and-forget: the lock-acquire signal (locked: true) is sent
-      // optimistically so the UI shows a queued state immediately. It is not awaited
-      // because we want the HTTP response to return before the SSE write completes.
-      // The lock-release signal (locked: false) IS awaited inside the task callback
-      // above to guarantee ordering — all tool results and flush must precede the
-      // release event on the SSE stream.
-      webAdapter.emitLockEvent(conversationId, true);
-    }
-
-    return { accepted: true, status: result.status };
-  }
+  const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
 
   /**
    * What happens after a gate answer is recorded. The routes never resume the run:
@@ -2908,113 +2425,6 @@ export function registerApiRoutes(
     return continuablePause(run) !== undefined
       ? 'The run continues on its own.'
       : `Run \`archon workflow resume ${run.id}\` from the CLI to continue it.`;
-  }
-
-  // ---------------------------------------------------------------------------
-  // API transform helpers (Date → ISO string for wire shape)
-  // ---------------------------------------------------------------------------
-
-  type ApiConversation = z.infer<typeof conversationSchema>;
-  type ApiCodebase = z.infer<typeof codebaseSchema>;
-  type ApiMessage = z.infer<typeof messageSchema>;
-  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
-  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
-
-  function toISOString(val: Date | string): string;
-  function toISOString(val: Date | string | null | undefined): string | null;
-  function toISOString(val: Date | string | null | undefined): string | null {
-    if (val === null || val === undefined) return null;
-    if (typeof val === 'string') return val;
-    try {
-      return val.toISOString();
-    } catch (e) {
-      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
-      return null;
-    }
-  }
-
-  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
-    return {
-      ...row,
-      created_at: toISOString(row.created_at),
-      updated_at: toISOString(row.updated_at),
-      deleted_at: toISOString(row.deleted_at),
-      last_activity_at: toISOString(row.last_activity_at),
-    };
-  }
-
-  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
-    let commands = row.commands;
-    if (typeof commands === 'string') {
-      try {
-        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
-      } catch (parseErr) {
-        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
-        // Fallback: empty map keeps the API response valid and prevents the endpoint
-        // from crashing. The corruption is already logged above for operator attention.
-        commands = {};
-      }
-    }
-    return {
-      ...row,
-      commands,
-      created_at: toISOString(row.created_at),
-      updated_at: toISOString(row.updated_at),
-    };
-  }
-
-  function toApiMessage(row: MessageRow): ApiMessage {
-    let metadata = row.metadata;
-    if (typeof metadata !== 'string') {
-      try {
-        metadata = JSON.stringify(metadata);
-      } catch (e) {
-        getLog().error(
-          { err: e as Error, messageId: row.id },
-          'api.message_metadata_serialize_failed'
-        );
-        metadata = '{}';
-      }
-    }
-    // Bound tool_result outputs in hydration responses — the DB keeps the full
-    // value; only the browser-bound payload is capped (see #2236).
-    return { ...row, metadata: boundMetadataToolOutputs(metadata) };
-  }
-
-  function toApiRunAttention(row: WorkflowRun): ApiWorkflowRun['attention'] {
-    const attention = runAttention(row);
-    return attention?.kind === 'terminal'
-      ? { ...attention, at: toISOString(attention.at) }
-      : attention;
-  }
-
-  function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
-    const approval = metadata.approval;
-    return isApprovalContext(approval)
-      ? { ...metadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
-      : metadata;
-  }
-
-  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
-    return {
-      ...row,
-      metadata: toApiRunMetadata(row.metadata),
-      attention: toApiRunAttention(row),
-      started_at: toISOString(row.started_at),
-      completed_at: toISOString(row.completed_at),
-      last_activity_at: toISOString(row.last_activity_at),
-    };
-  }
-
-  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
-    return {
-      ...row,
-      metadata: toApiRunMetadata(row.metadata),
-      attention: toApiRunAttention(row),
-      started_at: toISOString(row.started_at),
-      completed_at: toISOString(row.completed_at),
-      last_activity_at: toISOString(row.last_activity_at),
-    };
   }
 
   // GET /api/conversations - List conversations
@@ -3654,29 +3064,6 @@ export function registerApiRoutes(
       return apiError(c, 500, 'Failed to delete env var');
     }
   });
-
-  /**
-   * Register a route with OpenAPI spec generation and input validation.
-   * Zod validates inputs (query, params, body) at runtime via defaultHook.
-   * Response schemas are used for OpenAPI spec generation only — output is not
-   * validated at runtime. The `as never` cast bypasses TypedResponse constraints.
-   */
-  function registerOpenApiRoute(
-    route: ReturnType<typeof createRoute>,
-    handler: (c: Context) => Response | Promise<Response>
-  ): void {
-    app.openapi(route, handler as never);
-  }
-
-  /** Access Zod-validated body from a handler registered via registerOpenApiRoute. */
-  function getValidatedBody<T>(c: Context, _schema: z.ZodType<T>): T {
-    return (c.req as unknown as { valid(k: 'json'): T }).valid('json');
-  }
-
-  /** Access the Zod-validated query from a handler registered via registerOpenApiRoute. */
-  function getValidatedQuery<T>(c: Context, _schema: z.ZodType<T>): T {
-    return (c.req as unknown as { valid(k: 'query'): T }).valid('query');
-  }
 
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
