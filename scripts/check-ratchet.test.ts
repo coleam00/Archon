@@ -48,6 +48,20 @@ describe('cognitiveUnits', () => {
     expect(names('(a ? a : 0)')).toEqual(names('a'));
   });
 
+  test('keeps sibling chained callbacks distinct by their inner-call arguments', () => {
+    const source = `function f() {
+      run('a').catch(e => (e ? 1 : 0));
+      run('b').catch(e => (e ? (e.x ? 1 : 2) : 0));
+      xs[ i ].then(v => v);
+    }`;
+    expect(Object.fromEntries(cognitiveUnits('sample.ts', source))).toEqual({
+      f: 0,
+      "f > run('a').catch()": 1,
+      "f > run('b').catch()": 3,
+      'f > xs[i].then()': 0,
+    });
+  });
+
   test('counts a missing final newline as a line', () => {
     expect([lineCount(''), lineCount('a\n'), lineCount('a\nb')]).toEqual([0, 1, 2]);
   });

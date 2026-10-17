@@ -57,12 +57,21 @@ function isFunctionUnit(node: ts.Node): node is FunctionUnit {
   );
 }
 
-// Built from names only: the source of `p.then(a => ...).catch(...)` would put the `then`
-// callback's body into the `catch` callback's identity, so editing one renames the other.
+const compactText = (node: ts.Node): string => node.getText().replace(/\s+/g, '');
+
+// Inner-call arguments stay in the name so `run('a').catch()` and `run('b').catch()` remain
+// distinct, but function arguments are left out: the source of `p.then(a => ...).catch(...)`
+// would put the `then` callback's body into the `catch` callback's identity.
 function calleeName(node: ts.Expression): string {
   if (ts.isPropertyAccessExpression(node))
     return `${calleeName(node.expression)}.${node.name.text}`;
-  if (ts.isCallExpression(node)) return `${calleeName(node.expression)}()`;
+  if (ts.isElementAccessExpression(node)) {
+    return `${calleeName(node.expression)}[${compactText(node.argumentExpression)}]`;
+  }
+  if (ts.isCallExpression(node)) {
+    const values = node.arguments.filter(argument => !ts.isFunctionLike(argument));
+    return `${calleeName(node.expression)}(${values.map(compactText).join(',')})`;
+  }
   if (ts.isNonNullExpression(node) || ts.isParenthesizedExpression(node)) {
     return calleeName(node.expression);
   }
