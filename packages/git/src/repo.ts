@@ -684,39 +684,48 @@ async function editSafeDirectory(
 }
 
 /**
- * Whether git will treat `path` as owned by the user running it, so it never
- * reads safe.directory there. A path not created yet is judged by its nearest
- * existing ancestor, so a checkout inside another user's tree (a bind mount)
- * keeps its grant. Follows git's POSIX check, including
- * GIT_TEST_ASSUME_DIFFERENT_OWNER. Root and Windows
- * always keep the grant: git judges sudo callers by SUDO_UID, and compares
- * owner SIDs on Windows.
+ * Whether `path` does not exist yet and git will treat it as owned by the user
+ * running it once that user creates it, so git never reads safe.directory there.
+ * Judged by the nearest existing ancestor, followed through symlinks to the
+ * filesystem the path will live on, so a checkout inside another user's tree (a
+ * bind mount) keeps its grant. An existing path keeps the grant: git also checks
+ * the owner of its `.git` entry and gitdir. Follows git's POSIX check, including
+ * GIT_TEST_ASSUME_DIFFERENT_OWNER. Root and Windows always keep the grant: git
+ * judges sudo callers by SUDO_UID, and compares owner SIDs on Windows.
  */
-async function ownedByCurrentUser(path: string): Promise<boolean> {
+async function newPathOwnedByCurrentUser(path: string): Promise<boolean> {
   const euid = process.geteuid?.();
   if (euid === undefined || euid === 0 || process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER) {
     return false;
   }
-  for (let candidate = path; ; candidate = dirname(candidate)) {
+  const isMissing = (error: unknown): boolean =>
+    error instanceof Error && 'code' in error && error.code === 'ENOENT';
+  try {
+    await lstat(path);
+    return false;
+  } catch (error) {
+    if (!isMissing(error)) return false;
+  }
+  for (let candidate = dirname(path); ; candidate = dirname(candidate)) {
     try {
-      return (await lstat(candidate)).uid === euid;
+      return (await stat(candidate)).uid === euid;
     } catch (error) {
-      const missing = error instanceof Error && 'code' in error && error.code === 'ENOENT';
       // An unreadable path keeps the grant: ownership is unknown, so write as before.
-      if (!missing || dirname(candidate) === candidate) return false;
+      if (!isMissing(error) || dirname(candidate) === candidate) return false;
     }
   }
 }
 
 /**
  * Add a directory to git's global safe.directory config when git will need it.
- * Skipping owned paths keeps concurrent setups off the global config lock.
+ * Skipping new paths this user will own keeps concurrent setups off the global
+ * config lock.
  * Grants persist after setup failure: revocation could remove trust that a
  * concurrent setup accepted for the same path.
  * Uses execFileAsync (no shell interpolation) for safety.
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
-  if (await ownedByCurrentUser(path)) return;
+  if (await newPathOwnedByCurrentUser(path)) return;
   try {
     let fields: string[];
     try {

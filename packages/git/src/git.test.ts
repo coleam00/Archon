@@ -3945,14 +3945,15 @@ branch refs/heads/feature/auth
         const config = join(root, 'gitconfig');
         const previousConfig = process.env.GIT_CONFIG_GLOBAL;
         process.env.GIT_CONFIG_GLOBAL = config;
-        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
         try {
           await realExec('git', ['init', root]);
           await writeFile(config, `[safe]\n directory = ${JSON.stringify(root)}\n directory = \n`);
           if (process.platform !== 'win32') await chmod(config, 0o660);
           const configMode = (await stat(config)).mode;
           const checkTrust = async (): Promise<void> => {
-            await realExec('git', ['-C', root, 'status', '--porcelain']);
+            await realExec('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
           };
           let checkedIntermediate = false;
           execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
@@ -4008,7 +4009,6 @@ branch refs/heads/feature/auth
           expect((await stat(config)).mode).toBe(configMode);
         } finally {
           execSpy.mockRestore();
-          delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
           if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
           else process.env.GIT_CONFIG_GLOBAL = previousConfig;
         }
@@ -4063,13 +4063,8 @@ branch refs/heads/feature/auth
           HOME: process.env.HOME,
           XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
           GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-          GIT_TEST_ASSUME_DIFFERENT_OWNER: process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER,
         };
-        Object.assign(process.env, {
-          HOME: root,
-          XDG_CONFIG_HOME: join(root, 'xdg'),
-          GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
-        });
+        Object.assign(process.env, { HOME: root, XDG_CONFIG_HOME: join(root, 'xdg') });
         delete process.env.GIT_CONFIG_GLOBAL;
         try {
           await realMkdir(join(root, 'xdg/git'), { recursive: true });
@@ -4097,7 +4092,9 @@ branch refs/heads/feature/auth
             expect(stdout.split('\0').filter(value => value === '/workspace/other')).toEqual([
               '/workspace/other',
             ]);
-            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain']);
+            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain'], {
+              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+            });
           }
         } finally {
           for (const [key, value] of Object.entries(saved)) {
@@ -4132,8 +4129,9 @@ branch refs/heads/feature/auth
       }
     });
 
-    // Windows keeps the write: git compares owner SIDs there, which we do not read.
-    test.skipIf(process.platform === 'win32')(
+    // Windows and root keep the write: git compares owner SIDs on Windows, which
+    // we do not read, and judges root callers by SUDO_UID.
+    test.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)(
       'concurrent worktree setups under a directory this user owns all succeed',
       async () => {
         execSpy.mockRestore();
@@ -4149,6 +4147,34 @@ branch refs/heads/feature/auth
           // Git trusts a repository its own user created without any grant.
           await git.execFileAsync('git', ['init', '--quiet', worktrees[0]]);
           await git.execFileAsync('git', ['-C', worktrees[0], 'status', '--porcelain']);
+        } finally {
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
+
+    test.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)(
+      'a new path under a symlink into a root-owned directory keeps its grant',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'git-safe-link-'))));
+        const configPath = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = configPath;
+        try {
+          await writeFile(configPath, '');
+          // The link is this user's; the directory the checkout would land in is root's.
+          await symlink('/usr', join(root, 'link'));
+          const checkout = repo(join(root, 'link', 'checkout'));
+          await git.addSafeDirectory(checkout);
+          const { stdout } = await git.execFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim()).toBe(checkout);
         } finally {
           if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
           else process.env.GIT_CONFIG_GLOBAL = previousConfig;

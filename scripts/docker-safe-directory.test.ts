@@ -163,8 +163,6 @@ test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])
       GIT_CONFIG_GLOBAL: undefined,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_COUNT: '0',
-      // Container checkouts belong to another user, as on a bind mount.
-      GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
       PATH: `${bin}${delimiter}${process.env.PATH}`,
       ARCHON_TEST_REPO: repo,
       ARCHON_TEST_BUN: process.execPath,
@@ -188,7 +186,9 @@ test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])
         '\0'
       );
       expect(entries.filter(value => value === repo)).toHaveLength(1);
-      execFileSync('git', ['-C', repo, 'status', '--porcelain'], { env });
+      execFileSync('git', ['-C', repo, 'status', '--porcelain'], {
+        env: { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
+      });
     }
   }
 );
