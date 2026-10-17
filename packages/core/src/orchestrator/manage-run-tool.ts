@@ -314,9 +314,10 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
  * Runtime-safe timestamp formatter. The run schema declares these fields as
  * Date, but rows are cast, never Zod-parsed: Postgres hydrates TIMESTAMPTZ
  * into Date objects while SQLite returns TEXT ('YYYY-MM-DD HH:MM:SS', UTC)
- * as-is (#2078). Mirrors the API serializer pattern (routes/api.ts
- * toISOString): pass strings through verbatim — re-parsing with new Date()
- * would misread the UTC wall-clock string as local time — and format Dates.
+ * as-is (#2078). Mirrors the API serializer pattern
+ * (server/src/routes/api-serializers.ts toISOString): pass strings through
+ * verbatim — re-parsing with new Date() would misread the UTC wall-clock
+ * string as local time — and format Dates.
  */
 function formatTimestamp(val: Date | string): string {
   return typeof val === 'string' ? val : val.toISOString();
