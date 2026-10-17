@@ -251,7 +251,8 @@ test.skipIf(process.platform !== 'win32')(
   15_000
 );
 
-// A stopped run aborts its node: the whole tree ends, whichever process holds the work.
+// A stopped run aborts its node: the whole tree ends, whichever process holds the work,
+// with no declared deadline to fall back on.
 async function runAbortedWrapper(): Promise<{
   error: RawSubprocessRejection | undefined;
   leaked: boolean;
@@ -266,7 +267,6 @@ async function runAbortedWrapper(): Promise<{
   const controller = new AbortController();
   const node = runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
     cwd: dir,
-    timeout: 30_000,
     env: { STARTED: started, MARKER: marker },
     endTreeOnTimeout: true,
     abortSignal: controller.signal,
