@@ -304,6 +304,15 @@ export class SlackWorkflowBridge {
     await this.updateStatusMessage(state, { status: 'paused', authoredOutcome });
     if (this.runs.get(event.runId) !== state) return;
 
+    if (authoredOutcome === 'unavailable') {
+      await this.adapter.getApp().client.chat.postMessage({
+        channel: state.channel,
+        thread_ts: state.threadTs,
+        text: `Approval details unavailable for run ${event.runId}. Check the run status before responding.`,
+      });
+      return;
+    }
+
     const { blocks, fallbackText } = buildApprovalBlocks({
       runId: event.runId,
       nodeId: event.nodeId,

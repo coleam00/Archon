@@ -68,6 +68,8 @@ export interface Run {
   approval?: {
     nodeId: string;
     pauseId?: WorkflowApproval['pauseId'];
+    type?: WorkflowApproval['type'];
+    childRunId?: WorkflowApproval['childRunId'];
     message: string;
     completionSignaled: boolean;
     decisions: NonNullable<WorkflowApproval['decisions']>;
@@ -195,6 +197,8 @@ export function toRun(raw: RawWorkflowRun): Run {
       ? {
           nodeId: approval.nodeId,
           pauseId: approval.pauseId,
+          type: approval.type,
+          childRunId: approval.childRunId,
           message:
             approval.type === 'child_workflow'
               ? approval.childRunId

@@ -1781,6 +1781,9 @@ nodes:
     expect((parentRun?.metadata.approval as { message: string }).message).not.toContain(
       '/archon-workflow '
     );
+    expect((parentRun?.metadata.approval as { message: string }).message).not.toContain(
+      'archon workflow '
+    );
   });
 
   it('child gate → parent pauses blocked-on-child → approve child → parent auto-resumes → output threads', async () => {

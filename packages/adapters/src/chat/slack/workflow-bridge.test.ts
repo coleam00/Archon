@@ -415,6 +415,43 @@ describe('SlackWorkflowBridge', () => {
     }
   );
 
+  test.each(['failed', 'missing'] as const)(
+    'approval lookup %s posts an unavailable note without response controls',
+    async lookup => {
+      const { adapter, posted, updated, triggerMap } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+      if (lookup === 'failed') {
+        mockGetWorkflowRun.mockRejectedValueOnce(new Error('database unavailable'));
+      } else {
+        mockGetWorkflowRun.mockResolvedValueOnce(null);
+      }
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv',
+        transcriptPath: '/logs',
+      });
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'sub',
+        pauseId: 'pause-one',
+        message: 'Sub-run is paused awaiting review.',
+      });
+      const note = posted.at(-1);
+      expect(note?.thread_ts).toBe('111.0');
+      expect(note?.text).toContain('Approval details unavailable');
+      expect(note?.text).toContain('r1');
+      expect(note?.blocks).toBeUndefined();
+      expect(posted).toHaveLength(2);
+      expect(JSON.stringify(posted)).not.toContain('respond:');
+      expect(JSON.stringify(updated)).toContain('paused');
+    }
+  );
+
   test.each(['approve', 'reject'] as const)(
     '%s on a blocked parent redirects to the child',
     async decision => {

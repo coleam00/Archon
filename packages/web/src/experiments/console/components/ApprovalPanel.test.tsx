@@ -89,12 +89,22 @@ test.each(['/workflow approve child-full-id', 'Sub-run is paused awaiting review
       status: 'paused',
       started_at: '2026-10-05T10:00:00Z',
       metadata: {
-        approval: { nodeId: 'sub', type: 'child_workflow', childRunId: 'child-full-id', message },
+        approval: {
+          nodeId: 'sub',
+          type: 'child_workflow',
+          childRunId: 'child-full-id',
+          message,
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+        },
       },
     });
     const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
     expect(html).toContain('child-full-id');
     expect(html).not.toContain('/workflow ');
     expect(html).not.toContain('/archon-workflow ');
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('<input');
+    expect(html).not.toContain('<textarea');
+    expect(html).not.toContain('data-keymap-');
   }
 );
