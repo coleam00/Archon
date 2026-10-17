@@ -78,3 +78,73 @@ describe('ApprovalPanel', () => {
     expect(html.match(/<button /g)?.length).toBe(2);
   });
 });
+
+test.each(['/workflow approve child-full-id', 'Sub-run is paused awaiting review.'])(
+  'child approval renders command-free guidance from structured identity (%s)',
+  message => {
+    const run = toRun({
+      id: 'parent',
+      workflow_name: 'parent',
+      codebase_id: null,
+      status: 'paused',
+      started_at: '2026-10-05T10:00:00Z',
+      attention: {
+        kind: 'blocked_on_child',
+        runId: 'parent',
+        nodeId: 'sub',
+        childRunId: 'child-full-id',
+      },
+      metadata: {
+        approval: {
+          nodeId: 'sub',
+          type: 'child_workflow',
+          childRunId: 'child-full-id',
+          message,
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+        },
+      },
+    });
+    const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
+    expect(html).toContain('child-full-id');
+    expect(html).not.toContain('/workflow ');
+    expect(html).not.toContain('/archon-workflow ');
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('<input');
+    expect(html).not.toContain('<textarea');
+    expect(html).not.toContain('data-keymap-');
+  }
+);
+
+test('fan-out parent names every child without offering parent responses', () => {
+  const run = toRun({
+    id: 'parent',
+    workflow_name: 'parent',
+    codebase_id: null,
+    status: 'paused',
+    started_at: '2026-10-05T10:00:00Z',
+    attention: {
+      kind: 'blocked_on_children',
+      runId: 'parent',
+      nodeId: 'parallel',
+      childRunIds: ['first-child-id', 'second-child-id'],
+    },
+    metadata: {
+      approval: {
+        nodeId: 'parallel',
+        type: 'fan_out',
+        childRunIds: ['first-child-id', 'second-child-id'],
+        message: 'Waiting on parallel sub-runs.',
+        decisions: [{ id: 'approve' }, { id: 'reject' }],
+      },
+    },
+  });
+  const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
+  expect(html).toContain('first-child-id');
+  expect(html).toContain('second-child-id');
+  expect(html).not.toContain('/workflow ');
+  expect(html).not.toContain('/archon-workflow ');
+  expect(html).not.toContain('<button');
+  expect(html).not.toContain('<input');
+  expect(html).not.toContain('<textarea');
+  expect(html).not.toContain('data-keymap-');
+});

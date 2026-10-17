@@ -13,7 +13,10 @@ import { RunActionForbiddenError } from '@archon/core/operations/run-authorizati
  */
 import type { RunActor } from '@archon/core';
 import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
-import type { WorkflowOperations } from '@archon/core/operations/workflow-operations';
+import {
+  ChildRunRedirectError,
+  type WorkflowOperations,
+} from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
 import { createLogger } from '@archon/paths';
@@ -21,7 +24,11 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
-import type { RunTerminalStatus } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  type ApprovalContext,
+  type RunTerminalStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import { workflowOperations, workflowDb } from '@archon/core';
 import {
   REACTION_FAILURE,
@@ -280,15 +287,36 @@ export class SlackWorkflowBridge {
       getLog().warn({ runId: event.runId }, 'slack.bridge_approval_no_run');
       return;
     }
-    const { authoredOutcome } = await this.readRunPresentation(event.runId);
+    const { authoredOutcome, approval: context } = await this.readRunPresentation(event.runId);
+    const message =
+      context?.type === 'child_workflow' &&
+      context.childRunId &&
+      context.nodeId === event.nodeId &&
+      context.pauseId === event.pauseId
+        ? new ChildRunRedirectError(
+            event.runId,
+            [context.childRunId],
+            event.nodeId,
+            'approve'
+          ).messageFor(this.adapter)
+        : event.message;
     if (this.runs.get(event.runId) !== state) return;
     await this.updateStatusMessage(state, { status: 'paused', authoredOutcome });
     if (this.runs.get(event.runId) !== state) return;
 
+    if (authoredOutcome === 'unavailable') {
+      await this.adapter.getApp().client.chat.postMessage({
+        channel: state.channel,
+        thread_ts: state.threadTs,
+        text: `Approval details unavailable for run ${event.runId}. Check the run status before responding.`,
+      });
+      return;
+    }
+
     const { blocks, fallbackText } = buildApprovalBlocks({
       runId: event.runId,
       nodeId: event.nodeId,
-      message: event.message,
+      message,
       decisions: event.decisions,
       pauseId: event.pauseId,
     });
@@ -310,7 +338,7 @@ export class SlackWorkflowBridge {
       });
     const approval: ApprovalMessage = {
       channel: state.channel,
-      message: event.message,
+      message,
       nodeId: event.nodeId,
       postResult,
     };
@@ -403,6 +431,7 @@ export class SlackWorkflowBridge {
   private async readRunPresentation(runId: string): Promise<{
     authoredOutcome: RunSnapshot['authoredOutcome'];
     totalCostUsd?: number;
+    approval?: ApprovalContext;
   }> {
     try {
       const run = await workflowDb.getWorkflowRun(runId);
@@ -412,6 +441,7 @@ export class SlackWorkflowBridge {
       }
       const raw = run.metadata?.total_cost_usd;
       return {
+        approval: isApprovalContext(run.metadata.approval) ? run.metadata.approval : undefined,
         authoredOutcome: run.outcome ?? undefined,
         totalCostUsd: typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined,
       };
@@ -621,6 +651,10 @@ export class SlackWorkflowBridge {
           await this.postForbiddenAction(body, error.message);
           return;
         }
+        if (error instanceof ChildRunRedirectError) {
+          await this.postActionNote(body, runId, error.messageFor(this.adapter));
+          return;
+        }
         const err = error as Error;
         getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
         await this.postActionNote(
@@ -765,8 +799,8 @@ export class SlackWorkflowBridge {
         thread_ts: target.thread_ts,
         text,
       });
-    } catch (notifyError) {
-      getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_action_notify_failed');
+    } catch (error) {
+      getLog().warn({ err: error as Error, runId }, 'slack.bridge_action_notify_failed');
     }
   }
 

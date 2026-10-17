@@ -102,12 +102,12 @@ describe('test-suite change decision', () => {
     '.archon/workflows/sdlc/README.md',
     '.archon/workflows/sdlc/CONSTITUTION.md',
     '.archon/workflows/sdlc/validate/README.md',
-  ])('skips pack prose %s, which the bundle does not compile', file => {
+  ])('skips pack prose %s, which the bundle does not embed', file => {
     expect(shouldRunTestSuite([file])).toBe(false);
   });
 
-  /** `bundle-inventory.ts` selects what `check:bundled` compiles, so it owns this family. */
-  test('every Markdown file the bundle compiles runs the suite', async () => {
+  /** `bundle-inventory.ts` selects what the binary embeds, so it owns this family. */
+  test('every Markdown file the bundle embeds runs the suite', async () => {
     const repoRoot = resolve(import.meta.dir, '..');
     const sources = await collectBundleSources(
       join(repoRoot, '.archon/workflows'),

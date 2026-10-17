@@ -4,24 +4,27 @@ import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 
 /**
  * The failure class of a failed Codex turn, read from `turn.error.codexErrorInfo` on
- * `turn/completed` and never from the message text. A Codex newer than the generated
- * protocol may send variants this table does not know; they are `unknown`.
+ * `turn/completed` and never from the message text. A variant this table does not know,
+ * which the generated type allows, is `unknown`.
  */
 
-type StringVariant = Extract<CodexErrorInfo, string>;
 type ObjectVariant = Exclude<CodexErrorInfo, string>;
+/** The named object variants; the open `{ [key: string]: unknown }` member adds none. */
 type ObjectVariantKey = ObjectVariant extends infer V
   ? V extends object
-    ? keyof V
+    ? string extends keyof V
+      ? never
+      : keyof V
     : never
   : never;
 
 /**
- * Total over the generated variants, so a Codex bump that adds one fails type-check until
- * it is classified here. `unknown` rows are deliberate: nothing in them says whether
- * another attempt can help.
+ * One row per string variant Codex generates. The generated union ends in `| string`,
+ * which absorbs its literals, so `turn-error.test.ts` reads them from the generated file
+ * and fails a Codex bump that adds one until it is classified here. `unknown` rows are
+ * deliberate: nothing in them says whether another attempt can help.
  */
-const CLASS_BY_VARIANT: Record<StringVariant, ProviderFailureClass> = {
+export const CLASS_BY_VARIANT = {
   unauthorized: 'auth',
   usageLimitExceeded: 'quota_exhausted',
   rateLimitExceeded: 'rate_limited',
@@ -38,7 +41,9 @@ const CLASS_BY_VARIANT: Record<StringVariant, ProviderFailureClass> = {
   threadRollbackFailed: 'unknown',
   sandboxError: 'unknown',
   other: 'unknown',
-};
+} as const satisfies Record<string, ProviderFailureClass>;
+
+type StringVariant = keyof typeof CLASS_BY_VARIANT;
 
 function isStringVariant(info: string): info is StringVariant {
   return Object.hasOwn(CLASS_BY_VARIANT, info);

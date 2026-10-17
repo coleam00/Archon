@@ -20,6 +20,14 @@ import type { ThreadSource } from "./ThreadSource";
  */
 export type ThreadForkParams = { threadId: string,
 /**
+ * Start from the loaded parent's effective config, tools, environments, and
+ * persisted history to maximize prompt-cache reuse. Requires a loaded,
+ * persisted parent and `ephemeral: true`. Enables `features.reasoning_effort_override`
+ * on the fork. Cannot be combined with configuration overrides, `path`, `lastTurnId`,
+ * or `beforeTurnId`.
+ */
+experimentalPredictionMode?: boolean,
+/**
  * Optional last turn id to fork through, inclusive.
  *
  * When specified, turns after `last_turn_id` are omitted from the fork.

@@ -560,6 +560,7 @@ function mcpStatusResponse(pages: ServerStatus[][], index: number): ListMcpServe
 function turnOf(status: TurnStatus, error: TurnError | null, id = TURN_ID): Turn {
   return {
     id,
+    rootTurnId: null,
     items: [],
     itemsView: 'notLoaded',
     status,
@@ -773,6 +774,8 @@ export function subAgentActivity(
 ): Extract<ThreadItem, { type: 'subAgentActivity' }> {
   return {
     type: 'subAgentActivity',
+    model: null,
+    reasoningEffort: null,
     id: `activity-${kind}`,
     kind,
     agentThreadId,

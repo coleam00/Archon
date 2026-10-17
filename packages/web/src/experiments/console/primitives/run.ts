@@ -195,7 +195,12 @@ export function toRun(raw: RawWorkflowRun): Run {
       ? {
           nodeId: approval.nodeId,
           pauseId: approval.pauseId,
-          message: approval.message,
+          message:
+            approval.type === 'child_workflow'
+              ? approval.childRunId
+                ? `Waiting on sub-run ${approval.childRunId}. Review the child run to continue.`
+                : 'Waiting on a sub-run. Review the child run to continue.'
+              : approval.message,
           completionSignaled: approval.completionSignaled === true,
           decisions: approval.decisions ?? [],
           decisionsAuthored: approval.decisionsAuthored === true,

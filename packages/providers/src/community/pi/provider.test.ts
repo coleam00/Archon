@@ -73,6 +73,9 @@ const mockSession = {
   bindExtensions: mockBindExtensions,
   extensionRunner: mockExtensionRunner,
   setModel: mockSetModel,
+  getAllTools: () => [],
+  getToolDefinition: () => undefined,
+  setActiveToolsByName: (_toolNames: string[]) => undefined,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -266,7 +269,9 @@ const mockSettingsManagerCreate = mock(() => ({
   getGlobalSettings: mockSettingsManagerGetGlobalSettings,
   getProjectSettings: mockSettingsManagerGetProjectSettings,
 }));
-const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({}));
+const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({
+  getDefaultTools: () => undefined,
+}));
 const mockResourceLoaderReload = mock(async () => undefined);
 // Shared extension runtime exposed by the mock loader's getExtensions() —
 // one object shared across sessions, exactly like Pi's real runtime. Tests

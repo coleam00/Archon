@@ -1,7 +1,26 @@
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import ts from 'typescript';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 import type { ProviderFailureClass } from '@archon/provider-contract';
-import { classifyTurnError } from './turn-error';
+import { CLASS_BY_VARIANT, classifyTurnError } from './turn-error';
+
+/** The string literals of the generated `CodexErrorInfo` union, which its `| string` hides from the type. */
+function generatedStringVariants(): string[] {
+  const path = join(import.meta.dir, 'protocol/v2/CodexErrorInfo.ts');
+  const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest);
+  const alias = source.statements.find(
+    (node): node is ts.TypeAliasDeclaration =>
+      ts.isTypeAliasDeclaration(node) && node.name.text === 'CodexErrorInfo'
+  );
+  if (alias === undefined || !ts.isUnionTypeNode(alias.type)) {
+    throw new Error('CodexErrorInfo.ts no longer declares a union type');
+  }
+  return alias.type.types.flatMap(member =>
+    ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal) ? [member.literal.text] : []
+  );
+}
 
 function snapshot(
   primary: { usedPercent: number; resetsAt: number | null } | null,
@@ -23,6 +42,12 @@ function snapshot(
 }
 
 describe('classifyTurnError', () => {
+  test('classifies every string variant the generated protocol declares', () => {
+    const generated = generatedStringVariants();
+    expect(generated).toContain('unauthorized');
+    expect(Object.keys(CLASS_BY_VARIANT).sort()).toEqual(generated.sort());
+  });
+
   test.each([
     ['unauthorized', 'auth'],
     ['usageLimitExceeded', 'quota_exhausted'],

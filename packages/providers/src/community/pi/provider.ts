@@ -766,7 +766,13 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools, buildDefaultPiTools },
+      {
+        resolvePiSkills,
+        resolvePiThinkingLevel,
+        resolvePiTools,
+        buildDefaultPiTools,
+        freshPiToolNames,
+      },
       { createPiResourceLoader, getOrCreateReloadedExtensionLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
@@ -992,6 +998,7 @@ export class PiProvider implements IAgentProvider {
         requestOptions?.forkSession,
         requestOptions?.purpose === 'title-generation'
       );
+      const resumed = resumeSessionId !== undefined && !resumeFailed;
       if (resumeFailed) {
         yield {
           type: 'warning',
@@ -1147,7 +1154,7 @@ export class PiProvider implements IAgentProvider {
           extensionsEnabled: enableExtensions,
           interactive,
           nodeId: nodeConfig?.nodeId,
-          resumed: resumeSessionId !== undefined && !resumeFailed,
+          resumed,
         },
         'pi.session_started'
       );
@@ -1162,8 +1169,7 @@ export class PiProvider implements IAgentProvider {
       const baseTools =
         filteredTools ??
         (nativeToolDefs.length > 0 ? buildDefaultPiTools(cwd, requestOptions?.env) : undefined);
-      const piCustomTools =
-        nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
+      const piCustomTools = baseTools && [...baseTools, ...nativeToolDefs];
 
       // A caller that aborted (the idle watchdog, a cancel) has stopped reading, so a
       // session started now would run unobserved.
@@ -1194,8 +1200,8 @@ export class PiProvider implements IAgentProvider {
           // tool names; the actual Tool[] payload now goes through `customTools`.
           // `noTools: "builtin"` suppresses the default built-in set so our
           // filtered (and env-injected bash) list isn't doubled up (the
-          // suppression-behavior bug was fixed in pi 0.70.0). When filteredTools
-          // is undefined we keep Pi's defaults — no overrides.
+          // suppression-behavior bug was fixed in pi 0.70.0). When piCustomTools
+          // is undefined (an unrestricted node) we keep Pi's defaults.
           //
           // `customTools` is also the only path through which we can attach a
           // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
@@ -1206,6 +1212,15 @@ export class PiProvider implements IAgentProvider {
             ? { customTools: piCustomTools, noTools: 'builtin' as const }
             : {}),
         });
+
+        // Given neither `tools` nor `noTools`, Pi 1.3+ restores a reopened
+        // session's tools from its transcript, so an unrestricted node would
+        // inherit the restriction of the node that wrote the session.
+        if (resumed && piCustomTools === undefined) {
+          session.setActiveToolsByName(
+            freshPiToolNames(session, settingsManager.getDefaultTools())
+          );
+        }
 
         // Extension models aren't in the static catalog — skip the fallback warning.
         if (modelFallbackMessage && model) {

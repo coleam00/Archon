@@ -16,6 +16,7 @@ import * as userDb from '@archon/core/db/users';
 import * as workflowDb from '@archon/core/db/workflows';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 import {
+  ChildRunRedirectError,
   CancelRefusedError,
   ResumeRefusedError,
   StaleGateAnswerError,
@@ -222,6 +223,8 @@ export function registerChatInbound(
     } catch (error) {
       if (error instanceof RunActionForbiddenError)
         return { status: 'forbidden', message: error.message };
+      if (error instanceof ChildRunRedirectError)
+        return { status: 'refused', message: error.messageFor(platform) };
       if (error instanceof StaleGateAnswerError || error instanceof ResumeRefusedError)
         return { status: 'refused', message: error.message };
       if (error instanceof CancelRefusedError)

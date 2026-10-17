@@ -7,8 +7,8 @@
  */
 export type ThreadSearchOccurrencesParams = { threadId: string,
 /**
- * Case-insensitive literal substring to find in visible user messages and final assistant
- * messages.
+ * Case-insensitive literal substring to find in visible user messages and both partial and
+ * final assistant answers.
  */
 searchTerm: string,
 /**

@@ -359,8 +359,8 @@ export function classifyClaudeApiError(
 
 /**
  * The class a reason Claude Code gave for refusing to start can justify. Sign-in
- * refusals are `auth`; a setup the operator must change is `misconfigured`; the one
- * reason the SDK documents as retryable is `transient`. A reason that could be either a
+ * refusals are `auth`; a setup the operator must change is `misconfigured`; the
+ * reasons the SDK documents as retryable are `transient`. A reason that could be either a
  * setup fault or a passing condition stays `unknown`.
  */
 function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailureClass {
@@ -369,6 +369,7 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
     case 'org_pin_mismatch':
     case 'gateway_signin_required':
     case 'gateway_access_denied':
+    case 'org_config_refused': // the sign-in or an admin's change is the fix, not a retry
       return 'auth';
     case 'provider_not_allowed': // the session is set up for a provider managed settings disallow
     case 'managed_settings_invalid':
@@ -380,6 +381,7 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
     case 'bypass_root':
       return 'misconfigured';
     case 'worktree_unverified':
+    case 'org_config_required_unavailable': // the org's required settings could not be loaded
       return 'transient';
     case 'org_verify_failed': // network or a revoked token; the reason does not say which
     case 'remote_settings_required_unavailable': // unreachable or missing; the reason does not say which

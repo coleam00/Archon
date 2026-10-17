@@ -15,11 +15,11 @@ export async function registerHostProviders(): Promise<void> {
   if (!BUNDLED_IS_BINARY) {
     for (const id of MAINTAINED_PROVIDER_IDS) {
       registerProvider(
-        processProviderRegistration(maintainedDescriptors[id], [
-          process.execPath,
-          '--no-env-file',
-          getSourceProviderEntry(id),
-        ])
+        processProviderRegistration(
+          maintainedDescriptors[id],
+          [process.execPath, '--no-env-file', getSourceProviderEntry(id)],
+          'source'
+        )
       );
     }
   }

@@ -10,11 +10,10 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
  * because a named check reads it:
- *   - Pack prompts (`commands/`) and `.shared/` documents under `.archon/workflows/` are
- *     compiled into `packages/workflows/src/defaults/bundled-defaults.generated.ts`
- *     (`check:bundled`) and read by pack tests; `isPackPrompt` matches them. Pack READMEs and
- *     design notes are prose. Every other file under `.archon/workflows/` is not Markdown, so
- *     it runs the suite anyway.
+ *   - Pack prompts (`commands/`) and `.shared/` documents under `.archon/workflows/` are read
+ *     by the bundle tests and embedded into the binary by `scripts/build-binaries.sh`
+ *     (`serve-binary`); `isPackPrompt` matches them. Pack READMEs and design notes are prose.
+ *     Every other file under `.archon/workflows/` is not Markdown, so it runs the suite anyway.
  *   - `.claude/skills/` is imported as text by `packages/cli/src/bundled-skill.ts`, so it is
  *     compiled into the CLI itself (CLI skill tests).
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
