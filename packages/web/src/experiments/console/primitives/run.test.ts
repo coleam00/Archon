@@ -246,6 +246,34 @@ describe('toRun — cost', () => {
 });
 
 describe('toRun — approval parsing', () => {
+  test.each(['child-full-id', undefined])(
+    'normalizes legacy child command prose using structured child ID %s',
+    childRunId => {
+      const run = toRun(
+        raw({
+          id: 'parent',
+          workflow_name: 'parent',
+          status: 'paused',
+          metadata: {
+            approval: {
+              nodeId: 'sub',
+              type: 'child_workflow',
+              childRunId,
+              message: 'Blocked on child. Approve it: /workflow approve legacy-prose-id',
+            },
+          },
+        })
+      );
+      expect(run.approval?.message).toBe(
+        childRunId
+          ? `Waiting on sub-run ${childRunId}. Review the child run to continue.`
+          : 'Waiting on a sub-run. Review the child run to continue.'
+      );
+      expect(run.approval?.message).not.toContain('/workflow');
+      expect(run.approval?.message).not.toContain('legacy-prose-id');
+    }
+  );
+
   test('keeps an authored vocabulary and its labels without synthesizing default choices', () => {
     const decisions = [
       { id: 'accept', label: 'Accept plan' },

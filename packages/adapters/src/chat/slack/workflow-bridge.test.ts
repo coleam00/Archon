@@ -272,6 +272,7 @@ describe('SlackWorkflowBridge', () => {
   beforeEach(() => {
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
     mockGetConversationId.mockReset();
     mockSubscribe.mockClear();
     mockRespondToWorkflow.mockClear();
@@ -468,6 +469,37 @@ describe('SlackWorkflowBridge', () => {
       });
       expect(posted.at(-1)?.text).toContain(`/archon-workflow ${decision} child-full-id`);
       expect(posted.at(-1)?.text).not.toContain('Could not record');
+      expect(resume).not.toHaveBeenCalled();
+      expect(updated).toHaveLength(0);
+    }
+  );
+
+  test.each(['approve', 'reject'] as const)(
+    '%s logs a failed child redirect delivery with the action and Slack error',
+    async decision => {
+      const { adapter, fakeApp, posted, updated, dispatchAction } = makeFakeAdapter();
+      const resume = mock(async () => 'resumed' as const);
+      const slackError = new Error('Slack post failed');
+      fakeApp.client.chat.postMessage.mockRejectedValueOnce(slackError);
+      (decision === 'approve' ? mockApproveWorkflow : mockRejectWorkflow).mockRejectedValueOnce(
+        new ChildRunRedirectError('r1', ['child-full-id'], 'sub', decision)
+      );
+      new SlackWorkflowBridge(adapter as never, resume).attach();
+      await dispatchAction(`${decision}:r1:sub`, {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '2.000' },
+      });
+      expect(fakeApp.client.chat.postMessage).toHaveBeenCalledWith({
+        channel: 'C1',
+        thread_ts: '2.000',
+        text: expect.stringContaining(`/archon-workflow ${decision} child-full-id`),
+      });
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { err: slackError, runId: 'r1', nodeId: 'sub', decision },
+        'slack.bridge_approval_handler_failed'
+      );
+      expect(posted).toHaveLength(0);
       expect(resume).not.toHaveBeenCalled();
       expect(updated).toHaveLength(0);
     }

@@ -793,15 +793,11 @@ export class SlackWorkflowBridge {
       return;
     }
 
-    try {
-      await this.adapter.getApp().client.chat.postMessage({
-        channel: target.channel,
-        thread_ts: target.thread_ts,
-        text,
-      });
-    } catch (notifyError) {
-      getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_action_notify_failed');
-    }
+    await this.adapter.getApp().client.chat.postMessage({
+      channel: target.channel,
+      thread_ts: target.thread_ts,
+      text,
+    });
   }
 
   private async applyResolutionEdit(args: {
