@@ -21,6 +21,20 @@ describe('cognitiveUnits', () => {
       }
       const mixed = (a: boolean, b: boolean, c: boolean) => (a && b) || c;
       const run = (a: boolean, b: boolean, c: boolean) => a && b && c;
+      function others(x: number | null, xs: number[]) {
+        switch (x) {
+          case 1:
+            if (xs.length) return 1;
+        }
+        try {
+          outer: while (x) {
+            do break outer; while (x);
+          }
+        } catch {
+          if (x) return 2;
+        }
+        return x ?? 0;
+      }
       function outer(xs: number[]) {
         return xs.map(x => (x > 0 ? x : -x));
       }
@@ -33,6 +47,7 @@ describe('cognitiveUnits', () => {
       branches: [3],
       mixed: [2],
       run: [1],
+      others: [11],
       outer: [0],
       'outer > xs.map()': [1],
       "describe('a')": [0],
@@ -231,6 +246,14 @@ describe('checkRatchet', () => {
     write(repo, 'src/renamed.ts', `${SIMPLE}// one more line\n`);
     commitAll(repo, 'rename and grow');
     expect(checkRatchet(repo, 'main').failures).toEqual(['src/renamed.ts: 4 -> 5 lines']);
+  });
+
+  test('does not treat a renamed file as a source of moved functions', () => {
+    const repo = repoOnBranch();
+    renameSync(join(repo, 'src/a.ts'), join(repo, 'src/renamed.ts'));
+    write(repo, 'src/c.ts', COMPLEX);
+    commitAll(repo, 'rename and add a same-named function');
+    expect(checkRatchet(repo, 'main').failures).toEqual([]);
   });
 
   test('scores neither untouched files nor files outside the base Biome scope', () => {

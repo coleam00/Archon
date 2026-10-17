@@ -247,7 +247,6 @@ function touchedPaths(mergeBase: string, repo: string): Map<string, string | nul
     const status = entries[index++];
     if (status.startsWith('R')) {
       const from = entries[index++];
-      touched.set(from, from);
       touched.set(entries[index++], from);
     } else {
       const path = entries[index++];
