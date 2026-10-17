@@ -10,7 +10,7 @@ import {
   realpath,
   symlink,
 } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join, resolve, sep } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
 import { deflateSync } from 'zlib';
@@ -4043,6 +4043,43 @@ branch refs/heads/feature/auth
         });
       }
     );
+
+    test.each([
+      ['the home share', true],
+      ['USERPROFILE when the home share is disconnected', false],
+    ])('without HOME, Windows writes to %s', async (_case, shareConnected) => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-windows-home-')));
+      const share = join(root, 'share');
+      const profile = join(root, 'profile');
+      await realMkdir(profile);
+      if (shareConnected) await realMkdir(share);
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      try {
+        await withEnv(
+          {
+            GIT_CONFIG_GLOBAL: undefined,
+            HOME: undefined,
+            XDG_CONFIG_HOME: undefined,
+            HOMEDRIVE: root,
+            HOMEPATH: `${sep}share`,
+            USERPROFILE: profile,
+          },
+          async () => {
+            const path = repo('/workspace/windows-home');
+            await git.addSafeDirectory(path);
+            const [used, unused] = shareConnected ? [share, profile] : [profile, share];
+            expect(await readFile(join(used, '.gitconfig'), 'utf8')).toContain(
+              `directory = ${path}`
+            );
+            await expect(stat(join(unused, '.gitconfig'))).rejects.toThrow('ENOENT');
+          }
+        );
+      } finally {
+        if (platform) Object.defineProperty(process, 'platform', platform);
+      }
+    });
 
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();

@@ -1,7 +1,7 @@
 import { GitFailure } from './errors';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import {
   appendFile,
   chmod,
@@ -14,7 +14,6 @@ import {
   unlink,
 } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
-import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
@@ -710,10 +709,20 @@ async function editSafeDirectory(
   });
 }
 
+/** The HOME git uses: POSIX git has none when it is unset; Git for Windows derives one. */
+function gitHome(): string | undefined {
+  const { HOME, HOMEDRIVE, HOMEPATH, USERPROFILE } = process.env;
+  if (HOME || process.platform !== 'win32') return HOME;
+  // Git for Windows skips a disconnected %HOMEDRIVE%%HOMEPATH% home share.
+  const homeShare = HOMEDRIVE && HOMEPATH ? `${HOMEDRIVE}${HOMEPATH}` : undefined;
+  return homeShare && statSync(homeShare, { throwIfNoEntry: false })?.isDirectory()
+    ? homeShare
+    : USERPROFILE;
+}
+
 /** Git's --global write target: ~/.gitconfig unless only the XDG file exists. */
 function defaultGlobalConfigPath(): string {
-  // POSIX git has no global config without HOME; Git for Windows derives one.
-  const home = process.env.HOME || (process.platform === 'win32' ? homedir() : undefined);
+  const home = gitHome();
   if (!home) throw new Error('HOME is not set, so git has no global config');
   const homeConfig = join(home, '.gitconfig');
   const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
