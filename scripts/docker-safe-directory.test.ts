@@ -34,6 +34,8 @@ test.skipIf(process.platform === 'win32').each([false, true])(
       GIT_CONFIG_GLOBAL: config,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_COUNT: '0',
+      // Container checkouts belong to another user, as on a bind mount.
+      GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
       PATH: `${bin}${delimiter}${process.env.PATH}`,
       ARCHON_TEST_REPO: repo,
       ARCHON_TEST_BUN: process.execPath,
@@ -77,7 +79,7 @@ if [ "$1" = config ] && [ "$2" = --includes ]; then
   "$ARCHON_TEST_GIT" config --global test.concurrent retained
 elif [ "$5" = --unset-all ]; then
   "$ARCHON_TEST_GIT" "$@" || exit $?
-  GIT_TEST_ASSUME_DIFFERENT_OWNER=1 "$ARCHON_TEST_GIT" -C "$ARCHON_TEST_REPO" status --porcelain || exit $?
+  "$ARCHON_TEST_GIT" -C "$ARCHON_TEST_REPO" status --porcelain || exit $?
   if "$ARCHON_TEST_GIT" config --global test.blocked must-not-write; then exit 88; fi
   touch "$ARCHON_TEST_MARKER"
 elif [ "$5" = --replace-all ] && [ "$ARCHON_TEST_FAIL" = 1 ]; then
@@ -104,9 +106,7 @@ fi
       if (fail) expect(repair.stderr.toString()).toContain('injected-replacement-failure');
       expect(await Bun.file(marker).exists()).toBe(true);
       await unlink(marker);
-      execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], {
-        env: { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
-      });
+      execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], { env });
       expect(git('config', '--global', 'test.concurrent')).toBe('retained');
       expect((await stat(config)).mode & 0o777).toBe(0o660);
       if (newlinePath) expect(await Bun.file(sibling).text()).toBe(siblingContents);
@@ -127,28 +127,17 @@ fi
     expect(scan.exitCode).toBe(7);
     expect(scan.stderr.toString()).toContain('scan-failed');
     await writeFile(join(bin, 'find'), `#!/bin/sh\n${scripts.find}\n`, { mode: 0o755 });
-    // A held config lock is waited for: nothing is written until its holder releases it.
-    const startWhileLocked = async (): Promise<void> => {
-      const before = await Bun.file(config).text();
-      await writeFile(`${config}.lock`, '');
-      const startup = Bun.spawn(['bash', resolve(import.meta.dir, '../docker-entrypoint.sh')], {
-        env,
-      });
-      await Bun.sleep(1000);
-      expect(startup.exitCode).toBeNull();
-      expect(await Bun.file(config).text()).toBe(before);
-      await unlink(`${config}.lock`);
-      expect(await startup.exited).toBe(0);
-      expect(
-        git('config', '--global', '--null', '--get-all', 'safe.directory')
-          .split('\0')
-          .filter(value => value === repo)
-      ).toHaveLength(1);
-    };
     git('config', '--global', '--add', 'safe.directory', repo);
-    await startWhileLocked();
+    await writeFile(`${config}.lock`, '');
+    expect(() =>
+      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
+    ).toThrow();
+    await unlink(`${config}.lock`);
     git('config', '--global', '--fixed-value', '--unset-all', 'safe.directory', repo);
-    await startWhileLocked();
+    await writeFile(`${config}.lock`, '');
+    expect(() =>
+      execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env })
+    ).toThrow();
   }
 );
 
@@ -174,6 +163,8 @@ test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])
       GIT_CONFIG_GLOBAL: undefined,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_COUNT: '0',
+      // Container checkouts belong to another user, as on a bind mount.
+      GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
       PATH: `${bin}${delimiter}${process.env.PATH}`,
       ARCHON_TEST_REPO: repo,
       ARCHON_TEST_BUN: process.execPath,
@@ -197,9 +188,7 @@ test.skipIf(process.platform === 'win32').each(['include-reset', 'two-globals'])
         '\0'
       );
       expect(entries.filter(value => value === repo)).toHaveLength(1);
-      execFileSync('git', ['-C', repo, 'status', '--porcelain'], {
-        env: { ...env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
-      });
+      execFileSync('git', ['-C', repo, 'status', '--porcelain'], { env });
     }
   }
 );

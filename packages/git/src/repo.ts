@@ -1,20 +1,20 @@
 import { GitFailure } from './errors';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
-import { existsSync, statSync } from 'fs';
+import { existsSync } from 'fs';
 import {
-  appendFile,
-  chmod,
-  open,
   readdir,
+  open,
   readFile,
   realpath,
   rename,
   stat,
+  lstat,
   unlink,
+  appendFile,
 } from 'fs/promises';
-import type { FileHandle } from 'fs/promises';
-import { join } from 'path';
+import { homedir } from 'os';
+import { dirname, join } from 'path';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
@@ -619,45 +619,50 @@ export async function syncRepository(
   return { ok: true, value: undefined };
 }
 
-const CONFIG_LOCK_WAIT_MS = 10000;
-
-/**
- * Take Git's writer lock for a config file. Another writer holding it (EEXIST),
- * whether Archon or git itself, is waited out; any other failure, or a lock
- * still held at the deadline, throws with its original error.
- */
-async function acquireConfigLock(lockPath: string): Promise<FileHandle> {
-  const deadline = Date.now() + CONFIG_LOCK_WAIT_MS;
-  for (let delay = 10; ; delay = Math.min(delay * 2, 200)) {
-    try {
-      return await open(lockPath, 'wx', 0o600);
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      if (Date.now() >= deadline) throw error;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-
-async function editConfigFile(
+async function editSafeDirectory(
   configPath: string,
-  edit: (lockPath: string) => Promise<void>
+  path: RepoPath,
+  grant: boolean
 ): Promise<void> {
   const config = await realpath(configPath);
   const lockPath = `${config}.lock`;
   // Use Git's writer lock and publish only the finished edit. Readers retain
   // their accepted trust even if a repair fails after removing the old entry.
-  const lock = await acquireConfigLock(lockPath);
+  const lock = await open(lockPath, 'wx', 0o600);
   let published = false;
   let closed = false;
   try {
-    const { mode } = await stat(config);
+    await lock.chmod((await stat(config)).mode);
     await lock.writeFile(await readFile(config));
     await lock.close();
     closed = true;
-    await edit(lockPath);
-    // Like git, apply the config's mode only after editing, so a read-only config stays editable.
-    await chmod(lockPath, mode);
+    try {
+      await execFileAsync(
+        'git',
+        ['config', '--file', lockPath, '--fixed-value', '--unset-all', 'safe.directory', path],
+        { timeout: 10000 }
+      );
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
+    }
+    if (grant) {
+      // Git writes into the last matching section, after any included resets.
+      await appendFile(lockPath, '\n[safe]\n');
+      await execFileAsync(
+        'git',
+        [
+          'config',
+          '--file',
+          lockPath,
+          '--fixed-value',
+          '--replace-all',
+          'safe.directory',
+          path,
+          path,
+        ],
+        { timeout: 10000 }
+      );
+    }
     await rename(lockPath, config);
     published = true;
   } finally {
@@ -678,65 +683,40 @@ async function editConfigFile(
   }
 }
 
-async function replaceSafeDirectory(lockPath: string, path: RepoPath): Promise<void> {
-  await execFileAsync(
-    'git',
-    ['config', '--file', lockPath, '--fixed-value', '--replace-all', 'safe.directory', path, path],
-    { timeout: 10000 }
-  );
-}
-
-async function editSafeDirectory(
-  configPath: string,
-  path: RepoPath,
-  grant: boolean
-): Promise<void> {
-  await editConfigFile(configPath, async lockPath => {
+/**
+ * Whether git will treat `path` as owned by the user running it, so it never
+ * reads safe.directory there. A path not created yet is judged by its nearest
+ * existing ancestor, so a checkout inside another user's tree (a bind mount)
+ * keeps its grant. Follows git's POSIX check, including
+ * GIT_TEST_ASSUME_DIFFERENT_OWNER. Root and Windows
+ * always keep the grant: git judges sudo callers by SUDO_UID, and compares
+ * owner SIDs on Windows.
+ */
+async function ownedByCurrentUser(path: string): Promise<boolean> {
+  const euid = process.geteuid?.();
+  if (euid === undefined || euid === 0 || process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER) {
+    return false;
+  }
+  for (let candidate = path; ; candidate = dirname(candidate)) {
     try {
-      await execFileAsync(
-        'git',
-        ['config', '--file', lockPath, '--fixed-value', '--unset-all', 'safe.directory', path],
-        { timeout: 10000 }
-      );
+      return (await lstat(candidate)).uid === euid;
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
+      const missing = error instanceof Error && 'code' in error && error.code === 'ENOENT';
+      // An unreadable path keeps the grant: ownership is unknown, so write as before.
+      if (!missing || dirname(candidate) === candidate) return false;
     }
-    if (grant) {
-      // Git writes into the last matching section, after any included resets.
-      await appendFile(lockPath, '\n[safe]\n');
-      await replaceSafeDirectory(lockPath, path);
-    }
-  });
-}
-
-/** The HOME git uses: POSIX git has none when it is unset; Git for Windows derives one. */
-function gitHome(): string | undefined {
-  const { HOME, HOMEDRIVE, HOMEPATH, USERPROFILE } = process.env;
-  if (HOME || process.platform !== 'win32') return HOME;
-  // Git for Windows skips a disconnected %HOMEDRIVE%%HOMEPATH% home share.
-  const homeShare = HOMEDRIVE && HOMEPATH ? `${HOMEDRIVE}${HOMEPATH}` : undefined;
-  return homeShare && statSync(homeShare, { throwIfNoEntry: false })?.isDirectory()
-    ? homeShare
-    : USERPROFILE;
-}
-
-/** Git's --global write target: ~/.gitconfig unless only the XDG file exists. */
-function defaultGlobalConfigPath(): string {
-  const home = gitHome();
-  if (!home) throw new Error('HOME is not set, so git has no global config');
-  const homeConfig = join(home, '.gitconfig');
-  const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
-  return existsSync(homeConfig) || !existsSync(xdgConfig) ? homeConfig : xdgConfig;
+  }
 }
 
 /**
- * Add a directory to git's global safe.directory config.
+ * Add a directory to git's global safe.directory config when git will need it.
+ * Skipping owned paths keeps concurrent setups off the global config lock.
  * Grants persist after setup failure: revocation could remove trust that a
  * concurrent setup accepted for the same path.
- * Writes take Git's config lock and wait for another writer instead of failing.
  * Uses execFileAsync (no shell interpolation) for safety.
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
+  if (await ownedByCurrentUser(path)) return;
   try {
     let fields: string[];
     try {
@@ -767,15 +747,20 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     const values = entries.map(entry => entry.value);
     const grants = entries.filter(entry => entry.value === path);
     if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
-    const targetPath = process.env.GIT_CONFIG_GLOBAL ?? defaultGlobalConfigPath();
-    // git config --global creates a missing file; the lock-and-rename edit needs one.
-    // Append mode creates through a dangling symlink and never truncates a racing writer's file.
-    if (!existsSync(targetPath)) await (await open(targetPath, 'a', 0o666)).close();
     if (grants.length === 0 && !values.includes('')) {
-      await editConfigFile(targetPath, lockPath => replaceSafeDirectory(lockPath, path));
+      await execFileAsync(
+        'git',
+        ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
+        { timeout: 10000 }
+      );
       return;
     }
-    const target = await realpath(targetPath);
+    const home = process.env.HOME || homedir();
+    const homeConfig = join(home, '.gitconfig');
+    const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
+    const target = await realpath(
+      process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
+    );
     // Publish effective trust before removing duplicate grants in earlier sources.
     await editSafeDirectory(target, path, true);
     for (const source of new Set(grants.map(entry => entry.source))) {

@@ -511,7 +511,7 @@ sudo chown -R 1001:1001 /opt/archon-user-home
 The entrypoint fixes ownership on every container start, touching only files whose owner is wrong, so startup stays fast even on large volumes. Subsequent rebuilds work without re-running `chown`.
 
 :::caution
-Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
+Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries at runtime for `/.archon/workspaces` and `/.archon/worktrees` repos owned by another user, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
 :::
 
 Runtime `safe.directory` grants also persist in this home volume across restarts and rebuilds. A grant remains if clone or worktree setup fails, adoption is rejected, or the checkout is removed; Git will still trust a later checkout at that path. Archon leaves removal to the operator because concurrent setup may rely on the same grant. See [Git directory trust](/reference/security/#git-directory-trust).

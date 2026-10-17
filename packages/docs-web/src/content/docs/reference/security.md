@@ -55,7 +55,7 @@ Because `bypassPermissions` grants full file and shell access, only run Archon i
 
 ## Git directory trust
 
-Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup. Concurrent setups wait up to 10 seconds for Git's config lock instead of failing; a lock held longer than that stops setup with the lock path in the error.
+Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant when the running user (other than root) owns the path, or for a path not created yet, its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
 
 If Git evaluates the same file more than once, for example through an include or symlinked XDG and home config files, its effective config can still list that single physical grant multiple times. Archon preserves those includes and symlinks.
 

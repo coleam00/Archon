@@ -112,6 +112,7 @@ describe('GitLab clone child security boundary', () => {
           'Initial',
         ]);
         await realExec('git', ['config', '--global', 'core.hooksPath', hooks]);
+        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
         await git.addSafeDirectory(git.toRepoPath(source));
         await git.addSafeDirectory(git.toRepoPath(join(source, '.git')));
         await writeFile(
@@ -119,7 +120,6 @@ describe('GitLab clone child security boundary', () => {
           '#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\ngit status --porcelain > hook-ran\n',
           { mode: 0o755 }
         );
-        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
         execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
           const clone = args.indexOf('clone');
           const localArgs = [...args];

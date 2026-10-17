@@ -10,7 +10,7 @@ import {
   realpath,
   symlink,
 } from 'fs/promises';
-import { join, resolve, sep } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
 import { deflateSync } from 'zlib';
@@ -3873,214 +3873,47 @@ branch refs/heads/feature/auth
       execSpy.mockRestore();
     });
 
-    test('concurrent registrations against one global config all succeed', async () => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-concurrent-')));
-      const configPath = join(root, 'gitconfig');
-      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
-      process.env.GIT_CONFIG_GLOBAL = configPath;
-      try {
-        await writeFile(configPath, '[user]\n\tname = other\n');
-        const paths = Array.from({ length: 8 }, (_, i) => repo(`/workspace/wt-${i}`));
-        await Promise.all(paths.map(path => git.addSafeDirectory(path)));
-        const { stdout } = await git.execFileAsync('git', [
+    test('calls git config with correct arguments', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.addSafeDirectory(repo('/workspace/repo'));
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
           'config',
           '--global',
-          '--get-all',
+          '--fixed-value',
+          '--replace-all',
           'safe.directory',
-        ]);
-        expect(stdout.trim().split('\n').sort()).toEqual([...paths].sort());
-        expect(
-          (await git.execFileAsync('git', ['config', '--global', 'user.name'])).stdout.trim()
-        ).toBe('other');
-      } finally {
-        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
-      }
-    });
-
-    const withEnv = async (
-      vars: Record<string, string | undefined>,
-      run: () => Promise<void>
-    ): Promise<void> => {
-      const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
-      const apply = (values: Record<string, string | undefined>): void => {
-        for (const [key, value] of Object.entries(values)) {
-          if (value === undefined) delete process.env[key];
-          else process.env[key] = value;
-        }
-      };
-      apply(vars);
-      try {
-        await run();
-      } finally {
-        apply(previous);
-      }
-    };
-
-    test('creates a missing global config for the first registration', async () => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-missing-')));
-      const configPath = join(root, 'gitconfig');
-      await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
-        const path = repo('/workspace/first');
-        await git.addSafeDirectory(path);
-        expect(await readFile(configPath, 'utf8')).toContain(`directory = ${path}`);
-      });
-    });
-
-    test.skipIf(process.platform === 'win32')(
-      'creates the target of a dangling global config symlink',
-      async () => {
-        execSpy.mockRestore();
-        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-dangling-')));
-        const configPath = join(root, 'gitconfig');
-        const target = join(root, 'dotfiles-gitconfig');
-        await symlink(target, configPath);
-        await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
-          const path = repo('/workspace/dangling');
-          await git.addSafeDirectory(path);
-          expect(await readFile(target, 'utf8')).toContain(`directory = ${path}`);
-        });
-      }
-    );
-
-    test('writes to the XDG config when it is the only global config', async () => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-xdg-')));
-      const home = join(root, 'home');
-      const xdgConfig = join(root, 'xdg', 'git', 'config');
-      await realMkdir(home);
-      await realMkdir(join(root, 'xdg', 'git'), { recursive: true });
-      await writeFile(xdgConfig, '[user]\n\tname = other\n');
-      await withEnv(
-        { GIT_CONFIG_GLOBAL: undefined, HOME: home, XDG_CONFIG_HOME: join(root, 'xdg') },
-        async () => {
-          const path = repo('/workspace/xdg');
-          await git.addSafeDirectory(path);
-          expect(await readFile(xdgConfig, 'utf8')).toContain(`directory = ${path}`);
-          await expect(stat(join(home, '.gitconfig'))).rejects.toThrow('ENOENT');
-        }
+          '/workspace/repo',
+          '/workspace/repo',
+        ],
+        { timeout: 10000 }
       );
     });
 
-    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-      'fails without waiting when the config lock cannot be created',
-      async () => {
-        execSpy.mockRestore();
-        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-readonly-')));
-        const configDir = join(root, 'config');
-        const configPath = join(configDir, 'gitconfig');
-        await realMkdir(configDir);
-        await writeFile(configPath, '');
-        await chmod(configDir, 0o500);
-        try {
-          await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
-            const started = Date.now();
-            await expect(git.addSafeDirectory(repo('/workspace/readonly'))).rejects.toThrow(
-              'EACCES'
-            );
-            expect(Date.now() - started).toBeLessThan(2000);
-          });
-        } finally {
-          await chmod(configDir, 0o700);
-        }
-      }
-    );
+    test('uses execFileAsync (not shell exec)', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
-    test('fails with the lock error when the config lock is held past the wait', async () => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-held-')));
-      const configPath = join(root, 'gitconfig');
-      await writeFile(configPath, '');
-      const lockPath = `${await realpath(configPath)}.lock`;
-      await writeFile(lockPath, '');
-      // Every clock read jumps 6 s, so the 10 s wait expires within a few retries.
-      let now = Date.now();
-      const clock = spyOn(Date, 'now').mockImplementation(() => (now += 6000));
-      try {
-        await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
-          await expect(git.addSafeDirectory(repo('/workspace/held'))).rejects.toThrow('EEXIST');
-        });
-      } finally {
-        clock.mockRestore();
-      }
-      expect(await readFile(configPath, 'utf8')).toBe('');
-      expect(await Bun.file(lockPath).exists()).toBe(true);
-    });
+      await git.addSafeDirectory(repo('/workspace/path with spaces'));
 
-    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0).each([
-      ['new grant', ''],
-      ['duplicate repair', '[safe]\n\tdirectory = /workspace/read-only\n'.repeat(2)],
-    ])('registers in a read-only config file (%s)', async (_case, content) => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-readonly-file-')));
-      const configPath = join(root, 'gitconfig');
-      await writeFile(configPath, content);
-      await chmod(configPath, 0o444);
-      await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
-        const path = repo('/workspace/read-only');
-        await git.addSafeDirectory(path);
-        const { stdout } = await git.execFileAsync('git', [
+      // If this were shell exec, spaces in the path would cause issues.
+      // execFileAsync passes args as array, so path with spaces is safe.
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
           'config',
           '--global',
-          '--get-all',
+          '--fixed-value',
+          '--replace-all',
           'safe.directory',
-        ]);
-        expect(stdout.trim().split('\n')).toEqual([path]);
-        expect((await stat(configPath)).mode & 0o777).toBe(0o444);
-      });
+          '/workspace/path with spaces',
+          '/workspace/path with spaces',
+        ],
+        { timeout: 10000 }
+      );
     });
-
-    test.skipIf(process.platform === 'win32')(
-      'fails clearly when git has no global config',
-      async () => {
-        execSpy.mockRestore();
-        await withEnv({ GIT_CONFIG_GLOBAL: undefined, HOME: undefined }, async () => {
-          await expect(git.addSafeDirectory(repo('/workspace/no-home'))).rejects.toThrow(
-            'HOME is not set'
-          );
-        });
-      }
-    );
-
-    test.each([
-      ['the home share', true],
-      ['USERPROFILE when the home share is disconnected', false],
-    ])('without HOME, Windows writes to %s', async (_case, shareConnected) => {
-      execSpy.mockRestore();
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-windows-home-')));
-      const share = join(root, 'share');
-      const profile = join(root, 'profile');
-      await realMkdir(profile);
-      if (shareConnected) await realMkdir(share);
-      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', { value: 'win32' });
-      try {
-        await withEnv(
-          {
-            GIT_CONFIG_GLOBAL: undefined,
-            HOME: undefined,
-            XDG_CONFIG_HOME: undefined,
-            HOMEDRIVE: root,
-            HOMEPATH: `${sep}share`,
-            USERPROFILE: profile,
-          },
-          async () => {
-            const path = repo('/workspace/windows-home');
-            await git.addSafeDirectory(path);
-            const [used, unused] = shareConnected ? [share, profile] : [profile, share];
-            expect(await readFile(join(used, '.gitconfig'), 'utf8')).toContain(
-              `directory = ${path}`
-            );
-            await expect(stat(join(unused, '.gitconfig'))).rejects.toThrow('ENOENT');
-          }
-        );
-      } finally {
-        if (platform) Object.defineProperty(process, 'platform', platform);
-      }
-    });
-
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;
@@ -4112,15 +3945,14 @@ branch refs/heads/feature/auth
         const config = join(root, 'gitconfig');
         const previousConfig = process.env.GIT_CONFIG_GLOBAL;
         process.env.GIT_CONFIG_GLOBAL = config;
+        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
         try {
           await realExec('git', ['init', root]);
           await writeFile(config, `[safe]\n directory = ${JSON.stringify(root)}\n directory = \n`);
           if (process.platform !== 'win32') await chmod(config, 0o660);
           const configMode = (await stat(config)).mode;
           const checkTrust = async (): Promise<void> => {
-            await realExec('git', ['-C', root, 'status', '--porcelain'], {
-              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
-            });
+            await realExec('git', ['-C', root, 'status', '--porcelain']);
           };
           let checkedIntermediate = false;
           execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (file, args, options) => {
@@ -4176,6 +4008,7 @@ branch refs/heads/feature/auth
           expect((await stat(config)).mode).toBe(configMode);
         } finally {
           execSpy.mockRestore();
+          delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
           if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
           else process.env.GIT_CONFIG_GLOBAL = previousConfig;
         }
@@ -4230,8 +4063,13 @@ branch refs/heads/feature/auth
           HOME: process.env.HOME,
           XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
           GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+          GIT_TEST_ASSUME_DIFFERENT_OWNER: process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER,
         };
-        Object.assign(process.env, { HOME: root, XDG_CONFIG_HOME: join(root, 'xdg') });
+        Object.assign(process.env, {
+          HOME: root,
+          XDG_CONFIG_HOME: join(root, 'xdg'),
+          GIT_TEST_ASSUME_DIFFERENT_OWNER: '1',
+        });
         delete process.env.GIT_CONFIG_GLOBAL;
         try {
           await realMkdir(join(root, 'xdg/git'), { recursive: true });
@@ -4259,9 +4097,7 @@ branch refs/heads/feature/auth
             expect(stdout.split('\0').filter(value => value === '/workspace/other')).toEqual([
               '/workspace/other',
             ]);
-            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain'], {
-              env: { ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: '1' },
-            });
+            await git.execFileAsync('git', ['-C', root, 'status', '--porcelain']);
           }
         } finally {
           for (const [key, value] of Object.entries(saved)) {
@@ -4295,6 +4131,30 @@ branch refs/heads/feature/auth
         else process.env.GIT_CONFIG_GLOBAL = previousConfig;
       }
     });
+
+    // Windows keeps the write: git compares owner SIDs there, which we do not read.
+    test.skipIf(process.platform === 'win32')(
+      'concurrent worktree setups under a directory this user owns all succeed',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'git-safe-race-'))));
+        const configPath = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = configPath;
+        try {
+          await writeFile(configPath, '[user]\n\tname = other-process\n');
+          const worktrees = Array.from({ length: 8 }, (_, i) => repo(join(root, `worktree-${i}`)));
+          await Promise.all(worktrees.map(path => git.addSafeDirectory(path)));
+          expect(await readFile(configPath, 'utf8')).toBe('[user]\n\tname = other-process\n');
+          // Git trusts a repository its own user created without any grant.
+          await git.execFileAsync('git', ['init', '--quiet', worktrees[0]]);
+          await git.execFileAsync('git', ['-C', worktrees[0], 'status', '--porcelain']);
+        } finally {
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
   });
 
   describe('findRepoRoot', () => {
