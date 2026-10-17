@@ -124,7 +124,7 @@ jobs:
             const manifest = await Bun.file("plugins/forge-github/archon-plugin.json").json();
             console.log(pluginReleaseAsset(manifest.executable, process.env.TARGET));
           ')
-          bun build --compile --target="$TARGET" packages/adapters/src/forge/github/plugin.ts --outfile "dist/${ASSET}"
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target="$TARGET" packages/adapters/src/forge/github/plugin.ts --outfile "dist/${ASSET}"
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test GitHub forge plugin
@@ -156,7 +156,7 @@ jobs:
             const manifest = await Bun.file("plugins/chat-slack/archon-plugin.json").json();
             console.log(pluginReleaseAsset(manifest.executable, process.env.TARGET));
           ')
-          bun build --compile --target="$TARGET" packages/chat-slack/src/main.ts --outfile "dist/${ASSET}"
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target="$TARGET" packages/chat-slack/src/main.ts --outfile "dist/${ASSET}"
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test Slack chat plugin
