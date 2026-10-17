@@ -352,6 +352,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -363,6 +365,13 @@ jobs:
 
       - name: Validate
         run: bun run validate --only cli-import-boundary,package-edges,generated-files,type-check,lint,format
+
+      # The ratchet compares against the merge base with origin/$GITHUB_BASE_REF, which the
+      # full fetch above provides. A push skips it: the change is already merged, and a squash
+      # merge turns the change's Ratchet-Allow trailers into body text git no longer reads.
+      - name: Ratchet
+        if: github.event_name == 'pull_request'
+        run: bun run validate --only ratchet
 
   schema-upgrade:
     needs: changes
