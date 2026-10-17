@@ -9,6 +9,7 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
+  isMaintainedProvider,
   providerFailureClassSchema,
   type IAgentProvider,
   type CredentialStatus,
@@ -159,6 +160,11 @@ function startProcess(
     })();
     return disposing;
   }
+  const descriptorMismatch = new Error(
+    isMaintainedProvider(descriptor.id)
+      ? `Archon's source changed under this run (built-in provider ${descriptor.id}); the run can continue with archon workflow resume ${options.env?.WORKFLOW_ID ?? '<run id>'}`
+      : `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
+  );
   return {
     async connect(): Promise<ConnectedProvider> {
       const connection = await connectProvider(
@@ -181,13 +187,13 @@ function startProcess(
         }
       );
       if (!isDeepStrictEqual(connection.descriptor, descriptor)) {
-        throw new Error(
-          `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
-        );
+        throw descriptorMismatch;
       }
       return connection;
     },
     async failure(error: unknown): Promise<Error> {
+      // This host-authored diagnostic includes the public run ID that env redaction would hide.
+      if (error === descriptorMismatch) return descriptorMismatch;
       // EOF does not imply process exit: a provider can close stdout and stay alive.
       // A protocol mismatch closed the host's side, so the plugin ends like on EOF; waiting
       // for it keeps the exit from racing termination.

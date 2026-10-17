@@ -201,12 +201,38 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
   }
 });
 
-test('descriptor mismatch fails before starting a session', async () => {
+test('installed plugin descriptor mismatch keeps the update message and refuses the session', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'archon-provider-descriptor-'));
   try {
     const file = join(directory, 'session');
-    await expect(collect(provider('mismatch', file).sendQuery('turn', tmpdir()))).rejects.toThrow(
-      'changed since install'
+    await expect(collect(provider('mismatch', file).sendQuery('turn', tmpdir()))).rejects.toEqual(
+      new Error(
+        `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
+      )
+    );
+    expect(existsSync(file)).toBe(false);
+  } finally {
+    await removeTempTree(directory);
+  }
+});
+
+test('built-in descriptor mismatch names source change and run resume and refuses the session', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'archon-builtin-descriptor-'));
+  try {
+    const file = join(directory, 'session');
+    const runtime = processProviderRegistration({ ...descriptor, id: 'claude' }, [
+      process.execPath,
+      fixture,
+      'mismatch',
+      file,
+    ]).factory();
+    const runId = '15454d16-0000-4000-8000-000000000001';
+    await expect(
+      collect(runtime.sendQuery('turn', tmpdir(), undefined, { env: { WORKFLOW_ID: runId } }))
+    ).rejects.toEqual(
+      new Error(
+        `Archon's source changed under this run (built-in provider claude); the run can continue with archon workflow resume ${runId}`
+      )
     );
     expect(existsSync(file)).toBe(false);
   } finally {
