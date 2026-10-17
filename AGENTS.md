@@ -165,7 +165,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Add tests for meaningful behavior and failure modes. Do not preserve deleted features through regression-test clutter.
 - The engine tests what it owns (the workflow language, script nodes, state, waits, resume) with its own minimal fixtures, never with a pack workflow. The pack tests only its own scripts at a tool boundary and never retests the engine's behavior.
 - Prefer deterministic, cheap tests. Remove accidental I/O and unnecessary subprocesses before increasing timeouts.
-- Remove test temp trees with `removeTempTree` or `trackTempRoots` from `@archon/paths/test-utils`.
+- Remove test temp trees with `removeTempTree` or `trackTempRoots`: from `@archon/paths/test-utils` in engine and `scripts/` tests, and from the pack's own `.archon/scripts/__tests__/temp-roots.ts` in pack tests.
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
   checksOf,
@@ -26,7 +26,7 @@ import { CONFIDENCES } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhCommentRow, gitCheckout, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
+import { type GhCommentRow, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -209,7 +209,7 @@ function install(): Install {
   const home = track(mkdtempSync(join(tmpdir(), 'archon-merge-home-')));
   return {
     checkout,
-    env: { ARCHON_HOME: home, HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1', INTAKE_STATE_CWD: checkout },
+    env: { ARCHON_HOME: home, HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1', INTAKE_STATE_CWD: checkout, INTAKE_HOST_CLI: JSON.stringify(hostCli()) },
   };
 }
 

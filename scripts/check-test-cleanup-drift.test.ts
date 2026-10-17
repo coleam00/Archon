@@ -226,6 +226,17 @@ test('rejects trackTempRoots() at the top level of a shared test module only', (
   expect(checkSource('packages/example/src/harness.ts', perCaller)).toEqual([]);
 });
 
+test('treats the pack-owned temp-roots helper like the engine helper', () => {
+  const topLevel = `
+    import { trackTempRoots } from './temp-roots';
+    const trackTempRoot = trackTempRoots();
+  `;
+
+  expect(checkSource('.archon/scripts/__tests__/harness.ts', topLevel)).toEqual([
+    expect.objectContaining({ rule: 'shared-tracker', line: 3 }),
+  ]);
+});
+
 test('rejects a malformed or duplicated ledger entry at construction', () => {
   expect(() =>
     buildLedger([

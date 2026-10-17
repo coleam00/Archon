@@ -1,10 +1,14 @@
+/**
+ * A forge plugin for a non-GitHub tracker, for `sdlc-forge-delivery.test.ts`. It parses
+ * requests and responses with the host's own schemas, so a drift in the protocol fails here.
+ */
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
   contentDigest,
   forgeRequestSchema,
   forgeResponseSchema,
   type ForgeWorkItemRecord,
-} from '../../../../packages/forge/src/operations';
+} from '../../packages/forge/src/operations';
 const metadata = {
   protocol: 1,
   name: 'tracker',

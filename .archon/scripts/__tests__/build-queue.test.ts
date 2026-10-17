@@ -3,9 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { validateArtifactPointers } from '../../../packages/workflows/src/artifact-pointer';
-import type { WorkflowRun } from '../../../packages/workflows/src/schemas';
+import { trackTempRoots } from './temp-roots';
 import {
   ANSWER_DECISIONS,
   APPLY_DECISIONS,
@@ -32,7 +30,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, gitCheckout, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -212,7 +210,7 @@ function install(): Install {
       HOME: home,
       DATABASE_URL: '',
       ARCHON_TELEMETRY_DISABLED: '1',
-      INTAKE_STATE_CWD: checkout,
+      INTAKE_STATE_CWD: checkout, INTAKE_HOST_CLI: JSON.stringify(hostCli()),
     },
   };
 }
@@ -313,7 +311,7 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
   }, 60_000);
 
-  test("facts starts on an item intake wrote, carrying intake's triage report as a plain reference", async () => {
+  test("facts starts on an item intake wrote, carrying intake's triage report as a plain reference", () => {
     const at = install();
     const fresh = newWorkItem(SUBJECT, AT);
     const source = { author: 'maintainer', labels: [], state: 'open' as const, digest: 'sha256:x' };
@@ -323,8 +321,8 @@ describe('the build queue scripts', () => {
     const { at: _at, run_id: _runId, ...verdict } = TRIAGE;
     seed(at, applyDecision(fresh, decision, { ...verdict, closure: null, labels: [], summary: 's', report: pointer }, false, AT, 'intake-run'));
     const output = ok(run(at, 'facts', {}));
-    // The validator reads the current run's id only, unless a pointer names that run.
-    expect(await validateArtifactPointers(output, { id: 'run-1' } as WorkflowRun)).toBeNull();
+    // A tagged pointer would have to name this run; the output carries none.
+    expect(JSON.stringify(output)).not.toContain('archon_artifact');
     expect((output.record as WorkItem).history.at(-1)?.report).toEqual({ run_id: 'intake-run', path: 'triage.md' });
     expect(stored(at).value?.history.at(-1)?.report).toEqual(pointer);
   }, 60_000);

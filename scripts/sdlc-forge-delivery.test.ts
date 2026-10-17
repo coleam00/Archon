@@ -1,7 +1,7 @@
 /**
  * The forge source, end to end: the pack's publishing scripts drive the real
  * `archon forge` command, its dispatch, and the real GitHub plugin
- * process, which talks to a fake GitHub (./fake-github-fetch.ts).
+ * process, which talks to a fake GitHub (./fixtures/sdlc-fake-github.ts).
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
  * a delivery creates a draft pull request and upserts the same review comment
@@ -20,22 +20,25 @@ import {
   packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
-} from './deliver-checks-harness';
-import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
-import { closeComments, type Closure, planClose } from '../../workflows/sdlc/.shared/close';
+} from '../.archon/scripts/__tests__/deliver-checks-harness';
+import { FAKE_HOST, initialState, type FakeGitHubState } from './fixtures/sdlc-fake-github';
+import { closeComments, type Closure, planClose } from '../.archon/workflows/sdlc/.shared/close';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
-const REPO_ROOT = resolve(import.meta.dir, '../../..');
+const REPO_ROOT = resolve(import.meta.dir, '..');
 const FORGE_COMMAND = join(REPO_ROOT, 'packages/cli/src/commands/forge.ts');
 const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin.ts');
-const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
+const FAKE_GITHUB = join(import.meta.dir, 'fixtures/sdlc-fake-github.ts');
 
 const MARKER = '<!-- archon-review-report -->';
 // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
 // it before it creates.
 const CHECKOUT = gitCheckout({}, trackTempRoot);
-const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], {
+  cwd: CHECKOUT,
+  encoding: 'utf8',
+}).stdout.trim();
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
@@ -85,7 +88,7 @@ function forgeHost(other = false): { argv: string[]; statePath: string } {
             args: other
               ? [
                   '--no-env-file',
-                  join(import.meta.dir, 'fixtures/workitem-plugin.ts'),
+                  join(import.meta.dir, 'fixtures/sdlc-workitem-plugin.ts'),
                   '--state',
                   statePath,
                 ]
@@ -177,7 +180,11 @@ describe('the forge source delivers through plugin operations', () => {
         INPUTS_EXISTING: 'null',
         INPUTS_TITLE: 'Add a guard',
         WORKFLOW_ID: 'run-forge-delivery',
-        INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run-forge-delivery', path: 'pr-body.md' }),
+        INPUTS_BODY: JSON.stringify({
+          type: 'archon_artifact',
+          run_id: 'run-forge-delivery',
+          path: 'pr-body.md',
+        }),
         INPUTS_DRAFT: 'true',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
@@ -196,7 +203,10 @@ describe('the forge source delivers through plugin operations', () => {
     expect(state.pulls).toHaveLength(1);
     expect(state.pulls[0]).toMatchObject({ draft: true });
     expect(state.comments).toEqual([
-      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\nVerdict: ready\n\n${ROUND_TWO}` },
+      {
+        id: 900,
+        body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\nVerdict: ready\n\n${ROUND_TWO}`,
+      },
     ]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
@@ -279,7 +289,10 @@ function throughForge(host: { argv: string[] }, body: () => void): void {
 }
 
 /** A plugin-backed host whose state also holds open issues with these numbers. */
-function forgeHostWith(...rows: { number: number; pull?: boolean }[]): { argv: string[]; statePath: string } {
+function forgeHostWith(...rows: { number: number; pull?: boolean }[]): {
+  argv: string[];
+  statePath: string;
+} {
   const host = forgeHost();
   const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
   for (const row of rows) {
@@ -317,14 +330,26 @@ it('closes a resolved item through the plugin, linking it to what resolved it an
   expect(closed(3)).toMatchObject({ state: 'open' });
   expect(closed(8)).toMatchObject({ state: 'closed', state_reason: 'completed' });
   const expected = [
-    ...closeComments({ repo: PR.repo, number: 7 }, `https://${FAKE_HOST}/example/repo/issues/7`, { kind: 'duplicate', url: originalUrl, original }),
-    ...closeComments({ repo: PR.repo, number: 8 }, `https://${FAKE_HOST}/example/repo/issues/8`, { kind: 'delivered', url: change }),
+    ...closeComments({ repo: PR.repo, number: 7 }, `https://${FAKE_HOST}/example/repo/issues/7`, {
+      kind: 'duplicate',
+      url: originalUrl,
+      original,
+    }),
+    ...closeComments({ repo: PR.repo, number: 8 }, `https://${FAKE_HOST}/example/repo/issues/8`, {
+      kind: 'delivered',
+      url: change,
+    }),
   ];
   expect(state.comments.map(row => ({ number: row.issue, body: row.body }))).toEqual(
     expected.map(comment => ({ number: comment.item.number, body: comment.body }))
   );
-  expect(state.calls.filter(call => call.startsWith('POST ') && call.endsWith('/comments'))).toEqual(
-    expected.map(comment => `POST https://${comment.item.repo.host}/api/v3/repos/${comment.item.repo.path}/issues/${comment.item.number}/comments`)
+  expect(
+    state.calls.filter(call => call.startsWith('POST ') && call.endsWith('/comments'))
+  ).toEqual(
+    expected.map(
+      comment =>
+        `POST https://${comment.item.repo.host}/api/v3/repos/${comment.item.repo.path}/issues/${comment.item.number}/comments`
+    )
   );
 }, 120_000);
 

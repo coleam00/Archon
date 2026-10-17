@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 import { PR, PR_URL, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
