@@ -25,7 +25,8 @@ import ts from 'typescript';
  * be paired one to one, so they compare as lists sorted highest first: no unit may score above
  * the base unit in its position. A sibling added among them can be refused, and waived as usual.
  * When a file gains units of an identity that left another touched file, the moved base scores
- * join that file's list.
+ * join that file's list. Partial moves are not tracked: when the source file keeps units of that
+ * identity, a unit moved out of it is compared as new.
  *
  * A deliberate increase lands with a `Ratchet-Allow:` trailer on one of the change's commits:
  * `Ratchet-Allow: <path>` for a file's line count, `Ratchet-Allow: <path>:<identity>` for a
