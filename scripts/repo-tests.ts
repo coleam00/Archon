@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 /**
@@ -144,13 +145,7 @@ function routeArgument(argument: string): RoutedArgument | undefined {
 export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     ...env,
-    ARCHON_CLI_COMMAND:
-      env.ARCHON_CLI_COMMAND ||
-      JSON.stringify([
-        process.execPath,
-        '--no-env-file',
-        join(REPO_ROOT, 'packages/cli/src/cli.ts'),
-      ]),
+    ARCHON_CLI_COMMAND: env.ARCHON_CLI_COMMAND || JSON.stringify(archonCliInvocation()),
   };
 }
 

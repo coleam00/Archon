@@ -5,6 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
+import { archonCliInvocation } from '@archon/paths/cli-command';
 import {
   planRequestedRuns,
   planShard,
@@ -161,11 +162,7 @@ describe('planShard', () => {
 
 describe('rootTestEnv', () => {
   test('names the source CLI for pack tests and keeps a host CLI already set', () => {
-    expect(JSON.parse(rootTestEnv({}).ARCHON_CLI_COMMAND ?? '')).toEqual([
-      process.execPath,
-      '--no-env-file',
-      fromRoot('packages/cli/src/cli.ts'),
-    ]);
+    expect(JSON.parse(rootTestEnv({}).ARCHON_CLI_COMMAND ?? '')).toEqual(archonCliInvocation());
     expect(rootTestEnv({ ARCHON_CLI_COMMAND: '["archon"]' }).ARCHON_CLI_COMMAND).toBe('["archon"]');
   });
 });
