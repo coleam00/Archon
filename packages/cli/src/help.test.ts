@@ -262,7 +262,7 @@ Commands:
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
   plugin list                Show installed plugins with tag and commit
-  doctor                     Verify installed provider diagnostics, gh auth, DB, and adapters
+  doctor                     Verify installed provider diagnostics, DB, and adapters
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription

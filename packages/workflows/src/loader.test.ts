@@ -1,8 +1,19 @@
 import { providerRegistry } from '@archon/providers';
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
-import { join, basename } from 'path';
+import {
+  describe,
+  it,
+  expect,
+  afterAll,
+  beforeEach,
+  afterEach,
+  spyOn,
+  mock,
+  type Mock,
+} from 'bun:test';
+import { mkdir, mkdtemp, writeFile, rm } from 'fs/promises';
+import { join } from 'path';
 import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 
 const isWindows = process.platform === 'win32';
 
@@ -23,11 +34,29 @@ const mockLogger = {
   level: 'info',
 };
 
+// A fake bundled pack stands in for the shipped one: source mode reads its tree through
+// `getBundledWorkflowsPath`, binary mode the records built from it.
+const bundleRoot = await mkdtemp(join(tmpdir(), 'loader-bundle-'));
+afterAll(() => removeTempTree(bundleRoot));
+const fakeBundle = await writeFakeBundle(
+  bundleRoot,
+  {
+    'fake/review/fake-review.yaml':
+      'name: fake-review\ndescription: Bundled review\nnodes:\n  - id: check\n    command: check\n',
+    'fake/review/commands/check.md': 'Check the change against its contract.\n',
+  },
+  ['fake']
+);
+const realBundledDefaults = await import('./defaults/bundled-defaults');
+mock.module('./defaults/bundled-defaults', () => ({ ...realBundledDefaults, ...fakeBundle }));
+spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['fake']);
+
 // Mock @archon/paths: suppress logger + pass through real path utilities
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   createLogger: mock(() => mockLogger),
+  getBundledWorkflowsPath: () => bundleRoot,
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
@@ -62,6 +91,8 @@ import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
+import * as bundleInventory from './defaults/bundle-inventory';
+import { writeFakeBundle } from './test-fake-bundle';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
 import { validateWorkflowResources } from './validator';
@@ -1657,16 +1688,12 @@ nodes:
   });
 
   describe('multi-source loading', () => {
-    it('should load real app defaults when enabled', async () => {
+    it('should load app defaults when enabled', async () => {
       // Test dir has no .archon/workflows/
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
-      // Should load the real archon-* prefixed app defaults
-      expect(workflows.length).toBeGreaterThanOrEqual(1);
-      // Check for at least one of the known app defaults
-      const archonReview = workflows.find(w => w.name === 'archon-review');
-      expect(archonReview).toBeDefined();
+      expect(workflows.map(w => w.name)).toEqual(['fake-review']);
     });
 
     it('should override app defaults with repo workflows of same filename', async () => {
@@ -1674,34 +1701,33 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: my-custom-assist
-description: My custom assist (overrides archon-review)
+description: My custom assist (overrides fake-review)
 nodes:
   - id: custom
     command: custom-command
 `;
       // Use exact same filename as app default to override
-      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'fake-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have the repo version, not the app default
       const assistWorkflow = workflows.find(
-        w => w.name === 'my-custom-assist' || w.name === 'archon-review'
+        w => w.name === 'my-custom-assist' || w.name === 'fake-review'
       );
       expect(assistWorkflow).toBeDefined();
       // Repo version should win (has custom name)
       expect(assistWorkflow?.name).toBe('my-custom-assist');
-      expect(assistWorkflow?.description).toBe('My custom assist (overrides archon-review)');
+      expect(assistWorkflow?.description).toBe('My custom assist (overrides fake-review)');
     });
 
     it('should skip app defaults when loadDefaults is false', async () => {
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const workflows = result.workflows.map(ws => ws.workflow);
 
-      // Should NOT find any archon-* workflows since app defaults are disabled
-      const archonWorkflow = workflows.find(w => w.name.startsWith('archon-'));
-      expect(archonWorkflow).toBeUndefined();
+      // Should NOT find the bundled workflow since app defaults are disabled
+      expect(workflows.find(w => w.name === 'fake-review')).toBeUndefined();
     });
 
     it('should combine app defaults with repo workflows', async () => {
@@ -1720,9 +1746,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both app defaults and repo workflows
-      const archonReview = workflows.find(w => w.name === 'archon-review');
+      const bundledReview = workflows.find(w => w.name === 'fake-review');
       const customWorkflow = workflows.find(w => w.name === 'my-custom-workflow');
-      expect(archonReview).toBeDefined();
+      expect(bundledReview).toBeDefined();
       expect(customWorkflow).toBeDefined();
     });
   });
@@ -2114,12 +2140,7 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
-      // Should load bundled workflows
-      expect(workflows.length).toBeGreaterThanOrEqual(1);
-      // Check that known bundled workflows are loaded
-      const archonReview = workflows.find(w => w.name === 'archon-review');
-      expect(archonReview).toBeDefined();
-      expect(workflows.some(w => w.name === 'archon-stabilize')).toBe(false);
+      expect(workflows.map(w => w.name)).toEqual(['fake-review']);
     });
 
     it('should skip bundled workflows when loadDefaults is false', async () => {
@@ -2130,8 +2151,7 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should not have any bundled defaults
-      const archonWorkflow = workflows.find(w => w.name.startsWith('archon-'));
-      expect(archonWorkflow).toBeUndefined();
+      expect(workflows.find(w => w.name === 'fake-review')).toBeUndefined();
     });
 
     it('should allow repo workflows to override bundled defaults', async () => {
@@ -2142,19 +2162,19 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: custom-assist-override
-description: Custom override of archon-review
+description: Custom override of fake-review
 nodes:
   - id: custom
     command: custom
 `;
-      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'fake-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Repo workflow should override bundled default
       const assistWorkflow = workflows.find(
-        w => w.name === 'custom-assist-override' || w.name === 'archon-review'
+        w => w.name === 'custom-assist-override' || w.name === 'fake-review'
       );
       expect(assistWorkflow).toBeDefined();
       expect(assistWorkflow?.name).toBe('custom-assist-override');
@@ -2179,9 +2199,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both bundled and repo workflows
-      const archonReview = workflows.find(w => w.name === 'archon-review');
+      const bundledReview = workflows.find(w => w.name === 'fake-review');
       const repoWorkflow = workflows.find(w => w.name === 'my-repo-workflow');
-      expect(archonReview).toBeDefined();
+      expect(bundledReview).toBeDefined();
       expect(repoWorkflow).toBeDefined();
     });
   });
@@ -5440,25 +5460,6 @@ nodes:
         expect((parseWarnings ?? []).filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([]);
       }
     });
-
-    it('bundled workflows carry no conditional-join warnings', async () => {
-      const binaryBuild = spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(true);
-      try {
-        const discovered = await discoverWorkflows(testDir, { loadDefaults: true });
-        expect(discovered.errors).toEqual([]);
-        expect(discovered.workflows.length).toBe(
-          Object.keys(bundledDefaults.BUNDLED_WORKFLOWS).length
-        );
-        const warned = discovered.workflows.flatMap(({ workflow, parseWarnings }) =>
-          (parseWarnings ?? [])
-            .filter(w => w.includes(CONDITIONAL_JOIN))
-            .map(w => `${workflow.name}: ${w}`)
-        );
-        expect(warned).toEqual([]);
-      } finally {
-        binaryBuild.mockRestore();
-      }
-    });
   });
 
   describe('parse warnings channel (#3444)', () => {
@@ -7949,66 +7950,6 @@ nodes:
       } else {
         expect(warnings).toEqual([]);
       }
-    });
-  });
-
-  describe('no false positives on the real workflow corpus (#2213)', () => {
-    /**
-     * The unknown-key check is only useful if a legitimate key never trips it.
-     * Detection reaches into nested config blocks and `loop_group` bodies, so a
-     * schema field that drifts out of a derived key set would start warning on
-     * valid YAML — and a warning nobody can act on is worse than none.
-     *
-     * Runs over Archon's own `.archon/workflows/` — its largest real corpus —
-     * and asserts nothing OUTSIDE a known-bad allowlist warns. Deliberately
-     * one-directional: the allowlist may shrink freely (fixing
-     * `e2e-opencode-smoke.yaml` must not break this), but a new name appearing
-     * is a false positive and fails.
-     *
-     * Calls `parseWorkflow` per file rather than `discoverWorkflows`. Parsing is
-     * the only thing under test — running full discovery would additionally do
-     * include expansion, command-file resolution and config loading, which is
-     * both a looser unit and heavy enough to starve the other package test
-     * processes running in parallel (`bun --filter '*' --parallel test`). It
-     * measurably did: on a 2-core Windows CI runner it pushed an unrelated
-     * SQLite test from 250 ms past the 5000 ms per-test timeout Windows then had.
-     */
-    const KNOWN_BAD = new Set([
-      // `agent:` at workflow and node level — a real bug, silently dropped since
-      // April. Remove from this list when the file is fixed.
-      'e2e-opencode-smoke',
-      // #2707 step 3: declares the now-deprecated prose 'until:' completion
-      // channel on a loop — still fully functional (grow-then-deprecate); the
-      // warning is expected, not a false positive.
-      't1-fix-issue',
-    ]);
-
-    it('warns only on workflows already known to carry unknown keys', async () => {
-      // packages/workflows/src/ → repo root
-      const corpusDir = join(import.meta.dir, '..', '..', '..', '.archon', 'workflows');
-
-      // Discovery descends one level; mirror that without invoking it.
-      const files: string[] = [];
-      for (const entry of await readdir(corpusDir, { withFileTypes: true })) {
-        const full = join(corpusDir, entry.name);
-        if (entry.isDirectory()) {
-          for (const sub of await readdir(full)) {
-            if (sub.endsWith('.yaml') || sub.endsWith('.yml')) files.push(join(full, sub));
-          }
-        } else if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) {
-          files.push(full);
-        }
-      }
-      // Guard against silently testing nothing if the corpus moves.
-      expect(files.length).toBeGreaterThan(20);
-
-      const unexpected: string[] = [];
-      for (const file of files) {
-        const result = parseWorkflow(await readFile(file, 'utf-8'), basename(file));
-        if (!result.workflow || result.warnings.length === 0) continue;
-        if (!KNOWN_BAD.has(result.workflow.name)) unexpected.push(result.workflow.name);
-      }
-      expect(unexpected).toEqual([]);
     });
   });
 

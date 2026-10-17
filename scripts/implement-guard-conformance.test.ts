@@ -17,13 +17,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { observeCheckout } from './checkout-observation';
-import type { CheckoutObservation } from './schemas/checkout-observation';
+import { observeCheckout } from '../packages/workflows/src/checkout-observation';
+import type { CheckoutObservation } from '../packages/workflows/src/schemas/checkout-observation';
 
 const GUARD = join(
   import.meta.dir,
-  '..',
-  '..',
   '..',
   '.archon',
   'workflows',

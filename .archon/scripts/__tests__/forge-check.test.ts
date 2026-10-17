@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 import {
   forgeOperation,
   gitCheckout,
@@ -10,9 +10,7 @@ import {
   PR,
   type ScriptOptions,
 } from './deliver-checks-harness';
-import { cliForgeMetadataRequestSchema } from '../../../packages/forge/src/cli-response';
-import { ghTokenKeysForHost } from '@archon/paths/github-token-env';
-import { ghTokenNames, REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -73,12 +71,6 @@ function check(
   });
 }
 
-// The pack runs outside this repository, so it restates the owner's host split.
-it('names the token env vars @archon/paths assigns to each gh host', () => {
-  for (const host of ['github.com', 'acme.ghe.com', 'git.example.com'])
-    expect(ghTokenNames(host)).toEqual(ghTokenKeysForHost(host));
-});
-
 describe('forge-check refuses a run whose forge source cannot act', () => {
   it('uses gh when no source is selected', () => {
     const run = check({ source: '' });
@@ -86,7 +78,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.forge).toEqual([]);
   });
 
-  it.each(['deliver', 'pr', 'ship', 'upkeep'])('emits the selected forge source from %s', entry => {
+  it.each(['deliver', 'pr', 'ship', 'upkeep', 'forge-check'])('emits the selected forge source from %s', entry => {
     const run = check({ entry, forge: { kind: 'fake', response: ANSWERED } });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
@@ -98,21 +90,6 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(JSON.parse(run.forgeRequests[1] ?? '')).toEqual({
       selector: { kind: 'head', repo: PR.repo, headRepo: PR.repo, head: 'archon-forge-check' },
     });
-  });
-
-  it('forge metadata requests conform to the CLI host input', () => {
-    const run = check({
-      source: 'forge',
-      forge: { kind: 'fake', response: ANSWERED },
-    });
-    expect(run.code).toBe(0);
-    expect(run.forge[0]).toContain('forge metadata');
-    const request = cliForgeMetadataRequestSchema.parse({
-      ...JSON.parse(run.forgeRequests[0] ?? ''),
-      op: 'metadata',
-      operationId: 'cli-operation',
-    });
-    expect(request.host).toBe(PR.repo.host);
   });
 
   it('accepts a capable installed plugin through host discovery and authenticated dispatch', () => {
@@ -306,7 +283,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     ]);
   });
 
-  it.each(['deliver', 'pr', 'ship', 'upkeep'])(
+  it.each(['deliver', 'pr', 'ship', 'upkeep', 'forge-check'])(
     'refuses %s when host authentication succeeds but repository access fails',
     entry => {
       const run = check({

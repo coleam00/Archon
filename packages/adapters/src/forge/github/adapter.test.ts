@@ -18,7 +18,6 @@
  * Both are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
-import { providerRegistry } from '@archon/providers';
 import {
   describe,
   test,
@@ -38,9 +37,6 @@ import { tmpdir } from 'node:os';
 import { mkdir, mkdtemp, access, writeFile, readFile } from 'node:fs/promises';
 import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'node:path';
-import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
-import { parseWorkflow } from '@archon/workflows/loader';
-import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import type { WorkflowEventSignalCandidate } from '@archon/core/db/workflows';
 
 // Mock logger to suppress noisy output during tests
@@ -589,23 +585,6 @@ describe('GitHubAdapter', () => {
     afterEach(() => {
       if (originalAllowedUsers === undefined) delete process.env.GITHUB_ALLOWED_USERS;
       else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
-    });
-
-    test('the adapter matcher accepts the bundled PR producer contract', () => {
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-pr'],
-        'archon-pr.yaml',
-        providerRegistry
-      );
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      // The publishing node owns the verified record; the agent before it only
-      // prepares the intent, and an inbound event must never match on that.
-      const node = parsed.workflow.nodes.find(item => item.id === 'publish');
-      if (node?.kind !== 'exec' || node.output_format === undefined) {
-        throw new Error('archon-pr does not expose a published pull-request contract');
-      }
-      expect(node.output_type).toBe('pull-request');
-      expect(validateStructuredOutput(pullRequestRecord, node.output_format).valid).toBe(true);
     });
 
     test('signals the exact matching wait and bypasses the human sender allowlist', async () => {

@@ -278,10 +278,22 @@ function isInCleanup(node: ts.Node, bindings: CleanupBindings): boolean {
   return false;
 }
 
-/** How `trackTempRoots` is bound from the shared test utilities: by name or through a namespace. */
+/**
+ * How `trackTempRoots` is bound from a temp-tree helper module, by name or through a namespace.
+ * The engine's helper is `@archon/paths/test-utils`; the pack owns its own copy in a module
+ * named `temp-roots`, because pack code may not import the engine.
+ */
 interface TrackerBindings {
   functions: Set<string>;
   namespaces: Set<string>;
+}
+
+function isTrackerModule(specifier: string): boolean {
+  return (
+    specifier === '@archon/paths/test-utils' ||
+    specifier.endsWith('/temp-roots') ||
+    specifier.endsWith('/temp-roots.ts')
+  );
 }
 
 function trackerBindings(sourceFile: ts.SourceFile): TrackerBindings {
@@ -291,7 +303,7 @@ function trackerBindings(sourceFile: ts.SourceFile): TrackerBindings {
     if (
       !ts.isImportDeclaration(statement) ||
       !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== '@archon/paths/test-utils'
+      !isTrackerModule(statement.moduleSpecifier.text)
     ) {
       continue;
     }
