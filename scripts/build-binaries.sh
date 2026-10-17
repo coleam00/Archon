@@ -30,6 +30,11 @@ echo "Building Archon server, CLI and provider plugins v${VERSION} (commit: ${GI
 # even if `bun build --compile` fails mid-way. See GitHub issue #979.
 BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
 BUNDLED_DATA_FILE="packages/workflows/src/defaults/bundled-data.ts"
+# The restore discards unstaged edits, so refuse to start rather than lose them.
+if ! git diff --quiet -- "${BUNDLED_BUILD_FILE}" "${BUNDLED_DATA_FILE}"; then
+  echo "ERROR: ${BUNDLED_BUILD_FILE} or ${BUNDLED_DATA_FILE} has unstaged edits that the post-build restore would discard; commit or stage them first" >&2
+  exit 1
+fi
 trap 'echo "Restoring ${BUNDLED_BUILD_FILE} and ${BUNDLED_DATA_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" "${BUNDLED_DATA_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} or ${BUNDLED_DATA_FILE} — working tree may be dirty" >&2' EXIT
 
 # The committed bundled-data.ts reads the packs named in bundle-index.json from disk;
