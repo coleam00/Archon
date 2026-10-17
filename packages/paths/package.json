@@ -1,6 +1,6 @@
 {
   "name": "@archon/paths",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -8,13 +8,21 @@
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
     "./cli-command": "./src/cli-command.ts",
+    "./release-asset": "./src/release-asset.ts",
+    "./server-launch": "./src/server-launch.ts",
     "./archon-paths": "./src/archon-paths.ts",
-    "./effort": "./src/effort.ts",
+    "./credential-redaction": "./src/credential-redaction.ts",
     "./logger": "./src/logger.ts",
     "./strip-cwd-env": "./src/strip-cwd-env.ts",
     "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts",
     "./env-loader": "./src/env-loader.ts",
-    "./test-utils": "./src/test-utils.ts"
+    "./test-utils": "./src/test-utils.ts",
+    "./plugin-process": "./src/plugin-process.ts",
+    "./skills": "./src/skills.ts",
+    "./process-owner": "./src/process-owner.ts",
+    "./duration": "./src/duration.ts",
+    "./regexp": "./src/regexp.ts",
+    "./github-token-env": "./src/github-token-env.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

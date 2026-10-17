@@ -1,11 +1,12 @@
 /**
- * Run event stream primitives. Six variants of events that render in the Run
- * detail page: text, tool_call, artifact, node_transition, approval, error.
+ * Run event stream primitives rendered in the run detail page.
  *
  * These are the client-side model — normalized from server workflow_events
  * rows AND from SSE events. The shape is deliberately flatter than the raw
- * event schema so EventStream rendering can switch on `kind` only.
+ * event schema so RunStream rendering can switch on `kind` only.
  */
+
+import type { components } from '@/lib/api.generated';
 
 export type RunEventKind =
   | 'text'
@@ -55,16 +56,25 @@ export interface NodeTransitionEvent extends RunEventBase {
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
   /**
-   * `node_completed` enrichment, read straight from the persisted event payload.
-   * Populated only on the `completed` transition; null on every other transition
-   * (and when a provider doesn't report a given field). Not consumed by any current
-   * renderer — carried so the eventual per-node detail view needn't re-touch this.
+   * Completion enrichment from the persisted row; null when a field is absent.
+   * `foldNodeRuns` copies costUsd, costScope, stopReason, numTurns, and tokens from
+   * the latest `completed` transition only when the engine's node state is `completed`.
    */
-  outputPreview: string | null;
   costUsd: number | null;
+  /** The server's scope for `costUsd`; null when the row carries no cost. */
+  costScope: CostScope | null;
   stopReason: string | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
 }
+
+/**
+ * What a node row's `cost_usd` measures. `own` is the node's own spend; `total` is a
+ * restatement of spend other rows of the same run already carry (a `loop_group` roll-up,
+ * a composed fan-out wrapper or instance terminal, a retry amendment). Summing only `own`
+ * costs lands on the run total. The server decides it by the engine's rule.
+ */
+export type CostScope = NonNullable<RawWorkflowEvent['cost_scope']>;
 
 export interface ApprovalEvent extends RunEventBase {
   kind: 'approval';
@@ -102,15 +112,23 @@ export type RunEvent =
   | ErrorEvent
   | SystemEvent;
 
-// Server row shape (workflow_events table).
-interface RawWorkflowEvent {
-  id: string;
-  workflow_run_id: string;
-  event_type: string;
-  step_index: number | null;
-  step_name: string | null;
-  data: Record<string, unknown>;
-  created_at: string;
+type RawWorkflowEvent = components['schemas']['WorkflowEvent'];
+
+type Execution = NonNullable<components['schemas']['DagNodeSseEvent']['execution']>;
+type TokenUsage = Pick<
+  Extract<Execution['spend']['tokens'], { source: 'provider' }>['value'],
+  'input' | 'output'
+>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readTokens(value: unknown): TokenUsage | null {
+  if (!isRecord(value)) return null;
+  const input = readNumberOrNull(value, 'input');
+  const output = readNumberOrNull(value, 'output');
+  return input === null || output === null ? null : { input, output };
 }
 
 function readString(obj: Record<string, unknown>, key: string): string {
@@ -134,13 +152,13 @@ function readNumberOrNull(obj: Record<string, unknown>, key: string): number | n
  * resume for already-completed nodes — doesn't fit that shape, and both skip
  * variants collapse to `skipped`.
  */
-const NODE_TRANSITION_BY_EVENT: Record<string, NodeTransitionEvent['transition']> = {
-  node_started: 'started',
-  node_completed: 'completed',
-  node_failed: 'failed',
-  node_skipped: 'skipped',
-  node_skipped_prior_success: 'skipped',
-};
+const NODE_TRANSITION_BY_EVENT = new Map<string, NodeTransitionEvent['transition']>([
+  ['node_started', 'started'],
+  ['node_completed', 'completed'],
+  ['node_failed', 'failed'],
+  ['node_skipped', 'skipped'],
+  ['node_skipped_prior_success', 'skipped'],
+]);
 
 /**
  * Best-effort normalizer from a raw workflow_events row to a typed RunEvent.
@@ -157,17 +175,8 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   const data = raw.data;
   const et = raw.event_type;
 
-  if (
-    et === 'node_started' ||
-    et === 'node_completed' ||
-    et === 'node_failed' ||
-    et === 'node_skipped' ||
-    et === 'node_skipped_prior_success'
-  ) {
-    // Guard above restricts `et` to the map's keys; `?? 'skipped'` is only a
-    // defensive default if a new node_* type is added to the guard but not the map.
-    const transition = NODE_TRANSITION_BY_EVENT[et] ?? 'skipped';
-    const output = readStringOrNull(data, 'node_output');
+  const transition = NODE_TRANSITION_BY_EVENT.get(et);
+  if (transition !== undefined) {
     return {
       ...base,
       kind: 'node_transition',
@@ -178,30 +187,11 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       durationMs: readNumberOrNull(data, 'duration_ms'),
       skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
-      outputPreview: output === null ? null : output.slice(0, 300),
       costUsd: readNumberOrNull(data, 'cost_usd'),
+      costScope: raw.cost_scope ?? null,
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
-    };
-  }
-
-  if (et === 'tool_called' || et === 'tool_completed') {
-    // Server writes snake_case fields (tool_name, tool_input, duration_ms);
-    // the start event carries the input, the completed event carries only
-    // the duration. RunStream pairs them by step + order to fill durationMs.
-    const toolName = readString(data, 'tool_name');
-    const toolInput = data.tool_input;
-    const argsSummary = readString(data, 'argsSummary');
-    return {
-      ...base,
-      kind: 'tool_call',
-      tool: toolName,
-      argsSummary,
-      args: toolInput,
-      result:
-        et === 'tool_called'
-          ? null
-          : { ok: true, durationMs: readNumberOrNull(data, 'duration_ms') ?? 0 },
+      tokens: readTokens(data.tokens),
     };
   }
 
@@ -278,6 +268,24 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  if (et === 'attention_notice_sent') {
+    return {
+      ...base,
+      kind: 'system',
+      label: data.baseline === true ? 'Attention baseline recorded' : 'Attention notice sent',
+      detail: readString(data, 'destination'),
+    };
+  }
+
+  if (et === 'pause_notice_undelivered') {
+    return {
+      ...base,
+      kind: 'system',
+      label: 'Pause notice not delivered; the run is still waiting',
+      detail: readString(data, 'platform'),
+    };
+  }
+
   if (et === 'error') {
     return {
       ...base,
@@ -293,16 +301,15 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     et === 'workflow_failed' ||
     et === 'workflow_resumed'
   ) {
-    // `workflow_resumed` is written only when a resume CLEARED a prior error
-    // (#2348), and carries that error in `data.error` — the same key
-    // `workflow_failed` uses, so the shared `detail` fallback below surfaces it.
     const label =
       et === 'workflow_started'
         ? 'Workflow started'
         : et === 'workflow_completed'
           ? 'Workflow completed'
           : et === 'workflow_resumed'
-            ? 'Workflow resumed (prior error cleared)'
+            ? readString(data, 'error')
+              ? 'Workflow resumed (prior error cleared)'
+              : 'Workflow resumed'
             : 'Workflow failed';
     const detail =
       readString(data, 'name') ||
@@ -383,51 +390,64 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  // Fallback: render anything else as a text event with the payload summary.
+  const content = readString(data, 'text') || readString(data, 'message');
+  if (content) return { ...base, kind: 'text', content };
   return {
     ...base,
-    kind: 'text',
-    content:
-      readString(data, 'text') ||
-      readString(data, 'message') ||
-      `${et} — ${JSON.stringify(data).slice(0, 200)}`,
+    kind: 'system',
+    label: et,
+    detail: JSON.stringify(data).slice(0, 200),
   };
 }
 
+/** The engine's state for one node, served as `run.nodes` on the run-detail response. */
+export type RunNodeState = components['schemas']['WorkflowRunDetail']['run']['nodes'][number];
+
 /**
- * One node's whole lifecycle, folded from its 2–3 `node_transition` events into a
- * single record. A node emits `node_started` + a terminal (`node_completed` /
- * `node_failed` / `node_skipped`), and a resumed run reuses one run id so the same
- * node can ALSO carry a later `node_skipped_prior_success`. The run stream renders
- * one `NodeRun` per node instead of one divider per raw transition.
+ * One node's display record: its `node_transition` events grouped under the
+ * engine's state for it, so the run stream renders one divider per node
+ * instead of one per raw transition.
  */
 export interface NodeRun {
-  /** `step_name`. Null-id transitions can't be keyed and are excluded from the fold. */
+  /** `step_name`, the engine's `node_id`. */
   nodeId: string;
   nodeName: string;
-  /** `running` = only a `started` transition seen so far (in-flight). */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  status: RunNodeState['state'];
   /** Earliest transition timestamp — positions the single divider in the stream. */
   startedAt: string;
-  /** Terminal transition timestamp; null while still running. */
+  /**
+   * Timestamp of the transition that produced `status`; null while running or pending.
+   * A replayed `completed` node ends at its completion, or at the replay when none is in view.
+   */
   endedAt: string | null;
   durationMs: number | null;
-  /** Written by the engine only on `node_completed`; null for non-AI nodes and any non-completed terminal. */
+  /** From the `node_completed` behind a `completed` state; null for non-AI nodes and every other state. */
   costUsd: number | null;
+  costScope: CostScope | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
 }
 
+const TRANSITION_FOR_STATE: Partial<
+  Record<RunNodeState['state'], NodeTransitionEvent['transition']>
+> = {
+  completed: 'completed',
+  failed: 'failed',
+  skipped: 'skipped',
+};
+
 /**
- * Folds a run's `node_transition` events into one `NodeRun` per node, keyed by
- * `nodeId`. Status precedence is `completed > failed > skipped > running` —
- * "ever completed wins" (a completed-then-resume-skipped node stays `completed`),
- * matching the dedup `countTerminalNodes` relies on. Null-`nodeId` transitions are
- * skipped (can't be keyed). Returned sorted by `startedAt`.
+ * Groups a run's `node_transition` events under the engine's node states. The
+ * state is the engine's, copied verbatim; the console keeps no fold of its own,
+ * because a client fold drifts from the engine whenever a node event (a resume
+ * reset, a suspension) is taught to one and not the other. A served node with no
+ * transitions yet has no stream position and is not returned. Sorted by
+ * `startedAt`.
  */
-export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
+export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[]): NodeRun[] {
   const byNode = new Map<string, NodeTransitionEvent[]>();
   for (const e of events) {
     if (e.kind !== 'node_transition' || e.nodeId === null) continue;
@@ -437,62 +457,64 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
   }
 
   const runs: NodeRun[] = [];
-  for (const [nodeId, transitions] of byNode) {
-    // Last-of-each-kind wins; precedence is applied below, not by event order.
-    let completed: NodeTransitionEvent | null = null;
-    let failed: NodeTransitionEvent | null = null;
-    let skipped: NodeTransitionEvent | null = null;
+  for (const node of nodes) {
+    const transitions = byNode.get(node.node_id);
+    if (transitions === undefined) continue;
+    let lastCompleted: NodeTransitionEvent | null = null;
+    let lastSkipped: NodeTransitionEvent | null = null;
+    let ended: NodeTransitionEvent | null = null;
     let nodeName = '';
     let startedAt = transitions[0]?.timestamp ?? '';
+    const endingTransition = TRANSITION_FOR_STATE[node.state];
     for (const t of transitions) {
       if (new Date(t.timestamp).getTime() < new Date(startedAt).getTime()) startedAt = t.timestamp;
       if (nodeName === '' && t.nodeName !== '') nodeName = t.nodeName;
-      if (t.transition === 'completed') completed = t;
-      else if (t.transition === 'failed') failed = t;
-      else if (t.transition === 'skipped') skipped = t;
+      if (t.transition === 'completed') lastCompleted = t;
+      else if (t.transition === 'skipped') lastSkipped = t;
+      if (t.transition === endingTransition) ended = t;
     }
-    const terminal = completed ?? failed ?? skipped;
-    // Precedence in documented order: ever-completed wins, then failed, then
-    // skipped, else still running.
-    let status: NodeRun['status'];
-    if (completed !== null) status = 'completed';
-    else if (failed !== null) status = 'failed';
-    else if (skipped !== null) status = 'skipped';
-    else status = 'running';
+    // The attempt behind a `completed` state. A prior-success replay (a `skipped`
+    // transition) restates the latest completion rather than producing one, so that
+    // completion still owns the cost and end. Any other state shows no cost: a node
+    // reset to pending or re-run to failure must not carry an earlier attempt's spend.
+    const completed = node.state === 'completed' ? lastCompleted : null;
+    // A replayed node whose completion is not in view ends at the replay.
+    const end = ended ?? (node.state === 'completed' ? lastSkipped : null);
     runs.push({
-      nodeId,
-      nodeName: nodeName !== '' ? nodeName : nodeId,
-      status,
+      nodeId: node.node_id,
+      nodeName: nodeName !== '' ? nodeName : node.node_id,
+      status: node.state,
       startedAt,
-      // Position/duration come from whichever terminal transition exists...
-      endedAt: terminal?.timestamp ?? null,
-      durationMs: terminal?.durationMs ?? null,
-      // ...but cost/turns/stop are only ever written on `node_completed`, so read
-      // them from that transition (a failed/skipped terminal carries none).
+      endedAt: end?.timestamp ?? null,
+      durationMs: end?.durationMs ?? null,
       costUsd: completed?.costUsd ?? null,
+      costScope: completed?.costScope ?? null,
       numTurns: completed?.numTurns ?? null,
+      tokens: completed?.tokens ?? null,
       stopReason: completed?.stopReason ?? null,
-      skipReason: skipped?.skipReason ?? null,
-      skipExpr: skipped?.skipExpr ?? null,
+      // Only a `skipped` state's own transition carries these; a replay's are not shown.
+      skipReason: ended?.skipReason ?? null,
+      skipExpr: ended?.skipExpr ?? null,
     });
   }
   return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
 }
 
 /**
- * Per-node terminal tally for a run's node-count readout (e.g. `7/8 nodes`).
- * Derived from {@link foldNodeRuns} so the dedup is single-sourced: `total` =
- * distinct nodes that reached a terminal (non-`running`) state; `completed` =
- * distinct nodes that ever completed (a completed-then-resume-skipped node stays
- * counted). Nodes with a null `nodeId` are excluded by the fold.
+ * Per-node terminal tally for a run's node-count readout (e.g. `7/8 nodes`), from
+ * the engine's node states: `total` = nodes in a terminal state, `completed` =
+ * nodes the engine reports completed.
  */
-export function countTerminalNodes(events: RunEvent[]): { completed: number; total: number } {
+export function countTerminalNodes(nodes: readonly RunNodeState[]): {
+  completed: number;
+  total: number;
+} {
   let completed = 0;
   let total = 0;
-  for (const r of foldNodeRuns(events)) {
-    if (r.status === 'running') continue;
+  for (const node of nodes) {
+    if (node.state === 'running' || node.state === 'pending') continue;
     total += 1;
-    if (r.status === 'completed') completed += 1;
+    if (node.state === 'completed') completed += 1;
   }
   return { completed, total };
 }

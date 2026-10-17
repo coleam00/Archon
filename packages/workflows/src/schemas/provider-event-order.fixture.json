@@ -1,0 +1,63 @@
+{
+  "description": "How one node's provider-event records are ordered: attempts in the order they first appear in the input (store order), each attempt's records by seq, legacy records (null attempt) as one attempt. The engine (orderProviderEventRecords) and the console (mergeProviderEventRecords) both run this fixture, because the console cannot import the engine. Attempt ids are chosen so that sorting by id gives the wrong order.",
+  "input": [
+    {
+      "attemptId": null,
+      "seq": 1
+    },
+    {
+      "attemptId": null,
+      "seq": 0
+    },
+    {
+      "attemptId": "z",
+      "seq": 2
+    },
+    {
+      "attemptId": "z",
+      "seq": 0
+    },
+    {
+      "attemptId": "a",
+      "seq": 0
+    },
+    {
+      "attemptId": "z",
+      "seq": 1
+    },
+    {
+      "attemptId": "a",
+      "seq": 1
+    }
+  ],
+  "expected": [
+    {
+      "attemptId": null,
+      "seq": 0
+    },
+    {
+      "attemptId": null,
+      "seq": 1
+    },
+    {
+      "attemptId": "z",
+      "seq": 0
+    },
+    {
+      "attemptId": "z",
+      "seq": 1
+    },
+    {
+      "attemptId": "z",
+      "seq": 2
+    },
+    {
+      "attemptId": "a",
+      "seq": 0
+    },
+    {
+      "attemptId": "a",
+      "seq": 1
+    }
+  ]
+}

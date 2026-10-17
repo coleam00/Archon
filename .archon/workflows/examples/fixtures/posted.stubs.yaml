@@ -1,0 +1,15 @@
+# The classifier routes the issue onward, the investigator drafts a comment,
+# the review approves it, and the post node sends the draft the review saw.
+classify: { route: investigate, reason: "stub: regression with a stack trace" }
+investigate: { comment: "stub: the cause is the null check in parser.ts" }
+review: { decision: approve, text: "" }
+post: ""
+fixture:
+  expect: completed
+  reached: [review, post]
+  inputs:
+    repository: acme/widgets
+    issue_number: "42"
+  resolved-text-contains:
+    review: "stub: the cause is the null check in parser.ts"
+    post: "stub: the cause is the null check in parser.ts"

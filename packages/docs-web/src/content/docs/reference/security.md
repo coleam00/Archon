@@ -9,6 +9,28 @@ sidebar:
 
 This page covers Archon's security model: how AI permissions work, how platform access is controlled, how webhooks are verified, and what data is and is not logged.
 
+## Users and roles
+
+Archon creates new users as `member`, including first-seen chat, forge, web and CLI identities. Roles are stored on the Archon user; identities are per platform, so a Slack identity and a web identity usually refer to separate users. The local operator manages roles through the CLI using the full Archon user id shown by `list`:
+
+```bash
+archon user list
+archon user role <id> admin
+archon user role <id> member
+```
+
+Use the database configured for the install you want to manage (`DATABASE_URL` for PostgreSQL, or `ARCHON_HOME` for SQLite). For Docker:
+
+```bash
+docker compose exec -u appuser app bun run cli user list
+docker compose exec -u appuser app bun run cli user link <id> slack:U123
+docker compose exec -u appuser app bun run cli user role <id> admin
+```
+
+Upgrading preserves existing roles, which defaulted to `admin`. The database default remains `admin` so older binaries can still insert users without a role. To prepare an existing multi-user install, keep intended admins and deliberately demote other users with `archon user role <id> member`.
+
+Only a run's starter or an admin can act on it; see [Who can act on a run](#who-can-act-on-a-run). Existing multi-user installs remain unprotected until the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
+
 ## Permission Model
 
 Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI agent can read, write, and execute files without interactive confirmation prompts.
@@ -31,6 +53,14 @@ Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI a
 Because `bypassPermissions` grants full file and shell access, only run Archon in environments where the AI agent is trusted with the repository contents. Do not expose Archon to untrusted users without adapter-level authorization (see below).
 :::
 
+## Git directory trust
+
+Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant for a path not created yet when the running user (other than root) owns its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
+
+If Git evaluates the same file more than once, for example through an include or symlinked XDG and home config files, its effective config can still list that single physical grant multiple times. Archon preserves those includes and symlinks.
+
+These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
+
 ## Tool Restrictions
 
 Workflow nodes support `allowed_tools` and `denied_tools` to restrict which tools the AI can use at each step. This is useful for creating sandboxed steps that can only read code (not modify it) or preventing specific tool usage.
@@ -49,8 +79,8 @@ nodes:
 **How it works:**
 - `allowed_tools` is a whitelist -- only listed tools are available. An empty list (`[]`) disables all tools.
 - `denied_tools` is a blacklist -- listed tools are blocked, all others are available.
-- These are mutually exclusive per node. If both are set, `allowed_tools` takes precedence.
-- Tool restrictions are currently supported for the Claude provider only. Codex nodes with `denied_tools` will log a warning; `allowed_tools` is not supported by the Codex SDK.
+- If both are set, the provider's own precedence applies. Copilot gives `allowed_tools` precedence over `denied_tools` instead of removing the denied tools from the allowed set.
+- Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
 
 ## Data Privacy and Logging
 
@@ -97,6 +127,7 @@ Each platform adapter supports an optional user whitelist via environment variab
 - Unauthorized attempts are logged with masked user identifiers for auditing.
 - SQLite/solo installs have no built-in user authentication -- use `CADDY_BASIC_AUTH` or form auth to protect the Web UI when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables). PostgreSQL deployments can additionally enable optional per-user email/password login via Better Auth (`BETTER_AUTH_SECRET`).
 - When web auth is enabled it **gates the API server-side**: every `/api/*` request needs a session/identity or gets `401`, except `/api/auth/*` (login) and `/api/health*` (healthcheck). This makes Better Auth the real access boundary — so you can drop the Caddy `forward_auth` sidecar and stop the `auth-service`. **Before flipping, understand the header-trust caveat:** the gate also accepts the trusted `X-Archon-User` (`ARCHON_WEB_AUTH_HEADER`) header as an identity. If your proxy was setting or stripping that header, you MUST keep stripping it from inbound requests after retiring the sidecar (or bind the app to `127.0.0.1`) — otherwise any client can forge the header and bypass the gate. To flip the deployment: confirm `/api/health` and a webhook still work, then sign in and confirm an authenticated `/api/*` call succeeds — note `/api/stream/*` (SSE) is under `/api/*` and **is now gated**, so an unauthenticated client gets `401`; a browser carrying its session cookie reaches it. Then remove the `forward_auth` block from the Caddyfile and the `auth-service` from compose. Set `ARCHON_WEB_AUTH_REQUIRED=false` to keep login-UI-only (e.g. when a proxy still gates access).
+- **Operator conversations are private to their owner.** When web auth is enabled, or `ARCHON_WEB_AUTH_HEADER` is set for a proxy-authenticated install, a `web` or `cli` conversation belongs to the user who created it. The conversation list shows only the caller's own web and CLI conversations. Opening, reading history, streaming over `/api/stream/<id>`, renaming, deleting, sending, starting a workflow run in it, and resetting its workflow node sessions all return `404` to anyone else, the same response as a conversation that does not exist. A request without an identity gets `401`, and an identity-backend outage gets `503`; neither falls back to listing every conversation. Sending and starting a run act on the `web` conversation with that id, and streaming prefers it, so a Slack or other chat conversation sharing the id admits nobody to a web chat; streaming a run started from chat or a forge follows that platform's access model. Sending or starting a run with an unknown id is refused rather than creating it. Resetting node sessions across all scopes is refused with `403`. Existing ownerless web and CLI conversations become inaccessible when enforcement is enabled; start a new chat for those. Conversations that already have an owner remain available to that owner. A run's own transcript (its hidden worker conversation, or a CLI run's conversation) stays readable to any signed-in user, like the run itself. Chat and forge platforms (Slack, Discord, Telegram, GitHub, GitLab, Gitea) keep their own access model, and solo installs are unchanged. **Ownership inherits the header-trust caveat above:** the owner is whoever `X-Archon-User` names, so a proxy must strip client-supplied values or any client can read another user's chats. A proxy that sends the default `X-Archon-User` header without setting `ARCHON_WEB_AUTH_HEADER` does not turn ownership on; set the variable.
 - **Signup is closed by default.** With web auth on and no `ARCHON_AUTH_ALLOWED_EMAILS`, self-serve registration is **disabled** (login only) and the server logs `web_auth.signup_disabled_no_allowlist` at boot — it never silently opens public signup on a reachable URL. Set the allowlist to invite teammates, or `ARCHON_AUTH_OPEN_SIGNUP=true` for open signup.
 
 ## Webhook Security
@@ -127,25 +158,28 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Archon's `.gitignore` excludes `.env` files. `<cwd>/.archon/.env` should also be gitignored (project-local secrets).
 
 **Subprocess env isolation:**
-- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
-- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional. The repo scope still cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
+- At startup, `stripCwdEnv()` removes **all** keys named in the CWD project env files (`.env`, `.env.local`, `.env.development`, `.env.production`), whatever their value or source, including shell exports and direnv, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope) with `override: true`. Repository env normally overrides user env. The CLI's `loadCliEnv` wrapper preserves the user-scope `GH_CONFIG_DIR` (including its absence), preventing repository env from redirecting the stored gh login. Inside a workflow, the CLI preserves inherited GitHub identity values over both env files, including empty values that disable host credentials. The standalone server follows the general load order, so repository env can override its `GH_CONFIG_DIR`. See [forge plugin configuration](/reference/forge/#plugin-configuration). The repo scope cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
-- `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
+- The CWD project env files listed above are untrusted sources. They belong to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
 **Per-user provider credentials:**
+- In per-user GitHub mode, conversation titles use the requesting user's credential for the title model. If that credential is absent or unusable, title generation is skipped. Delivered per-user credentials take precedence over installation and project authentication settings; requests without a per-user delivery keep native provider precedence.
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
-- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) carry no secrets and work without an identity on solo installs. They follow the general API authentication gate when it is enabled. Credential routes require identity even when that gate is off.
 
 ### Target repo `.env` isolation
 
 Archon prevents target repo `.env` from leaking into subprocesses through structural protection:
 
-1. **Boot cleanup:** `stripCwdEnv()` removes Bun-auto-loaded CWD `.env` keys from `process.env` before any application code runs. **This is the primary guard** — every subprocess Archon spawns inherits from the already-cleaned `process.env`.
+1. **Boot cleanup:** `stripCwdEnv()` removes from `process.env` every key named in the CWD project env files, regardless of value or source, before any application code runs. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. **This is the primary guard** — every subprocess Archon spawns inherits from the already-cleaned `process.env`.
 2. **Claude Code subprocess:** when the SDK is configured to spawn a Bun-runnable JS entry point (legacy npm-installed `cli.js`/`cli.mjs`/`cli.cjs`), Archon also passes `executableArgs: ['--no-env-file']` so Bun skips its env autoload inside the spawned process. SDK 0.2.x ships per-platform native binaries instead — those don't auto-load `.env` from cwd, so the flag is unnecessary and is omitted.
 3. **Bun script nodes:** `bun --no-env-file` prevents script node subprocesses from loading target repo `.env`.
 4. **Bash nodes:** Not affected — bash does not auto-load `.env` files.
 
-Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD strip and pass through to subprocesses normally.
+This strict deletion prevents a project `ANTHROPIC_API_KEY` from overriding Claude subscription authentication and billing the API instead. It also prevents project keys, including shell or direnv values with the same names, from overriding Archon's defaults or environment.
+
+Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env sources (`~/.archon/.env` and `<cwd>/.archon/.env`) load after the strip and pass through to subprocesses normally. The strip removes project key names at boot; it does not forbid explicitly supplying those names through Archon's later trusted env layers.
 
 **If you need env vars available during workflow execution**, use managed env injection:
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
@@ -156,4 +190,21 @@ Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD
 
 **Docker deployments:**
 - `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
-- Escape `$` as `$$` in Docker Compose `.env` files to prevent variable substitution of bcrypt hashes.
+- For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#authentication-optional-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
+
+## Who can act on a run
+
+Approve, reject, respond, resume, cancel, abandon, signal and delete are authorized in core operations. `/reset` authorizes every resumable run in the conversation atomically before cancelling any of them. A refusal records no decision, changes no run, and stops no owner. HTTP returns 403; chat, forge comments, tools and Slack buttons report the refusal. Reads remain open.
+
+| Actor | Run with a starter | Run with no recorded starter |
+| --- | --- | --- |
+| Local operator | Allowed | Allowed |
+| Admin | Allowed | Allowed |
+| Member or unknown user ID | Allowed only for the starter | Refused |
+| Unidentified | Refused | Refused |
+
+The CLI is always the local operator. The console with web auth off and no resolved identity is also the operator, so a single-user install cannot be locked out. Chat and forge identities never become the operator. With web auth on, an unresolved identity is refused even when anonymous requests are admitted by the API configuration.
+
+Roles are read on each action. An operator can grant admin with `archon user role <user-id> admin`. Users are identified per platform: a member who starts a run on Slack cannot approve it from the web with a separate identity. Named gate approvers are not supported.
+
+Existing users keep their admin role on upgrade. Existing multi-user installs stay unprotected until the operator demotes users with `archon user role <user-id> member`.

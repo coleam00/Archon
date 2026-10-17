@@ -13,14 +13,20 @@
  *
  * Grammar (compound expressions are split into atoms by {@link whenAtoms}):
  *   $nodeId.output            — whole output text of a node
- *   $nodeId.output.field      — a field of a node's JSON output
+ *   $nodeId.output.a.b        — an object-field path of a node's JSON output
  *   $nodeId.field             — shorthand for the line above (cannot nest)
  *   $INPUTS.name              — a named workflow input (#2470)
  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
- *   number/boolean.
+ *   number/boolean. A numeric operator (<= >= < >) needs an RHS that parses as a
+ *   finite number, quoted or not; anything else could never compare true.
  */
-import { INPUT_NAME_SOURCE } from './schemas/dag-node';
+import {
+  assertSupportedOutputRefs,
+  INPUT_NAME_SOURCE,
+  OUTPUT_FIELD_SOURCE,
+  OUTPUT_PATH_SOURCE,
+} from './output-ref';
 
 /**
  * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
@@ -47,16 +53,30 @@ function isWhenOperator(value: string): value is WhenOperator {
   return (WHEN_OPERATORS as readonly string[]).includes(value);
 }
 
+/**
+ * A numeric operator compares `parseFloat` of both sides. The RHS is a literal, so a
+ * non-numeric one could never compare and would skip the node on every run; rejecting it
+ * here makes the loader report it. Same `parseFloat` rule as the evaluator, so `'80'` and
+ * `80` both qualify.
+ */
+function isComparableLiteral(operator: WhenOperator, expected: string): boolean {
+  return operator === '==' || operator === '!=' || Number.isFinite(parseFloat(expected));
+}
+
 /** A node id may contain hyphens; a path segment (a JSON field name) may not. */
 const NODE_ID_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
-const PATH_SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
+const PATH_SEGMENT_SOURCE = OUTPUT_FIELD_SOURCE;
+
+const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
+  String.raw`^\s*(\$(${NODE_ID_SOURCE})\.(${OUTPUT_FIELD_SOURCE})(?:\.${OUTPUT_FIELD_SOURCE})+)`
+);
 
 /**
  * Capture groups:
  *   1. inputName   — `$INPUTS.<name>` (the input branch; tried first)
  *   2. nodeId      — `$nodeId`
  *   3. segment1    — first path segment (`output` for canonical refs, else a shorthand field)
- *   4. segment2    — optional second segment (the field name when segment1 is `output`)
+ *   4. segment2    — optional object-field path (when segment1 is `output`)
  *   5. operator
  *   6. quotedValue — single-quoted RHS literal (may be empty)
  *   7. unquotedValue — bare numeric or boolean RHS
@@ -76,14 +96,14 @@ export const WHEN_ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${WHEN_INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
-    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
 
 const LOOP_PREV_WHEN_ATOM_PATTERN = new RegExp(
-  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
@@ -138,26 +158,59 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
 /**
  * Every atom string in a (possibly compound) `when:` expression, in source order.
  *
- * Flattens the `||` / `&&` structure away — callers that need the boolean structure
- * (the evaluator) split with {@link splitOutsideQuotes} themselves; callers that only
- * need to inspect each comparison (the loader) use this.
+ * Flattens the `||` / `&&` structure away for reference diagnostics. Use
+ * {@link parseWhenExpression} to validate syntax or preserve boolean structure.
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
 }
 
+/** Parse the full OR-of-AND expression before any values can short-circuit it. */
+export function parseWhenExpression(expr: string, allowLoopPrev = false): WhenAtom[][] | null {
+  const clauses: WhenAtom[][] = [];
+  for (const clause of splitOutsideQuotes(expr.trim(), '||')) {
+    const atoms: WhenAtom[] = [];
+    for (const text of splitOutsideQuotes(clause, '&&')) {
+      const atom = parseWhenAtomInternal(text, allowLoopPrev);
+      if (atom === null) return null;
+      atoms.push(atom);
+    }
+    clauses.push(atoms);
+  }
+  return clauses;
+}
+
+/** Quoted RHS values are literal data, even when they contain reference-shaped text. */
+export function assertSupportedWhenOutputRefs(expr: string): void {
+  for (const atom of whenAtoms(expr)) {
+    const quote = atom.indexOf("'");
+    assertSupportedOutputRefs(quote < 0 ? atom : atom.slice(0, quote));
+  }
+}
+
+/** Find unsupported nested shorthand on the left-hand side of a `when:` atom. */
+export function findUnsupportedNestedWhenRef(expr: string): { reference: string } | undefined {
+  for (const atom of whenAtoms(expr)) {
+    const shorthand = NESTED_SHORTHAND_WHEN_REF_PATTERN.exec(atom);
+    if (shorthand?.[1] !== undefined && shorthand[2] !== undefined && shorthand[3] !== undefined) {
+      const nodeId = shorthand[2];
+      const firstSegment = shorthand[3];
+      if (nodeId === WHEN_INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output')
+        continue;
+      return {
+        reference: shorthand[1],
+      };
+    }
+  }
+  return undefined;
+}
+
 /**
- * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — every
- * caller treats that as a parse failure (the evaluator fails closed and skips the
- * node; the loader leaves the atom to that runtime behaviour).
+ * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — the loader rejects
+ * malformed expressions and the evaluator fails closed when called directly.
  */
 export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
-}
-
-/** Parse a loop-group atom, including its scoped `$LOOP_PREV` reference form. */
-export function parseLoopPrevWhenAtom(expr: string): WhenAtom | null {
-  return parseWhenAtomInternal(expr, true);
 }
 
 function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom | null {
@@ -170,7 +223,8 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
         nodeId !== undefined &&
         operator !== undefined &&
         isWhenOperator(operator) &&
-        expected !== undefined
+        expected !== undefined &&
+        isComparableLiteral(operator, expected)
       ) {
         return {
           ref: { kind: 'loop_prev', nodeId, field },
@@ -188,6 +242,7 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
   // Quoted RHS takes precedence; the unquoted alternative covers numbers and booleans.
   const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
   if (operator === undefined || !isWhenOperator(operator) || expected === undefined) return null;
+  if (!isComparableLiteral(operator, expected)) return null;
 
   if (inputName !== undefined) {
     return { ref: { kind: 'input', name: inputName }, operator, expected };

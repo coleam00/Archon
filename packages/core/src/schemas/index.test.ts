@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect } from 'bun:test';
 import {
   conversationRowSchema,
@@ -6,6 +7,7 @@ import {
   userRowSchema,
   userIdentityRowSchema,
   sessionRowSchema,
+  SESSION_TRANSITION_REASONS,
   sessionMetadataSchema,
   workflowEventRowSchema,
   codebaseEnvVarSchema,
@@ -17,6 +19,7 @@ import {
 import type { DashboardWorkflowRun } from './index';
 
 const validDashboardWorkflowRun = {
+  origin: { conversationId: 'conv-1' },
   id: 'run-1',
   workflow_name: 'deploy',
   conversation_id: 'conv-1',
@@ -214,6 +217,33 @@ describe('core schemas', () => {
     expect(result.success).toBe(true);
   });
 
+  test('session reasons validate supported history and reject unknown values independently', () => {
+    const row = {
+      id: 'sess-1',
+      conversation_id: 'conv-1',
+      codebase_id: null,
+      ai_assistant_type: 'claude',
+      assistant_session_id: null,
+      active: true,
+      metadata: {},
+      started_at: new Date(),
+      ended_at: null,
+      parent_session_id: null,
+      transition_reason: null,
+      ended_reason: null,
+    };
+    expect(SESSION_TRANSITION_REASONS).toContain('plan-to-execute');
+    expect(SESSION_TRANSITION_REASONS).toContain('cwd-changed');
+    for (const field of ['transition_reason', 'ended_reason']) {
+      for (const value of [null, ...SESSION_TRANSITION_REASONS]) {
+        expect(sessionRowSchema.safeParse({ ...row, [field]: value }).success).toBe(true);
+      }
+      for (const value of ['unknown-reason', 42, {}, undefined]) {
+        expect(sessionRowSchema.safeParse({ ...row, [field]: value }).success).toBe(false);
+      }
+    }
+  });
+
   test('sessionMetadataSchema allows extra keys via passthrough', () => {
     const result = sessionMetadataSchema.safeParse({ lastCommand: 'plan', extra: true });
     expect(result.success).toBe(true);
@@ -351,4 +381,33 @@ describe('core schemas', () => {
     });
     expect(result.success).toBe(true);
   });
+});
+
+test('identity platforms are open lowercase identifiers bounded by persisted storage', () => {
+  for (const id of [
+    'slack',
+    'telegram',
+    'discord',
+    'github',
+    'gitea',
+    'gitlab',
+    'web',
+    'cli',
+    'matrix-chat',
+    'a'.repeat(32),
+  ]) {
+    expect(identityPlatformSchema.parse(id)).toBe(id);
+  }
+  for (const id of [
+    '',
+    ' matrix',
+    'Matrix',
+    'matrix_chat',
+    'matrix/chat',
+    'matrix--chat',
+    'matrix-',
+    'a'.repeat(33),
+  ]) {
+    expect(identityPlatformSchema.safeParse(id).success).toBe(false);
+  }
 });

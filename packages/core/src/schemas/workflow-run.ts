@@ -1,63 +1,20 @@
 /**
- * Zod schemas for dashboard workflow run types (enriched JOIN results).
+ * Zod schemas for workflow run requests and dashboard types (enriched JOIN results).
  */
 import { z } from '@hono/zod-openapi';
-import { workflowRunSchema, workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 
-// ---------------------------------------------------------------------------
-// DashboardWorkflowRun
-// ---------------------------------------------------------------------------
-
-export const dashboardWorkflowRunSchema = workflowRunSchema.extend({
-  codebase_name: z.string().nullable(),
-  platform_type: z.string().nullable(),
-  worker_platform_id: z.string().nullable(),
-  parent_platform_id: z.string().nullable(),
-  active_nodes: z.array(z.string().min(1)),
-  current_step_name: z.string().nullable(),
-  total_steps: z.number().nullable(),
-  current_step_status: z.enum(['running', 'completed', 'failed']).nullable(),
-  agents_completed: z.number().nullable(),
-  agents_failed: z.number().nullable(),
-  agents_total: z.number().nullable(),
+const signalWorkflowWaitFields = z.object({
+  event: z.string().min(1),
+  occurrence: z.string().min(1).optional(),
+  resumeAt: z.iso.datetime().optional(),
+  payload: z.unknown().optional(),
 });
 
-export type DashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
+export const signalWorkflowWaitRequestSchema = z.union([
+  signalWorkflowWaitFields.required({ occurrence: true }),
+  signalWorkflowWaitFields.required({ resumeAt: true }),
+]);
 
-// ---------------------------------------------------------------------------
-// ListDashboardRunsOptions
-// ---------------------------------------------------------------------------
+export type SignalWorkflowWaitRequest = z.infer<typeof signalWorkflowWaitRequestSchema>;
 
-export const listDashboardRunsOptionsSchema = z.object({
-  status: z
-    .union([workflowRunStatusSchema, z.tuple([workflowRunStatusSchema], workflowRunStatusSchema)])
-    .optional(),
-  codebaseId: z.string().optional(),
-  search: z.string().optional(),
-  after: z.string().optional(),
-  before: z.string().optional(),
-  limit: z.number().optional(),
-  offset: z.number().optional(),
-});
-
-export type ListDashboardRunsOptions = z.infer<typeof listDashboardRunsOptionsSchema>;
-
-// ---------------------------------------------------------------------------
-// DashboardRunsResult
-// ---------------------------------------------------------------------------
-
-export const dashboardRunsResultSchema = z.object({
-  runs: z.array(dashboardWorkflowRunSchema),
-  total: z.number(),
-  counts: z.object({
-    all: z.number(),
-    running: z.number(),
-    completed: z.number(),
-    failed: z.number(),
-    cancelled: z.number(),
-    pending: z.number(),
-    paused: z.number(),
-  }),
-});
-
-export type DashboardRunsResult = z.infer<typeof dashboardRunsResultSchema>;
+export * from '@archon/workflows/schemas/workflow-run-listing';

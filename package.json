@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -15,16 +15,16 @@
     "build:binaries": "bash scripts/build-binaries.sh",
     "build:runner-image": "bash scripts/build-runner-image.sh",
     "build:checksums": "bash scripts/checksums.sh",
-    "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
-    "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
-    "check:bundled-skill": "bun run scripts/check-bundled-skill.ts --check",
-    "generate:bundled-schema": "bun run scripts/generate-bundled-schema.ts",
-    "check:bundled-schema": "bun run scripts/generate-bundled-schema.ts --check",
     "generate:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts",
     "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
+    "generate:codex-protocol": "bun run scripts/generate-codex-protocol.ts",
     "generate:capability-matrix": "bun run scripts/generate-capability-matrix.ts",
+    "generate:node-execution-reference": "bun run packages/workflows/src/scripts/generate-node-execution-reference.ts",
+    "check:node-execution-reference": "bun run packages/workflows/src/scripts/generate-node-execution-reference.ts --check",
     "check:capability-matrix": "bun run scripts/generate-capability-matrix.ts --check",
     "check:api-types": "bun run --cwd=packages/server check:api-types",
+    "generate:provider-contract-schema": "bun run --cwd=packages/provider-contract generate:schema",
+    "check:provider-contract-schema": "bun run --cwd=packages/provider-contract check:schema",
     "generate:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts",
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
@@ -33,10 +33,10 @@
     "test": "bun run scripts/repo-tests.ts",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json",
-    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/lint.ts",
-    "lint:fix": "bun run scripts/lint.ts --fix",
-    "format": "bun x prettier --write .",
-    "format:check": "bun x prettier --check .",
+    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && biome lint --error-on-warnings .",
+    "lint:fix": "biome lint --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
     "dev:web": "bun --filter @archon/web dev",
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
@@ -44,24 +44,23 @@
     "validate": "bun run scripts/validate.ts",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth",
-    "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts"
+    "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts",
+    "check:package-edges": "bun run scripts/check-package-edges.ts",
+    "generate:chat-contract-schema": "bun run --cwd=packages/chat-contract generate:schema",
+    "check:chat-contract-schema": "bun run --cwd=packages/chat-contract check:schema"
   },
   "devDependencies": {
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
-    "@eslint/js": "^9.39.1",
+    "@biomejs/biome": "2.5.15",
     "@types/bun": "latest",
     "bun-types": "^1.3.5",
-    "eslint": "^9.39.1",
-    "eslint-config-prettier": "10.1.8",
     "husky": "^9.1.7",
     "lint-staged": "^15.2.0",
-    "prettier": "^3.7.4",
-    "typescript": "^5.3.0",
     "pino-pretty": "^13",
-    "typescript-eslint": "^8.48.0"
+    "typescript": "^5.3.0"
   },
   "engines": {
     "bun": "1.4.2"
@@ -76,9 +75,5 @@
     "@hono/node-server": "^1.19.15",
     "ws": "^8.21.0",
     "sharp": "^0.35.0"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.282",
-    "@opencode-ai/sdk": "^1.17.3"
   }
 }

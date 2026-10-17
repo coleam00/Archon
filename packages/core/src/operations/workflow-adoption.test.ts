@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Tests for between-run continuation adoption resolution (#2747).
  *
@@ -11,6 +12,7 @@ import type { IsolationEnvironmentRow } from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toBranchName } from '@archon/git';
 import {
+  resolveRegisteredWorktree,
   resolveWorkflowAdoption,
   WorkflowAdoptionError,
   type ResolveWorkflowAdoptionArgs,
@@ -18,6 +20,7 @@ import {
 
 function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     workflow_name: 'implement',
     conversation_id: 'conv-1',
@@ -152,8 +155,10 @@ describe('resolveWorkflowAdoption', () => {
     ).lane;
     expect(lane).toEqual({
       kind: 'reuse-worktree',
-      workingPath: '/ws/repo/.worktrees/run-1',
-      envId: 'env-1',
+      environment: expect.objectContaining({
+        id: 'env-1',
+        working_path: '/ws/repo/.worktrees/run-1',
+      }),
     });
   });
 
@@ -353,3 +358,36 @@ describe('resolveWorkflowAdoption', () => {
     expect(lane).toEqual({ kind: 'in-place' });
   });
 });
+
+test.each(['token', 'legacy', 'destroyed'] as const)(
+  'reuse lane refuses a same-path %s registration replaced after selection',
+  async kind => {
+    const selected = envRow({
+      metadata: kind === 'token' ? { worktree_registration_id: 'selected' } : {},
+    });
+    const { lane } = await resolveWorkflowAdoption({
+      ...baseArgs,
+      adoptedRunId: 'run-1',
+      deps: makeDeps({ run: runRow(), environment: selected }),
+    });
+    if (lane.kind !== 'reuse-worktree') throw new Error('Expected reuse');
+    await expect(
+      resolveRegisteredWorktree(
+        {
+          getById: async () => ({
+            ...selected,
+            ...(kind === 'destroyed'
+              ? { status: 'destroyed' as const }
+              : {
+                  metadata:
+                    kind === 'token'
+                      ? { worktree_registration_id: 'replacement' }
+                      : { legacy: true },
+                }),
+          }),
+        },
+        lane
+      )
+    ).rejects.toThrow('changed during adoption');
+  }
+);

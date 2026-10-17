@@ -51,7 +51,7 @@ User invokes /rulecheck [focus area]
 │  3. Deep scan source     │
 │  4. Group violations     │
 │  5. Fix one group        │
-│  6. bun run validate     │
+│  6. Check own changes    │
 │  7. Write summary JSON   │
 │  8. gh pr create         │
 │  9. Update memory        │
@@ -242,7 +242,7 @@ when the hook needs more than what's in the event JSON.
 | Output | Advisory report (no changes) | Actual fixes + PR |
 | Isolation | None (reads in-place) | Git worktree |
 | Safety | None | PreToolUse command blocklist |
-| Validation | None | `bun run validate` |
+| Validation | None | Tests, lint, type-check on changes; CI is the full gate |
 | Notifications | None | Slack (command hook + HTTP hook) |
 | Learning | None | Persistent memory + meta-judge |
 | Autonomy | Reports findings only | Finds, fixes, validates, PRs |

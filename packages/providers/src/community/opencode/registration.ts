@@ -1,4 +1,5 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
+import { unownedProviderNotice } from '../deprecation';
 
 import { OPENCODE_CAPABILITIES } from './capabilities';
 import { parseOpencodeConfigStrict } from './config';
@@ -17,10 +18,11 @@ export function registerOpencodeProvider(): void {
     factory: () => new OpencodeProvider(),
     capabilities: OPENCODE_CAPABILITIES,
     builtIn: false,
+    deprecationNotice: unownedProviderNotice('OpenCode'),
     parseConfig: parseOpencodeConfigStrict,
     // OpenCode's backend universe is the models.dev catalog, resolved at
     // runtime by the embedded server — there is no static list to declare.
     // Introspection is exposed via GET /api/providers/opencode/credentials.
-    credentials: { kind: 'dynamic' },
+    credentials: { kind: 'dynamic', vendorFor: () => undefined },
   });
 }

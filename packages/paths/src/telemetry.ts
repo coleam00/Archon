@@ -172,9 +172,8 @@ function collectMachineProperties(): Record<string, string | boolean> {
     is_ci: process.env.CI?.toLowerCase() === 'true',
     // `process.stderr.isTTY` is `undefined` at runtime when stderr is not a TTY
     // (servers, pipes, CI), so without coercion the field is silently omitted on
-    // the primary server path. bun-types incorrectly narrows it to `boolean`,
-    // which makes the lint rule think the coercion is redundant — it is not.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- bun-types mis-types process.stderr.isTTY as always-boolean; runtime value is boolean|undefined and the coercion guarantees a present `false`.
+    // the primary server path. bun-types incorrectly narrows it to `boolean`, so
+    // the coercion looks redundant — it is not.
     is_tty: Boolean(process.stderr.isTTY),
   };
 }
@@ -573,7 +572,6 @@ export interface WorkflowInvokedProperties {
   usesMcp?: boolean;
   usesSkills?: boolean;
   usesFreshContext?: boolean;
-  interactive?: boolean;
   usedIsolation?: boolean;
   isResume?: boolean;
   shape?: WorkflowShapeProperties;
@@ -666,6 +664,8 @@ export type WorkflowExitReason =
   // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
   // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
   | 'evidence_missing'
+  // The run budget refused new work, or its spend could not be measured (#2814).
+  | 'budget_refused'
   | 'source_unavailable'
   | 'not_finalized'
   | 'process_terminated'
@@ -683,7 +683,7 @@ export type WorkflowCancelReason =
 
 /**
  * Why the first failed node failed, as recorded where the failure happened.
- * `fatal`/`transient`/`unknown` classify a provider error; the rest are
+ * `fatal`/`transient`/`rate_limited`/`unknown` classify a provider error; the rest are
  * engine-detected causes. Mirrored from `NodeFailureKind` in `@archon/workflows`.
  * A fixed enum — raw error text never leaves the machine.
  */
@@ -691,6 +691,8 @@ export type WorkflowErrorClass =
   | 'fatal'
   | 'transient'
   | 'unknown'
+  | 'rate_limited'
+  | 'overloaded'
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'
@@ -815,7 +817,6 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         uses_mcp: Boolean(props.usesMcp),
         uses_skills: Boolean(props.usesSkills),
         uses_fresh_context: Boolean(props.usesFreshContext),
-        interactive: Boolean(props.interactive),
         used_isolation: Boolean(props.usedIsolation),
         is_resume: Boolean(props.isResume),
         ...(props.shape ? workflowShapeWireProps(props.shape) : {}),
@@ -1053,15 +1054,16 @@ export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void
 
 /**
  * Best-effort exit flush. Slow ingestion drops pending events after 75 ms;
- * telemetry must not hold up CLI exit or server shutdown.
+ * telemetry must not hold up CLI exit or server shutdown. Tests may override the
+ * budget to wait for delivery rather than exercise best-effort exit behavior.
  */
-export async function shutdownTelemetry(): Promise<void> {
+export async function shutdownTelemetry(timeoutMs = TELEMETRY_SHUTDOWN_TIMEOUT_MS): Promise<void> {
   if (clientInit === undefined) return;
   try {
     const initialized = await clientInit;
     if (initialized) {
       try {
-        await initialized.client.shutdown(TELEMETRY_SHUTDOWN_TIMEOUT_MS);
+        await initialized.client.shutdown(timeoutMs);
       } finally {
         // The SDK deadline only races its flush; it leaves fetch running.
         initialized.abortController.abort();

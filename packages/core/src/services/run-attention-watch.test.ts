@@ -1,10 +1,10 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { hostname } from 'node:os';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { DbNotificationListener } from '../db/adapters/types';
-
-// ---------------------------------------------------------------------------
-// Mock DB modules before importing the module under test
-// ---------------------------------------------------------------------------
+import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
+import type { RunDoorbell } from './run-attention-watch';
+import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 
 /**
  * The rows the waiter can see, keyed by run id. Mutating this between reads is how a
@@ -13,18 +13,8 @@ import type { DbNotificationListener } from '../db/adapters/types';
 const rows = new Map<string, WorkflowRun>();
 const mockGetWorkflowRun = mock((id: string) => Promise.resolve(rows.get(id) ?? null));
 
-// Deliberately the ONLY member of the store this module may reach. Any write the
-// waiter attempted — updateWorkflowRun, cancelWorkflowRun, resolveApprovalGate —
-// would throw "is not a function" here rather than silently mutating a run.
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: mockGetWorkflowRun,
-}));
-
-// SQLite posture by default: no listener, so the interval is the only wake source.
-const mockGetDbNotificationListener = mock((): DbNotificationListener | null => null);
-mock.module('../db/connection', () => ({
-  getDbNotificationListener: mockGetDbNotificationListener,
-}));
+const store = { getWorkflowRun: mockGetWorkflowRun };
+let doorbell: RunDoorbell | undefined;
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -39,34 +29,48 @@ mock.module('@archon/paths', () => ({
 }));
 
 let reachableOwners: Set<string> | null = null;
-const RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS = 10_000;
-const ownerEvents = new Map<
-  string,
-  (event: 'attention' | 'control_handoff' | 'disconnected') => void
->();
+const ownerEvents = new Map<string, (event: RunLiveOwnerWatchEvent) => void>();
 const ownerUnsubscribes: ReturnType<typeof mock>[] = [];
 const mockWatchRunLiveOwner = mock(
-  (runId: string, onEvent: (event: 'attention' | 'control_handoff' | 'disconnected') => void) => {
-    if (reachableOwners !== null && !reachableOwners.has(runId)) return Promise.resolve(null);
+  (
+    runId: string,
+    onEvent: (event: RunLiveOwnerWatchEvent) => void
+  ): Promise<RunLiveOwnerWatchResult> => {
+    if (reachableOwners !== null && !reachableOwners.has(runId))
+      return Promise.resolve({ kind: 'unreachable' });
     ownerEvents.set(runId, onEvent);
     const unsubscribe = mock(() => undefined);
     ownerUnsubscribes.push(unsubscribe);
-    return Promise.resolve({ unsubscribe });
+    return Promise.resolve({ kind: 'attached', handle: { unsubscribe } });
   }
 );
 mock.module('./run-live-owner', () => ({
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
   watchRunLiveOwner: mockWatchRunLiveOwner,
 }));
 
-const { waitForRunAttention } = await import('./run-attention-watch');
+const { runOwnerLossWatch, waitForRunAttention } = await import('./run-attention-watch');
+const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } = await import(
+  './run-stop-bounds'
+);
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
+const localUid = process.getuid?.();
+const localOwner = {
+  execution_owner: {
+    host: hostname(),
+    pid: 4242,
+    ...(localUid === undefined ? {} : { uid: localUid }),
+  },
+};
+const foreignOwner = { execution_owner: { host: 'other-host.invalid', pid: 4242 } };
+
+/** Rows carry this host's execution-owner stamp unless a test says otherwise. */
 function putRun(id: string, over: Partial<WorkflowRun> = {}): WorkflowRun {
   const run = {
+    origin: { conversationId: 'conv-1' },
     id,
     workflow_name: 'demo',
     conversation_id: 'conv-1',
@@ -75,7 +79,7 @@ function putRun(id: string, over: Partial<WorkflowRun> = {}): WorkflowRun {
     status: 'running',
     outcome: null,
     user_message: 'go',
-    metadata: {},
+    metadata: localOwner,
     started_at: new Date('2026-08-28T10:00:00.000Z'),
     completed_at: null,
     last_activity_at: null,
@@ -95,12 +99,11 @@ const gate = (over: Record<string, unknown> = {}) => ({
   approval: { nodeId: 'review', message: 'Approve the plan.', ...over },
 });
 
-/** A fast wait — the interval is the wake source in every test here. */
 const wait = (runId: string, over: Record<string, unknown> = {}) =>
-  waitForRunAttention(runId, { pollIntervalMs: 5, deadlineMs: 3000, ...over });
+  waitForRunAttention(store, runId, { doorbell, pollIntervalMs: 5, deadlineMs: 3000, ...over });
 
 async function waitForOwner(runId: string): Promise<void> {
-  const deadline = Date.now() + 1000;
+  const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
   while (!ownerEvents.has(runId)) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for owner ${runId}`);
     await Bun.sleep(5);
@@ -111,7 +114,7 @@ beforeEach(() => {
   rows.clear();
   mockGetWorkflowRun.mockImplementation((id: string) => Promise.resolve(rows.get(id) ?? null));
   mockGetWorkflowRun.mockClear();
-  mockGetDbNotificationListener.mockClear();
+  doorbell = undefined;
   reachableOwners = null;
   ownerEvents.clear();
   ownerUnsubscribes.length = 0;
@@ -121,6 +124,47 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('waitForRunAttention', () => {
+  test.each([false, true])(
+    'running advisory returns the affected child identity: %s',
+    async child => {
+      const calls = [
+        {
+          streamId: 'stream',
+          nodeId: 'implement',
+          provider: 'codex',
+          toolCallId: 'tool',
+          name: 'bash',
+          startedAt: '2026-10-01T00:00:00.000Z',
+          lastProgressAt: '2026-10-01T00:00:00.000Z',
+          raisedAt: '2026-10-01T00:30:00.000Z',
+          thresholdMs: 1800000,
+        },
+      ];
+      const affected = putRun('affected', { metadata: { tool_call_attention: calls } });
+      if (child)
+        putRun('parent', {
+          status: 'paused',
+          metadata: gate({ type: 'child_workflow', childRunId: 'affected' }),
+        });
+      const result = await wait(child ? 'parent' : 'affected');
+      expect(result).toMatchObject({
+        kind: 'attention',
+        attention: {
+          kind: 'stalled_tool_calls',
+          runId: 'affected',
+          status: 'running',
+          calls: [{ nodeId: 'implement', toolCallId: 'tool' }],
+        },
+      });
+      expect(affected.status).toBe('running');
+      expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+      affected.metadata = {};
+      expect(await wait('affected', { deadlineMs: 10 })).toMatchObject({
+        kind: 'deadline',
+        observedStatus: 'running',
+      });
+    }
+  );
   test('returns not_found for an id that names no run', async () => {
     // Distinct from every other outcome: waiting on an id that does not exist must
     // not look like waiting on a live run.
@@ -156,6 +200,92 @@ describe('waitForRunAttention', () => {
     expect(rows.get('r1')).toEqual(before);
   });
 
+  test('an owner on another host is unknown, not lost, and the wait keeps watching', async () => {
+    const before = putRun('r1', { status: 'running', metadata: foreignOwner });
+    reachableOwners = new Set();
+    const announced: unknown[] = [];
+
+    const result = await wait('r1', {
+      deadlineMs: 50,
+      onAttached: (...args: unknown[]) => {
+        announced.push(args);
+      },
+    });
+
+    expect(result).toEqual({ kind: 'deadline', runId: 'r1', observedStatus: 'running' });
+    expect(announced).toEqual([
+      ['running', { kind: 'unknown', recordedOwner: foreignOwner.execution_owner }],
+    ]);
+    expect(rows.get('r1')).toEqual(before);
+  });
+
+  test.skipIf(localUid === undefined)(
+    'an owner on this host under another user is unknown, not lost',
+    async () => {
+      putRun('r1', {
+        status: 'running',
+        metadata: { execution_owner: { host: hostname(), pid: 4242, uid: (localUid ?? 0) + 1 } },
+      });
+      reachableOwners = new Set();
+
+      expect(await wait('r1', { deadlineMs: 50 })).toMatchObject({ kind: 'deadline' });
+    }
+  );
+
+  test('a run that records no owner is unknown, not lost', async () => {
+    putRun('r1', { status: 'running', metadata: {} });
+    reachableOwners = new Set();
+    const announced: unknown[] = [];
+
+    expect(
+      await wait('r1', {
+        deadlineMs: 50,
+        onAttached: (...args: unknown[]) => {
+          announced.push(args);
+        },
+      })
+    ).toMatchObject({ kind: 'deadline' });
+    expect(announced).toEqual([['running', { kind: 'unknown', recordedOwner: undefined }]]);
+  });
+
+  test('a wait on an owner on another host still answers from the durable row', async () => {
+    putRun('r1', { status: 'running', metadata: foreignOwner });
+    reachableOwners = new Set();
+
+    expect(
+      await wait('r1', {
+        onAttached: () => {
+          putRun('r1', {
+            status: 'completed',
+            metadata: foreignOwner,
+            completed_at: new Date(),
+          });
+        },
+      })
+    ).toMatchObject({ kind: 'attention', attention: { kind: 'terminal', status: 'completed' } });
+  });
+
+  test('keeps an unproven ancestor waiting even when the child endpoint is absent', async () => {
+    putRun('parent', { status: 'running' });
+    putRun('child', { status: 'running', parent_run_id: 'parent' });
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unreachable' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unreachable' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+
+    expect(await wait('child', { deadlineMs: 0 })).toEqual({
+      kind: 'deadline',
+      runId: 'child',
+      observedStatus: 'running',
+    });
+    expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0])).toEqual([
+      'child',
+      'parent',
+      'child',
+      'parent',
+    ]);
+  });
+
   test('a terminal row racing a missing owner wins', async () => {
     const running = putRun('r1', { status: 'running' });
     const completed = { ...running, status: 'completed', completed_at: new Date() } as WorkflowRun;
@@ -174,7 +304,7 @@ describe('waitForRunAttention', () => {
 
   test('owner attention wakes a durable re-read without waiting for the interval', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
     await waitForOwner('r1');
     putRun('r1', { status: 'completed', completed_at: new Date() });
     ownerEvents.get('r1')?.('attention');
@@ -187,7 +317,7 @@ describe('waitForRunAttention', () => {
 
   test('an unexpected owner disconnect wakes immediately as owner_lost', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
     await waitForOwner('r1');
     reachableOwners = new Set();
     ownerEvents.get('r1')?.('disconnected');
@@ -208,7 +338,7 @@ describe('waitForRunAttention', () => {
       ownerUnsubscribes.push(unsubscribe);
       reachableOwners = new Set();
       onEvent('disconnected');
-      return Promise.resolve({ unsubscribe });
+      return Promise.resolve({ kind: 'attached', handle: { unsubscribe } });
     });
 
     expect(await wait('r1')).toEqual({
@@ -221,7 +351,7 @@ describe('waitForRunAttention', () => {
 
   test('a stop handoff gives the controller bounded time to persist cancellation', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 20, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 20, deadlineMs: 3000 });
     await waitForOwner('r1');
     ownerEvents.get('r1')?.('control_handoff');
     reachableOwners = new Set();
@@ -235,6 +365,38 @@ describe('waitForRunAttention', () => {
     });
   });
 
+  test('a stop handoff outlasts the slowest stop the controller can still finish', async () => {
+    // A Windows stop can list the process table several times after the owner is gone,
+    // each listing bounded only by its command timeout. A waiter that gave up before the
+    // controller's own bound would report owner_lost for a run that ends cancelled.
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      putRun('r1', { status: 'running' });
+      let settled = false;
+      const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 5 }).finally(() => {
+        settled = true;
+      });
+      await waitForOwner('r1');
+      ownerEvents.get('r1')?.('control_handoff');
+      reachableOwners = new Set();
+      ownerEvents.get('r1')?.('disconnected');
+
+      now += DETACHED_RUN_TERMINATION_MAX_MS;
+      await Bun.sleep(20);
+      expect(settled).toBe(false);
+      putRun('r1', { status: 'cancelled', completed_at: new Date() });
+
+      expect(await pending).toMatchObject({
+        kind: 'attention',
+        attention: { kind: 'terminal', status: 'cancelled' },
+      });
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   test('a stop handoff expires when the controller never persists a transition', async () => {
     const realNow = Date.now;
     let now = realNow();
@@ -242,7 +404,7 @@ describe('waitForRunAttention', () => {
     try {
       putRun('r1', { status: 'running' });
       let settled = false;
-      const pending = waitForRunAttention('r1', { pollIntervalMs: 5 }).finally(() => {
+      const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 5 }).finally(() => {
         settled = true;
       });
       await waitForOwner('r1');
@@ -252,7 +414,7 @@ describe('waitForRunAttention', () => {
 
       await Bun.sleep(20);
       expect(settled).toBe(false);
-      now += RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS + 1;
+      now += DETACHED_RUN_STOP_HANDOFF_GRACE_MS + 1;
 
       expect(await pending).toEqual({
         kind: 'owner_lost',
@@ -272,7 +434,7 @@ describe('waitForRunAttention', () => {
     putRun('r1', { status: 'running' });
     const attached: string[] = [];
 
-    const result = await waitForRunAttention('r1', {
+    const result = await waitForRunAttention(store, 'r1', {
       pollIntervalMs: 5,
       deadlineMs: 40,
       onAttached: status => {
@@ -326,6 +488,7 @@ describe('waitForRunAttention', () => {
         kind: 'awaiting_response',
         runId: 'r1',
         respondTo: { runId: 'r1', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve the plan.',
       },
     });
@@ -361,7 +524,7 @@ describe('waitForRunAttention', () => {
     expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
   });
 
-  test('an action-required wait wakes with its authored message', async () => {
+  test('an attention wait wakes with its authored message', async () => {
     putRun('r1', {
       status: 'paused',
       metadata: {
@@ -378,10 +541,13 @@ describe('waitForRunAttention', () => {
     expect(await wait('r1')).toEqual({
       kind: 'attention',
       attention: {
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'r1',
         nodeId: 'rerun-ci',
+        occurrence: 'legacy:rerun-ci',
         message: 'Rerun the failed check.',
+        form: 'message',
+        options: [],
       },
     });
   });
@@ -418,6 +584,7 @@ describe('waitForRunAttention', () => {
           kind: 'awaiting_response',
           runId: 'child',
           respondTo: { runId: 'child', nodeId: 'child-gate' },
+          occurrence: 'legacy:child-gate',
           message: 'Approve the plan.',
         },
       });
@@ -450,7 +617,7 @@ describe('waitForRunAttention', () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('child') });
       putRun('child', { status: 'running', parent_run_id: 'parent' });
       reachableOwners = new Set(['parent']);
-      const pending = waitForRunAttention('parent', {
+      const pending = waitForRunAttention(store, 'parent', {
         pollIntervalMs: 60_000,
         deadlineMs: 3000,
       });
@@ -468,6 +635,41 @@ describe('waitForRunAttention', () => {
         observedStatus: 'paused',
       });
     });
+
+    test.each([
+      ['another host', foreignOwner, 'deadline'],
+      ['this host', localOwner, 'owner_lost'],
+    ] as const)(
+      'an unclaimed child reads its owner from the parent on %s',
+      async (_where, parentOwner, expected) => {
+        putRun('parent', {
+          status: 'paused',
+          metadata: { ...blockedOn('child'), ...parentOwner },
+        });
+        putRun('child', { status: 'pending', parent_run_id: 'parent', metadata: {} });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: expected });
+      }
+    );
+
+    test.each([
+      ['another host', foreignOwner, 'deadline'],
+      ['this host', localOwner, 'owner_lost'],
+    ] as const)(
+      'a direct wait on an unstamped running child reads its owner from the parent on %s',
+      async (_where, parentOwner, expected) => {
+        // A claimed child is `running` before its own stamp lands; its process is the parent's.
+        putRun('parent', {
+          status: 'paused',
+          metadata: { ...blockedOn('child'), ...parentOwner },
+        });
+        putRun('child', { status: 'running', parent_run_id: 'parent', metadata: {} });
+        reachableOwners = new Set();
+
+        expect(await wait('child', { deadlineMs: 50 })).toMatchObject({ kind: expected });
+      }
+    );
 
     test('a direct child wait can attach to the same ancestor owner', async () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('child') });
@@ -500,6 +702,98 @@ describe('waitForRunAttention', () => {
       });
     });
 
+    describe('a fan-out parent blocked on several children', () => {
+      const blockedOnAll = (...childRunIds: string[]) =>
+        gate({ type: 'fan_out', nodeId: 'work', childRunIds });
+
+      test('wakes with the first child that needs an answer, never the parent', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: gate({ nodeId: 'c2-gate' }),
+        });
+
+        expect(await wait('parent')).toMatchObject({
+          kind: 'attention',
+          attention: {
+            kind: 'awaiting_response',
+            runId: 'c2',
+            respondTo: { runId: 'c2', nodeId: 'c2-gate' },
+          },
+        });
+      });
+
+      test('with no child needing an answer, watches the running child', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'running', parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'hold',
+              kind: 'time',
+              waitingSince: '2026-08-28T10:00:00.000Z',
+              resumeAt: '2026-08-28T11:00:00.000Z',
+            },
+          },
+        });
+        reachableOwners = new Set(['c1']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls[0]?.[0]).toBe('c1');
+      });
+
+      // A finished child's hook stands down while the gate still waits on a sibling,
+      // so nothing owns that child: it must not be the run the waiter watches.
+      test('a finished child does not need an owner while a sibling is unfinished', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'running', parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0])).not.toContain('c1');
+      });
+
+      test('the finished child needs an owner once it released the gate', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'failed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'owner_lost' });
+      });
+
+      // Only the child that finished last continues the parent, and the rows do not say
+      // which one that was.
+      test('once released, any finished child can be the live owner', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+      });
+
+      test('once released, an unreachable child on another host keeps the parent unknown', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'completed',
+          completed_at: new Date(),
+          parent_run_id: 'parent',
+          metadata: foreignOwner,
+        });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'deadline' });
+      });
+    });
+
     test('a chain longer than the bound is unreadable, not an assumed state', async () => {
       for (let i = 0; i < 520; i += 1) {
         putRun(`r${String(i)}`, { status: 'paused', metadata: blockedOn(`r${String(i + 1)}`) });
@@ -508,7 +802,7 @@ describe('waitForRunAttention', () => {
 
       expect(await wait('r0')).toMatchObject({
         kind: 'attention',
-        attention: { kind: 'unreadable', reason: 'child_chain_too_deep' },
+        attention: { kind: 'unreadable', runId: 'r0', reason: 'child_chain_too_deep' },
       });
     });
   });
@@ -560,72 +854,106 @@ describe('waitForRunAttention', () => {
   });
 
   describe('the notification doorbell', () => {
-    test('is skipped entirely when the dialect has none (SQLite)', async () => {
-      putRun('r1', { status: 'completed', completed_at: new Date() });
-
-      await wait('r1');
-
-      expect(mockGetDbNotificationListener).toHaveBeenCalled();
-    });
-
-    test('wakes a re-read, but the row is still the answer', async () => {
-      // A notification carrying this run id must never BE the answer: the doorbell
-      // rings here while the run is still running, and the wait continues.
-      let ring: ((payload: string) => void) | undefined;
-      const unsubscribe = mock(() => undefined);
-      mockGetDbNotificationListener.mockReturnValueOnce({
-        listen: (_channel: string, onNotify: (payload: string) => void) => {
-          ring = onNotify;
-          return Promise.resolve(unsubscribe);
+    test('polls a durable terminal row when the supplied doorbell rejects', async () => {
+      const error = new Error('notification transport unavailable');
+      doorbell = async () => {
+        throw error;
+      };
+      putRun('r1', { status: 'pending' });
+      const pending = wait('r1', {
+        onAttached: () => {
+          putRun('r1', { status: 'completed', completed_at: new Date() });
         },
       });
-      putRun('r1', { status: 'running' });
-
-      // A long interval: only the doorbell can move this forward in time.
-      const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
-      await Bun.sleep(20);
-      ring?.('r1');
-      await Bun.sleep(20);
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal', status: 'completed' } });
       expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(1);
-
-      putRun('r1', { status: 'completed', completed_at: new Date() });
-      ring?.('r1');
-
-      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
-      expect(unsubscribe).toHaveBeenCalled();
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { err: error, runId: 'r1' },
+        'run_attention.doorbell_unavailable'
+      );
     });
 
-    test('ignores a notification for a different run', async () => {
-      let ring: ((payload: string) => void) | undefined;
-      mockGetDbNotificationListener.mockReturnValueOnce({
-        listen: (_channel: string, onNotify: (payload: string) => void) => {
-          ring = onNotify;
-          return Promise.resolve(() => undefined);
-        },
-      });
-      putRun('r1', { status: 'running' });
-
-      // A 60s interval and NO deadline: between the opening read and the abort,
-      // the doorbell is the only thing that can cause another read. So the count
-      // measures the doorbell directly instead of racing a deadline timer against
-      // the clock — pinning an exact total across a deadline made this assertion a
-      // function of timer alignment, and CI duly read 3 where a laptop read 2.
-      const controller = new AbortController();
-      const pending = waitForRunAttention('r1', {
-        pollIntervalMs: 60_000,
-        signal: controller.signal,
-      });
+    test('polls correctly when no notification implementation is supplied', async () => {
+      putRun('r1', { status: 'pending' });
+      const pending = wait('r1');
       await Bun.sleep(20);
-      const readsBeforeRing = mockGetWorkflowRun.mock.calls.length;
-
-      ring?.('some-other-run');
-      await Bun.sleep(50);
-
-      // The whole point: a payload naming a different run woke nothing.
-      expect(mockGetWorkflowRun.mock.calls.length).toBe(readsBeforeRing);
-
-      controller.abort();
-      expect(await pending).toMatchObject({ kind: 'aborted' });
+      putRun('r1', { status: 'completed', completed_at: new Date() });
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
     });
+
+    test('wakes a re-read, leaves the row authoritative and unsubscribes', async () => {
+      let ring: (() => void) | undefined;
+      const unsubscribe = mock(() => undefined);
+      doorbell = async (runId, onDoorbell) => {
+        expect(runId).toBe('r1');
+        ring = onDoorbell;
+        return unsubscribe;
+      };
+      putRun('r1', { status: 'running' });
+      const pending = waitForRunAttention(store, 'r1', {
+        doorbell,
+        pollIntervalMs: 60_000,
+        deadlineMs: 3000,
+      });
+      await waitForOwner('r1');
+      const reads = mockGetWorkflowRun.mock.calls.length;
+      ring?.();
+      await Bun.sleep(20);
+      expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(reads);
+      putRun('r1', { status: 'completed', completed_at: new Date() });
+      ring?.();
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    test('unsubscribes the doorbell on abort', async () => {
+      const unsubscribe = mock(() => undefined);
+      const controller = new AbortController();
+      putRun('r1', { status: 'pending' });
+      const pending = waitForRunAttention(store, 'r1', {
+        doorbell: async () => unsubscribe,
+        signal: controller.signal,
+        onAttached: () => controller.abort(),
+      });
+      expect(await pending).toEqual({ kind: 'aborted', runId: 'r1' });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('runOwnerLossWatch', () => {
+  test('reports a lost owner with its observed status, and any other end as null', async () => {
+    putRun('orphan', { status: 'running' });
+    putRun('asking', { status: 'paused', metadata: { ...localOwner, ...gate() } });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('orphan', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('asking', signal)).toBeNull();
+    expect(rows.get('orphan')?.status).toBe('running');
+  });
+
+  test('keeps watching a running run through its tool-call attention, and reports its lost owner', async () => {
+    const stalled = {
+      streamId: 'stream',
+      nodeId: 'implement',
+      provider: 'codex',
+      toolCallId: 'tool',
+      name: 'bash',
+      startedAt: '2026-10-01T00:00:00.000Z',
+      lastProgressAt: '2026-10-01T00:00:00.000Z',
+      raisedAt: '2026-10-01T00:30:00.000Z',
+      thresholdMs: 1800000,
+    };
+    putRun('stalled', { metadata: { ...localOwner, tool_call_attention: [stalled] } });
+    putRun('malformed', { metadata: { ...localOwner, tool_call_attention: 'garbage' } });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('stalled', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('malformed', signal)).toEqual({ observedStatus: 'running' });
+    expect(rows.get('stalled')?.metadata).toMatchObject({ tool_call_attention: [stalled] });
   });
 });

@@ -11,8 +11,9 @@
  * — the UNIQUE constraint causes the second writer to throw, and we recover
  * by re-SELECTing the winner's identity row.
  */
+import { identityPlatformSchema, userRoleSchema } from '../schemas/user';
 import { pool, getDatabase, getDialect } from './connection';
-import type { IdentityPlatform, User, UserIdentity } from '../types';
+import type { IdentityPlatform, User, UserIdentity, UserRole } from '../types';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -73,7 +74,8 @@ export async function findOrCreateUserByPlatformIdentity(
   platformUserId: string,
   displayName?: string
 ): Promise<User> {
-  getLog().debug({ platform, platformUserId }, 'user.create_started');
+  identityPlatformSchema.parse(platform);
+  getLog().debug({ platform }, 'user.create_started');
 
   const existing = await selectIdentity(platform, platformUserId);
 
@@ -85,19 +87,16 @@ export async function findOrCreateUserByPlatformIdentity(
       }
       return user;
     }
-    getLog().warn(
-      { identityId: existing.id, platform, platformUserId },
-      'user.identity_orphan_repair_started'
-    );
-    return await repairOrphanedIdentity(existing.id, platform, platformUserId, displayName);
+    getLog().warn({ identityId: existing.id, platform }, 'user.identity_orphan_repair_started');
+    return await repairOrphanedIdentity(existing.id, platform, displayName);
   }
 
   const db = getDatabase();
   try {
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        [displayName ?? null]
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {
@@ -108,10 +107,7 @@ export async function findOrCreateUserByPlatformIdentity(
          VALUES ($1, $2, $3, $4)`,
         [user.id, platform, platformUserId, displayName ?? null]
       );
-      getLog().info(
-        { userId: user.id, platform, platformUserId, displayName },
-        'user.create_completed'
-      );
+      getLog().info({ userId: user.id, platform }, 'user.create_completed');
       return user;
     });
   } catch (err) {
@@ -120,7 +116,7 @@ export async function findOrCreateUserByPlatformIdentity(
     // the original error and rethrow — silently swallowing it would mask real
     // DB failures behind a misleading "race recovery" path.
     if (!isUniqueViolation(err)) {
-      getLog().error({ err, platform, platformUserId }, 'user.create_failed');
+      getLog().error({ err, platform }, 'user.create_failed');
       throw err;
     }
 
@@ -128,14 +124,14 @@ export async function findOrCreateUserByPlatformIdentity(
     if (recovered) {
       const user = await getUserById(recovered.user_id);
       if (user) {
-        getLog().info({ platform, platformUserId, userId: user.id }, 'user.create_race_recovered');
+        getLog().info({ platform, userId: user.id }, 'user.create_race_recovered');
         return user;
       }
     }
     // UNIQUE fired but recovery turned up empty (very unusual — possibly the
     // winner was deleted between the failure and our re-SELECT). Surface the
     // original error rather than silently returning undefined.
-    getLog().error({ err, platform, platformUserId }, 'user.create_failed_race_recovery_empty');
+    getLog().error({ err, platform }, 'user.create_failed_race_recovery_empty');
     throw err;
   }
 }
@@ -163,7 +159,7 @@ async function backfillDisplayName(
     }
   } catch (err) {
     getLog().warn(
-      { err: err as Error, userId: user.id, identityId: identity.id },
+      { err, userId: user.id, identityId: identity.id },
       'user.display_name_backfill_failed'
     );
   }
@@ -172,15 +168,14 @@ async function backfillDisplayName(
 async function repairOrphanedIdentity(
   identityId: string,
   platform: IdentityPlatform,
-  platformUserId: string,
   displayName: string | undefined
 ): Promise<User> {
   const db = getDatabase();
   try {
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        [displayName ?? null]
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {
@@ -191,16 +186,13 @@ async function repairOrphanedIdentity(
         [user.id, displayName ?? null, identityId]
       );
       getLog().info(
-        { userId: user.id, identityId, platform, platformUserId },
+        { userId: user.id, identityId, platform },
         'user.identity_orphan_repair_completed'
       );
       return user;
     });
   } catch (err) {
-    getLog().error(
-      { err, identityId, platform, platformUserId },
-      'user.identity_orphan_repair_failed'
-    );
+    getLog().error({ err, identityId, platform }, 'user.identity_orphan_repair_failed');
     throw err;
   }
 }
@@ -216,10 +208,12 @@ export async function updateUserDisplayName(userId: string, displayName: string)
 /**
  * Raised when a GitHub account is already linked to a different Archon user.
  * Connecting must never silently reassign an identity from one user to another.
+ * The message reaches users and logs, so it names neither the login nor the
+ * other user; the caller already knows which account it just authorized.
  */
 export class GithubIdentityConflictError extends Error {
-  constructor(public readonly login: string) {
-    super(`GitHub account @${login} is already linked to a different Archon user.`);
+  constructor() {
+    super('This GitHub account is already linked to a different Archon user.');
     this.name = 'GithubIdentityConflictError';
   }
 }
@@ -245,44 +239,86 @@ export async function updateUserGithubProfile(
   );
 }
 
-/**
- * Attach a GitHub identity to an EXISTING Archon user (the connecting actor).
- * Unlike findOrCreateUserByPlatformIdentity, this never mints a new user — the
- * device-flow connect surfaces already have the actor's user_id and only need
- * to bind their GitHub login to it. Throws GithubIdentityConflictError if the
- * login already maps to a different user.
- */
+export class PlatformIdentityConflictError extends Error {
+  constructor(
+    public readonly platform: IdentityPlatform,
+    public readonly platformUserId: string,
+    public readonly existingUserId: string,
+    public readonly requestedUserId: string
+  ) {
+    super(
+      `Identity ${platform}:${platformUserId} is already linked to user ${existingUserId}; linking it to user ${requestedUserId} requires moving it.`
+    );
+    this.name = 'PlatformIdentityConflictError';
+  }
+}
+
+export async function linkPlatformIdentity(
+  userId: string,
+  platform: IdentityPlatform,
+  platformUserId: string,
+  displayName?: string,
+  move = false
+): Promise<void> {
+  identityPlatformSchema.parse(platform);
+  if (!platformUserId.trim()) throw new Error('Platform user id must not be empty.');
+  if (!(await getUserById(userId))) throw new Error(`Unknown user id: ${userId}`);
+  // Read only to log who lost the identity; the write below decides ownership.
+  const prior = await selectIdentity(platform, platformUserId);
+
+  // Enforce ownership in the write itself so concurrent links cannot silently move an identity.
+  const result = await pool.query<UserIdentity>(
+    `INSERT INTO remote_agent_user_identities (user_id, platform, platform_user_id, platform_display_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (platform, platform_user_id) DO UPDATE
+     SET user_id = excluded.user_id,
+         platform_display_name = COALESCE(excluded.platform_display_name, remote_agent_user_identities.platform_display_name)
+     WHERE remote_agent_user_identities.user_id = excluded.user_id OR $5
+     RETURNING *`,
+    [userId, platform, platformUserId, displayName ?? null, move]
+  );
+  if (!result.rows[0]) {
+    const existing = await selectIdentity(platform, platformUserId);
+    if (!existing) throw new Error('Identity disappeared while linking; retry the command.');
+    throw new PlatformIdentityConflictError(platform, platformUserId, existing.user_id, userId);
+  }
+  const previousUserId = prior && prior.user_id !== userId ? prior.user_id : undefined;
+  getLog().info(
+    { userId, platform, ...(previousUserId ? { previousUserId } : {}) },
+    'user.identity_linked'
+  );
+}
+
 export async function linkGithubIdentity(userId: string, login: string): Promise<void> {
-  const platform: IdentityPlatform = 'github';
-  const existing = await selectIdentity(platform, login);
-  if (existing) {
-    if (existing.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
-    }
-    await pool.query(
-      'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
-      [login, existing.id]
-    );
-    getLog().info({ userId, login }, 'user.github_identity_relinked');
-    return;
-  }
   try {
-    await pool.query(
-      `INSERT INTO remote_agent_user_identities (user_id, platform, platform_user_id, platform_display_name)
-       VALUES ($1, $2, $3, $4)`,
-      [userId, platform, login, login]
-    );
-    getLog().info({ userId, login }, 'user.github_identity_linked');
+    await linkPlatformIdentity(userId, 'github', login, login);
   } catch (err) {
-    // Concurrent connect of the same ('github', login) raced us past the SELECT
-    // and inserted first. UNIQUE(platform, platform_user_id) rejects the loser —
-    // re-read and honor the winner: conflict if it's a different user, otherwise
-    // a no-op (e.g. a double-clicked "Connect GitHub").
-    if (!isUniqueViolation(err)) throw err;
-    const winner = await selectIdentity(platform, login);
-    if (winner && winner.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
-    }
-    getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
+    if (err instanceof PlatformIdentityConflictError) throw new GithubIdentityConflictError();
+    throw err;
   }
+}
+
+export async function listUsersWithIdentities(): Promise<
+  (User & { identities: UserIdentity[] })[]
+> {
+  const users = await pool.query<User>('SELECT * FROM remote_agent_users ORDER BY created_at, id');
+  const identities = await pool.query<UserIdentity>(
+    'SELECT * FROM remote_agent_user_identities ORDER BY platform, platform_user_id'
+  );
+  const byUser = new Map<string, UserIdentity[]>();
+  for (const identity of identities.rows) {
+    const group = byUser.get(identity.user_id) ?? [];
+    group.push(identity);
+    byUser.set(identity.user_id, group);
+  }
+  return users.rows.map(user => ({ ...user, identities: byUser.get(user.id) ?? [] }));
+}
+
+export async function setUserRole(userId: string, role: UserRole): Promise<void> {
+  const validatedRole = userRoleSchema.parse(role);
+  const result = await pool.query(
+    `UPDATE remote_agent_users SET role = $1, updated_at = ${getDialect().now()} WHERE id = $2`,
+    [validatedRole, userId]
+  );
+  if (result.rowCount === 0) throw new Error(`Unknown user id: ${userId}`);
 }

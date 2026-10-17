@@ -1,14 +1,11 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import {
-  registerBuiltinProviders,
-  clearRegistry,
-  getRegistration,
-  registerProvider,
-} from '@archon/providers';
+import { clearRegistry, getRegistration, registerProvider } from '@archon/providers';
+import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers/in-process';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
+import { EFFORT_LADDER } from '@archon/provider-contract';
 import { InvalidConfigError } from '@archon/core/config';
 import {
   makeDiscoverWorkflowsMock,
@@ -32,6 +29,12 @@ mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: mockGetDatabaseType,
   loadConfig: mockLoadConfig,
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {
@@ -42,7 +45,7 @@ mock.module('@archon/core', () => ({
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   toSafeConfig: (config: unknown) => config,
-  generateAndSetTitle: mock(async () => {}),
+  generateTitleForUser: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   updateGlobalConfig: mockUpdateGlobalConfig,
   createLogger: () => ({
@@ -62,6 +65,7 @@ mock.module('@archon/core', () => ({
 }));
 
 mock.module('@archon/paths', () => ({
+  canonicalizeProjectPath: async (path: string) => path,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -78,8 +82,7 @@ mock.module('@archon/paths', () => ({
   }),
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   isDocker: mock(() => false),
 }));
@@ -163,13 +166,7 @@ function makeApp(): Hono {
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    })),
+    getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
@@ -336,6 +333,25 @@ describe('PATCH /api/config/tiers', () => {
     const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'extreme' } });
     expect(res.status).toBe(400);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('effort for a provider without reasoning control → 400, no write', async () => {
+    registerOpencodeProvider();
+    try {
+      const res = await patch({
+        large: {
+          provider: 'opencode',
+          model: 'anthropic/claude-sonnet-4-6',
+          effort: 'high',
+        },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("Provider 'opencode' does not support effort");
+      expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    } finally {
+      clearRegistry();
+      registerBuiltinProviders();
+    }
   });
 
   test('null tier value unsets (passes null through)', async () => {

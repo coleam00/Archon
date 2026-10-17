@@ -5,6 +5,7 @@ import { HttpError } from '../lib/http';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import type { Run } from '../primitives/run';
+import { isLegacyAttention } from './AttentionAnswerPanel';
 
 interface RunActionBarProps {
   run: Run;
@@ -15,7 +16,10 @@ interface RunActionBarProps {
  *   running   → Cancel; Abandon too once cancel was refused (409: no live owner
  *               answered, or it could not be stopped). Abandon is then how the
  *               operator releases a run whose process is gone.
- *   paused    → (nothing — the in-stream ApprovalPanel is the action surface)
+ *   paused    → Abandon for attention and provider-limit waits; Resume too for a
+ *               provider-limit wait (it continues by itself, Resume tries sooner) and for
+ *               an attention wait paused before answers existed; AttentionAnswerPanel
+ *               answers attention waits, gates use ApprovalPanel
  *   failed    → Resume · Abandon
  *   completed → Re-run when the run has a project
  *   cancelled → Re-run
@@ -69,7 +73,15 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
     }
   };
 
-  if (run.status === 'paused') return null;
+  const abandonableWait =
+    run.attention?.kind === 'attention' || run.attention?.kind === 'usage_limit';
+  if (run.status === 'paused' && !abandonableWait) return null;
+  // An attention wait is answered in its own panel; only one paused before answers
+  // existed still continues with a bare resume.
+  const canResume =
+    run.status === 'failed' ||
+    run.attention?.kind === 'usage_limit' ||
+    (run.attention?.kind === 'attention' && isLegacyAttention(run.attention));
 
   return (
     <div className="sticky bottom-0 border-t border-border bg-surface px-[30px] py-3.5">
@@ -97,16 +109,18 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : null}
 
-        {run.status === 'failed' ? (
+        {run.status === 'failed' || abandonableWait ? (
           <>
-            <button
-              type="button"
-              onClick={() => void call('resume')}
-              disabled={busy !== null}
-              className="brand-bar rounded-[9px] px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
-            >
-              {busy === 'resume' ? 'Resuming…' : 'Resume'}
-            </button>
+            {canResume ? (
+              <button
+                type="button"
+                onClick={() => void call('resume')}
+                disabled={busy !== null}
+                className="brand-bar rounded-[9px] px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
+              >
+                {busy === 'resume' ? 'Resuming…' : 'Resume'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void call('abandon')}

@@ -1,118 +1,66 @@
-// Types (contract layer — re-exported for convenience)
+// Contract types owned by @archon/provider-contract, re-exported for existing consumers
 export type {
   IAgentProvider,
-  AgentRequestOptions,
   SendQueryOptions,
-  NodeConfig,
-  ProviderDefaults,
   ProviderDefaultsMap,
-  ProviderConfigParser,
-  ProviderConfigScope,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
   MessageChunk,
   TokenUsage,
   CredentialKind,
-  CredentialSpec,
-  ProviderCredentialCatalog,
-  ProviderAttemptAdmission,
   ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
 
-// Provider config types (canonical definitions in ./types, re-exported via config modules)
-// Import from ./types directly or from the config modules — both work.
-
 // Registry
 export {
   registerProvider,
+  markProviderUnavailable,
   getAgentProvider,
+  setDeprecationReporter,
   getRegistration,
   getProviderCapabilities,
   parseProviderRunModel,
   getRegisteredProviders,
   getProviderInfoList,
   isRegisteredProvider,
-  registerBuiltinProviders,
-  registerCommunityProviders,
   clearRegistry,
+  providerRegistry,
 } from './registry';
 
 // Error
-export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
+export { InvalidProviderRunConfigError } from '@archon/provider-contract';
 
-// Shared structured-output helpers (cross-provider; the dag-executor validates
-// every provider's output_format result against the declared schema).
-export {
-  compileOutputSchema,
-  validateStructuredOutput,
-  formatSchemaErrors,
-  findRequiredPropertyGaps,
-  type RequiredPropertyGap,
-  type StructuredValidationResult,
-} from './shared/structured-output';
-
-// Provider classes
-export { ClaudeProvider } from './claude/provider';
-export { CodexProvider } from './codex/provider';
-
-// Config parsers
-export {
-  parseClaudeConfig,
-  parseClaudeSettingSources,
-  type ClaudeProviderDefaults,
-  type ParsedSettingSources,
-} from './claude/config';
-export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
-
-// Utilities (needed by consumers)
-export { resetCodexSingleton } from './codex/provider';
-export { loadMcpConfig, type LoadedMcpConfig } from './mcp/config';
-export {
-  resolveCodexBinaryPath,
-  resolveCodexBinaryWithSource,
-  fileExists as codexFileExists,
-  type CodexBinarySource,
-} from './codex/binary-resolver';
-export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
-
-// Skills resolution
-export { claudeSkillSearchRoots, findInstalledSkillNames, skillSearchRoots } from './shared/skills';
-
-// Community providers
-export {
-  OpencodeProvider,
-  parseOpencodeConfig,
-  registerOpencodeProvider,
-  introspectOpencodeCredentials,
-  type OpencodeProviderDefaults,
-  type OpencodeCredentialIntrospection,
-  type OpencodeCredentialProvider,
-  type OpencodeAuthMethod,
-} from './community/opencode';
-export {
-  PiProvider,
-  parsePiConfig,
-  registerPiProvider,
-  listPiModels,
-  type PiProviderDefaults,
-  type PiModelInfo,
-} from './community/pi';
 // Generated Pi backend → env-var map + ambient vendors (single source for the
 // Pi runtime bridge and @archon/core's credential delivery — see #1955).
-// PI_CREDENTIAL_SPECS is intentionally NOT re-exported: its only consumer is
-// the Pi registration, which imports the generated file directly.
 export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
 
+// Env names core's credential delivery writes and the Codex provider reads.
+export { CODEX_CREDENTIAL_ENV } from './codex/credential-env';
+
+export { DEPRECATED_PROVIDERS_DOCS_PATH } from './community/deprecation';
+
 export {
-  CopilotProvider,
-  parseCopilotConfig,
-  registerCopilotProvider,
-  resetCopilotSingleton,
-  type CopilotProviderDefaults,
-} from './community/copilot';
-export {
-  resolveCopilotBinaryPath,
-  fileExists as copilotFileExists,
-} from './community/copilot/binary-resolver';
+  singleVendorCatalog,
+  normalizeCredentialVendor,
+  LEGACY_VENDOR_ALIASES,
+} from './credential-catalog';
+
+export { maintainedDescriptors } from './maintained-descriptors';
+export { descriptor as claudeDescriptor } from './claude/descriptor';
+export { descriptor as codexDescriptor } from './codex/descriptor';
+export { descriptor as piDescriptor } from './community/pi/descriptor';
+export type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  PiProviderDefaults,
+  OpencodeProviderDefaults,
+  CopilotProviderDefaults,
+} from './types';
+export type { PiModelInfo } from './community/pi/model-catalog';
+export type {
+  OpencodeCredentialIntrospection,
+  OpencodeCredentialProvider,
+  OpencodeAuthMethod,
+} from './community/opencode';

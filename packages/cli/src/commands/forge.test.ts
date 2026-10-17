@@ -205,7 +205,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
 
   expect(dispatchedOptions).toMatchObject({
     env: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' },
-    pluginsDir: getPluginsPath(),
+    pluginsDir: getPluginsPath('/trusted'),
     credentialEnv: {
       ARCHON_HOME: '/repo-controlled',
       PATH: '/repo-controlled/bin',
@@ -359,4 +359,158 @@ test('an invalid mutation request is refused before dispatch begins', async () =
   expect(code).toBe(1);
   expect(output[0]).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
   expect(output[0]).not.toHaveProperty('mutation');
+});
+
+test('new work-item mutations use file requests and record content-free verified audits', async () => {
+  const repo = { host: 'forge.example', path: 'a/b' };
+  const ref = { repo, number: 4 };
+  const marker = '<!-- private marker -->';
+  const requests = [
+    {
+      op: 'workitem.create',
+      repo,
+      title: 'Private title',
+      body: `${marker}\nPrivate body`,
+      marker,
+    },
+    { op: 'workitem.labels.set', ref, labels: ['a', 'b'] },
+    {
+      op: 'repo.label.ensure',
+      repo,
+      name: 'label',
+      color: 'ABCDEF',
+      description: 'Private description',
+    },
+  ];
+  const directory = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-forge-workitem-cli-')));
+  for (const request of requests) {
+    const path = join(directory, 'request.json');
+    writeFileSync(path, JSON.stringify(request));
+    const output: unknown[] = [];
+    const audits: unknown[] = [];
+    const code = await forgeCommand(
+      request.op,
+      { dataFile: path },
+      {
+        readConfig: async () => ({
+          scanPath: false,
+          plugins: [
+            {
+              plugin: 'mutator',
+              command: process.execPath,
+              args: [join(import.meta.dir, '../../../forge/src/fixtures/mutation-plugin.ts')],
+            },
+          ],
+        }),
+        env: { WORKFLOW_ID: 'workitems-run' },
+        write: async value => {
+          output.push(value);
+        },
+        audit: async value => {
+          audits.push(value);
+        },
+      }
+    );
+    expect(code).toBe(0);
+    expect(output[0]).toMatchObject({
+      ok: true,
+      result: { op: request.op, value: { outcome: 'applied' } },
+    });
+    expect(audits[0]).toMatchObject({ operation: request.op, target: request.ref ?? repo });
+    for (const secret of ['Private title', 'Private body', 'Private description', marker])
+      expect(JSON.stringify(audits)).not.toContain(secret);
+  }
+});
+
+test('reviews retain bodies in stdout and digest them through the CLI audit boundary', async () => {
+  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 42 };
+  const auditRecords: unknown[] = [];
+  const responses: unknown[] = [];
+  const code = await forgeCommand(
+    'pr.reviews',
+    { data: JSON.stringify({ ref }) },
+    {
+      env: { WORKFLOW_ID: 'run' },
+      readConfig: async () => ({}),
+      dispatch: async request => {
+        const response: ForgeResponse = {
+          operationId: request.operationId,
+          ok: true,
+          result: {
+            op: 'pr.reviews',
+            value: {
+              ref,
+              items: [
+                {
+                  kind: 'review',
+                  id: '1',
+                  author: null,
+                  commit: 'head',
+                  state: 'COMMENTED',
+                  createdAt: null,
+                  url: 'https://forge.example/review/1',
+                  body: 'confidential review',
+                },
+              ],
+            },
+          },
+        };
+        return {
+          response,
+          plugin: null,
+          audit: {
+            operationId: request.operationId,
+            operation: request.op,
+            target: ref,
+            plugin: null,
+            result: forgeAuditResponse(response),
+            durationMs: 1,
+          },
+        };
+      },
+      audit: async audit => {
+        auditRecords.push(audit);
+      },
+      write: async response => {
+        responses.push(response);
+      },
+    }
+  );
+  expect(code).toBe(0);
+  expect(JSON.stringify(responses)).toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).not.toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).toContain('digest');
+});
+
+test('host metadata exposes selected plugin capabilities without credentials or operations', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-metadata-')));
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'metadata',
+    { data: JSON.stringify({ host: 'github.com' }) },
+    {
+      env: { HOME: root, ARCHON_HOME: root, PATH: '' },
+      readConfig: async () => ({
+        scanPath: false,
+        plugins: [
+          {
+            plugin: 'github',
+            command: process.execPath,
+            args: [
+              '--no-env-file',
+              join(import.meta.dir, '../../../forge/src/fixtures/credential-plugin.ts'),
+            ],
+          },
+        ],
+      }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(code).toBe(0);
+  expect(output[0]).toMatchObject({
+    ok: true,
+    result: { op: 'metadata', value: { capabilities: ['pr.view', 'resolve'] } },
+  });
 });

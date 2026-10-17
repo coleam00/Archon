@@ -1,3 +1,6 @@
+import { diagnoseOpencode } from './diagnostics';
+import { probeOpencodeRuntime } from './runtime';
+import type { CredentialStatus } from '@archon/provider-contract';
 import { join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
@@ -12,8 +15,9 @@ import type {
 import { getOrderedAgents } from './agent-config';
 import { OPENCODE_CAPABILITIES } from './capabilities';
 import { parseModelRef, parseOpencodeConfig } from './config';
-import { classifyOpencodeError, enrichOpencodeError } from './errors';
+import { opencodeFailureClass } from './errors';
 import { materializeAgents } from './agent-fs';
+import { failureResult } from '../../shared/failure';
 import { streamMultiAgentOpencodeSession } from './multi-agent';
 import {
   acquireEmbeddedRuntime,
@@ -22,12 +26,10 @@ import {
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
 
 export { parseModelRef } from './config';
 export { resetEmbeddedRuntime } from './runtime';
-
-const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 2000;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -36,18 +38,53 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 export class OpencodeProvider implements IAgentProvider {
-  private readonly retryBaseDelayMs: number;
-
-  constructor(options?: { retryBaseDelayMs?: number }) {
-    this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+  constructor(private readonly diagnosticProbe = probeOpencodeRuntime) {}
+  diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): ReturnType<typeof diagnoseOpencode> {
+    request.signal.throwIfAborted();
+    return diagnoseOpencode(request.signal, this.diagnosticProbe);
   }
 
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
+  /**
+   * One call is one attempt; the engine owns retry. A failure, including one thrown
+   * while setting the turn up, ends in a `result` carrying a typed `failure`, then
+   * `settled`. The class is `auth` or `rate_limited` only when the SDK's auth
+   * discriminator or HTTP status says so; every other failure is `unknown` with its
+   * text as evidence. Only cancellation throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of closeOpenToolCalls(
+        this.streamTurn(prompt, cwd, resumeSessionId, requestOptions),
+        { resultEndsTurn: true }
+      )) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'opencode.error_after_result');
+      else yield failureResult(opencodeFailureClass(error), 'opencode_query_failed', err.message);
+    }
+    // Nothing more runs for this turn once its stream has ended.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
@@ -77,152 +114,65 @@ export class OpencodeProvider implements IAgentProvider {
     const orderedAgents = getOrderedAgents(requestOptions?.nodeConfig);
     const hasAgentConfig = orderedAgents.length > 0;
     const isMultiAgent = orderedAgents.length > 1;
-    const usingExternalBaseUrl = Boolean(assistantConfig.baseUrl);
-    if (usingExternalBaseUrl) {
-      throw new Error(
-        'OpenCode external baseUrl mode is no longer supported. ' +
-          'Archon now requires managed embedded OpenCode runtime for fully controlled agent lifecycle.'
-      );
+    const sessionCwd = hasAgentConfig && nodeId ? join(cwd, '.archon-opencode', nodeId) : cwd;
+
+    if (requestOptions?.abortSignal?.aborted) {
+      throw new Error('OpenCode query aborted');
     }
 
-    const sessionCwd =
-      hasAgentConfig && nodeId && !usingExternalBaseUrl
-        ? join(cwd, '.archon-opencode', nodeId)
-        : cwd;
+    const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
+    const client = embedded.client;
 
-    let lastError: Error | undefined;
-    let recoveredAgentNotFound = false;
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
-      if (requestOptions?.abortSignal?.aborted) {
-        throw new Error('OpenCode query aborted');
+    try {
+      // When agents are defined, use a per-node session directory so each node
+      // gets its own OpenCode InstanceState — preventing stale agent cache from
+      // previous nodes in the same workflow run.
+      if (hasAgentConfig && nodeAgents) {
+        await materializeAgents(sessionCwd, nodeAgents);
+        await disposeInstanceForDirectory(client, sessionCwd);
       }
 
-      const runtime = await (async (): Promise<{
-        client: import('./runtime').OpencodeClientLike;
-        release: () => void;
-      }> => {
-        const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
-        return {
-          client: embedded.client,
-          release: (): void => {
-            releaseEmbeddedRuntime(embedded);
-          },
-        };
-      })();
-
-      try {
-        // When agents are defined, use a per-node session directory so each node
-        // gets its own OpenCode InstanceState — preventing stale agent cache from
-        // previous nodes in the same workflow run.
-        // For multi-agent, materialize each agent in its own subdirectory.
-        if (hasAgentConfig) {
-          if (isMultiAgent) {
-            // Materialize all agents in the shared sessionCwd so the single
-            // event subscription catches events from every child session.
-            await materializeAgents(sessionCwd, nodeAgents ?? {});
-            await disposeInstanceForDirectory(runtime.client, sessionCwd);
-          } else if (nodeAgents) {
-            await materializeAgents(sessionCwd, nodeAgents);
-            await disposeInstanceForDirectory(runtime.client, sessionCwd);
-          }
-        }
-
-        if (isMultiAgent) {
-          if (!nodeId) {
-            throw new Error(
-              'OpenCode multi-agent execution requires a nodeId in nodeConfig. ' +
-                'Ensure the workflow node sets nodeConfig.nodeId.'
-            );
-          }
-          // Multi-agent always starts fresh — it resolves its own per-node
-          // sessions internally and cannot resume a single prior session. If a
-          // resume was requested, report it as cold (false) so the executor
-          // surfaces the lost continuity instead of silently starting fresh.
-          yield* withResumedOutcome(
-            streamMultiAgentOpencodeSession(
-              runtime.client,
-              sessionCwd,
-              nodeId,
-              prompt,
-              parsedModel,
-              requestOptions
-            ),
-            resumedOutcome(resumeSessionId, false)
+      if (isMultiAgent) {
+        if (!nodeId) {
+          throw new Error(
+            'OpenCode multi-agent execution requires a nodeId in nodeConfig. ' +
+              'Ensure the workflow node sets nodeConfig.nodeId.'
           );
-          return;
         }
-
-        const { sessionId, resumed } = await resolveSessionId(
-          runtime.client,
-          sessionCwd,
-          resumeSessionId
-        );
-        if (resumeSessionId && !resumed) {
-          yield {
-            type: 'system',
-            content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
-          };
-        }
-
+        // Multi-agent always starts fresh — it resolves its own per-node
+        // sessions internally and cannot resume a single prior session. If a
+        // resume was requested, report it as cold (false) so the executor
+        // surfaces the lost continuity instead of silently starting fresh.
         yield* withResumedOutcome(
-          streamOpencodeSession(
-            runtime.client,
+          streamMultiAgentOpencodeSession(
+            client,
             sessionCwd,
-            sessionId,
+            nodeId,
             prompt,
             parsedModel,
             requestOptions
           ),
-          resumedOutcome(resumeSessionId, resumed)
+          resumedOutcome(resumeSessionId, false)
         );
         return;
-      } catch (error) {
-        const errorClass = classifyOpencodeError(
-          error,
-          requestOptions?.abortSignal?.aborted === true
-        );
-        const enrichedError = enrichOpencodeError(error, errorClass);
-        const shouldRetry =
-          errorClass === 'rate_limit' ||
-          errorClass === 'crash' ||
-          (errorClass === 'agent_not_found' && hasAgentConfig && !recoveredAgentNotFound);
-
-        getLog().error(
-          {
-            err: error,
-            errorClass,
-            attempt,
-            maxRetries: MAX_RETRIES,
-          },
-          'opencode.query_failed'
-        );
-
-        if (!shouldRetry || attempt >= MAX_RETRIES - 1) {
-          throw enrichedError;
-        }
-
-        if (errorClass === 'agent_not_found') {
-          recoveredAgentNotFound = true;
-          getLog().info({ attempt, sessionCwd }, 'opencode.retrying_after_agent_refresh');
-        }
-
-        const delayMs = this.retryBaseDelayMs * 2 ** attempt;
-        getLog().info({ attempt, delayMs, errorClass }, 'opencode.retrying_query');
-        // A capped provider's slot is not held through the backoff.
-        await (requestOptions?.admission
-          ? requestOptions.admission.releaseDuring(() => delay(delayMs))
-          : delay(delayMs));
-        if (lastError) {
-          enrichedError.cause = lastError;
-        }
-        lastError = enrichedError;
-      } finally {
-        runtime.release();
       }
-    }
 
-    throw lastError ?? new Error(`OpenCode query failed after ${MAX_RETRIES} retries`);
+      const { sessionId, resumed } = await resolveSessionId(client, sessionCwd, resumeSessionId);
+      if (resumeSessionId && !resumed) {
+        yield {
+          type: 'warning',
+          code: 'opencode.resume_failed',
+          message: 'Could not resume OpenCode session. Starting fresh conversation.',
+        };
+      }
+
+      yield* withResumedOutcome(
+        streamOpencodeSession(client, sessionCwd, sessionId, prompt, parsedModel, requestOptions),
+        resumedOutcome(resumeSessionId, resumed)
+      );
+    } finally {
+      releaseEmbeddedRuntime(embedded);
+    }
   }
 
   getType(): string {

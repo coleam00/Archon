@@ -2,15 +2,14 @@
 # implementation-ready. The real verdict script runs (publish is off, so it writes
 # nothing) and must accept the tuple.
 triage:
-  contract: READY
-  route: deliver
-  design_first: false
-  complexity: small
-  item: { repository: "", number: 0 }
+  decision: { contract: READY, route: deliver }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
-  proposed_edits: { title: "", body: "" }
-  blocked_reason: ""
-  blocked_by: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: current code confirms the work order; no material decision remains"
 fixture:

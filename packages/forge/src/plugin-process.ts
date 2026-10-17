@@ -1,8 +1,5 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { extname, isAbsolute, join } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { validateCommand, terminateTree } from '@archon/paths/plugin-process';
 export const FORGE_PLUGIN_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 export const FORGE_PLUGIN_TIMEOUT_MS = 30_000;
 
@@ -55,36 +52,6 @@ export function redactToken(text: string, token?: string): string {
   if (!token) return text;
   const encoded = JSON.stringify(token).slice(1, -1);
   return text.split(token).join('[REDACTED]').split(encoded).join('[REDACTED]');
-}
-
-function validateCommand(command: string): string | undefined {
-  if (!isAbsolute(command)) return 'plugin command must be an absolute executable path';
-  const extension = extname(command).toLowerCase();
-  if (extension === '.cmd' || extension === '.bat')
-    return 'plugin command cannot be a .cmd or .bat file';
-  if (process.platform === 'win32' && extension !== '.exe')
-    return 'Windows plugin command must be an .exe file';
-  return undefined;
-}
-
-async function terminateTree(pid: number): Promise<void> {
-  if (process.platform === 'win32') {
-    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
-    await execFileAsync(
-      join(systemRoot, 'System32', 'taskkill.exe'),
-      ['/PID', String(pid), '/T', '/F'],
-      {
-        windowsHide: true,
-        timeout: 5_000,
-      }
-    );
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-  }
 }
 
 export async function runPluginProcess(

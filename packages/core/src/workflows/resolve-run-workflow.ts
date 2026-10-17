@@ -1,52 +1,59 @@
-import { loadConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
-import { resolveContinuationWorkflow } from '@archon/workflows/executor';
+import {
+  WorkflowSourceIntegrityError,
+  resolveContinuationWorkflow,
+} from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import type { ResolvedWorkflow, WorkflowLoadError } from '@archon/workflows/schemas/workflow';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import { findWorkflowLoadError, type ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import {
+  spellWorkflowCommand,
+  type WorkflowDeps,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { createWorkflowDeps } from './store-adapter';
 import { toError } from '../utils/error';
 
 const log = createLogger('resolve-run-workflow');
 
-function findWorkflowLoadError(
-  loadErrors: readonly WorkflowLoadError[],
-  workflowName: string
-): WorkflowLoadError | undefined {
-  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
-}
-
 export async function resolveRunWorkflow(
+  deps: WorkflowDeps,
   run: WorkflowRun,
   workflowCwd: string,
   surface: WorkflowCommandSurface
 ): Promise<
-  { ok: true; workflow: ResolvedWorkflow } | { ok: false; message: string; resumeHint?: string }
+  | { ok: true; workflow: ResolvedWorkflow }
+  | {
+      ok: false;
+      message: string;
+      resumeHint?: string;
+      sourceError?: WorkflowSourceIntegrityError;
+    }
 > {
   try {
-    const continuation = await resolveContinuationWorkflow(createWorkflowDeps(), run, workflowCwd);
+    const continuation = await resolveContinuationWorkflow(deps, run, workflowCwd);
     if (continuation) return { ok: true, workflow: continuation.workflow };
   } catch (error) {
     const err = toError(error);
-    log.error({ err, runId: run.id }, 'workflow.continuation_source_failed');
+    if (!(error instanceof WorkflowSourceIntegrityError))
+      log.error({ err, runId: run.id }, 'workflow.continuation_source_failed');
     return {
       ok: false,
       message: `its recorded workflow source is unavailable: ${err.message}`,
       resumeHint: 'Start a fresh run to execute the current workflow.',
+      ...(error instanceof WorkflowSourceIntegrityError ? { sourceError: error } : {}),
     };
   }
 
   let discovery: Awaited<ReturnType<typeof discoverWorkflowsWithConfig>>;
   try {
-    discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+    discovery = await discoverWorkflowsWithConfig(workflowCwd, deps.loadConfig, deps.providers);
   } catch (error) {
     const err = toError(error);
     log.error({ err, cwd: workflowCwd, runId: run.id }, 'workflow.resume_discovery_failed');
     return {
       ok: false,
-      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+      message: `Failed to load workflows: ${err.message}`,
     };
   }
 

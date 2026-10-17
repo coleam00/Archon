@@ -1,5 +1,12 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+// @archon-test-isolated
+import { spyOn, mock, describe, test, expect, beforeEach } from 'bun:test';
+import { createMockLogger } from '../test/mocks/logger';
+import { testTimeout } from '@archon/paths/test-utils';
 import { createMockQuery, mockPostgresDialect } from '../test/mocks/database';
+
+const paths = await import('@archon/paths');
+const mockLogger = createMockLogger();
+mock.module('@archon/paths', () => ({ ...paths, createLogger: () => mockLogger }));
 
 process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
 
@@ -10,39 +17,17 @@ mock.module('../db/connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-// Drive Pi's login() via a controllable impl. The singletons are the objects the
-// bridge maps Archon providers to (claude→anthropic, codex→openaiCodex, copilot→…).
-type Callbacks = {
-  onAuth: (info: { url: string }) => void;
-  onDeviceCode: (info: { userCode: string; verificationUri: string }) => void;
-  onManualCodeInput?: () => Promise<string>;
-  onPrompt: (p: unknown) => Promise<string>;
-  onSelect: (p: { options: { id: string }[] }) => Promise<string | undefined>;
-  onProgress?: (m: string) => void;
-  signal?: AbortSignal;
-};
+import type { OAuthLoginCallbacks as Callbacks } from './subscription-oauth';
 let loginImpl: (cb: Callbacks) => Promise<Record<string, unknown>>;
-function makeProvider(id: string, usesCallbackServer?: boolean) {
-  return {
-    id,
-    name: id,
-    ...(usesCallbackServer ? { usesCallbackServer } : {}),
-    login: (cb: Callbacks) => loginImpl(cb),
-    refreshToken: async (c: Record<string, unknown>) => c,
-    getApiKey: () => 'k',
-  };
-}
-// anthropic/codex bind a local fixed-port callback server in pi (#1963).
-const anthropic = makeProvider('anthropic', true);
-const codex = makeProvider('openaiCodex', true);
-const copilot = makeProvider('github-copilot');
-mock.module('@archon/providers/oauth', () => ({
-  getOAuthProvider: (id: string) =>
-    ({ anthropic, openaiCodex: codex, 'github-copilot': copilot })[id],
-  getOAuthApiKey: async () => ({ newCredentials: {}, apiKey: 'k' }),
-  anthropicOAuthProvider: anthropic,
-  openaiCodexOAuthProvider: codex,
-  githubCopilotOAuthProvider: copilot,
+const anthropic = {
+  usesCallbackServer: true,
+  login: (cb: Callbacks) => loginImpl(cb),
+};
+const copilot = { login: (cb: Callbacks) => loginImpl(cb) };
+mock.module('./oauth-providers', () => ({
+  subscriptionOAuthProviderFor: (id: string) => ({ anthropic, 'github-copilot': copilot })[id],
+  SUBSCRIPTION_PROVIDERS: new Set(['anthropic', 'openai', 'github-copilot']),
+  OPENAI_SUBSCRIPTION_VENDOR: 'openai',
 }));
 
 // The openai (ChatGPT/Codex) flow is Archon-owned (#1924) — drive its exchange
@@ -67,6 +52,7 @@ mock.module('./openai-oauth', () => ({
   exchangeOpenAiAuthorizationCode: (code: string, verifier: string) => exchangeImpl(code, verifier),
   // Imported by user-provider-key-store (loaded transitively via connect-service);
   // unused by the bridge itself.
+  OpenAiTokenError: class OpenAiTokenError extends Error {},
   mintOpenAiOAuthApiKey: async (creds: Record<string, unknown>) => ({
     newCredentials: creds,
     apiKey: 'k',
@@ -74,13 +60,9 @@ mock.module('./openai-oauth', () => ({
   refreshOpenAiOAuthCredentials: async (creds: Record<string, unknown>) => creds,
 }));
 
-const {
-  startOAuth,
-  pollOAuth,
-  cancelOAuth,
-  resetOAuthSessionsForTest,
-  OAuthCallbackPortBusyError,
-} = await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } = await import(
+  './oauth-bridge'
+);
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
@@ -90,6 +72,8 @@ describe('oauth-bridge', () => {
   beforeEach(() => {
     resetOAuthSessionsForTest();
     mockQuery.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
     parseImpl = defaultParseImpl;
   });
 
@@ -107,6 +91,12 @@ describe('oauth-bridge', () => {
     const start = await startOAuth('u1', 'claude');
     expect(start.mode).toBe('manual');
     expect(start.url).toBe('https://auth.example/login');
+    expect(mockLogger.info.mock.calls).toEqual([
+      [
+        { userId: 'u1', provider: 'anthropic', sessionId: start.sessionId, mode: 'manual' },
+        'oauth_bridge.login_started',
+      ],
+    ]);
 
     // First poll submits the pasted code; login() then resolves async.
     expect(pollOAuth(start.sessionId, 'u1', 'CODE123').status).toBe('pending');
@@ -126,6 +116,10 @@ describe('oauth-bridge', () => {
     expect(start.mode).toBe('device');
     expect(start.userCode).toBe('WXYZ');
     expect(start.verificationUri).toBe('https://dev');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { userId: 'u1', provider: 'github-copilot', sessionId: start.sessionId, mode: 'device' },
+      'oauth_bridge.login_started'
+    );
     await tick();
     expect(pollOAuth(start.sessionId, 'u1').status).toBe('connected');
   });
@@ -189,6 +183,10 @@ describe('oauth-bridge', () => {
     };
     const start = await startOAuth('u1', 'claude');
     cancelOAuth(start.sessionId, 'u1');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { userId: 'u1', provider: 'anthropic', sessionId: start.sessionId, reason: 'cancelled' },
+      'oauth_bridge.login_aborted'
+    );
     expect(pollOAuth(start.sessionId, 'u1').status).toBe('error');
   });
 
@@ -201,22 +199,129 @@ describe('oauth-bridge', () => {
     const first = await startOAuth('u1', 'claude');
     const second = await startOAuth('u1', 'claude');
     expect(first.sessionId).not.toBe(second.sessionId);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      {
+        userId: 'u1',
+        provider: 'anthropic',
+        sessionId: first.sessionId,
+        reason: 'superseded-same-user',
+      },
+      'oauth_bridge.login_aborted'
+    );
     expect(pollOAuth(first.sessionId, 'u1').status).toBe('error'); // prior session dropped
+  });
+
+  for (const trigger of ['poll', 'start'] as const) {
+    test(`expiry found by ${trigger} logs the expired session`, async () => {
+      const start = await startOAuth('alice', 'openai');
+      const now = Date.now();
+      const clock = spyOn(Date, 'now').mockReturnValue(now + start.expiresIn * 1000 + 1);
+      try {
+        if (trigger === 'poll') {
+          expect(pollOAuth(start.sessionId, 'alice')).toEqual({
+            status: 'error',
+            detail: 'Login session not found or expired.',
+          });
+        } else {
+          await startOAuth('bob', 'openai');
+        }
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { userId: 'alice', provider: 'openai', sessionId: start.sessionId, reason: 'expired' },
+          'oauth_bridge.login_aborted'
+        );
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  }
+
+  for (const outcome of ['connected', 'failed'] as const) {
+    for (const trigger of ['expiry', 'supersede'] as const) {
+      test(`a ${outcome} session dropped by ${trigger} is not logged as aborted`, async () => {
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => {
+          finish = resolve;
+        });
+        loginImpl = async cb => {
+          cb.onDeviceCode({ userCode: 'WXYZ', verificationUri: 'https://dev' });
+          await gate;
+          if (outcome === 'failed') throw new Error('denied');
+          return { access: 'a', refresh: 'r', expires: 1 };
+        };
+        const start = await startOAuth('u1', 'copilot');
+        finish();
+        await tick();
+        if (trigger === 'expiry') {
+          const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + start.expiresIn * 1000 + 1);
+          try {
+            pollOAuth(start.sessionId, 'u1');
+          } finally {
+            clock.mockRestore();
+          }
+        } else {
+          await startOAuth('u1', 'copilot');
+        }
+        expect(
+          mockLogger.info.mock.calls.filter(call => call[1] === 'oauth_bridge.login_aborted')
+        ).toEqual([]);
+      });
+    }
+  }
+
+  test('test reset stays quiet', async () => {
+    await startOAuth('u1', 'openai');
+    mockLogger.info.mockClear();
+    resetOAuthSessionsForTest();
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  test('lifecycle logs contain only safe fields even when a device login ignores cancellation', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    loginImpl = async cb => {
+      cb.onDeviceCode({
+        userCode: 'SECRET-CODE',
+        verificationUri: 'https://secret.example/authorize',
+      });
+      await gate;
+      return { access: 'SECRET-ACCESS', refresh: 'SECRET-REFRESH', id_token: 'SECRET-ID-TOKEN' };
+    };
+    const start = await startOAuth('alice', 'copilot');
+    cancelOAuth(start.sessionId, 'alice');
+    expect(mockLogger.info.mock.calls).toEqual([
+      [
+        { userId: 'alice', provider: 'github-copilot', sessionId: start.sessionId, mode: 'device' },
+        'oauth_bridge.login_started',
+      ],
+      [
+        {
+          userId: 'alice',
+          provider: 'github-copilot',
+          sessionId: start.sessionId,
+          reason: 'cancelled',
+        },
+        'oauth_bridge.login_aborted',
+      ],
+    ]);
+    finish();
+    await tick();
+    expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('SECRET');
+    expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('https://');
   });
 
   // ---- #1963: abandoned logins must not wedge the fixed callback port ----
 
-  test('aborting a session rejects the manual-code deferred so a pi-style login releases its callback server (#1963)', async () => {
-    // Mirror pi-ai 0.79.1 loginAnthropic: the callback server only closes in a
-    // `finally` reached after onManualCodeInput() settles — pi ignores the
-    // abort signal, so the deferred rejection is the only path there.
+  test('aborting a session rejects the manual-code deferred so a manual login releases its callback server (#1963)', async () => {
     let serverClosed = false;
     loginImpl = async cb => {
       cb.onAuth({ url: 'https://x' });
       try {
         await cb.onManualCodeInput!();
       } finally {
-        serverClosed = true; // pi's `finally { server.close() }`
+        serverClosed = true;
       }
       return { access: 'a' };
     };
@@ -244,6 +349,16 @@ describe('oauth-bridge', () => {
     // flow (releasing the server) and proceeds.
     const b = await startOAuth('bob', 'claude');
     expect(serversClosed).toBe(1);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      {
+        userId: 'alice',
+        provider: 'anthropic',
+        sessionId: a.sessionId,
+        reason: 'superseded-port-conflict',
+        initiatedByUserId: 'bob',
+      },
+      'oauth_bridge.login_aborted'
+    );
     // S2: the superseded user's poll detail is user-visible in the console
     // retry UX — pin the exact message.
     const supersededPoll = pollOAuth(a.sessionId, 'alice');
@@ -282,6 +397,10 @@ describe('oauth-bridge', () => {
       return { access: 'a' };
     };
     const first = startOAuth('u1', 'claude');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { userId: 'u1', provider: 'anthropic', sessionId: expect.any(String), mode: 'pending' },
+      'oauth_bridge.login_started'
+    );
     await tick(1); // let the first session register
     loginImpl = async cb => {
       cb.onAuth({ url: 'https://second' });
@@ -291,6 +410,12 @@ describe('oauth-bridge', () => {
     const second = await startOAuth('u1', 'claude');
     expect(second.url).toBe('https://second');
     await expect(first).rejects.toThrow(/superseded/i);
+    expect(
+      mockLogger.info.mock.calls.filter(call => call[1] === 'oauth_bridge.login_started')
+    ).toHaveLength(2);
+    expect(
+      mockLogger.info.mock.calls.filter(call => call[1] === 'oauth_bridge.login_aborted')
+    ).toHaveLength(1);
   });
 
   test('device-flow logins (no callback server) for different users coexist', async () => {
@@ -317,46 +442,35 @@ describe('oauth-bridge', () => {
     expect(pollOAuth(b.sessionId, 'bob').status).toBe('connected');
   });
 
-  test('a login impl that ignores the cancel entirely cannot permanently break later starts (#1963 regression)', async () => {
-    // Worst case: login neither honors the abort signal nor consumes the
-    // manual-code deferred, and never settles. The bridge waits a bounded
-    // settle window, then proceeds with the new login.
-    loginImpl = async cb => {
-      cb.onAuth({ url: 'https://wedged' });
-      await new Promise<never>(() => {}); // never settles
-      return {};
-    };
-    const first = await startOAuth('u1', 'claude');
-    expect(first.url).toBe('https://wedged');
+  test(
+    'a login impl that ignores the cancel entirely cannot permanently break later starts (#1963 regression)',
+    async () => {
+      // Worst case: login neither honors the abort signal nor consumes the
+      // manual-code deferred, and never settles. The bridge waits a bounded
+      // settle window, then proceeds with the new login.
+      loginImpl = async cb => {
+        cb.onAuth({ url: 'https://wedged' });
+        await new Promise<never>(() => {}); // never settles
+        return {};
+      };
+      const first = await startOAuth('u1', 'claude');
+      expect(first.url).toBe('https://wedged');
 
-    let received: string | undefined;
-    loginImpl = async cb => {
-      cb.onAuth({ url: 'https://fresh' });
-      received = await cb.onManualCodeInput!();
-      return { access: 'a', refresh: 'r', expires: 1 };
-    };
-    const second = await startOAuth('u2', 'claude');
-    expect(second.url).toBe('https://fresh');
-    pollOAuth(second.sessionId, 'u2', 'CODE');
-    await tick();
-    expect(received).toBe('CODE');
-    expect(pollOAuth(second.sessionId, 'u2').status).toBe('connected');
-  }, 10000);
-
-  test('EADDRINUSE at start surfaces an actionable retryable error, not an opaque failure (#1963)', async () => {
-    loginImpl = async () => {
-      throw new Error('listen EADDRINUSE: address already in use 127.0.0.1:53692');
-    };
-    let thrown: unknown;
-    try {
-      await startOAuth('u1', 'claude');
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(OAuthCallbackPortBusyError);
-    expect((thrown as Error).message).toMatch(/callback port/i);
-    expect((thrown as Error).message).toMatch(/retry/i);
-  });
+      let received: string | undefined;
+      loginImpl = async cb => {
+        cb.onAuth({ url: 'https://fresh' });
+        received = await cb.onManualCodeInput!();
+        return { access: 'a', refresh: 'r', expires: 1 };
+      };
+      const second = await startOAuth('u2', 'claude');
+      expect(second.url).toBe('https://fresh');
+      pollOAuth(second.sessionId, 'u2', 'CODE');
+      await tick();
+      expect(received).toBe('CODE');
+      expect(pollOAuth(second.sessionId, 'u2').status).toBe('connected');
+    },
+    testTimeout(10000)
+  );
 
   // ---- #1924: openai (ChatGPT/Codex) runs the Archon-owned PKCE flow ----
 

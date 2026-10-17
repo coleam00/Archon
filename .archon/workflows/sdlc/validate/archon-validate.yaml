@@ -81,7 +81,8 @@ nodes:
       type: object
       properties:
         # The commands to run, in order. Each is an argv, never a shell string;
-        # a check that needs a shell names one as its first element.
+        # a check that needs a shell names one as its first element. Checks in
+        # one group stop at the group's first failure; every group runs.
         checks:
           type: array
           items:
@@ -92,14 +93,10 @@ nodes:
                 type: array
                 items: { type: string }
                 minItems: 1
-            required: [name, argv]
-        # Untracked paths under `.archon/` that the run injected and the gate
-        # would refuse. The runner moves them aside while the checks run.
-        quarantine:
-          type: array
-          items: { type: string }
+              group: { type: string }
+            required: [name, argv, group]
         notes: { type: string }
-      required: [checks, quarantine, notes]
+      required: [checks, notes]
 
   # Runs the declared checks and records every exit status in
   # `$ARTIFACTS_DIR/validation.md`. Green and "didn't finish" are read from those

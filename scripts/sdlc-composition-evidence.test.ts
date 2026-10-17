@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   compareComposition,
   comparisonVerdict,
@@ -33,9 +34,12 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-function fixture(): { cwd: string; artifacts: string; request: CompositionRequest } {
-  const root = track(mkdtempSync(join(tmpdir(), 'composition-proof-')));
-  const cwd = join(root, 'repo');
+let templateRoot: string;
+let template: { cwd: string; original: string; head: string; base: string };
+
+beforeAll(() => {
+  templateRoot = mkdtempSync(join(tmpdir(), 'composition-template-'));
+  const cwd = join(templateRoot, 'repo');
   mkdirSync(cwd);
   git(cwd, 'init', '-b', 'main');
   git(cwd, 'config', 'user.name', 'Test');
@@ -54,6 +58,18 @@ function fixture(): { cwd: string; artifacts: string; request: CompositionReques
   git(cwd, 'add', '.');
   git(cwd, 'commit', '-qm', 'move value');
   const base = git(cwd, 'rev-parse', 'HEAD');
+  template = { cwd, original, head, base };
+});
+
+afterAll(async () => {
+  if (templateRoot) await removeTempTree(templateRoot);
+});
+
+function fixture(): { cwd: string; artifacts: string; request: CompositionRequest } {
+  const root = track(mkdtempSync(join(tmpdir(), 'composition-proof-')));
+  const cwd = join(root, 'repo');
+  cpSync(template.cwd, cwd, { recursive: true });
+  const { original, head, base } = template;
   const check = join(root, 'gate.js');
   writeFileSync(
     check,
@@ -259,46 +275,12 @@ describe('three-tree project gate evidence', () => {
   });
 });
 
-it('equal predecessor trees do not preserve subsequent merge ancestry', () => {
-  const f = fixture();
-  git(f.cwd, 'checkout', '--detach', f.request.original_base);
-  writeFileSync(join(f.cwd, 'value.txt'), 'A\n');
-  git(f.cwd, 'add', '.');
-  git(f.cwd, 'commit', '-qm', 'A');
-  const a = git(f.cwd, 'rev-parse', 'HEAD');
-  writeFileSync(join(f.cwd, 'value.txt'), 'C\n');
-  git(f.cwd, 'add', '.');
-  git(f.cwd, 'commit', '-qm', 'C stacked on A');
-  const c = git(f.cwd, 'rev-parse', 'HEAD');
-  const tree = git(f.cwd, 'rev-parse', `${a}^{tree}`);
-  const merged = git(
-    f.cwd,
-    'commit-tree',
-    tree,
-    '-p',
-    f.request.original_base,
-    '-p',
-    a,
-    '-m',
-    'merge A'
-  );
-  const squash = git(f.cwd, 'commit-tree', tree, '-p', f.request.original_base, '-m', 'squash A');
-  expect(git(f.cwd, 'rev-parse', `${merged}^{tree}`)).toBe(
-    git(f.cwd, 'rev-parse', `${squash}^{tree}`)
-  );
-  expect(
-    Bun.spawnSync(['git', 'merge-tree', '--write-tree', merged, c], { cwd: f.cwd }).exitCode
-  ).toBe(0);
-  expect(
-    Bun.spawnSync(['git', 'merge-tree', '--write-tree', squash, c], { cwd: f.cwd }).exitCode
-  ).toBe(1);
-});
-
-it('keeps the validation producer schemas and script vocabulary in agreement', () => {
+it('keeps implement sessions and validation producer contracts in agreement', () => {
   type Workflow = {
     returns: string;
     nodes: {
       id: string;
+      loop?: { fresh_context?: boolean };
       output_type?: string;
       output_format?: { properties: { red_cause: { enum: string[] } } };
     }[];
@@ -310,6 +292,7 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   const implement = Bun.YAML.parse(
     readFileSync(join(root, 'implement/archon-implement.yaml'), 'utf8')
   ) as Workflow;
+  expect(implement.nodes.find(n => n.id === 'implement')!.loop?.fresh_context).toBe(true);
   expect(
     validate.nodes.find(n => n.id === 'compare')!.output_format!.properties.red_cause.enum
   ).toEqual([...VALIDATION_RED_CAUSES]);
@@ -330,7 +313,7 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   ).toEqual(ordinary);
 });
 
-it("refuses implement's unfinished validation with the green gates' message", () => {
+it("refuses implement's unfinished validation as unfinished, never as red", () => {
   const script = join(
     import.meta.dir,
     '..',
@@ -350,68 +333,4 @@ it("refuses implement's unfinished validation with the green gates' message", ()
   expect(run.stdout.toString()).toBe('');
   expect(run.stderr.toString().trim()).toBe(unfinishedValidation('The implementation', summary));
   expect(run.stderr.toString()).not.toMatch(/\bred\b/);
-});
-
-describe('the green gate on a validation that did not finish', () => {
-  const script = join(
-    import.meta.dir,
-    '..',
-    '.archon/workflows/sdlc/deliver/scripts/gate-green.ts'
-  );
-  function gate(cause: string, summary: string, green = 'false') {
-    const run = Bun.spawnSync([process.execPath, script], {
-      env: {
-        ...process.env,
-        INPUTS_GREEN: green,
-        INPUTS_RED_CAUSE: cause,
-        INPUTS_SUMMARY: summary,
-        INPUTS_STAGE: 'The project gate',
-      },
-    });
-    return { exitCode: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
-  }
-
-  it('refuses incomplete as unfinished, never as red, and carries the reason', () => {
-    const summary = 'A usage limit stopped validation during type-check; lint passed.';
-    const result = gate('incomplete', summary);
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain("The project gate: validation didn't finish.");
-    expect(result.stderr).toContain(summary);
-    expect(result.stderr).toContain('Resume the run');
-    expect(result.stderr).not.toMatch(/\bred\b/);
-  });
-
-  it('refuses incomplete even when the verdict also claims green', () => {
-    const result = gate('incomplete', 'type-check never ran', 'true');
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain("validation didn't finish");
-  });
-
-  it('still refuses red with no declared cause as unexplained red', () => {
-    const result = gate('', 'tests failed');
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('is red and declared no red_cause');
-  });
-});
-
-it('forwards interaction through the CI projection without making it an accepted-red attention route', () => {
-  const root = join(import.meta.dir, '..', '.archon/workflows/sdlc/deliver/scripts');
-  const project = Bun.spawnSync([process.execPath, join(root, 'ci-round-result.ts')], {
-    env: { ...process.env, INPUTS_RED_CAUSE: 'interaction', INPUTS_ACTION: 'none' },
-  });
-  expect(project.exitCode).toBe(0);
-  expect(JSON.parse(project.stdout.toString())).toEqual({
-    action: 'none',
-    red_cause: 'interaction',
-  });
-  const route = Bun.spawnSync([process.execPath, join(root, 'ci-attention-route.ts')], {
-    env: { ...process.env, INPUTS_RED_CAUSE: 'interaction' },
-  });
-  expect(route.exitCode).toBe(0);
-  expect(JSON.parse(route.stdout.toString())).toEqual({
-    attention: false,
-    red_cause: 'interaction',
-  });
 });

@@ -1,3 +1,4 @@
+import type { WorktreeSetupEvent } from './schemas/worktree-setup';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * SDK Event Logger - captures workflow execution to JSONL
@@ -5,8 +6,9 @@ import type { NodeExecutionMetadata } from './schemas/node-execution';
 import { appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
-import type { MessageChunk } from '@archon/providers/types';
+import type { MessageChunk } from '@archon/provider-contract';
 import type { SkipCause } from './schemas';
+import type { ProviderEventEnvelope } from './schemas/provider-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -22,12 +24,17 @@ let logWarningShown = false;
 /**
  * A row in a run's JSONL log. Some variants are historical: nothing has emitted
  * `'validation'` (with `check`/`result`) since #805 removed its call site along with
- * sequential execution mode, and its writer is now deleted too. It stays because logs
- * already on disk contain those rows — keep it when reading, never write a new one.
+ * sequential execution mode, and its writer is now deleted too. `'assistant'` (with
+ * `content`) and `'tool'` (with `tool_name`/`tool_input`) carried agent text and tool
+ * starts with no step, id or output until `'provider_event'` replaced them. They stay
+ * because logs already on disk contain those rows — keep them when reading, never write
+ * a new one.
  */
-export interface WorkflowEvent {
+export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
+  setup?: WorktreeSetupEvent;
   execution?: NodeExecutionMetadata;
   type:
+    | WorktreeSetupEvent['type']
     | 'workflow_start'
     | 'workflow_resume'
     | 'workflow_complete'
@@ -42,7 +49,8 @@ export interface WorkflowEvent {
     | 'node_skipped'
     | 'node_error'
     | 'watchdog_reset'
-    | 'exec_output';
+    | 'exec_output'
+    | 'provider_event';
   workflow_id: string;
   workflow_name?: string;
   step?: string;
@@ -88,17 +96,31 @@ export interface WorkflowEvent {
  * failed after spending reports that spend the same way a node that completed does
  * (#2693).
  *
- * That symmetry holds per SINK, not yet across every node type. A `loop:` node's
- * cumulative totals reach its transcript row on failure and its persisted event on
- * either outcome, but no success exit writes a terminal transcript row for the loop's
- * own id — only per-iteration rows, which carry duration and no usage. `workflow:` and
- * fan-out nodes write no transcript rows at all. So do not read an absent `cost_usd` on
- * a run's transcript as "the whole run was free"; read it per row, where it means the
- * provider reported no cost. Completing that coverage is #2614's audit.
+ * A row reports `cost_usd` and `tokens` as its OWN spend only when the record's
+ * `accounting` is `'node'`. Every other value restates spend other rows of the same run
+ * already carry — a `loop_group` roll-up over its `<groupId>.<nodeId>` body rows, a
+ * composed fan-out wrapper over its instances, an instance terminal over its own leaves,
+ * an amendment over the attempt it amends — so those rows omit both axes. The durable row
+ * keeps its `cost_usd` and marks a restatement `aggregate: true`; the resume fold skips a
+ * marked row because its scope's own rows already carry that spend, except a
+ * composed-instance terminal, which the fold keeps as the authoritative source for its
+ * scope because that instance's inner rows are observability writes that can be missing
+ * after a crash. No row restates another's spend, so summing the rows that carry a
+ * `cost_usd` lands on `workflow_complete.cost_usd` (#3508); count `node_error` rows in
+ * that sum, because a retried attempt that already spent reports on its own. So an absent
+ * `cost_usd` says one of two things, and the row's `accounting` says which: on a row that
+ * reports its own spend, the provider reported no cost; on a restatement row, that scope's
+ * spend is on the rows it names.
  *
- * Each axis is omitted when nothing was reported for it, so an absent `cost_usd` means
- * the provider reported no cost (Codex reports none at all — #2334) and `0` means it
- * reported zero. Build it with `!== undefined` tests, never truthiness.
+ * Do not read an absent `cost_usd` on a run's transcript as "the whole run was free"; read
+ * it per row. A `loop:` node's cumulative totals reach its persisted event on either
+ * outcome, and a success exit writes the terminal transcript row for the loop's own id just
+ * as a failure does; its per-iteration rows carry duration and no usage.
+ *
+ * Each axis is omitted when nothing was reported for it, so on a row that reports its own
+ * spend an absent `cost_usd` means the provider reported no cost (Codex reports none at all
+ * — #2334) and `0` means it reported zero. Build it with `!== undefined` tests, never
+ * truthiness.
  */
 export type WorkflowUsage = Pick<WorkflowEvent, 'tokens' | 'cost_usd'>;
 
@@ -276,32 +298,20 @@ export async function logGateDecision(
 }
 
 /**
- * Log assistant message
+ * Record one provider event in the run's log: the envelope the store row carries, framed
+ * by the log's own `workflow_id`, `ts` and `step`. The line parses with
+ * `providerEventLineSchema`.
  */
-export async function logAssistant(
+export async function logProviderEvent(
   logDir: string,
   workflowRunId: string,
-  content: string
+  stepName: string,
+  envelope: ProviderEventEnvelope
 ): Promise<void> {
   await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'assistant',
-    content,
-  });
-}
-
-/**
- * Log tool call
- */
-export async function logTool(
-  logDir: string,
-  workflowRunId: string,
-  toolName: string,
-  toolInput: Record<string, unknown>
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'tool',
-    tool_name: toolName,
-    tool_input: toolInput,
+    type: 'provider_event',
+    step: stepName,
+    ...envelope,
   });
 }
 
@@ -398,4 +408,12 @@ export async function logExecOutput(
     ...(output.stdoutTail !== undefined ? { stdout_tail: output.stdoutTail } : {}),
     ...(output.stderrTail !== undefined ? { stderr_tail: output.stderrTail } : {}),
   });
+}
+
+export async function logWorktreeSetup(
+  logDir: string,
+  runId: string,
+  setup: WorktreeSetupEvent
+): Promise<void> {
+  await logWorkflowEvent(logDir, runId, { type: setup.type, setup });
 }

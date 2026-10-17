@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
+import { cliArgOptions } from './args';
+import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 
@@ -25,6 +28,22 @@ function scopedHelpOptions(argv: string[]): string {
   const end = body.indexOf('\n\n');
   return end === -1 ? body : body.slice(0, end);
 }
+
+it('keeps run source and isolation flags consistent with the parser', () => {
+  const options = scopedHelpOptions(['workflow', 'run']).split('\n');
+  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+    const parserOption = cliArgOptions[name];
+    expect(parserOption).toBeDefined();
+    const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
+    expect(lines).toHaveLength(1);
+    const spec = lines[0]?.trimStart().split(/ {2,}/)[0];
+    if (parserOption?.type === 'string') {
+      expect(spec).toMatch(new RegExp(`^--${name} <[^>]+>$`));
+    } else {
+      expect(spec).toBe(`--${name}`);
+    }
+  }
+});
 
 describe('CLI help output', () => {
   const help = renderHelp();
@@ -83,7 +102,7 @@ describe('CLI help output', () => {
 
   it('documents the unified skill destinations and subscription providers', () => {
     expect(help).toContain(
-      'skill install [path]       Install archon-cli into .claude/skills and .agents/skills'
+      'skill add [path]           Add archon-cli into .claude/skills and .agents/skills'
     );
     expect(help).toContain(
       'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
@@ -119,11 +138,17 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--workflow-source');
   });
 
-  it('scopes workflow logs --help to --follow and excludes run-only flags', () => {
+  it('documents --container in workflow run options', () => {
+    expect(scopedHelpOptions(['workflow', 'run'])).toContain('--container');
+    expect(scopedHelpOptions(['workflow', 'answer'])).not.toContain('--container');
+  });
+
+  it('scopes workflow logs --help to its own flags and excludes run-only flags', () => {
     // Proves the partition is not a one-off for workflow run: another
-    // subcommand gets only its own flag, while a run-only flag drops out.
+    // subcommand gets only its own flags, while a run-only flag drops out.
     const scoped = renderHelp('workflow', 'logs');
     expect(scoped).toContain('--follow');
+    expect(scoped).toContain('--format <jsonl|text>');
     expect(scoped).not.toContain('--dry-run');
   });
 
@@ -155,6 +180,23 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--data <json>');
   });
 
+  it('documents converting a pull request back to draft with structured input', () => {
+    const scoped = renderHelp('forge', 'pr.draft');
+    expect(scoped).toContain('forge pr.draft');
+    expect(scoped).toContain('Convert a pull request to draft and verify the result');
+    const options = scopedHelpOptions(['forge', 'pr.draft']);
+    expect(options).toContain('--data <json>');
+    expect(options).toContain('--data-file <path>');
+  });
+
+  for (const request of forgeRequestSchema.options) {
+    const op = request.shape.op.value;
+    it(`renders scoped help for the admitted forge operation ${op}`, () => {
+      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
+      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+    });
+  }
+
   // Frozen pre-refactor template literal (557788e0d:packages/cli/src/cli.ts:140-260).
   // The byte-identical guarantee on global help is a load-bearing contract: shell
   // completions and downstream scripts pin the exact text. Embedding the frozen
@@ -168,8 +210,11 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  state <get|put|patch|log|delete|list>
+                             Read and audit durable project or install JSON documents
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
+  user <list|role|link>      List users, link identities and manage roles as the operator
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -182,15 +227,21 @@ Commands:
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
   workflow logs <run-id>     Print or follow a run's JSONL transcript
-  workflow wait <run-id>     Block until the run ends or needs a human decision
+  workflow wait <run-id>     Block until the run ends or needs attention
+  workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
+                             (defaults to the current project)
+  workflow attention label <run-id> --occurrence <id>
+                             Set or remove labels on the attention wait a run is paused at
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
+  workflow wake [--watch] [--json] Wake due continuations across this install
+  workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
-  workflow search [query]    Search the workflow marketplace
-  workflow install <slug>    Install a workflow from the marketplace
+  workflow answer <run-id> --occurrence <id>
+                             Answer a paused attention wait in its declared form
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -202,15 +253,16 @@ Commands:
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (binary installs download it on first run)
-  skill install [path]       Install archon-cli into .claude/skills and .agents/skills
-  plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)
+  serve                      Start the web UI server (binary installs download server and UI on first run)
+  skill add [path]           Add archon-cli into .claude/skills and .agents/skills
+  provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
+  plugin add <owner/repo[/path][@tag]>
+                             Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
   plugin list                Show installed plugins with tag and commit
-  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
+  doctor                     Verify installed provider diagnostics, gh auth, DB, and adapters
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
@@ -236,11 +288,13 @@ Options:
   --cwd <path>               Override working directory (default: current directory)
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
+  --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --workflow-source <path>   Read the workflow, its commands and scripts from this directory
                              instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
-  --folder                   Register the current non-git directory as a folder project and run in place
+  --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
@@ -253,23 +307,30 @@ Options:
   --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
+  --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
-  --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)
+  --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
+                             paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
+                             and attention label)
+  --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
   --follow                   For 'workflow logs': stream appended rows until the run ends
-  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
-                             persist_session resume between separate CLI invocations)
+  --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
+                             text renders it as progress lines for a human
+  --conversation-id <id>     Correlation id for the run's messages. It creates no
+                             conversation and no persist_session scope
   --port <port>              Override server port for 'serve' (default: 3090)
-  --download-only            Download web UI without starting the server
-  --force                    Overwrite existing file (for workflow install)
+  --download-only            Download server and web UI without starting the server
+  --force                    For 'setup': overwrite existing values instead of merging
+                             For 'complete': remove even when safety checks block it
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -278,33 +339,40 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run assist --folder "List every repo under this multi-repo root"
-  archon workflow run archon-assist --detach "Investigate the flaky test"
-  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
+  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --detach "Investigate the flaky test"
+  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow logs <run-id> --follow
+  archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
   archon workflow runs --open
-  archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
-  archon skill install
-  archon skill install /path/to/project
-  archon plugin install coleam00/Archon/plugins/forge-github
-  archon workflow search "pr review"
-  archon workflow install archon-piv-loop
+  archon workflow run archon-review --adopt <run-id> "Review the changes"
+  archon skill add
+  archon skill add /path/to/project
+  archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
 
   it('archon --help matches the supported global index byte-for-byte', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
+    expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
+  });
+
+  it.each([
+    ['plugin', '<owner/repo[/path][@tag]>'],
+    ['skill', '[path]'],
+  ])('retains scoped help for the %s alias without advertising it globally', (command, args) => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, command, 'install', '--help'], {
       encoding: 'utf8',
       env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe(EXPECTED_GLOBAL_HELP);
-    expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
+    expect(result.stdout).toContain(`${command} install ${args}`);
+    expect(result.stdout).toContain(`Deprecated alias for archon ${command} add`);
+    expect(renderHelp()).not.toContain(`${command} install`);
   });
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {
@@ -348,4 +416,53 @@ Examples:
   it('renders --full in workflow list --help', () => {
     expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
   });
+});
+
+it('workflow run help distinguishes initial registration from the dispatch override', () => {
+  const text = scopedHelpOptions(['workflow', 'run']);
+  expect(text).toContain('--base-branch <name>');
+  expect(text).toContain('Initial repository registration only');
+  expect(text).toContain('--base <branch>');
+});
+
+it('forge work-item and repository-label help exposes file requests', () => {
+  for (const operation of [
+    'workitem.create',
+    'workitem.labels.set',
+    'repo.labels.list',
+    'repo.label.ensure',
+  ]) {
+    const text = renderHelp('forge', operation);
+    expect(text).toContain(operation);
+    expect(text).toContain('--data-file <path>');
+  }
+});
+
+it('provider and plugin add help exposes the supported commands and plugin example', () => {
+  expect(renderHelp('provider', 'add')).toContain('provider add <id...>');
+  const plugin = renderHelp('plugin', 'add');
+  expect(plugin).toContain('plugin add <owner/repo[/path][@tag]>');
+  expect(plugin).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+});
+
+it('every supported attachment verb has scoped help, with aliases scoped only', () => {
+  const global = renderHelp();
+  for (const [command, verbs] of Object.entries(attachmentCommands)) {
+    for (const [verb, entry] of Object.entries(verbs)) {
+      const spec = `${command} ${verb} ${entry.args}`.trimEnd();
+      expect(renderHelp(command, verb)).toContain(spec);
+      if ('scopedOnly' in entry) {
+        expect(global).not.toContain(spec);
+      } else {
+        expect(global).toContain(spec);
+      }
+    }
+  }
+});
+
+it('documents host metadata separately from plugin operations', () => {
+  const scoped = renderHelp('forge', 'metadata');
+  expect(scoped).toContain('without credentials or forge operations');
+  expect(scoped).toContain('"host":"github.com"');
+  expect(renderHelp()).not.toContain('forge metadata');
 });

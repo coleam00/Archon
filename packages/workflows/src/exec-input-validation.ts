@@ -76,7 +76,8 @@ export function inlineExecInputSource(
 export function validateExecInputTargets(
   workflow: Pick<WorkflowDefinition, 'inputs'>,
   targets: readonly ExecInputValidationTarget[],
-  resolveSource: (target: ExecInputValidationTarget) => ExecInputSource | undefined
+  resolveSource: (target: ExecInputValidationTarget) => ExecInputSource | undefined,
+  configuredEnvNames: ReadonlySet<string> = new Set()
 ): ExecInputValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -92,23 +93,31 @@ export function validateExecInputTargets(
 
     for (const read of scanEnvironmentReads(source.text, source.runtime)) {
       if (availableEnv.has(read.name)) continue;
-      if (read.name.startsWith('INPUTS_') && workflow.inputs === undefined) continue;
+      const isInputsRead = read.name.startsWith('INPUTS_');
+      if (isInputsRead && workflow.inputs === undefined) continue;
+      if (!isInputsRead && configuredEnvNames.has(read.name)) continue;
       const location = `${source.label} line ${String(read.line)}`;
       const available =
         availableNames.length === 0 ? 'none' : availableNames.map(name => `'${name}'`).join(', ');
-      const prefix =
-        `Node '${target.node.id}' ${target.slot.path} (${location}) reads environment variable ` +
-        `'${read.name}', which is not provided by its bindings, declared inputs, or the engine. ` +
-        `Available bindings/inputs: ${available}.`;
 
-      if (read.name.startsWith('INPUTS_')) {
+      if (isInputsRead) {
+        const prefix =
+          `Node '${target.node.id}' ${target.slot.path} (${location}) reads environment variable ` +
+          `'${read.name}', which is not provided by its bindings, declared inputs, or the engine. ` +
+          `Available bindings/inputs: ${available}.`;
         const fix =
           target.node.runtime === 'sh'
             ? ` Declare a workflow input that maps to '${read.name}'; bash nodes do not support node-local 'with:' bindings.`
             : ` Add a matching 'with:' binding or declare a workflow input that maps to '${read.name}'.`;
         errors.push(prefix + fix);
       } else {
-        warnings.push(prefix);
+        warnings.push(
+          `Node '${target.node.id}' ${target.slot.path} (${location}) reads environment variable ` +
+            `'${read.name}', which is not provided by its bindings, declared inputs, the engine, ` +
+            '.archon/.env, or a configured env var. It might come from a source this check ' +
+            'cannot see at validate time — for example, a codebase env var configured in the ' +
+            `database — or it might be a typo. Available bindings/inputs: ${available}.`
+        );
       }
     }
   }
@@ -116,11 +125,15 @@ export function validateExecInputTargets(
   return { errors, warnings };
 }
 
-export function validateInlineExecInputs(workflow: WorkflowDefinition): ExecInputValidationResult {
+export function validateInlineExecInputs(
+  workflow: WorkflowDefinition,
+  configuredEnvNames?: ReadonlySet<string>
+): ExecInputValidationResult {
   return validateExecInputTargets(
     workflow,
     collectExecInputValidationTargets(workflow),
-    inlineExecInputSource
+    inlineExecInputSource,
+    configuredEnvNames
   );
 }
 

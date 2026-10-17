@@ -2,12 +2,13 @@
  * Web platform adapter implementing IPlatformAdapter with SSE stream management.
  * Bridge between the orchestrator and the React frontend via Server-Sent Events.
  */
-import type { IWebPlatformAdapter, MessageMetadata } from '@archon/core';
-import type { MessageChunk } from '@archon/providers/types';
+import { webPolicy } from '@archon/adapters/web/policy';
+import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { PlatformStructuredEvent } from '@archon/workflows/deps';
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { MessagePersistence } from './web/persistence';
 import { SSETransport, type SSEWriter } from './web/transport';
-import { truncateToolOutput } from './web/truncate';
 import { WorkflowEventBridge } from './web/workflow-bridge';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -17,9 +18,12 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export class WebAdapter implements IWebPlatformAdapter {
-  /** Per-conversation tool call counter for unique SSE tool IDs */
-  private toolCallCounter = new Map<string, number>();
+export class WebAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    canDetachProject: true as const,
+    messagePersistence: 'adapter',
+    defaultWorkflowDispatch: 'background',
+  } as const;
   /**
    * Per-conversation running tool stack for SSE duration tracking.
    * Uses a Map of toolCallId → start info so parallel DAG nodes don't
@@ -37,19 +41,19 @@ export class WebAdapter implements IWebPlatformAdapter {
   ) {}
 
   /**
-   * Register an SSE stream for a conversation.
-   * Closes any existing stream (browser refresh / new tab replaces old).
+   * Dashboard connections coexist; a conversation reconnect replaces its old stream.
    */
   registerStream(conversationId: string, stream: SSEWriter): void {
     this.transport.registerStream(conversationId, stream);
   }
 
   removeStream(conversationId: string, expectedStream?: SSEWriter): void {
-    this.transport.removeStream(conversationId, expectedStream);
-    // Clean up stale tool tracking state on SSE disconnect to prevent
-    // spurious tool_result events on the next message to this conversation.
-    this.runningTools.delete(conversationId);
-    this.toolCallCounter.delete(conversationId);
+    // Clean up stale tool tracking state once the last writer is gone to prevent
+    // spurious tool_result events on the next message to this conversation. A
+    // stale writer leaving while another is live must not wipe live tool state.
+    if (this.transport.removeStream(conversationId, expectedStream)) {
+      this.runningTools.delete(conversationId);
+    }
   }
 
   /**
@@ -86,9 +90,6 @@ export class WebAdapter implements IWebPlatformAdapter {
       ...(metadata?.workflowResult ? { workflowResult: metadata.workflowResult } : {}),
     });
 
-    // Forward output to registered callback (for event bridge preview)
-    this.workflowBridge.emitOutput(conversationId, message);
-
     await this.transport.emit(conversationId, event);
 
     // Workflow result arrives after the parent lock is released (background dispatch),
@@ -100,29 +101,20 @@ export class WebAdapter implements IWebPlatformAdapter {
     }
   }
 
-  async sendStructuredEvent(conversationId: string, chunk: MessageChunk): Promise<void> {
+  async sendStructuredEvent(conversationId: string, chunk: PlatformStructuredEvent): Promise<void> {
     let event: string;
 
-    if (chunk.type === 'tool' && chunk.toolName) {
+    if (chunk.type === 'tool_call') {
       const now = Date.now();
+      const name = toolCallDisplayName(chunk);
+      const input = chunk.rawInput === undefined ? {} : chunk.rawInput;
 
       // Buffer tool call for direct chat persistence (message metadata)
       this.persistence.appendToolCall(conversationId, {
-        name: chunk.toolName,
-        input: chunk.toolInput ?? {},
+        toolCallId: chunk.toolCallId,
+        name,
+        input,
       });
-
-      // Prefer the SDK-provided stable ID (e.g. Claude `tool_use_id`); fall back to a
-      // generated counter for clients that don't supply one (e.g. Codex). Stable IDs
-      // guarantee tool_call/tool_result pair correctly under concurrent same-named tools.
-      let toolCallId: string;
-      if (chunk.toolCallId) {
-        toolCallId = chunk.toolCallId;
-      } else {
-        const counter = (this.toolCallCounter.get(conversationId) ?? 0) + 1;
-        this.toolCallCounter.set(conversationId, counter);
-        toolCallId = `${conversationId}-tool-${String(counter)}`;
-      }
 
       // Track this tool's start for duration computation (supports parallel DAG nodes)
       let convTools = this.runningTools.get(conversationId);
@@ -130,84 +122,50 @@ export class WebAdapter implements IWebPlatformAdapter {
         convTools = new Map();
         this.runningTools.set(conversationId, convTools);
       }
-      convTools.set(toolCallId, { toolCallId, name: chunk.toolName, startedAt: now });
+      convTools.set(chunk.toolCallId, { toolCallId: chunk.toolCallId, name, startedAt: now });
 
       event = JSON.stringify({
         type: 'tool_call',
-        toolCallId,
-        name: chunk.toolName,
-        input: chunk.toolInput ?? {},
+        toolCallId: chunk.toolCallId,
+        name,
+        input,
         timestamp: now,
       });
-    } else if (chunk.type === 'tool_result' && chunk.toolName) {
+    } else if (chunk.type === 'tool_call_update') {
       const now = Date.now();
-      // Find and remove the matching running tool entry. Prefer stable ID lookup
-      // (correct under concurrent same-named tools), fall back to name reverse-scan
-      // for clients that don't supply an ID.
       const convTools = this.runningTools.get(conversationId);
-      let matchedToolCallId: string | undefined;
-      let startedAt = now;
-      if (convTools) {
-        if (chunk.toolCallId && convTools.has(chunk.toolCallId)) {
-          const t = convTools.get(chunk.toolCallId);
-          if (t) {
-            matchedToolCallId = chunk.toolCallId;
-            startedAt = t.startedAt;
-            convTools.delete(chunk.toolCallId);
-          }
-        } else {
-          // Reverse iterate to match the most recent tool with this name
-          for (const [id, t] of [...convTools.entries()].reverse()) {
-            if (t.name === chunk.toolName) {
-              matchedToolCallId = id;
-              startedAt = t.startedAt;
-              convTools.delete(id);
-              break;
-            }
-          }
-        }
-      }
-      if (!matchedToolCallId) {
-        // Neither stable-ID lookup nor name reverse-scan found a match. The
-        // SSE event still goes out, but the UI cannot pair it to a running
-        // card and the entry (if any) will leak in runningTools. Surface this
-        // so we can debug missing tool_call emissions.
+      const tool = convTools?.get(chunk.toolCallId);
+      if (!tool) {
+        // The SSE event still goes out, but the UI cannot pair it to a running card.
         getLog().warn(
-          {
-            conversationId,
-            toolName: chunk.toolName,
-            toolCallId: chunk.toolCallId,
-          },
+          { conversationId, toolCallId: chunk.toolCallId },
           'web_adapter.tool_result_unmatched'
         );
       }
-      const duration = now - startedAt;
-      // Persist tool output to DB
+      convTools?.delete(chunk.toolCallId);
+      const duration = now - (tool?.startedAt ?? now);
+      // The provider already capped the output (TOOL_OUTPUT_MAX_CHARS).
+      const output = chunk.output ?? '';
       try {
-        this.persistence.appendToolResult(
-          conversationId,
-          chunk.toolName,
-          chunk.toolOutput,
-          duration
-        );
+        this.persistence.appendToolResult(conversationId, chunk.toolCallId, output, duration, {
+          status: chunk.status,
+          exitCode: chunk.exitCode,
+        });
       } catch (e: unknown) {
         getLog().error({ conversationId, err: e }, 'tool_result_persist_failed');
       }
-      // Bound the SSE payload only — the DB write above keeps the full output
       event = JSON.stringify({
         type: 'tool_result',
-        toolCallId: matchedToolCallId,
-        name: chunk.toolName,
-        output: truncateToolOutput(chunk.toolOutput),
+        toolCallId: chunk.toolCallId,
+        name: tool?.name,
+        output,
+        status: chunk.status,
+        ...(chunk.exitCode !== undefined ? { exitCode: chunk.exitCode } : {}),
         duration,
         timestamp: now,
       });
-    } else if (chunk.type === 'result' && chunk.sessionId) {
-      event = JSON.stringify({
-        type: 'session_info',
-        sessionId: chunk.sessionId,
-        timestamp: Date.now(),
-      });
+    } else if (chunk.type === 'result') {
+      return;
     } else if (chunk.type === 'workflow_dispatch') {
       event = JSON.stringify({
         type: 'workflow_dispatch',
@@ -215,14 +173,15 @@ export class WebAdapter implements IWebPlatformAdapter {
         workflowName: chunk.workflowName,
         timestamp: Date.now(),
       });
-    } else if (chunk.type === 'system') {
+    } else if (chunk.type === 'system_status') {
       event = JSON.stringify({
         type: 'system_status',
         content: chunk.content,
         timestamp: Date.now(),
       });
     } else {
-      return;
+      const unhandled: never = chunk;
+      throw new Error(`Unhandled structured event: ${JSON.stringify(unhandled)}`);
     }
 
     await this.transport.emit(conversationId, event);
@@ -237,7 +196,7 @@ export class WebAdapter implements IWebPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'web';
+    return webPolicy.id;
   }
 
   async start(): Promise<void> {
@@ -260,7 +219,6 @@ export class WebAdapter implements IWebPlatformAdapter {
     this.transport.stop();
     this.workflowBridge.stop();
     this.persistence.clearAll();
-    this.toolCallCounter.clear();
     this.runningTools.clear();
   }
 
@@ -291,7 +249,7 @@ export class WebAdapter implements IWebPlatformAdapter {
           await this.transport.emit(conversationId, resultEvent);
           // Persist fallback output to DB (real output may have been captured via PostToolUse hook)
           try {
-            this.persistence.appendToolResult(conversationId, tool.name, '', duration);
+            this.persistence.appendToolResult(conversationId, tool.toolCallId, '', duration);
           } catch (e: unknown) {
             getLog().error({ conversationId, err: e }, 'tool_result_persist_failed');
           }
@@ -319,20 +277,20 @@ export class WebAdapter implements IWebPlatformAdapter {
     return this.transport.hasActiveStream(conversationId);
   }
 
-  /**
-   * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
-   * Forwards compact progress events (step progress, status) and output previews.
-   */
-  setupEventBridge(workerConversationId: string, parentConversationId: string): () => void {
-    return this.workflowBridge.bridgeWorkerEvents(workerConversationId, parentConversationId);
-  }
-
-  registerOutputCallback(conversationId: string, callback: (text: string) => void): void {
-    this.workflowBridge.registerOutputCallback(conversationId, callback);
-  }
-
-  removeOutputCallback(conversationId: string): void {
-    this.workflowBridge.removeOutputCallback(conversationId);
+  async prepareBackgroundConversation(
+    context: Parameters<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>[0]
+  ): Promise<() => Promise<void>> {
+    const { workerConversationId, parentConversationId, conversationDbId } = context;
+    this.setConversationDbId(workerConversationId, conversationDbId);
+    // Worker workflow events are forwarded to the parent conversation's stream.
+    const unsubscribe = this.workflowBridge.bridgeWorkerEvents(
+      workerConversationId,
+      parentConversationId
+    );
+    return async () => {
+      unsubscribe();
+      await this.emitLockEvent(workerConversationId, false);
+    };
   }
 
   async emitRetract(conversationId: string): Promise<void> {

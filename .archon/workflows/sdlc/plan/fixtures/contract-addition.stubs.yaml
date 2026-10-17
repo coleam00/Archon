@@ -1,0 +1,16 @@
+# Dry-run fixture: an additive configuration change. A fallback lookup leaves every
+# path that resolved before resolving to the same file, so the planner decides it,
+# lists it under contract additions, and proceeds instead of stopping on the shipped
+# configuration surface.
+policy: { defaults: "fixture-policy-defaults" }
+plan:
+  ready: true
+  open_questions: []
+  summary: "stub: the fallback is a contract addition; every existing path keeps its meaning, and the PR body flags it"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+fixture:
+  inputs:
+    work: "A relative MCP config path that does not resolve against the checkout falls back to a second base directory. Paths that resolve today keep resolving to the same file."
+  expect: completed
+  resolved-text-contains:
+    plan: "Name the addition under **Contract additions** in the plan, with why each existing value keeps its meaning, so the pull request body flags it for the reviewer."

@@ -1,0 +1,92 @@
+# Dry-run fixture, a later round: the item already has open pull request 1 in its
+# repository, and ship's triage routes `deliver`, not `continue`. The pull request
+# facts resolved still reaches delivery through ship's real `continues` script: the
+# implementer and prepare are both told to finish it.
+facts:
+  path: route
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  record: null
+  brief: "continue: fix the open review finding"
+  rounds: []
+  recorded: null
+  at_cap: false
+  policy_defaults: "/stub/policy"
+  pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+  continues: 1
+  branch: ""
+route:
+  decision: launch
+  brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
+  reason: "stub: the finding is correctable"
+  attention: null
+ship__forge: { source: forge }
+ship__deliver__forge: { source: forge }
+ship__triage__triage:
+  decision: { contract: READY, route: deliver }
+  type: { value: bug, reason: "stub: a finding" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  summary: "stub: the work order is complete"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: merged the pull request's head and fixed the finding"
+implement__assert-changed: "1 file changed"
+pr__forge: { source: forge }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "build/7-stub-fixture", base: "dev", existing: 1, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: continues pull request 1" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead2", base_revision: "fixturebase", maintainer_can_modify: null }
+review__route: { seams: false, code: true, tests: false, errors: false, docs: false, reason: "stub: a small fix" }
+review__scope:
+  head_matches: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+review__code: "0 findings"
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+simplify__simplify: { findings: false }
+simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
+ship__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
+answer:
+  decision: done
+  brief: ""
+  push: null
+  reason: "stub: answered"
+  attention: null
+apply:
+  decision: ready
+  summary: "stub: Issue 7: ready."
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, route, ship__continues, ship__report, answer, apply]
+  resolved-text-contains:
+    implement__implement: "resolved it (empty or `null` when it named none): 1. When it names one"
+    pr__prepare: "the caller resolved it (`1`"
+    answer: '"pr_url":"https://github.com/example/repo/pull/1"'
+exec-code: true

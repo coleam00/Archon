@@ -5,7 +5,7 @@
 # For development, see: https://github.com/coleam00/Archon
 
 class Archon < Formula
-  desc "Remote agentic coding platform - control AI assistants from anywhere"
+  desc "Governed agentic automation engine"
   homepage "https://github.com/coleam00/Archon"
   version "0.11.1"
   license "MIT"
@@ -45,6 +45,20 @@ class Archon < Formula
     end
 
     bin.install binary_name => "archon"
+  end
+
+  def caveats
+    <<~EOS
+      Archon ships without AI providers. Add the ones you use:
+        archon setup
+      or directly:
+        archon provider add <claude|codex|pi>
+
+      Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
+
+      After `brew upgrade archon`, run `archon provider add` again for each
+      provider you use; installed providers must match the CLI version.
+    EOS
   end
 
   test do

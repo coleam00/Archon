@@ -10,8 +10,11 @@
  * z.union() is NOT used here — YAML nodes lack an explicit `type` discriminant,
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
-import { z } from '@hono/zod-openapi';
-import { stepRetryConfigSchema } from './retry';
+import { SETTING_SOURCES } from '@archon/paths/skills';
+import { z } from 'zod';
+import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
+export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
+import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
 export { MAX_DURABLE_WAIT_MS } from './durable-wait';
@@ -26,6 +29,8 @@ export type { EffortLevel } from './effort';
 // grammar, everywhere (#2637).
 import {
   declaredFieldsFromSchema,
+  declaredOutputPathsFromSchema,
+  type DeclaredOutputPaths,
   jsonValueSchema,
   parseWholeOutputRef,
   parseWholeInputsRef,
@@ -122,33 +127,13 @@ export const sandboxSettingsSchema = z
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
 /**
- * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
- * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
- * experimental critical-reminder field.
- */
-export const agentDefinitionSchema = z.object({
-  description: z.string().min(1, "'description' is required"),
-  prompt: z.string().min(1, "'prompt' is required"),
-  model: z.string().min(1).optional(),
-  tools: z.array(z.string().min(1)).optional(),
-  disallowedTools: z.array(z.string().min(1)).optional(),
-  skills: z.array(z.string().min(1)).optional(),
-  maxTurns: z.number().int().positive().optional(),
-});
-
-export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
-
-/**
  * Per-node Pi extension posture — the PORTABLE authoring surface for issue #2133.
  * Mirrors the install-level `assistants.pi.nodes.<nodeId>` override map (#2124),
  * but lives on the node itself so it travels with the workflow instead of a
  * machine's `config.yaml`. Highest-precedence layer: node YAML `pi:` > config
  * `nodes.<id>` > assistant-level `assistants.pi.*`. Structurally identical to the
- * providers-side `PiNodeOverride` (@archon/providers/pi/config) — hand-mirrored
- * because that module is not reachable from here. The constraint is SDK-free,
- * not type-only: @archon/workflows may import runtime values from a leaf subpath
- * with no SDK dependencies (@archon/providers/types), but `pi/config` pulls in the Pi
- * SDK, so this shape stays mirrored.
+ * provider contract's `PiExtensionPosture`; pi-extension-posture.type-test.ts
+ * checks the authoring schema against that SDK-free contract.
  *
  * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
  * it; non-AI node types warn it's ignored (see BASH_NODE_AI_FIELDS).
@@ -182,6 +167,38 @@ export function isNodeContextResume(
   return typeof context === 'object' && context !== null && 'resume' in context;
 }
 
+/**
+ * A node's `mcp:` declaration: a config-file path the node requires, or
+ * `{ path, optional: true }` for a server the node runs without when its provider
+ * cannot load MCP servers or the file does not exist. Strict so a misspelled
+ * `optional` fails the load instead of silently meaning required.
+ */
+export const nodeMcpSchema = z.union([
+  z.string().min(1, "'mcp' must be a non-empty string path"),
+  z.strictObject({
+    path: z.string().min(1, "'mcp.path' must be a non-empty string path"),
+    optional: z.boolean().optional(),
+  }),
+]);
+
+export type NodeMcp = z.infer<typeof nodeMcpSchema>;
+
+export interface McpDeclaration {
+  path: string;
+  optional: boolean;
+}
+
+export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undefined {
+  if (mcp === undefined) return undefined;
+  return typeof mcp === 'string'
+    ? { path: mcp, optional: false }
+    : { path: mcp.path, optional: mcp.optional === true };
+}
+
+function trimNodeMcp(mcp: NodeMcp): NodeMcp {
+  return typeof mcp === 'string' ? mcp.trim() : { ...mcp, path: mcp.path.trim() };
+}
+
 // Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
 const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -207,8 +224,11 @@ export const dagNodeBaseSchema = z.object({
   idle_timeout: z.number().optional(),
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
-  mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
+  mcp: nodeMcpSchema.optional(),
   skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
+  // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
+  // only the plugins it names; the provider fails the node when it cannot.
+  plugins: z.array(z.string().trim().min(1, 'each plugin must be a non-empty string')).optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the
@@ -243,7 +263,7 @@ export const dagNodeBaseSchema = z.object({
   // assistant-level default (['project', 'user'] when unset). Claude-only;
   // other providers warn and ignore it. Lets a lean node (e.g. a reviewer)
   // skip project/user context loading for faster startup.
-  settingSources: z.array(z.enum(['project', 'user'])).optional(),
+  settingSources: z.array(z.enum(SETTING_SOURCES)).optional(),
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a
@@ -255,13 +275,16 @@ export const dagNodeBaseSchema = z.object({
   // error naming it if the snapshot changed — outside the run's engine-owned
   // directories (artifacts/state/logs). Enforced for exec and agent nodes; warned
   // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
-  // single checkout-scoped payload. Absent means no enforcement.
+  // single checkout-scoped payload. Absent means no enforcement. A layer of guarded
+  // nodes only runs concurrently; a layer mixing guarded nodes with any node that
+  // isn't checkout-guarded runs sequentially so a sibling's write is never blamed on
+  // a guarded node.
   mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
-  // scope (typically the conversation). On the next run with the same scope, the
-  // executor loads the stored session and passes it as resumeSessionId. Requires
-  // a provider with sessionResume capability. Distinct from the Claude SDK's
-  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  // scope (typically the conversation). The next run in that scope forks the session
+  // that existed when it started; a provider without sessionFork starts fresh
+  // instead (see `persistedSessionHandling`). Requires a provider with sessionResume
+  // capability.
   persist_session: z.boolean().optional(),
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed
@@ -281,7 +304,7 @@ export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
 /**
  * Node-local binding directive (#2637) — the explicit form of a `with:` value on a
  * `command:`/`script:` node that reads an upstream output across a possibly-skipped
- * branch. `from` must be exactly one whole `$node.output[.field]` reference; when the
+ * branch. `from` must be exactly one whole `$node.output[.a.b]` reference; when the
  * producer was skipped, the binding takes `if_skipped` instead — and without one, the
  * consuming node fails loudly (never a silent `''`).
  *
@@ -330,7 +353,7 @@ export const promptSourceSchema = z.discriminatedUnion('kind', [
     name: z.string(),
     // Node-local named bindings (#2637): values delivered to the command file's
     // `$INPUTS.<name>` surface. Strings may hold refs/templates; a whole
-    // `$node.output[.field]` ref passes the logical value; objects are binding
+    // `$node.output[.a.b]` ref passes the logical value; objects are binding
     // directives ({ from, if_skipped }) — validated in dagNodeSchema's superRefine.
     with: nodeBindingsSchema.optional(),
   }),
@@ -371,8 +394,8 @@ export type AgentNode = z.infer<typeof agentNodeSchema>;
  * script), `deps:`/named-script-file resolution (script-only), and per-runtime
  * error diagnostics. `$LOOP_USER_INPUT` delivery is NOT a script-only concept —
  * both runtimes deliver it via env (#2725); bash additionally gets the literal
- * `$LOOP_USER_INPUT` token pre-spliced (shell-quoted) into its source by
- * `applyLoopPrevToBodyNode`, a channel script has no equivalent of. A "merge but
+ * `$LOOP_USER_INPUT` token shell-quoted into its source by its loop_group scope, a
+ * channel script has no equivalent of. A "merge but
  * keep behavior byte-identical" refactor would relocate rather than remove that
  * complexity, while unifying the ~230 lines of near-identical scaffolding (event
  * emission/persistence, retry wiring, error formatting) into one function risks
@@ -496,10 +519,11 @@ const loopAiAuthoringSchema = dagNodeBaseSchema.pick({
 /**
  * Loop node schema — extends base with `loop` config.
  * The authored AI projection selects fields consumed by each iteration; remaining
- * AI fields warn as ignored. retry is rejected because the loop owns iteration.
+ * AI fields warn as ignored. Retry policy applies to each failed iteration.
  */
 export const loopNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop'),
+  retry: loopRetryConfigSchema.optional(),
   loop: loopNodeConfigSchema,
   timeout: execNodeSchema.shape.timeout,
 });
@@ -552,8 +576,8 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
 
 /**
  * Loop-group node schema — extends base with `loop_group` config (iteration control + body).
- * Like `loop:`, AI-specific base fields are ignored at runtime with a warning, and `retry`
- * is not supported (the loop manages its own iteration). `model`/`provider` are forwarded
+ * AI-specific base fields are ignored at runtime with a warning, and `retry`
+ * is not supported (the group manages its own iteration). `model`/`provider` are forwarded
  * to body AI nodes unless overridden per-node (same forwarding `loop:` uses).
  */
 export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
@@ -578,8 +602,7 @@ export type ApprovalOnReject = z.infer<typeof approvalOnRejectSchema>;
  * step 1). `id` is an author-chosen identifier — reachable from every drive
  * surface via `workflow respond <run-id> <decision> [text]` (#2707 step 2);
  * `approve`/`reject` remain the default-vocabulary sugar every surface's
- * dedicated approve/reject path still speaks. `decisions` must still include
- * an `approve` entry (enforced in `dagNodeSchema`'s `superRefine`). `label` is
+ * dedicated approve/reject path still speaks when those ids are declared. `label` is
  * purely cosmetic display text; the wire value the gate outputs as
  * `$<id>.output.decision` is always the `id`, never the label.
  *
@@ -601,6 +624,14 @@ export const approvalDecisionConfigSchema = z.object({
     ),
   label: z.string().min(1).optional(),
 });
+
+type ApprovalDecisionConfig = z.infer<typeof approvalDecisionConfigSchema>;
+
+export function getApprovalDecisions(approval: {
+  decisions?: ApprovalDecisionConfig[];
+}): ApprovalDecisionConfig[] {
+  return approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }];
+}
 
 /**
  * Schema for the `approval:` config object. Named (rather than inlined at both
@@ -695,6 +726,106 @@ export const haltNodeSchema = dagNodeBaseSchema.extend({
 /** DAG node that cancels the workflow run with a reason string */
 export type HaltNode = z.infer<typeof haltNodeSchema>;
 
+/**
+ * How an attention wait is answered; it fixes the node's output contract, so it is
+ * always a literal. See `ATTENTION_OUTPUT_FORMATS`.
+ */
+export const attentionFormSchema = z.enum(['message', 'approval', 'select', 'multi_select']);
+export type AttentionForm = z.infer<typeof attentionFormSchema>;
+
+/**
+ * One answer a `select` or `multi_select` attention wait accepts. The id is the wire
+ * value the answer carries and the next node reads; kebab-case keeps it one CLI token.
+ */
+export const attentionOptionSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(
+      AGENT_ID_REGEX,
+      "must be kebab-case (lowercase letters, digits, single hyphens — e.g. 'use-main')"
+    ),
+  label: z.string().min(1).optional(),
+});
+export type AttentionOption = z.infer<typeof attentionOptionSchema>;
+
+/**
+ * The options of an attention wait, literal or resolved at pause time from an upstream
+ * output. Both pass this one schema, so a referenced list obeys the literal rules.
+ */
+export const attentionOptionsSchema = z
+  .array(attentionOptionSchema)
+  .min(1, 'must declare at least one option')
+  .superRefine((options, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, option] of options.entries()) {
+      if (seen.has(option.id))
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: `'${option.id}' is declared more than once`,
+        });
+      seen.add(option.id);
+    }
+  });
+
+/**
+ * A label key on an attention wait. It is one CLI token with no `=`, so `--label k=v`
+ * and `--set k=v` split unambiguously at the first `=`. The engine gives keys no meaning.
+ *
+ * `__proto__` is refused: assigning it to a plain object sets the prototype instead of
+ * creating a key, so a label write would vanish and a filter on it would match everything.
+ */
+export const attentionLabelKeySchema = z
+  .string()
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace")
+  .refine(key => key !== '__proto__', "'__proto__' cannot be a label key");
+
+/** An attention wait's labels: a flat map of plain strings the engine never interprets. */
+export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());
+export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
+
+/** The answers an `approval` attention wait accepts. */
+export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
+  { id: 'approve' },
+  { id: 'reject' },
+];
+
+const attentionTextOutput = { type: 'string' } as const;
+
+/** The output contract each attention form fixes: what the next node reads. */
+export const ATTENTION_OUTPUT_FORMATS = {
+  message: {
+    type: 'object',
+    properties: { text: attentionTextOutput },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  approval: {
+    type: 'object',
+    properties: {
+      decision: { type: 'string', enum: APPROVAL_ATTENTION_OPTIONS.map(option => option.id) },
+      text: attentionTextOutput,
+    },
+    required: ['decision', 'text'],
+    additionalProperties: false,
+  },
+  select: {
+    type: 'object',
+    properties: { decision: { type: 'string' }, text: attentionTextOutput },
+    required: ['decision', 'text'],
+    additionalProperties: false,
+  },
+  multi_select: {
+    type: 'object',
+    properties: {
+      decisions: { type: 'array', items: { type: 'string' } },
+      text: attentionTextOutput,
+    },
+    required: ['decisions', 'text'],
+    additionalProperties: false,
+  },
+} as const satisfies Record<AttentionForm, Record<string, unknown>>;
+
 export const waitUntilTimestampSchema = z.string().datetime();
 const waitUntilValueSchema = z
   .string()
@@ -716,9 +847,40 @@ const waitConfigVariantSchemas = [
     event: z.string().trim().min(1, "'wait.event' must not be empty"),
     deadline_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS),
   }),
-  z.strictObject({
-    attention: z.string().trim().min(1, "'wait.attention' must not be empty"),
-  }),
+  z
+    .strictObject({
+      attention: z.string().trim().min(1, "'wait.attention' must not be empty"),
+      form: attentionFormSchema.optional(),
+      options: z
+        .union([
+          attentionOptionsSchema,
+          z
+            .string()
+            .refine(
+              value => parseWholeOutputRef(value)?.field !== undefined,
+              "must be a list of options or one whole '$node.output.<field>' reference"
+            ),
+        ])
+        .optional(),
+      /** Values may hold runtime references, resolved when the wait pauses. */
+      labels: attentionLabelsSchema.optional(),
+    })
+    .superRefine((value, ctx) => {
+      const form = value.form ?? 'message';
+      const takesOptions = form === 'select' || form === 'multi_select';
+      if (takesOptions && value.options === undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: `is required for form '${form}'`,
+        });
+      if (!takesOptions && value.options !== undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: `is only valid for forms 'select' and 'multi_select', not '${form}'`,
+        });
+    }),
 ] as const;
 const waitConfigKeys = new Set(
   waitConfigVariantSchemas.flatMap(schema => Object.keys(schema.shape))
@@ -740,7 +902,14 @@ export type WaitCondition =
   | { kind: 'duration'; durationMs: number }
   | { kind: 'until'; timestamp: string }
   | { kind: 'event'; event: string; deadlineMs: number }
-  | { kind: 'attention'; message: string };
+  | {
+      kind: 'attention';
+      message: string;
+      form: AttentionForm;
+      /** Literal options, or the whole `$node.output.<field>` reference resolved at pause time. */
+      options?: AttentionOption[] | string;
+      labels?: AttentionLabels;
+    };
 
 export function waitCondition(config: WaitConfig): WaitCondition {
   if (config.duration_ms !== undefined) {
@@ -752,7 +921,13 @@ export function waitCondition(config: WaitConfig): WaitCondition {
   if (config.event !== undefined) {
     return { kind: 'event', event: config.event, deadlineMs: config.deadline_ms };
   }
-  return { kind: 'attention', message: config.attention };
+  return {
+    kind: 'attention',
+    message: config.attention,
+    form: config.form ?? 'message',
+    ...(config.options !== undefined ? { options: config.options } : {}),
+    ...(config.labels !== undefined ? { labels: config.labels } : {}),
+  };
 }
 
 export const workflowWaitResultSchema = z.object({
@@ -774,6 +949,13 @@ export const WAIT_NODE_OUTPUT_FORMAT = {
   required: ['status', 'waited_ms'],
   additionalProperties: false,
 } as const;
+
+/** The output contract a wait fixes: its condition's result, or an attention form's answer. */
+export function waitOutputFormat(wait: WaitConfig): Record<string, unknown> {
+  return wait.attention !== undefined
+    ? ATTENTION_OUTPUT_FORMATS[wait.form ?? 'message']
+    : WAIT_NODE_OUTPUT_FORMAT;
+}
 
 export const waitNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('wait'),
@@ -854,18 +1036,19 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
 /**
  * Dynamic fan-out config for a `workflow:` node (#2121 slice 2, PR-C). Expands the
  * node into N governed child runs — one per element of a runtime-length item list —
- * joined into a single node outcome. `items` is a `$node.output[.field]` ref that
+ * joined into a single node outcome. `items` is a `$node.output[.a.b]` ref that
  * MUST resolve to a JSON array at run time (DATA, per the constitution's
  * §load-time-composition — the child target stays a static name; only the item
  * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
  * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
  * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
- * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
+ * time, so no two of them contend for the parent checkout's path lock. The window counts
+ * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
- * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
- * budget ceiling is deferred to #1961. `join` reduces the
+ * leave some children uncancelled when the parent is abandoned. The workflow `budget:`
+ * does not cover fan-out yet (a budgeted workflow rejects it at load; #2815). `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
  *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
  *      cancelled entries are represented as `{ archon_failed: true, error, status }`
@@ -1008,6 +1191,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'hooks',
   'mcp',
   'skills',
+  'plugins',
   'agents',
   'pi',
   'effort',
@@ -1062,8 +1246,8 @@ export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
 /**
  * Fields a wait cannot consume; its output contract and lifecycle are engine-owned.
  * `output_format` is absent because a wait node REJECTS it outright (the schema's
- * superRefine: the engine fixes the wait's own `{ status, waited_ms, … }` contract),
- * so it never reaches this warn set.
+ * superRefine: the engine fixes the wait's own contract, `waitOutputFormat`), so it
+ * never reaches this warn set.
  */
 export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS,
@@ -1118,6 +1302,9 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = [
  * its shape, and for any future use that needs the pre-validation object type.
  */
 export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
+  retry: stepRetryConfigSchema
+    .extend({ delay_ms: loopRetryConfigSchema.shape.delay_ms })
+    .optional(),
   // Mode fields (exactly one required)
   command: z.string().optional(),
   prompt: z.string().optional(),
@@ -1171,7 +1358,7 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  * - Exactly one of command/prompt/bash/loop/loop_group/approval/cancel/script (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
- * - retry not allowed on loop or loop_group nodes
+ * - mode-specific retry validation; retry not allowed on loop_group nodes
  * - timeout on bash must be positive
  *
  * Note: provider identity is validated in loader.ts (workflow-level) and
@@ -1297,20 +1484,6 @@ export const dagNodeSchema = z
             path: ['approval', 'decisions'],
           });
         }
-        // 'reject' is optional (an approve-only "acknowledge" gate is valid —
-        // rejectWorkflow falls back to cancelling when no 'reject' id is
-        // declared), but 'approve' must always be reachable: without it,
-        // `workflow approve <id>` would still "succeed" and write a permanent
-        // approval_decision:'approved' audit event for an outcome the gate's
-        // own declared vocabulary says can never occur. Fail at load time
-        // instead of leaving that as a silent runtime footgun.
-        if (!ids.includes('approve')) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "'approval.decisions' must include an 'approve' entry",
-            path: ['approval', 'decisions'],
-          });
-        }
       }
     }
 
@@ -1399,7 +1572,7 @@ export const dagNodeSchema = z
             code: z.ZodIssueCode.custom,
             message:
               `${kind} binding '${key}': an object value must be a binding directive ` +
-              "{ from: '$node.output[.field]', if_skipped?: <value> } — " +
+              "{ from: '$node.output[.a.b]', if_skipped?: <value> } — " +
               `${parsed.error.issues[0]?.message ?? 'invalid shape'}. ` +
               'Use a string, number, boolean, null, or array for a literal value.',
             path: ['with', key],
@@ -1412,7 +1585,7 @@ export const dagNodeSchema = z
           // check. Name the supported spelling instead of the generic grammar error.
           const message = parsed.data.from.trim().startsWith('$LOOP_PREV')
             ? `${kind} binding '${key}': 'from' cannot read '$LOOP_PREV' — it is not a node reference. Use the string form (e.g. '${key}: ${parsed.data.from.trim()}'), which substitutes the previous iteration's text each pass.`
-            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output' or '$node.output.field' reference, got '${parsed.data.from}'`;
+            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output[.a.b]' reference, got '${parsed.data.from}'`;
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message,
@@ -1676,13 +1849,17 @@ export const dagNodeSchema = z
       }
     }
 
-    // Loop node: retry not supported
-    if (hasLoop && data.retry !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'retry' is not supported on loop nodes (loop manages its own iteration)",
-        path: ['retry'],
-      });
+    if (data.retry !== undefined) {
+      const retrySchema = hasLoop ? loopRetryConfigSchema : stepRetryConfigSchema;
+      const result = retrySchema.safeParse(data.retry);
+      if (!result.success) {
+        addSchemaIssues(
+          result.error.issues.map(issue => ({
+            message: issue.message,
+            path: ['retry', ...issue.path],
+          }))
+        );
+      }
     }
 
     // Loop-group node: retry not supported (the loop_group manages its own iteration)
@@ -1780,8 +1957,9 @@ export const dagNodeSchema = z
       ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),
       ...(data.denied_tools !== undefined ? { denied_tools: data.denied_tools } : {}),
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
-      ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
+      ...(data.mcp !== undefined ? { mcp: trimNodeMcp(data.mcp) } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+      ...(data.plugins !== undefined ? { plugins: data.plugins } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
@@ -1867,7 +2045,7 @@ export const dagNodeSchema = z
                 },
               },
             ]
-          : (data.approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }]);
+          : getApprovalDecisions(data.approval);
       return {
         ...base,
         ...shared,
@@ -1883,7 +2061,7 @@ export const dagNodeSchema = z
         ...base,
         kind: 'wait',
         wait: data.wait,
-        output_format: WAIT_NODE_OUTPUT_FORMAT,
+        output_format: waitOutputFormat(data.wait),
       } as WaitNode;
     }
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
@@ -1969,12 +2147,13 @@ export const dagNodeSchema = z
     return {
       ...base,
       ...loopAiAuthoringSchema.parse(data),
+      ...(data.retry !== undefined ? { retry: loopRetryConfigSchema.parse(data.retry) } : {}),
       kind: 'loop',
       loop: data.loop,
       ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
-    } as LoopNode;
+    } satisfies LoopNode;
   })
-  .openapi('DagNode');
+  .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
 // Type guards (preserved from original types.ts)
@@ -2016,13 +2195,22 @@ export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
 }
 
 /**
- * A loop_group body's terminal sinks: the entries no other body entry depends on,
- * in body order. The executor reads an iteration's output from these, and a gate or
- * wait only pauses the enclosing loop when it is the SOLE one (#2707 step 3) — see
- * `loopGroupSoleTerminalSink`. Load-time checks and the runtime share this so the
- * two can never disagree about which node a body ends on.
+ * The field-path contract a node's own definition declares for its output. A
+ * loop_group's `output_format` is not applied to the group's own output, so it declares
+ * none. A `workflow:` node has no schema; its contract is the child's, carried at run
+ * time.
  */
-export function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
+export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefined {
+  return isLoopGroupNode(node) ? undefined : declaredOutputPathsFromSchema(node.output_format);
+}
+
+/**
+ * A loop_group body's terminal sinks: the entries no other body entry depends on,
+ * in body order. A gate or wait only pauses the enclosing loop when it is the SOLE
+ * one (#2707 step 3) — see `loopGroupSoleTerminalSink`. Load-time checks and the
+ * runtime share this so the two can never disagree about which node a body ends on.
+ */
+function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
   body: readonly T[]
 ): T[] {
   const dependedOn = new Set(body.flatMap(n => n.depends_on ?? []));
@@ -2035,6 +2223,25 @@ export function loopGroupSoleTerminalSink<T extends { id: string; depends_on?: r
 ): T | undefined {
   const sinks = loopGroupBodySinks(body);
   return sinks.length === 1 ? sinks[0] : undefined;
+}
+
+/**
+ * The body entries an iteration's output is read from, in body order: the terminal
+ * sinks, with a sink that asks a human (an approval gate or an attention wait) read
+ * past to the entries it depends on. A pause asks about the work; it is not the work,
+ * so the group's output is the same whether the pause was skipped or answered (#4043).
+ * The answer stays on the pause's own output, where `until_bash` and
+ * `$LOOP_PREV.<pause>.output` read it.
+ */
+export function loopGroupOutputNodes<T extends DagNode | IncludeDirective>(
+  body: readonly T[]
+): T[] {
+  return loopGroupBodySinks(body).flatMap(sink =>
+    !isIncludeDirective(sink) &&
+    (isGateNode(sink) || (isWaitNode(sink) && sink.wait.attention !== undefined))
+      ? body.filter(n => sink.depends_on?.includes(n.id))
+      : [sink]
+  );
 }
 
 /** Type guard: check if a DAG node is a workflow (runtime sub-run) node */
@@ -2109,6 +2316,52 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
  */
 export function isPersistableNode(node: DagNode): boolean {
   return node.kind === 'agent';
+}
+
+/**
+ * True when a node participates in cross-run session persistence: a persistable node
+ * that hasn't opted out via `context: 'fresh'`, with `persist_session: true` set
+ * directly or inherited from the workflow-level `persist_sessions` default. The
+ * loader's capability check, the executor's session lookup and upsert, the #1846
+ * scope-artifact mirror, and `runMayPersistSessions` all gate on this one predicate.
+ */
+export function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
+  if (!isPersistableNode(node)) return false;
+  if (node.context === 'fresh') return false;
+  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
+  return nodePersist ?? workflowPersistSessions;
+}
+
+/**
+ * True when a run of this workflow may use cross-run session persistence: some node
+ * uses it, or a composed fan-out could, since its body resolves only when it runs.
+ * The executor's run-start session read, the scope-artifact dir, and run telemetry
+ * all gate on this.
+ */
+export function runMayPersistSessions(workflow: {
+  nodes: readonly (DagNode | IncludeDirective)[];
+  persist_sessions?: boolean;
+}): boolean {
+  const workflowPersistSessions = workflow.persist_sessions === true;
+  return workflow.nodes.some(
+    node =>
+      !isIncludeDirective(node) &&
+      (node.kind === 'compose_fan_out' || nodeUsesPersistedScope(node, workflowPersistSessions))
+  );
+}
+
+/**
+ * What a provider does with a session an earlier run persisted. Only a fork gives the
+ * run its own copy; a provider that resumes in place would let two concurrent runs
+ * write into one conversation, so its node starts fresh instead (`'fresh'`). The
+ * loader warns on `'fresh'` and rejects `'unsupported'`; the executor continues only
+ * on `'fork'`.
+ */
+export function persistedSessionHandling(
+  caps: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork'>
+): 'unsupported' | 'fresh' | 'fork' {
+  if (!caps.sessionResume) return 'unsupported';
+  return caps.sessionFork === true ? 'fork' : 'fresh';
 }
 
 // ---------------------------------------------------------------------------

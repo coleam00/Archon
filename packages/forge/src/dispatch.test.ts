@@ -149,3 +149,24 @@ test('refuses resolved identity that differs from the selected host', async () =
   expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
   expect(result.audit.target).toBeNull();
 });
+
+test('an older plugin refuses new work-item capability before executing it', async () => {
+  const discovery = await discoverPlugins({ config: config('malformed') });
+  const repo = { host: 'forge.example', path: 'group/team/repo' };
+  const result = await dispatchForge(
+    {
+      operationId: 'unsupported-create',
+      op: 'workitem.create',
+      repo,
+      title: 'Title',
+      marker: 'marker',
+      body: 'marker\nBody',
+    },
+    { discovery }
+  );
+  expect(result.response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { outcome: 'refused', target: repo },
+  });
+});

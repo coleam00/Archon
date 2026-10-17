@@ -8,8 +8,8 @@
  *      entry still serves as fallback when the re-lookup fails with a 5xx or
  *      network error.
  *   2. tokenCache:   `installationId → CachedInstallationToken` (1h GitHub TTL,
- *      we refresh 5min before expiry on access). Used directly for clone-path
- *      URL embedding and the /internal/git-credential endpoint.
+ *      we refresh 5min before expiry on access). Used for clone credentials
+ *      and the /internal/git-credential endpoint.
  *   3. octokitCache: `installationId → Octokit` (memoisation, no TTL). Each
  *      Octokit holds its OWN private `createAppAuth` token state, opaque to
  *      us. THIS is the load-bearing reason invalidateToken / invalidateRepo
@@ -86,9 +86,6 @@ function lookupKey(owner: string, repo: string): string {
 }
 
 export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubAppAuthProvider {
-  // Validate config at the boundary so misconfiguration surfaces at server
-  // bootstrap, not at the first webhook. loadAppPrivateKey already enforces
-  // the same "fail at start" contract for the PEM.
   if (!config.appId.trim()) {
     throw new AppPrivateKeyError(
       'createGitHubAppAuthProvider: appId is empty. Set GITHUB_APP_ID to the numeric App ID.'
@@ -111,8 +108,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   const lookupCache = new Map<string, RepoLookup>();
   const octokitCache = new Map<number, Octokit>();
 
-  async function resolveInstallationId(owner: string, repo: string): Promise<number> {
-    if (config.defaultInstallationId) return config.defaultInstallationId;
+  async function lookupInstallationId(owner: string, repo: string): Promise<number> {
     const key = lookupKey(owner, repo);
     const cached = lookupCache.get(key);
     if (cached && Date.now() - cached.cachedAt < LOOKUP_CACHE_TTL_MS) {
@@ -153,6 +149,10 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
     }
   }
 
+  async function resolveInstallationId(owner: string, repo: string): Promise<number> {
+    return config.defaultInstallationId ?? lookupInstallationId(owner, repo);
+  }
+
   async function getInstallationTokenById(installationId: number): Promise<string> {
     const cached = tokenCache.get(installationId);
     if (cached && Date.now() + REFRESH_BUFFER_MS < cached.expiresAtMs) {
@@ -183,7 +183,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   }
 
   async function getInstallationToken(owner: string, repo: string): Promise<string> {
-    const installationId = await resolveInstallationId(owner, repo);
+    const installationId = await lookupInstallationId(owner, repo);
     return getInstallationTokenById(installationId);
   }
 
@@ -209,7 +209,6 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   }
 
   function primeInstallationLookup(owner: string, repo: string, installationId: number): void {
-    if (config.defaultInstallationId) return; // priming is a no-op when fixed-install
     lookupCache.set(lookupKey(owner, repo), { installationId, cachedAt: Date.now() });
     getLog().debug({ owner, repo, installationId }, 'github_auth.install_lookup_primed');
   }
@@ -247,11 +246,9 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
         { owner, repo, installationId: lookup.installationId },
         'github_auth.repo_cache_evicted_on_401'
       );
-      return;
     }
-    // No cached lookup (default-installation-id mode, or the cache TTL'd
-    // since the call that 401'd). Still evict the default-install token +
-    // Octokit when applicable so the next call re-issues.
+    // API clients use the fixed installation even when repository tokens
+    // resolve to a different installation.
     if (config.defaultInstallationId) {
       tokenCache.delete(config.defaultInstallationId);
       octokitCache.delete(config.defaultInstallationId);

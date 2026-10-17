@@ -1,5 +1,10 @@
-import { z } from '@hono/zod-openapi';
-import type { TokenUsage } from '@archon/providers/types';
+import { declaredOutputPathsSchema } from '../output-ref';
+import { z } from 'zod';
+import {
+  providerFailureSchema,
+  SESSION_PREVIEW_LENGTH,
+  tokenUsageSchema,
+} from '@archon/provider-contract';
 import {
   agentNodeSchema,
   execNodeSchema,
@@ -16,20 +21,17 @@ import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
 import { checkoutObservationSchema } from './checkout-observation';
 
-/** Conforms to the provider owner; no alternate token vocabulary at this boundary. */
-export const executionTokenUsageSchema = z.object({
-  input: z.number(),
-  output: z.number(),
-  cacheRead: z.number().optional(),
-  cacheWrite: z.number().optional(),
-  cachePartial: z.literal(true).optional(),
-  total: z.number().optional(),
-  cost: z.number().optional(),
-}) satisfies z.ZodType<TokenUsage>;
-
 export const unavailableMeasurementSchema = z.object({
   source: z.literal('unavailable'),
-  reason: z.enum(['unsupported', 'not_reported', 'unknown', 'not_applicable', 'invalid']),
+  /** `incomplete` invalidates totals; `unknown` describes an unspecified reporting capability. */
+  reason: z.enum([
+    'unsupported',
+    'not_reported',
+    'unknown',
+    'not_applicable',
+    'invalid',
+    'incomplete',
+  ]),
 });
 export function reportedMeasurementSchema<T extends z.ZodType>(
   value: T
@@ -46,8 +48,19 @@ export function reportedMeasurementSchema<T extends z.ZodType>(
   ]);
 }
 export const executionSpendSchema = z.object({
-  tokens: reportedMeasurementSchema(executionTokenUsageSchema),
-  costUsd: reportedMeasurementSchema(z.number()),
+  tokens: reportedMeasurementSchema(tokenUsageSchema),
+  costUsd: z.discriminatedUnion('source', [
+    z.object({
+      source: z.literal('provider'),
+      value: z.number(),
+      /**
+       * The attempt made provider calls whose cost was not all reported, so
+       * `value` is a floor. A run budget treats such a cost as unavailable.
+       */
+      partial: z.literal(true).optional(),
+    }),
+    unavailableMeasurementSchema,
+  ]),
   stopReason: reportedMeasurementSchema(z.string()),
   numTurns: reportedMeasurementSchema(z.number()),
 });
@@ -65,7 +78,7 @@ export const nodeDescriptorSchema = z.discriminatedUnion('kind', [
   gateNodeSchema.pick({ id: true, kind: true }),
   haltNodeSchema.pick({ id: true, kind: true }),
   waitNodeSchema.pick({ id: true, kind: true }),
-  workflowNodeSchema.pick({ id: true, kind: true }),
+  workflowNodeSchema.pick({ id: true, kind: true }).extend({ fanOut: z.literal(true).optional() }),
   composeFanOutNodeSchema.pick({ id: true, kind: true }),
   z.object({ kind: z.literal('compose_fan_out_instance'), id: z.string() }),
 ]);
@@ -94,21 +107,24 @@ export const executionBindingSchema = z.object({
     .optional(),
   tier: tierNameSchema.optional(),
   effort: effortLevelSchema.optional(),
-  sessionPreview: z.string().max(8).optional(),
+  sessionPreview: z.string().max(SESSION_PREVIEW_LENGTH).optional(),
   sessionOrigin: z.enum(['fresh', 'resumed', 'resume-failed-cold']).optional(),
 });
 export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
- * `error` prose later. `fatal`/`transient`/`unknown` classify a provider error the
- * way retry does; the rest name engine-detected causes. Absent on records written
- * before this field existed.
+ * `error` prose later. `fatal`/`transient`/`rate_limited`/`overloaded`/`unknown` classify a provider
+ * error; the rest name engine-detected causes. Every kind maps to a retry class in
+ * `executor-shared.ts`. Absent on records written before this field existed; retry
+ * treats an absent kind as `unknown`.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',
   'transient',
   'unknown',
+  'rate_limited',
+  'overloaded',
   'timeout',
   'exec_failed',
   'output_contract',
@@ -127,6 +143,8 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     error: z.string(),
     retryable: z.literal(false).optional(),
     failureKind: nodeFailureKindSchema.optional(),
+    /** The provider's own typed failure, unchanged, when a provider reported one. */
+    providerFailure: providerFailureSchema.optional(),
   }),
   z.object({ status: z.literal('skipped'), reason: nodeSkipReasonSchema, cause: skipCauseSchema }),
   z.object({
@@ -139,7 +157,7 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
 export const executionOutputSchema = z.object({
   text: z.string(),
   structured: z.unknown().optional(),
-  declaredFields: z.array(z.string()).optional(),
+  declaredOutputPaths: declaredOutputPathsSchema.optional(),
   persisted: z
     .object({
       text: z.string(),
@@ -150,6 +168,22 @@ export const executionOutputSchema = z.object({
     .optional(),
 });
 export type ExecutionOutput = z.infer<typeof executionOutputSchema>;
+
+/**
+ * Why a node's optional MCP declaration did not reach its provider. A server that
+ * reached the provider and failed to connect is recorded by the provider's own
+ * `mcp_server_status` event instead.
+ */
+export const mcpUnavailableReasonSchema = z.enum(['provider_unsupported', 'config_missing']);
+
+export const mcpUnavailableSchema = z.object({
+  /** The path as the node declared it. */
+  path: z.string(),
+  reason: mcpUnavailableReasonSchema,
+  /** The servers the config file names, when the file was readable. */
+  servers: z.array(z.string()).optional(),
+});
+export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),
@@ -175,6 +209,8 @@ export const executionDiagnosticsSchema = z.object({
   ordinal: z.number().optional(),
   approvalDecision: z.string().optional(),
   expr: z.string().optional(),
+  /** The node's optional MCP servers were not loaded, and why. */
+  mcpUnavailable: mcpUnavailableSchema.optional(),
 });
 
 export const nodeExecutionMetadataSchema = z.object({
@@ -199,9 +235,19 @@ export const nodeExecutionMetadataSchema = z.object({
 });
 export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
 
+/** What a node row's `cost_usd` measures: the node's own spend, or a total restating spend other rows carry. */
+export const nodeCostScopeSchema = z.enum(['own', 'total']);
+export type NodeCostScope = z.infer<typeof nodeCostScopeSchema>;
+
 export const nodeExecutionRecordSchema = nodeExecutionMetadataSchema.extend({
   output: executionOutputSchema.optional(),
   diagnostics: executionDiagnosticsSchema.optional(),
+  /**
+   * The full provider session id this attempt ended in. It can resume the conversation,
+   * so only the durable row stores it; `executionMetadata` drops it, which keeps it out
+   * of the transcript and the emitter.
+   */
+  sessionId: z.string().min(1).optional(),
 });
 export type NodeExecutionRecord = z.infer<typeof nodeExecutionRecordSchema>;
 

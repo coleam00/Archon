@@ -1,3 +1,4 @@
+import { NoDefaultProviderError } from '@archon/provider-contract';
 /**
  * Which provider and model a node will actually run on — and where each value came from.
  *
@@ -57,7 +58,7 @@ export interface NodeModelResolution {
 
 /** The workflow-level fallbacks the executor threads alongside each node. */
 export interface WorkflowModelScope {
-  provider: string;
+  provider: string | undefined;
   model: string | undefined;
   preset: ModelAliasPreset | undefined;
   tier: TierName | undefined;
@@ -82,6 +83,17 @@ export function resolveNodeModel(
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): NodeModelResolution {
+  const resolved = resolveNodeModelScope(node, scope, assistantModels, aiProfile);
+  if (resolved.provider === undefined) throw new NoDefaultProviderError();
+  return { ...resolved, provider: resolved.provider };
+}
+
+export function resolveNodeModelScope(
+  node: DagNode,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
+  aiProfile?: ResolvedAiProfile
+): Omit<NodeModelResolution, 'provider'> & { provider: string | undefined } {
   let provider = node.provider ?? scope.provider;
   let providerOrigin: ResolutionOrigin = node.provider ? 'node' : scope.providerOrigin;
   let preset: ModelAliasPreset | undefined;
@@ -123,7 +135,7 @@ export function resolveNodeModel(
       model = scope.model;
       modelOrigin = model !== undefined ? 'workflow' : 'unset';
     } else {
-      model = assistantModels[provider];
+      model = provider === undefined ? undefined : assistantModels[provider];
       modelOrigin = model !== undefined ? 'assistant config' : 'unset';
     }
   }
@@ -179,7 +191,7 @@ export function resolveNodeModel(
  */
 export function resolveWorkflowModelScope(
   workflow: { provider?: string; model?: string; effort?: EffortLevel },
-  defaultAssistant: string,
+  defaultAssistant: string | undefined,
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): WorkflowModelScope {
@@ -198,7 +210,7 @@ export function resolveWorkflowModelScope(
   } else if (workflow.model) {
     model = workflow.model;
   }
-  model ??= assistantModels[provider];
+  if (provider !== undefined) model ??= assistantModels[provider];
   return {
     provider,
     model,
@@ -210,7 +222,13 @@ export function resolveWorkflowModelScope(
     // workflow declared (the executor warns about exactly that case). Reporting the
     // overridden value as the origin would name the loser. Matches `resolveNodeModel`,
     // which sets 'model ref' inside its own preset branch for the same reason.
-    providerOrigin: preset ? 'model ref' : workflow.provider ? 'workflow' : 'default assistant',
+    providerOrigin: preset
+      ? 'model ref'
+      : workflow.provider
+        ? 'workflow'
+        : defaultAssistant === undefined
+          ? 'unset'
+          : 'default assistant',
   };
 }
 

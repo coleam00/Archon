@@ -83,17 +83,14 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
       return Promise.resolve(undefined);
     },
     notify(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
-      // Emit as `assistant` (not `system`) so the content is captured into
-      // `$nodeId.output` for downstream bash/script nodes. System chunks are
-      // filtered to ⚠️/MCP-prefix only by the DAG executor.
-      // `flush: true` forces batch-mode adapters to surface this immediately —
-      // extensions like plannotator print review URLs the user must act on
-      // before the node unblocks, so we can't wait for node completion.
-      const icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
+      // A warning reaches the operator as soon as it arrives, in every streaming mode:
+      // extensions like plannotator print review URLs the user must act on before the
+      // node unblocks, so the notice cannot wait for node completion. The contract has no
+      // notice severity, so the extension's own level rides in the text.
       bridge.emit({
-        type: 'assistant',
-        content: `\n[pi extension ${icon}] ${message}\n`,
-        flush: true,
+        type: 'warning',
+        code: 'pi.extension_notify',
+        message: `pi extension ${type}: ${message}`,
       });
     },
     onTerminalInput(_handler: TerminalInputHandler): () => void {

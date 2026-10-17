@@ -1,7 +1,8 @@
 import type { Codebase } from '../types';
-import * as codebaseDb from '../db/codebases';
-import { resolve } from 'node:path';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
+import { canonicalizeProjectPath } from '@archon/paths';
 import {
+  findRepoRoot,
   CanonicalRepoPathUnavailableError,
   getCanonicalRepoPath,
   getGitCheckoutIdentity,
@@ -15,13 +16,6 @@ export interface CodebaseCheckoutResolverDeps {
   getGitCheckoutIdentity: (path: string) => Promise<GitCheckoutIdentity>;
 }
 
-const defaultDeps: CodebaseCheckoutResolverDeps = {
-  findCodebaseByDefaultCwd: cwd => codebaseDb.findCodebaseByDefaultCwd(cwd),
-  listCodebases: () => codebaseDb.listCodebases(),
-  getCanonicalRepoPath: path => getCanonicalRepoPath(path),
-  getGitCheckoutIdentity: path => getGitCheckoutIdentity(path),
-};
-
 /**
  * Resolve a checkout to an existing codebase without remote or branch inference.
  *
@@ -32,25 +26,35 @@ const defaultDeps: CodebaseCheckoutResolverDeps = {
  */
 export async function findCodebaseForCheckoutPath(
   cwd: string,
-  deps: CodebaseCheckoutResolverDeps = defaultDeps
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> &
+    Partial<Pick<CodebaseCheckoutResolverDeps, 'getCanonicalRepoPath' | 'getGitCheckoutIdentity'>>
 ): Promise<Codebase | null> {
+  cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
   if (exact) return exact;
 
   try {
-    const canonicalCwd = await deps.getCanonicalRepoPath(cwd);
+    const canonicalCwd = await (deps.getCanonicalRepoPath ?? getCanonicalRepoPath)(cwd);
     if (canonicalCwd === cwd) return null;
-    return await deps.findCodebaseByDefaultCwd(canonicalCwd);
+    // The primary path comes from `git worktree list` (forward slashes on
+    // Windows); `default_cwd` is stored in canonical form.
+    const primary = await deps.findCodebaseByDefaultCwd(
+      await canonicalizeProjectPath(canonicalCwd)
+    );
+    return primary?.kind === 'repo' ? primary : null;
   } catch (error) {
     if (!(error instanceof CanonicalRepoPathUnavailableError)) throw error;
   }
 
-  const checkoutIdentity = await deps.getGitCheckoutIdentity(cwd);
+  const checkoutIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(cwd);
   const matches: Codebase[] = [];
   for (const codebase of await deps.listCodebases()) {
-    if (codebase.kind === 'folder') continue;
+    // A relative stored path would resolve against this process's directory.
+    if (codebase.kind === 'folder' || !isAbsolute(codebase.default_cwd)) continue;
     try {
-      const registeredIdentity = await deps.getGitCheckoutIdentity(codebase.default_cwd);
+      const registeredIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(
+        codebase.default_cwd
+      );
       if (resolve(registeredIdentity.commonGitDir) === resolve(checkoutIdentity.commonGitDir)) {
         matches.push(codebase);
       }
@@ -67,4 +71,39 @@ export async function findCodebaseForCheckoutPath(
     );
   }
   return matches[0] ?? null;
+}
+
+export async function resolveCodebaseForPath(
+  cwd: string,
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> & {
+    findCodebaseByPathPrefix: (cwd: string) => Promise<Codebase | null>;
+  }
+): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {
+  cwd = await canonicalizeProjectPath(cwd);
+  const exact = await deps.findCodebaseByDefaultCwd(cwd);
+  if (exact?.kind === 'folder') return { codebase: exact, repoRoot: null };
+  // Repository roots always come from Git: runs record this string as their working
+  // path, and on Windows it differs from the canonical `default_cwd` (separators,
+  // 8.3 short names), so returning `cwd` would hide runs from `--resume`.
+  const repoRoot = await findRepoRoot(cwd);
+  if (exact) return { codebase: exact, repoRoot };
+  const parent = await deps.findCodebaseByPathPrefix(cwd);
+  if (parent?.kind === 'folder') {
+    const insideFolder = repoRoot ? relative(parent.default_cwd, repoRoot) : null;
+    // A nested repository owns its checkout; an enclosing repository cannot
+    // override a folder the operator explicitly registered inside it.
+    if (
+      insideFolder === null ||
+      insideFolder === '..' ||
+      insideFolder.startsWith(`..${sep}`) ||
+      isAbsolute(insideFolder) ||
+      insideFolder === ''
+    ) {
+      return { codebase: parent, repoRoot: null };
+    }
+  }
+  return {
+    codebase: repoRoot ? await findCodebaseForCheckoutPath(repoRoot, deps) : parent,
+    repoRoot,
+  };
 }

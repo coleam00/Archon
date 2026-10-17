@@ -1,7 +1,9 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadArchonEnv } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { parseWorkflow } from './loader';
 import { discoverWorkflows } from './workflow-discovery';
@@ -40,7 +42,8 @@ nodes:
       printf '%s' "$INPUTS_BASH_BARE"
       printf '%s' "\${INPUTS_BASH_BRACED}"
 `,
-      'supported-forms.yaml'
+      'supported-forms.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -94,7 +97,8 @@ nodes:
       literal: true
       directive: { from: $produce.output.value, if_skipped: fallback }
 `,
-      'provided-values.yaml'
+      'provided-values.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -114,7 +118,8 @@ nodes:
     with:
       ignored: value
 `,
-      'bash-declared.yaml'
+      'bash-declared.yaml',
+      providerRegistry
     );
     expect(declared.workflow).not.toBeNull();
     expect((declared.warnings ?? []).join('\n')).toContain("'with' is only supported");
@@ -130,7 +135,8 @@ nodes:
     with:
       local: value
 `,
-      'bash-ignored.yaml'
+      'bash-ignored.yaml',
+      providerRegistry
     );
     expect(ignored.workflow).toBeNull();
     expect(ignored.error?.error).toContain('INPUTS_LOCAL');
@@ -154,7 +160,8 @@ nodes:
       zeta: true
       alpha: false
 `,
-      'advisory-read.yaml'
+      'advisory-read.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -163,6 +170,7 @@ nodes:
     expect(warnings[0]).toContain('PROJECT_TOKEN');
     expect(warnings[0]).toContain('script line 2');
     expect(warnings[0]).toContain("Available bindings/inputs: 'alpha', 'middle', 'zeta'.");
+    expect(warnings[0]).toContain('might come from');
   });
 
   test('does not claim dynamic, aliased, or unsupported accessors', () => {
@@ -189,7 +197,8 @@ nodes:
   - id: shell
     bash: printf '%s' "$HOME"
 `,
-      'unsupported-forms.yaml'
+      'unsupported-forms.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -212,7 +221,8 @@ nodes:
           script: console.log(process.env.INPUTS_MISSING)
           runtime: bun
 `,
-      'nested-body.yaml'
+      'nested-body.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -249,7 +259,10 @@ print(fix, repetitions)
 `
       );
 
-      const result = await discoverWorkflows(root, { loadDefaults: false });
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
@@ -261,6 +274,165 @@ print(fix, repetitions)
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a named script reading a variable declared only in .archon/.env validates with no warning', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      await writeFile(join(root, '.archon', '.env'), 'PROJECT_SECRET=shh\n');
+      loadArchonEnv(root);
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-dotenv.yaml'),
+        `name: uses-dotenv
+description: Reads a variable supplied by .archon/.env
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.PROJECT_SECRET)\n'
+      );
+
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0]?.parseWarnings ?? []).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      delete process.env.PROJECT_SECRET;
+    }
+  });
+
+  test('a name supplied only via options.envVarNames validates with no warning', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.NAME)\n'
+      );
+
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+        envVarNames: ['NAME'],
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0]?.parseWarnings ?? []).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a name that exists only in the target repo plain .env still warns', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      // Never loaded by loadArchonEnv or discoverWorkflows — this is the target repo's
+      // own .env, deliberately excluded (see @archon/paths' strip-cwd-env.ts).
+      await writeFile(join(root, '.env'), 'REPO_DOTENV_ONLY=shh\n');
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-repo-dotenv.yaml'),
+        `name: uses-repo-dotenv
+description: Reads a variable that only the target repo's own .env declares
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.REPO_DOTENV_ONLY)\n'
+      );
+
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      const warnings = result.workflows[0]?.parseWarnings ?? [];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('REPO_DOTENV_ONLY');
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a name that only an unrelated ambient process env var happens to share still warns', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    // Simulates a CI runner or shell export unrelated to any source Archon supplies —
+    // declared nowhere (.archon/.env, config.yaml env:, bindings, declared inputs).
+    process.env.MY_RANDOM_CI_RUNNER_VAR = 'anything';
+    try {
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-ambient-var.yaml'),
+        `name: uses-ambient-var
+description: Reads a name no configured source declares
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.MY_RANDOM_CI_RUNNER_VAR)\n'
+      );
+
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      const warnings = result.workflows[0]?.parseWarnings ?? [];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('MY_RANDOM_CI_RUNNER_VAR');
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      delete process.env.MY_RANDOM_CI_RUNNER_VAR;
     }
   });
 
@@ -277,7 +449,8 @@ nodes:
       print(os.environ["INPUTS_MISSING"])
     runtime: uv
 `,
-      'inline-unbound.yaml'
+      'inline-unbound.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -310,7 +483,10 @@ nodes:
 `
       );
 
-      const unbound = await discoverWorkflows(root, { loadDefaults: false });
+      const unbound = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(unbound.workflows).toEqual([]);
       expect(unbound.errors).toHaveLength(1);
       expect(unbound.errors[0]?.error).toContain('INPUTS_FIX');
@@ -330,7 +506,10 @@ nodes:
       fix: ready
 `
       );
-      const bound = await discoverWorkflows(root, { loadDefaults: false });
+      const bound = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(bound.errors).toEqual([]);
       expect(bound.workflows).toHaveLength(1);
       expect(bound.workflows[0]?.parseWarnings ?? []).toEqual([]);

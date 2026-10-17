@@ -1,0 +1,44 @@
+# Dry-run fixture: a listed maintainer's issue. Facts decides `triage`, so the
+# included triage runs and its real verdict script accepts the stubbed tuple
+# (unpublished, so it writes nothing). The facts and outcome scripts reach the
+# state store and the forge, so they are stubbed here and proved by
+# .archon/scripts/__tests__/intake.test.ts.
+facts:
+  path: triage
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  target: "https://github.com/example/repo/issues/7"
+  decision:
+    path: triage
+    trust: maintainer
+    promoted: null
+    stage: new
+    body_digest: "sha256:stub"
+    labels: []
+    waiting: []
+    notes: []
+  seen: null
+triage__triage:
+  decision: { contract: READY, route: deliver }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: ready to deliver"
+outcome:
+  path: triage
+  item: 7
+  stage: deliver
+  trust: maintainer
+  promoted: false
+  labels: [archon-ready, archon-size-s, archon-type-feature]
+  summary: "stub: Issue 7: deliver"
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
+  expect: completed
+  reached: [facts, triage__verdict, outcome]
+exec-code: true

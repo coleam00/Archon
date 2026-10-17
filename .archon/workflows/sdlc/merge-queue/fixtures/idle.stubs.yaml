@@ -1,0 +1,23 @@
+# Dry-run fixture: no item waits for the merge queue, so no agent node runs. The facts
+# and record scripts reach the state store, so they are stubbed here and proved by
+# .archon/scripts/__tests__/merge-queue.test.ts.
+facts:
+  path: idle
+  base: null
+  items: []
+  settled: []
+  gate: ""
+  policy_defaults: "/stub/policy"
+record:
+  merged: []
+  summary: "stub: No pull request waits for the merge queue."
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+  evaluation: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, record]
+exec-code: true

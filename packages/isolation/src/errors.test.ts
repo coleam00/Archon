@@ -1,146 +1,128 @@
+import { GitFailure, ConfiguredBaseBranchNotFoundError } from '@archon/git';
 import { describe, test, expect } from 'bun:test';
-import { classifyIsolationError, isKnownIsolationError, IsolationBlockedError } from './errors';
+import {
+  classifyIsolationError,
+  ExistingBranchDivergedError,
+  isKnownIsolationError,
+  IsolationBlockedError,
+  IsolationFailure,
+  recordCleanupFailure,
+  WorktreePostCreateError,
+  MissingProjectDirectoryError,
+} from './errors';
 
-describe('classifyIsolationError', () => {
-  test('matches "permission denied" in message', () => {
-    const result = classifyIsolationError(new Error('Permission denied: /workspace'));
-    expect(result).toContain('Permission denied');
-  });
-
-  test('matches "eacces" in message', () => {
-    const result = classifyIsolationError(new Error('EACCES: access denied'));
-    expect(result).toContain('Permission denied');
-  });
-
-  test('matches "timeout" in message', () => {
-    const result = classifyIsolationError(new Error('Command timeout after 30s'));
-    expect(result).toContain('Timed out');
-  });
-
-  test('matches "no space left" in message', () => {
-    const result = classifyIsolationError(new Error('No space left on device'));
-    expect(result).toContain('No disk space');
-  });
-
-  test('matches "enospc" in message', () => {
-    const result = classifyIsolationError(new Error('ENOSPC: write failed'));
-    expect(result).toContain('No disk space');
-  });
-
-  test('matches "not a git repository" in message', () => {
-    const result = classifyIsolationError(new Error('fatal: not a git repository'));
-    expect(result).toContain('not a valid git repository');
-  });
-
-  test('returns generic message for unrecognized errors', () => {
-    const result = classifyIsolationError(new Error('something unexpected'));
-    expect(result).toContain('Could not create isolated workspace');
-    expect(result).toContain('something unexpected');
-  });
-
-  test('checks stderr when message does not match', () => {
-    const err = new Error('Command failed') as Error & { stderr: string };
-    err.stderr = 'fatal: not a git repository';
-    const result = classifyIsolationError(err);
-    expect(result).toContain('not a valid git repository');
-  });
-
-  test('checks stderr for permission denied', () => {
-    const err = new Error('git worktree add failed') as Error & { stderr: string };
-    err.stderr = 'error: permission denied';
-    const result = classifyIsolationError(err);
-    expect(result).toContain('Permission denied');
-  });
-
-  test('handles missing stderr gracefully', () => {
-    const result = classifyIsolationError(new Error('unknown error'));
-    expect(result).toContain('Could not create isolated workspace');
-  });
-
-  test('matches "submodule initialization failed" with opt-out guidance', () => {
-    const result = classifyIsolationError(
-      new Error('Submodule initialization failed: fatal: could not read from remote repository')
-    );
-    expect(result).toContain('Submodule initialization failed');
-    expect(result).toContain('initSubmodules: false');
-  });
-
-  test('an unfinished-setup refusal keeps its path even when the branch slug looks like another error', () => {
-    const path = '/workspace/worktrees/repo/task-fix-timeout-in-parser';
-    const result = classifyIsolationError(
-      new Error(
-        `Cannot adopt the worktree at ${path}: its setup did not finish. ` +
-          `Otherwise remove it with \`git worktree remove --force --force ${path}\`.`
-      )
-    );
-    expect(result).toContain(`git worktree remove --force --force ${path}`);
-    expect(result).not.toContain('Timed out');
-  });
-
-  test('matches default branch detection failures with base branch guidance', () => {
-    const result = classifyIsolationError(
-      new Error('Cannot detect default branch for /repo: neither origin/HEAD nor origin/main exist')
-    );
-    expect(result).toContain('No base branch could be detected');
-    expect(result).toContain('worktree.baseBranch');
-  });
+test('missing project guidance survives isolation classification even with timeout in its path', () => {
+  const error = new MissingProjectDirectoryError('/workspace/timeout/source', 'acme/timeout');
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
 });
 
-describe('isKnownIsolationError', () => {
-  test('identifies permission denied as known', () => {
-    expect(isKnownIsolationError(new Error('permission denied'))).toBe(true);
+test('a diverged branch is reported as itself even when its name contains timeout', () => {
+  const error = new ExistingBranchDivergedError(
+    'fix/timeout-retry',
+    'origin/fix/timeout-retry',
+    1,
+    2
+  );
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
+});
+
+describe('typed isolation failures', () => {
+  test.each([
+    ['permission_denied', 'Permission denied'],
+    ['timeout', 'Timed out'],
+    ['no_space', 'No disk space'],
+    ['not_repository', 'not a valid git repository'],
+    ['default_branch_missing', 'No base branch could be detected'],
+    ['submodule_failed', 'initSubmodules: false'],
+    ['adoption_refused', 'Refused to adopt'],
+    ['ownership_unverified', 'Cannot verify ownership'],
+    ['different_clone', 'different local clone'],
+  ] as const)('%s selects its message regardless of branch text', (kind, message) => {
+    const error = new IsolationFailure(
+      kind,
+      'timeout permission denied cannot adopt /fix/no-space'
+    );
+    expect(isKnownIsolationError(error)).toBe(true);
+    expect(classifyIsolationError(error)).toContain(message);
   });
 
-  test('identifies eacces as known', () => {
-    expect(isKnownIsolationError(new Error('EACCES: access denied'))).toBe(true);
+  test.each([
+    'permission denied',
+    'EACCES',
+    'timeout',
+    'no space left',
+    'not a git repository',
+    'cannot adopt',
+  ])('plain text %s never turns an unexpected error into a blocked failure', text => {
+    const error = new TypeError(`Unexpected bug in branch ${text}`);
+    expect(isKnownIsolationError(error)).toBe(false);
+    expect(classifyIsolationError(error)).toContain(error.message);
   });
 
-  test('identifies timeout as known', () => {
-    expect(isKnownIsolationError(new Error('timeout after 30s'))).toBe(true);
+  test('unclassified git failure retains operation, full stderr, exit code and cause through wrappers', () => {
+    const cause = Object.assign(new Error('git worktree add failed'), {
+      code: 128,
+      stderr: 'permission denied\nsecond line: timeout',
+    });
+    const failure = new GitFailure('unclassified', cause.message, cause);
+    const wrapped = new Error(`Failed to create PR worktree: ${failure.message}`, {
+      cause: failure,
+    });
+    expect(isKnownIsolationError(wrapped)).toBe(false);
+    expect(classifyIsolationError(wrapped)).toContain('git worktree add');
+    expect(classifyIsolationError(wrapped)).toContain(cause.stderr);
+    expect(classifyIsolationError(wrapped)).toContain('exit code 128');
+    expect(classifyIsolationError(wrapped)).not.toContain('Timed out');
+    expect(failure.cause).toBe(cause);
   });
 
-  test('identifies no space left as known', () => {
-    expect(isKnownIsolationError(new Error('No space left on device'))).toBe(true);
+  test.each([
+    ['EACCES', 'Permission denied'],
+    ['ENOSPC', 'No disk space'],
+    ['ETIMEDOUT', 'Timed out'],
+  ] as const)('classifies structured errno %s through context wrappers', (code, message) => {
+    const failure = new Error('Cannot inspect path containing timeout', {
+      cause: new IsolationFailure(
+        'unclassified',
+        'process failure',
+        Object.assign(new Error('arbitrary vendor wording'), { code })
+      ),
+    });
+    expect(isKnownIsolationError(failure)).toBe(true);
+    expect(classifyIsolationError(failure)).toContain(message);
   });
 
-  test('identifies enospc as known', () => {
-    expect(isKnownIsolationError(new Error('ENOSPC: write failed'))).toBe(true);
+  test('configured missing branch keeps its corrective guidance', () => {
+    const failure = new ConfiguredBaseBranchNotFoundError('fix/timeout-retry', 'origin');
+    expect(classifyIsolationError(failure)).toBe(`**Error:** ${failure.message}`);
+    expect(isKnownIsolationError(failure)).toBe(true);
   });
 
-  test('identifies not a git repository as known', () => {
-    expect(isKnownIsolationError(new Error('fatal: not a git repository'))).toBe(true);
+  test('post-create command evidence outranks its underlying errno', () => {
+    const failure = new WorktreePostCreateError(
+      0,
+      'install',
+      'exit',
+      'failed',
+      7,
+      undefined,
+      undefined,
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    );
+    expect(classifyIsolationError(failure)).toBe(`**Error:** ${failure.message}`);
   });
 
-  test('identifies branch not found as known', () => {
-    expect(isKnownIsolationError(new Error('branch not found'))).toBe(true);
-  });
-
-  test('identifies submodule initialization failure as known', () => {
-    expect(
-      isKnownIsolationError(new Error('Submodule initialization failed: network unreachable'))
-    ).toBe(true);
-  });
-
-  test('identifies default branch detection failure as known', () => {
-    expect(
-      isKnownIsolationError(
-        new Error('Cannot detect default branch: neither origin/HEAD nor origin/main exist')
-      )
-    ).toBe(true);
-  });
-
-  test('returns false for unknown errors', () => {
-    expect(isKnownIsolationError(new TypeError('cannot read property of null'))).toBe(false);
-  });
-
-  test('returns false for generic unexpected errors', () => {
-    expect(isKnownIsolationError(new Error('something unexpected'))).toBe(false);
-  });
-
-  test('checks stderr when message does not match', () => {
-    const err = new Error('Command failed') as Error & { stderr: string };
-    err.stderr = 'error: permission denied';
-    expect(isKnownIsolationError(err)).toBe(true);
+  test('cleanup evidence cannot override the original failure', () => {
+    const failure = new IsolationFailure(
+      'branch_exists',
+      'Branch "fix/timeout-retry" already exists'
+    );
+    recordCleanupFailure(failure, 'Cleanup failed: permission denied');
+    expect(classifyIsolationError(failure)).toBe(
+      '**Error:** Branch "fix/timeout-retry" already exists Cleanup failed: permission denied'
+    );
   });
 });
 

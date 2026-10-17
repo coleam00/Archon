@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect } from 'bun:test';
 import {
   isPerUserGitHubEnabled,
@@ -9,11 +10,16 @@ import {
 const VALID_KEY = 'a'.repeat(64);
 
 describe('github-auth/config', () => {
-  test('resolves GITHUB_TOKEN before GH_TOKEN', () => {
-    expect(resolveGitHubTokenFromEnv({ GITHUB_TOKEN: 'github-token', GH_TOKEN: 'gh-token' })).toBe(
-      'github-token'
-    );
-    expect(resolveGitHubTokenFromEnv({ GH_TOKEN: 'gh-token' })).toBe('gh-token');
+  test.each([
+    [{ GITHUB_TOKEN: 'github-token', GH_TOKEN: 'gh-token' }, 'gh-token'],
+    [{ GH_TOKEN: 'gh-token' }, 'gh-token'],
+    [{ GITHUB_TOKEN: 'github-token' }, 'github-token'],
+    [{}, undefined],
+    [{ GH_TOKEN: '', GITHUB_TOKEN: 'github-token' }, 'github-token'],
+    [{ GH_TOKEN: 'gh-token', GITHUB_TOKEN: '' }, 'gh-token'],
+    [{ GH_TOKEN: '', GITHUB_TOKEN: '' }, undefined],
+  ])('resolves GH_TOKEN before GITHUB_TOKEN: %j', (env, expected) => {
+    expect(resolveGitHubTokenFromEnv(env)).toBe(expected);
   });
 
   describe('isPerUserGitHubEnabled', () => {

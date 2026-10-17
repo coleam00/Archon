@@ -20,15 +20,14 @@ mock.module('@archon/paths', () => ({
 
 import { evaluateCondition, InputRefError } from './condition-evaluator';
 import { OutputRefError } from './output-ref';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { findUnsupportedNestedWhenRef, parseWhenAtom, whenAtoms } from './when-atom';
 import type { NodeOutput } from './schemas';
 
 /**
  * Build a NodeOutput fixture for condition tests.
- * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
- * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
- * paths populate it; older providers leave it off). `declaredFields` marks a
- * declared-schema producer (output_format with properties) for strict-resolution tests.
+ * Omits `structuredOutput` when undefined, matching producers that emit none (only
+ * Pi/Codex/Claude paths populate it). `declaredFields` marks a declared-schema producer
+ * for strict-resolution tests; each field becomes a depth-1 declared path.
  */
 function makeOutput(
   output: string,
@@ -42,7 +41,9 @@ function makeOutput(
       output,
       error: 'error',
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(declaredFields !== undefined
+        ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+        : {}),
     };
   if (state === 'skipped') {
     return { state, output, cause: { kind: 'condition', expr: 'false' } };
@@ -51,7 +52,9 @@ function makeOutput(
     state,
     output,
     ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredFields !== undefined
+      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+      : {}),
   };
 }
 
@@ -81,6 +84,35 @@ describe('evaluateCondition', () => {
     const outputs = new Map([['classify', makeOutput(jsonOutput)]]);
     expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
+  });
+
+  it('resolves a nested canonical output path', () => {
+    const outputs = new Map([
+      ['review', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
+    ]);
+
+    expect(evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
+  });
+
+  it('rejects indexed current and prior paths instead of silently skipping', () => {
+    for (const reference of [
+      '$review.output.proposal.action[0]',
+      '$LOOP_PREV.review.output.proposal.action[0]',
+    ]) {
+      expect(() => evaluateCondition(`${reference} == 'add'`, new Map())).toThrow(
+        'Unsupported output reference'
+      );
+    }
+  });
+
+  it('treats unsupported-looking output syntax inside a quoted RHS as literal text', () => {
+    const literal = '$review.output.proposal.action[0]';
+    expect(
+      evaluateCondition(`$a.output == '${literal}'`, new Map([['a', makeOutput(literal)]]))
+    ).toEqual({ result: true, parsed: true });
   });
 
   it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
@@ -120,7 +152,7 @@ describe('evaluateCondition', () => {
       evaluateCondition("$LOOP_PREV.work.output.route == 'true'", new Map(), undefined, {
         loopPrevOutputs: priorOutputs,
       })
-    ).toThrow("Condition reference '$work.output.route' resolved to an object");
+    ).toThrow("Condition reference '$LOOP_PREV.work.output.route' resolved to an object");
     expect(mockLogFn).toHaveBeenCalledWith(
       {
         nodeId: 'work',
@@ -130,6 +162,18 @@ describe('evaluateCondition', () => {
       },
       'dag.condition_field_not_primitive'
     );
+  });
+
+  it('resolves a nested prior-iteration output path', () => {
+    const priorOutputs = new Map([
+      ['work', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
+    ]);
+
+    expect(
+      evaluateCondition("$LOOP_PREV.work.output.proposal.action == 'add'", new Map(), undefined, {
+        loopPrevOutputs: priorOutputs,
+      })
+    ).toEqual({ result: true, parsed: true });
   });
 
   it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
@@ -313,13 +357,26 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$n.output.score >= '0.9'", outputs).result).toBe(true);
   });
 
-  it('numeric operator: fail-closed when actual is not numeric', () => {
-    const res = evaluateCondition("$n.output > '5'", new Map([['n', makeOutput('hello')]]));
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(false);
+  it('treats a nonnumeric runtime value as false and permits OR fallback', () => {
+    const outputs = new Map([
+      ['a', makeOutput('N/A')],
+      ['b', makeOutput('ok')],
+    ]);
+    expect(evaluateCondition('$a.output > 50', outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output > 50 && $b.output == 'ok'", outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output > 50 || $b.output == 'ok'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
   });
 
-  it('numeric operator: fail-closed when expected is not numeric', () => {
+  it('numeric operator: a non-numeric literal is a parse failure, not a comparison', () => {
     const res = evaluateCondition("$n.output > 'abc'", new Map([['n', makeOutput('10')]]));
     expect(res.result).toBe(false);
     expect(res.parsed).toBe(false);
@@ -435,14 +492,24 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('|| operator: short-circuits on true first clause — invalid second clause is not evaluated', () => {
-    // When the first OR clause is true, the second clause (even if invalid) is not reached.
-    // This is intentional short-circuit OR behavior. A typo in a later OR clause will still
-    // surface as a parse error on runs where the earlier clauses are false.
+  it('rejects invalid syntax even in a clause that would short-circuit', () => {
     const outputs = new Map([['a', makeOutput('X')]]);
-    const res = evaluateCondition("$a.output == 'X' || not-valid", outputs);
-    expect(res.result).toBe(true);
-    expect(res.parsed).toBe(true); // short-circuit: invalid second clause never reached
+    expect(evaluateCondition("$a.output == 'X' || not-valid", outputs)).toEqual({
+      result: false,
+      parsed: false,
+    });
+  });
+
+  it('short-circuits value resolution after validating syntax', () => {
+    const outputs = new Map([['a', makeOutput('X')]]);
+    expect(evaluateCondition("$a.output == 'X' || $missing.output.field == 'Y'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output == 'Z' && $missing.output.field == 'Y'", outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
   });
 
   // --- splitOutsideQuotes guard: operators inside quoted values are not treated as splitters ---
@@ -628,11 +695,9 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$score.confidence >= '0.99'", outputs).result).toBe(false);
   });
 
-  it('shorthand path: rejects a sub-field ($node.field.subfield) fail-closed', () => {
+  it('shorthand path: rejects a sub-field ($node.field.subfield) loudly', () => {
     const outputs = new Map([['n', makeOutput(JSON.stringify({ a: { b: 'x' } }))]]);
-    const res = evaluateCondition("$n.a.b == 'x'", outputs);
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(false);
+    expect(() => evaluateCondition("$n.a.b == 'x'", outputs)).toThrow("Reference '$n.a.b'");
   });
 
   it('shorthand path: throws on a missing key in a schemaless JSON node (no-silent-drop)', () => {
@@ -816,6 +881,18 @@ describe('parseWhenAtom', () => {
     expect(parseWhenAtom('not an atom')).toBeNull();
     expect(parseWhenAtom('$classify.output ==')).toBeNull();
   });
+
+  it('rejects a numeric operator whose literal is not a finite number', () => {
+    for (const op of ['<=', '>=', '<', '>'] as const) {
+      expect(parseWhenAtom(`$score.output ${op} 'high'`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} ''`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} true`)).toBeNull();
+      expect(parseWhenAtom(`$INPUTS.limit ${op} 'many'`)).toBeNull();
+    }
+    // Equality has no numeric reading, so any literal stays valid.
+    expect(parseWhenAtom("$score.output == 'high'")).not.toBeNull();
+    expect(parseWhenAtom("$score.output != ''")).not.toBeNull();
+  });
 });
 
 describe('whenAtoms', () => {
@@ -829,6 +906,12 @@ describe('whenAtoms', () => {
 
   it('does not split on separators inside a quoted literal', () => {
     expect(whenAtoms("$a.output == 'x && y'")).toEqual(["$a.output == 'x && y'"]);
+  });
+
+  it('does not treat a nested-reference-shaped quoted value as a live reference', () => {
+    expect(
+      findUnsupportedNestedWhenRef("$a.output == '$review.output.proposal.action'")
+    ).toBeUndefined();
   });
 });
 
@@ -976,4 +1059,24 @@ describe('structured $INPUTS values in when: (#2999)', () => {
       })
     ).toThrow("Condition reference '$INPUTS.config' resolved to an object");
   });
+});
+
+it('nested conditions still require a scalar', () => {
+  for (const action of [{ ready: true }, [true]]) {
+    expect(() =>
+      evaluateCondition(
+        '$p.output.proposal.action == true',
+        new Map([['p', makeOutput(JSON.stringify({ proposal: { action } }))]])
+      )
+    ).toThrow('resolved to an');
+  }
+});
+
+it('names the reference as written for unknown and missing output refs', () => {
+  expect(() => evaluateCondition("$ghost.output.x == 'a'", new Map())).toThrow("'$ghost.output.x'");
+  expect(() =>
+    evaluateCondition("$LOOP_PREV.work.output.missing == 'a'", new Map(), undefined, {
+      loopPrevOutputs: new Map([['work', makeOutput('{}')]]),
+    })
+  ).toThrow("'$LOOP_PREV.work.output.missing'");
 });

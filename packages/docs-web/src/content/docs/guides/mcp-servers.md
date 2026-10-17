@@ -10,14 +10,15 @@ sidebar:
 ---
 
 DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
-servers to individual nodes. Claude workflow nodes exclude ambient user/project/plugin
-MCP by default and expose exactly the external servers in their declared file, plus
+servers to individual nodes. Claude and Codex workflow nodes exclude ambient
+user/project/plugin MCP by default, including the servers of plugins the node names with
+`plugins:`, and expose exactly the external servers in their declared file, plus
 governed native tools that Archon injects for the current workflow when applicable.
-Codex is an explicit exception: its SDK adds declared servers to ambient configuration
-rather than replacing it.
 
-MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
-currently warn and ignore the `mcp` field.
+MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
+node with a required `mcp:` fails the run before any node starts, and
+`archon validate workflows` reports it as an error. A node can instead declare its
+servers [optional](#optional-servers) and run without them.
 
 ## Quick Start
 
@@ -48,6 +49,68 @@ nodes:
 
 That's it. The MCP server starts when the node runs, its tools become available
 to the AI, and it shuts down when the node completes.
+
+## Optional Servers
+
+A node that can do useful work without its servers declares them optional:
+
+```yaml
+nodes:
+  - id: intel
+    prompt: |
+      If mcp__posthog__* tools are available, query product usage for the area this
+      change touches. Otherwise, report that no product data source is connected.
+    mcp:
+      path: .archon/mcp/posthog.json
+      optional: true
+```
+
+The node gets exactly the servers in the file when its provider supports MCP and the
+file exists. Otherwise it runs without them:
+
+| Reason | When |
+|--------|------|
+| `provider_unsupported` | The node's provider cannot load MCP servers (Pi, OpenCode) |
+| `config_missing` | The config file does not exist |
+
+The node's `node_started` and terminal rows record `mcp_unavailable` with the declared
+`path`, the `reason`, and the server names when the file was readable, and the chat
+shows a warning such as
+`Node 'intel' runs without its optional MCP servers (.archon/mcp/posthog.json): MCP config file not found: '.archon/mcp/posthog.json'. Tried: /repo/.archon/mcp/posthog.json.`
+A server that reaches the provider but fails to connect is recorded as an
+`mcp_server_status` provider event, as described under
+[Connection Failure Handling](#connection-failure-handling).
+
+The engine adds nothing to the prompt. The agent sees which servers loaded from its own
+tool list, so write the prompt to check for the `mcp__<server>__*` tools, as above.
+
+Only a missing file counts as absent. A file that exists but is unreadable or invalid
+JSON still fails `archon validate workflows`. Invalid JSON and unreadable checkout
+config files fail the node on a provider that loads MCP. A host-local read failure
+in a run's captured home MCP config pauses the run so it can resume on a host that
+can read the capture, including when the MCP declaration is optional.
+`archon validate workflows` reports nothing for an optional declaration whose file is missing or whose provider
+lacks MCP, because that is the expected state for most users of a portable workflow.
+
+Relative paths resolve against the run's checkout first. Only a declaration in a
+home-scoped workflow may fall back to the directory containing its YAML file. This
+is the declaring file's directory, including for nested workflows and nodes brought
+in through `include:`. Project, bundled, and installed workflows use only the checkout.
+Captured runs, including continuations, use the captured copy of the home YAML's
+directory. An absolute path uses exactly that path and bypasses relative lookup.
+
+This also applies to optional declarations: a home workflow whose optional `mcp:` file is
+missing from the checkout but present next to its YAML runs with those servers.
+
+Only a missing file permits fallback. An unreadable or invalid checkout config fails
+instead of loading a home config. A missing-file error lists every location tried, in
+order; optional missing declarations record `config_missing` and warn with those locations.
+
+A gitignored checkout config such as `.archon/mcp/posthog.json` reaches a worktree run
+only through `worktree.copyFiles`; without it, and without an eligible home fallback,
+the run records `config_missing` for an optional declaration.
+
+The plain string form, `mcp: .archon/mcp/github.json`, is a required declaration.
 
 ## Config File Format
 
@@ -186,9 +249,17 @@ author-declared MCP servers. Archon may still inject its own governed native-too
 server for a node that requests an engine capability. This does not disable
 `CLAUDE.md`, built-in agents, or filesystem-defined agents.
 
-Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
-Codex SDK, so the servers are available for that node without requiring global
-`~/.codex/config.toml` setup.
+Codex nodes pass the same MCP config as per-node `mcp_servers` overrides on the
+Codex thread, so the servers are available for that node without requiring global
+`~/.codex/config.toml` setup. Every other server in the user's or project's Codex
+config, every plugin's server, and ChatGPT apps are turned off for the node's thread.
+Before the turn starts, Archon asks Codex which servers the thread loaded and fails the
+node as misconfigured if any undeclared server is live. The servers you configured are
+left untouched for interactive Codex sessions.
+
+A Codex node cannot declare a server under a name your Codex `config.toml` already
+uses. Codex would merge the two definitions into one, so the node fails before it starts
+with an instruction to rename the server in the `mcp:` file.
 
 ## MCP-Only Nodes
 
@@ -222,21 +293,41 @@ MCP server connection failed: github (failed)
 The node continues executing but without the tools from the failed server.
 Check your config file path, server command, and environment variables if this happens.
 
-Claude's strict workflow configuration prevents undeclared user/plugin MCPs from
-starting, so their connection failures do not affect the run. Codex can still
-inherit ambient servers as described below.
+Claude, Codex, and Copilot report each server's status as an `mcp_server_status`
+provider event, which the run record keeps with the server name and the vendor's error.
 
-### Codex ambient MCP limitation
+Claude's and Codex's strict workflow configuration prevents undeclared user/plugin MCPs
+from starting, so their connection failures do not affect the run.
 
-Codex's SDK applies node `mcp:` servers as additive configuration overrides. It
-does not replace the ambient user/project/plugin MCP catalog: with no node `mcp:`,
-ambient servers may remain available, and with a declared file, both ambient and
-declared servers may be present. `mcp_servers={}` does not clear inherited entries,
-and the current SDK has no wildcard/default global-off control.
+### Servers that ship in a Claude plugin
 
-Archon therefore does not describe Codex `mcp:` as an exclusive tool boundary.
-It preserves runnable additive behavior and reports the limitation rather than
-mutating user configuration or rejecting the workflow.
+Naming a plugin with `plugins:` does not connect its MCP servers. To use one, declare
+it in the node's `mcp:` file under the name Claude Code gives plugin servers,
+`plugin:<plugin>:<server>`. That name lets Claude reuse the sign-in it already stored
+for the plugin's server. Copy the server's definition from `claude plugin list --json`:
+
+```json
+{
+  "plugin:posthog:posthog": {
+    "type": "http",
+    "url": "https://mcp.posthog.com/mcp",
+    "headers": { "x-posthog-mcp-consumer": "plugin" }
+  }
+}
+```
+
+Its tools appear as `mcp__plugin_posthog_posthog__*`. This works for `http` and `sse`
+servers. A `stdio` server, or a definition that uses Claude plugin placeholders such as
+`${CLAUDE_PLUGIN_ROOT}`, cannot be restated this way, because Archon does not expand
+those placeholders.
+
+### Servers that ship in a Codex plugin
+
+Naming a Codex plugin with `plugins:` does not connect its MCP servers either. To use
+one, declare it in the node's `mcp:` file under the name the plugin's `.mcp.json`
+gives it. Codex lets the declared
+definition replace the plugin's, and the node sees only the declared one. A definition
+that depends on paths inside the plugin's directory cannot be restated this way.
 
 ## Workflow Examples
 
@@ -317,10 +408,10 @@ nodes:
 
 ## Push Notifications (ntfy)
 
-Some built-in workflows (like `archon-smart-pr-review`) include an optional
-notification node that sends a push notification to your phone when the workflow
-completes. It's gated behind a `when:` condition — if you haven't configured ntfy,
-the node is silently skipped.
+A workflow can end with an optional notification node that sends a push
+notification to your phone when the workflow completes. Gate it behind a `when:`
+condition so the node is skipped when ntfy isn't configured. No bundled workflow
+includes one; add the nodes below to your own workflows.
 
 ### Setup (30 seconds)
 
@@ -378,8 +469,8 @@ to generate a meaningful summary.
 # Verify your phone receives notifications
 curl -d "Hello from Archon" ntfy.sh/YOUR_TOPIC_NAME
 
-# Run a workflow with notifications
-bun run cli workflow run archon-smart-pr-review "Review PR #123"
+# Run one of your workflows that includes the notify node
+bun run cli workflow run my-workflow "Review PR #123"
 ```
 
 ## MCP vs allowed_tools/denied_tools vs hooks
@@ -398,8 +489,9 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
-- **No load-time validation** — The MCP config file is read at execution time, not
-  when the workflow YAML is loaded. A typo in the path won't surface until the node runs.
+- **No load-time validation** — Loading the workflow YAML does not read the MCP config
+  file. `archon validate workflows` checks that a required file exists and is valid JSON;
+  otherwise a typo in the path surfaces when the node runs.
 - **No inline config** — MCP configs must be in a separate JSON file, not inline in YAML.
   This is intentional — it keeps secrets out of version-controlled workflow files.
 
@@ -407,7 +499,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `MCP config file not found` | Wrong path or file doesn't exist | Check the path relative to your repo root (cwd) |
+| `MCP config file not found` | Wrong path or file doesn't exist | Check every location listed after `Tried:`: the run checkout, then the declaring home YAML's directory (its captured copy for captured runs) when eligible |
 | `MCP config file is not valid JSON` | Syntax error in JSON | Validate with `cat .archon/mcp/config.json \| python3 -m json.tool` |
 | `MCP config must be a JSON object` | Top-level value is array or string | Wrap in `{ "server-name": { ... } }` |
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { beforeAll, describe, expect, it } from 'bun:test';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
@@ -7,7 +7,13 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { DETACHED_RUN_FAILED_EXIT_CODE } from './workflow-exit-code';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+
+import {
+  DETACHED_RESUME_RECEIPT_ENV,
+  waitForDetachedResumeReceipt,
+} from './detached-resume-receipt';
 
 // These fixtures are torn down after tests that spawn, and then kill, a real detached
 // child. A killed process can still hold a handle inside its temp tree at the instant of
@@ -25,9 +31,19 @@ const FIXTURE_STATE_DEADLINE_MS = 5_000;
 
 /**
  * For a test that runs a real stop. On Windows the stop reads the process table through
- * `Get-CimInstance`, and the first such query on a fresh runner took about 4 s.
+ * `Get-CimInstance`; once WMI is warm (see `WMI_WARM_UP_TIMEOUT_MS`) a listing takes 1-3 s.
  */
 const STOP_TEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The first `Get-CimInstance` on a fresh Windows runner pays WMI's one-time start-up. It
+ * took 6-8 s under CPU burners and up to 19 s under the full suite's load, where it pushed
+ * the first stop test past `STOP_TEST_TIMEOUT_MS` while every later stop test passed in
+ * seconds.
+ * The cost is per machine, not per query: each listing runs in a fresh PowerShell and the
+ * second one is already fast. So it is paid once before the stop tests, not inside one.
+ */
+const WMI_WARM_UP_TIMEOUT_MS = 90_000;
 
 /**
  * For the stop that races a spawning target. That stop takes up to six process listings
@@ -141,8 +157,8 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
  *
- * `leaseMs` closes the lease that long after committing it, as a real owner does when
- * its termination lease lapses.
+ * `leaseMs` closes the lease that long after committing it, as a real owner's lease
+ * closes when the owner exits.
  */
 function stubOwner(pid: number, leaseMs?: number): Server {
   return createServer((socket: Socket): void => {
@@ -164,6 +180,83 @@ function stubOwner(pid: number, leaseMs?: number): Server {
 }
 
 describe('detached run control integration', () => {
+  beforeAll(async (): Promise<void> => {
+    // A fresh marker names no process; only the query's cost matters here.
+    if (process.platform === 'win32') await windowsProcessesNaming(crypto.randomUUID());
+  }, WMI_WARM_UP_TIMEOUT_MS);
+
+  for (const closedLauncher of [false, true]) {
+    it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {
+      const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-receipt-')));
+      const fixturePath = join(fixtureDir, 'receipt.ts');
+      const continuedPath = join(fixtureDir, 'continued');
+      const errorPath = join(fixtureDir, 'transport-error');
+      writeFileSync(
+        fixturePath,
+        `
+        import { consumeDetachedResumeReceiptRequest } from ${JSON.stringify(join(import.meta.dir, 'detached-resume-receipt.ts'))};
+        import { writeFileSync } from 'node:fs';
+        const notify = consumeDetachedResumeReceiptRequest((runId, error) => {
+          writeFileSync(process.argv[3], JSON.stringify({ runId, code: error instanceof Error && 'code' in error ? error.code : null }));
+        });
+        setTimeout(() => {
+          notify?.('fixture');
+          writeFileSync(process.argv[2], 'continued');
+        }, 100);
+      `
+      );
+      const child = spawn(process.execPath, [fixturePath, continuedPath, errorPath], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+        env: { ...process.env, [DETACHED_RESUME_RECEIPT_ENV]: '1' },
+      });
+      const exit = waitForExit(child);
+      try {
+        const pipe = child.stdio[3];
+        if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+        if (closedLauncher) {
+          pipe.destroy();
+          child.unref();
+        } else {
+          await waitForDetachedResumeReceipt(
+            child,
+            pipe,
+            (code, signal) => new Error(`No receipt: ${String(code)} ${String(signal)}`)
+          );
+        }
+        await waitForFixtureProcess(() => existsSync(continuedPath));
+        expect(await exit).toEqual({ code: 0, signal: null });
+        if (closedLauncher) {
+          expect(JSON.parse(readFileSync(errorPath, 'utf8'))).toMatchObject({
+            runId: 'fixture',
+            code: 'EPIPE',
+          });
+        }
+      } finally {
+        if (child.pid !== undefined && processExists(child.pid)) child.kill();
+      }
+    });
+  }
+
+  for (const code of [0, DETACHED_RUN_FAILED_EXIT_CODE]) {
+    it(`preserves exit ${String(code)} when the real child sends no receipt`, async () => {
+      const child = spawn(process.execPath, ['-e', `process.exit(${String(code)})`], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      });
+      const pipe = child.stdio[3];
+      if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+      const error = await rejectedError(() =>
+        waitForDetachedResumeReceipt(
+          child,
+          pipe,
+          (exitCode, signal) => new Error(`No receipt: ${String(exitCode)} ${String(signal)}`)
+        )
+      );
+      expect(error.message).toBe(`No receipt: ${String(code)} null`);
+    });
+  }
+
   it(
     'stops the detached owner process group before its descendant can leak work',
     async () => {
@@ -379,7 +472,7 @@ describe('detached run control integration', () => {
   );
 
   it(
-    'kills nothing on Windows when the lease lapses before the kill',
+    'kills nothing on Windows when the lease closes before the kill',
     async () => {
       // The first process listing takes hundreds of milliseconds at least. A lease that
       // closes during it no longer proves the listed root is the owner, so the stop must

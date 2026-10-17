@@ -1,0 +1,80 @@
+name: proactive-issue-investigation
+description: >-
+  Reference example of a proactive workflow that pauses for review. A trigger
+  binding starts it when an issue opens. A small-model agent decides whether the
+  issue deserves an investigation, a stronger agent investigates and drafts a
+  reply, the run pauses until the draft is approved or rejected, and only an approved draft is
+  posted to the issue. Explained in the docs guide "Proactive workflows".
+inputs:
+  repository:
+    required: true
+    description: owner/name of the GitHub repository, for example acme/widgets
+  issue_number:
+    required: true
+    description: number of the issue that opened
+
+nodes:
+  # Cheap and fast: most issues need no investigation, so a small model reads
+  # them all and a stronger one only reads the issues it routes onward.
+  - id: classify
+    model: small
+    prompt: |
+      Read GitHub issue $INPUTS.issue_number in $INPUTS.repository with
+      `gh issue view $INPUTS.issue_number --repo $INPUTS.repository --comments`.
+
+      Decide whether an engineer should investigate it now. Choose `investigate`
+      for a bug report or regression with enough detail to look into. Choose
+      `skip` for questions, feature requests, duplicates, spam, and reports too
+      thin to act on. Give a one-sentence reason.
+    output_format:
+      type: object
+      properties:
+        route: { type: string, enum: [investigate, skip] }
+        reason: { type: string }
+      required: [route, reason]
+      additionalProperties: false
+
+  - id: investigate
+    depends_on: [classify]
+    when: "$classify.output.route == 'investigate'"
+    prompt: |
+      Investigate GitHub issue $INPUTS.issue_number in $INPUTS.repository. Read
+      it with `gh issue view $INPUTS.issue_number --repo $INPUTS.repository --comments`,
+      then read the code in this checkout to find the likely cause. Do not change
+      any files and do not write to GitHub; your draft is reviewed first.
+
+      Draft a comment for the issue: what you think the cause is, the files and
+      lines involved, and what would confirm it. Say plainly when you are unsure.
+    output_format:
+      type: object
+      properties:
+        comment: { type: string }
+      required: [comment]
+      additionalProperties: false
+
+  # Approve posts the draft. Reject cancels the run, so nothing is posted.
+  - id: review
+    depends_on: [investigate]
+    wait:
+      form: approval
+      attention: |
+        Draft comment for $INPUTS.repository#$INPUTS.issue_number
+        (classifier: $classify.output.reason). Approve to post it as written;
+        reject to drop it.
+
+        $investigate.output.comment
+
+  - id: drop
+    depends_on: [review]
+    when: "$review.output.decision == 'reject'"
+    cancel: The draft was rejected; nothing was posted.
+
+  # A script, not an agent, because the review approved this exact text. An
+  # agent posting it could reword it after the approval.
+  - id: post
+    depends_on: [review]
+    when: "$review.output.decision == 'approve'"
+    bash: |
+      set -euo pipefail
+      body=$investigate.output.comment
+      gh issue comment "$INPUTS_ISSUE_NUMBER" --repo "$INPUTS_REPOSITORY" --body "$body"

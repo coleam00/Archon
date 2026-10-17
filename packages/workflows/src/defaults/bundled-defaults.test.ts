@@ -1,13 +1,12 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  fakeGhPreload,
-  type GhFake,
-} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { resolveWorkflow } from '../graph-plan';
+import { dryRunWorkflow } from '../dry-run';
+import { parseFixtureFile } from '../fixture-runner';
+import { join } from 'path';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -17,9 +16,12 @@ import {
 } from './bundled-defaults';
 import {
   formatPackagedResourceReference,
+  qualifyWorkflowResources,
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
+import { resolveWorkflowName } from '../router';
+import { collectInstalledBundleSources } from './bundle-inventory';
 import {
   isExecNode,
   isIncludeDirective,
@@ -27,24 +29,18 @@ import {
   isOutputFormatEnforced,
   isWaitNode,
 } from '../schemas';
-import {
-  findRequiredPropertyGaps,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  registerBuiltinProviders,
-} from '@archon/providers';
+import { findStrictSchemaIssues } from '@archon/provider-contract';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();
+const track = trackTempRoots();
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
 // four levels to the repo root, then into .archon/.
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
-const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
-const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
-// `legacy/` holds the deprecated-window defaults (#2781): same flat file
-// convention, one grouping subfolder within the discovery depth cap.
-const LEGACY_WORKFLOWS_DIR = join(WORKFLOWS_DIR, 'legacy');
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -57,74 +53,38 @@ describe('bundled-defaults', () => {
     });
   });
 
+  describe('fresh install', () => {
+    // A binary reads the embedded records; a source install reads the indexed tree.
+    // Both must offer exactly the sdlc pack, so neither can still ship a flat default.
+    it('ships only the sdlc pack, in the binary and from source', async () => {
+      const embedded = Object.keys(BUNDLED_WORKFLOWS).sort();
+      expect(embedded.filter(name => BUNDLED_WORKFLOW_OWNERS[name]?.pack !== 'sdlc')).toEqual([]);
+      expect(
+        Object.keys(BUNDLED_COMMANDS).filter(
+          name => parsePackagedResourceReference(name)?.owner.pack !== 'sdlc'
+        )
+      ).toEqual([]);
+
+      const sources = await collectInstalledBundleSources(join(REPO_ROOT, '.archon/workflows'));
+      const fromSource = (sources ?? []).flatMap(file =>
+        file.kind === 'workflow' ? [{ name: file.name, pack: file.owner.pack }] : []
+      );
+      expect(fromSource.filter(file => file.pack !== 'sdlc')).toEqual([]);
+      expect(fromSource.map(file => file.name).sort()).toEqual(embedded);
+    });
+
+    it('resolves every bundled workflow by its short name without ambiguity', () => {
+      const workflows = Object.keys(BUNDLED_WORKFLOWS).map(name => ({ name }));
+      for (const { name } of workflows) {
+        const short = name.replace(/^archon-/, '');
+        expect(resolveWorkflowName(short, workflows)?.name).toBe(name);
+      }
+    });
+  });
+
   describe('bundle completeness', () => {
-    // These assertions are the canary for bundle drift: if someone adds a
-    // default file without regenerating bundled-defaults.generated.ts, the
-    // bundle would be missing in compiled binaries (see #979 context). The
-    // generator is `scripts/generate-bundled-defaults.ts`, and
-    // `bun run check:bundled` verifies the generated file is up to date.
-
-    it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
-      const onDisk = readdirSync(COMMANDS_DIR)
-        .filter(f => f.endsWith('.md'))
-        .map(f => f.slice(0, -'.md'.length))
-        .sort();
-      expect(
-        Object.keys(BUNDLED_COMMANDS)
-          .filter(name => parsePackagedResourceReference(name) === null)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
-      const readFlat = (dir: string): string[] => {
-        if (!existsSync(dir)) return [];
-        return readdirSync(dir)
-          .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-          .map(f => f.replace(/\.ya?ml$/, ''));
-      };
-      const onDisk = [...readFlat(WORKFLOWS_DIR), ...readFlat(LEGACY_WORKFLOWS_DIR)].sort();
-      expect(
-        Object.keys(BUNDLED_WORKFLOWS)
-          .filter(name => BUNDLED_WORKFLOW_OWNERS[name] === undefined)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
-      // Bundled content is LF-normalized by the generator so it stays identical
-      // regardless of the checkout's line-ending policy. Match that here.
-      const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
-
-      // Packaged (pack-owned) entries live under .archon/workflows/<pack>/<workflow>/,
-      // not the flat defaults directories — their content parity is proven by
-      // 'packaged bundle metadata is internally consistent' below.
-      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        if (parsePackagedResourceReference(name) !== null) continue;
-        const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
-        expect(content).toBe(diskContent);
-      }
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        if (BUNDLED_WORKFLOW_OWNERS[name] !== undefined) continue;
-        // Workflows may be .yaml or .yml — prefer .yaml, fall back. The name may
-        // live in the flat defaults dir or the legacy/ deprecation window.
-        let diskContent: string | undefined;
-        for (const dir of [WORKFLOWS_DIR, LEGACY_WORKFLOWS_DIR]) {
-          try {
-            diskContent = readLF(join(dir, `${name}.yaml`));
-            break;
-          } catch {}
-          try {
-            diskContent = readLF(join(dir, `${name}.yml`));
-            break;
-          } catch {}
-        }
-        // The completeness test above pins the file existing; here we only
-        // compare content parity.
-        expect(diskContent).toBeDefined();
-        expect(content).toBe(diskContent as string);
-      }
-    });
+    // The records must match the pack files on disk: a compiled binary embeds these
+    // same records (see #979 context), written by `scripts/generate-bundled-defaults.ts`.
 
     it('packaged bundle metadata is internally consistent', () => {
       for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
@@ -183,31 +143,14 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-pr-review-scope should read .pr-number before other discovery', () => {
-      const content = BUNDLED_COMMANDS['archon-pr-review-scope'];
-      expect(content).toContain('$ARTIFACTS_DIR/.pr-number');
-      expect(content).toContain('PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number');
-    });
-
-    it('classify-review-scope declares only its structured output fields', () => {
-      const content =
-        BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
-      expect(content).toContain('- `errors`, `docs` — booleans');
-      expect(content).toContain('- `reasons` — `{errors, docs}`');
-      expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
-    });
-
-    it('archon-create-pr should write .pr-number to artifacts', () => {
-      const content = BUNDLED_COMMANDS['archon-create-pr'];
-      expect(content).toContain('echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"');
-    });
-
-    it('the SDLC implementation and every review lens own separate discovery records', () => {
+    it('the SDLC investigation, plan, implementation and every review lens own separate discovery records', () => {
       const expected = new Map([
+        ['__archon_pack__bundled:sdlc:investigate::investigate', 'discoveries/investigate.json'],
+        ['__archon_pack__bundled:sdlc:plan::plan', 'discoveries/plan.json'],
         ['__archon_pack__bundled:sdlc:implement::implement', 'discoveries/implement.json'],
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
-        ['__archon_pack__bundled:sdlc:review::review-simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:simplify::simplify', 'discoveries/review-simplify.json'],
         ['__archon_pack__bundled:sdlc:review::review-tests', 'discoveries/review-tests.json'],
         ['__archon_pack__bundled:sdlc:review::review-errors', 'discoveries/review-errors.json'],
         ['__archon_pack__bundled:sdlc:review::review-docs', 'discoveries/review-docs.json'],
@@ -220,48 +163,134 @@ describe('bundled-defaults', () => {
       }
 
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
-      expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.json');
+      // The accepted records travel as the verdict's certified `discoveries`; the
+      // markdown copy is for a human reader, and no second JSON file exists.
+      expect(synthesize).toContain('- `discoveries`: the accepted discovery records');
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.md');
-      expect(synthesize).toContain('an `adjacent` record never affects readiness');
+      expect(synthesize).not.toContain('discoveries.json');
+      expect(synthesize).toContain('An `unrelated` record never affects readiness');
       expect(synthesize).toContain(
         'If you are an agent reading this: open discoveries.md and surface each discovery to your human.'
       );
     });
 
-    // A reusable pack must not hardcode one project's context paths (AGENTS.md,
-    // "Project guidance should be available, not sprayed everywhere"). Every evaluative
-    // prompt reads the pack-owned scope artifact plus a conventional, conditional
-    // `architecture.md`; project guidance arrives through the provider's own context
-    // mechanism, which is why no prompt instructs reading AGENTS.md either. The rules the
-    // prompts used to delegate to a project file are stated in the prompts themselves.
-    it('no review prompt hardcodes a project context path', () => {
-      const lenses = [
-        'review-code',
-        'review-seams',
-        'review-simplify',
-        'review-tests',
-        'review-errors',
-        'review-docs',
-      ];
-      for (const name of [...lenses, 'review-synthesize']) {
-        const content = BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`];
-        expect(content).toBeDefined();
-        expect(content).not.toContain('.archon/engineering.md');
-        expect(content).not.toContain('Read `AGENTS.md`');
-        expect(content).toContain("the project's `architecture.md` if it has one");
-        expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
-        // The risk taxonomy the removed file used to own, now stated in every prompt
-        // that depends on it rather than cited.
-        expect(content).toContain(
-          'irreversible or destructive paths, lifecycle ownership, persisted contracts and ' +
-            'schemas, credentials and auth boundaries, integration boundaries'
-        );
+    // A scratch worktree carries tracked files only, so a falsifying command run there
+    // fails on unresolved dependencies unless the prompt that creates it installs them.
+    it('every SDLC prompt that creates a scratch worktree installs its dependencies', () => {
+      const creators = Object.entries(BUNDLED_COMMANDS).filter(
+        ([key, content]) => key.includes(':sdlc:') && content.includes('git worktree add --detach')
+      );
+      expect(creators.length).toBeGreaterThan(0);
+      for (const [key, content] of creators) {
+        expect({ key, installs: content.includes('package manager in locked mode') }).toEqual({
+          key,
+          installs: true,
+        });
       }
-      // Synthesis judges whether the lenses engaged those risks; the lenses scale their
-      // own depth by them.
-      for (const name of lenses) {
-        expect(BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`]).toContain(
-          'scale depth to what the change can destroy'
+    });
+
+    // A reusable pack must not hardcode one project's context paths (AGENTS.md,
+    // "Project guidance should be available, not sprayed everywhere"). Every prompt that
+    // judges names the project's conventional sidecar documents, each only where it
+    // exists, and opens one only when a decision depends on it, reading the section that
+    // rules on it rather than the whole file. `architecture.md`, a long page in many
+    // projects, is named only where a decision is structural. Project guidance arrives
+    // through the provider's own context mechanism, which is why no prompt instructs
+    // reading AGENTS.md. The rules the prompts used to delegate to a project file are
+    // stated in the prompts themselves.
+    it('every judging prompt names the sidecar documents it needs, and no project path', () => {
+      const where = (docs: string, has: 'one' | 'them' = 'them'): string =>
+        `where the project has ${has}, its ${docs} — at the root, in a config directory such as \`.archon/\`, or wherever its steering files point`;
+      const all = where('`architecture.md`, its `engineering.md`, and its direction document');
+      const values = where('`engineering.md` and its direction document');
+      const engineering = where('`engineering.md`', 'one');
+      // Prompts that decide read the section that rules on a decision; reviewers read the
+      // section they cite.
+      const decides: Record<string, string> = {
+        '__archon_pack__bundled:sdlc:triage::triage': where('direction document', 'one'),
+        '__archon_pack__bundled:sdlc:plan::plan': all,
+        '__archon_pack__bundled:sdlc:investigate::investigate': all,
+        '__archon_pack__bundled:sdlc:implement::implement': engineering,
+      };
+      const cites: Record<string, string> = {
+        '__archon_pack__bundled:sdlc:simplify::simplify': all,
+        '__archon_pack__bundled:sdlc:review::review-seams': all,
+        '__archon_pack__bundled:sdlc:review::review-code': values,
+        '__archon_pack__bundled:sdlc:review::review-synthesize': values,
+        '__archon_pack__bundled:sdlc:review::review-tests': engineering,
+        '__archon_pack__bundled:sdlc:review::review-errors': engineering,
+        '__archon_pack__bundled:sdlc:review::review-docs': engineering,
+      };
+      // Judgments that are not structural never open `architecture.md`.
+      const noArchitecture = new Set([
+        '__archon_pack__bundled:sdlc:review::review-code',
+        '__archon_pack__bundled:sdlc:review::review-synthesize',
+        '__archon_pack__bundled:sdlc:review::review-tests',
+        '__archon_pack__bundled:sdlc:review::review-errors',
+        '__archon_pack__bundled:sdlc:review::review-docs',
+      ]);
+      for (const [prompts, section] of [
+        [decides, 'read the section that rules on it'],
+        [cites, 'read the section you cite, not the whole file'],
+      ] as const) {
+        for (const [key, read] of Object.entries(prompts)) {
+          const content = BUNDLED_COMMANDS[key];
+          expect(content).toBeDefined();
+          expect(content).not.toContain('.archon/engineering.md');
+          expect(content).not.toContain('Read `AGENTS.md`');
+          expect({
+            key,
+            read: content.includes(read),
+            section: content.includes(section),
+            architecture: content.includes('`architecture.md`'),
+          }).toEqual({ key, read: true, section: true, architecture: !noArchitecture.has(key) });
+        }
+      }
+    });
+
+    it('every reviewer states the finding boundary and its round inputs', () => {
+      const reviewers = [
+        '__archon_pack__bundled:sdlc:review::review-code',
+        '__archon_pack__bundled:sdlc:review::review-seams',
+        '__archon_pack__bundled:sdlc:simplify::simplify',
+        '__archon_pack__bundled:sdlc:review::review-tests',
+        '__archon_pack__bundled:sdlc:review::review-errors',
+        '__archon_pack__bundled:sdlc:review::review-docs',
+        '__archon_pack__bundled:sdlc:review::review-synthesize',
+      ];
+      for (const key of reviewers) {
+        const content = BUNDLED_COMMANDS[key];
+        expect(content).toBeDefined();
+        // One boundary decides whether a defect blocks now or becomes a filed issue:
+        // anything that touches the change is a finding, only unrelated work is a
+        // discovery. Every reviewer states it in the same words.
+        expect(content).toContain('is a finding, even when the contract never named it');
+        // The structure pass runs after the review, outside it, so it reads the
+        // diff and work order itself rather than a review round's scope.
+        if (!key.includes(':simplify::')) {
+          expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
+          expect(content).toContain('$mode.output.risks');
+        }
+      }
+    });
+
+    // Severity has one definition: synthesis assigns every label, so a lens that kept its
+    // own scale would be a second owner of the same decision.
+    it('only synthesis defines finding severity', () => {
+      const reviewers = Object.keys(BUNDLED_COMMANDS).filter(
+        key =>
+          (key.startsWith('__archon_pack__bundled:sdlc:review::review-') &&
+            !key.endsWith('review-synthesize') &&
+            !key.endsWith('review-scope')) ||
+          key === '__archon_pack__bundled:sdlc:simplify::simplify'
+      );
+      expect(reviewers.length).toBeGreaterThanOrEqual(6);
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '## Severity'
+      );
+      for (const key of reviewers) {
+        expect(BUNDLED_COMMANDS[key]).not.toMatch(
+          /## Severity|\bCritical\b|\bImportant\b|Suggestion/
         );
       }
     });
@@ -274,27 +303,9 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-workflow-builder should have validate-before-save node ordering and key constraints', () => {
-      const content = BUNDLED_WORKFLOWS['archon-workflow-builder'];
-      expect(content).toContain('id: validate-yaml');
-      expect(content).toContain('depends_on: [validate-yaml]');
-      expect(content).toContain('denied_tools: [Edit, Bash]');
-      expect(content).toContain('output_format:');
-      expect(content).toContain('workflow_name');
-    });
-
-    it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
-      const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
-      expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
-      expect(content).toContain(
-        'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
-      );
-      expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
-    });
-
-    it('archon-ship carries its target through triage.md without downstream target prose', () => {
-      const content = BUNDLED_WORKFLOWS['archon-ship'];
-      const parsed = parseWorkflow(content, 'archon-ship.yaml');
+    it('archon-ship-block carries its target through triage.md without downstream target prose', () => {
+      const content = BUNDLED_WORKFLOWS['archon-ship-block'];
+      const parsed = parseWorkflow(content, 'archon-ship-block.yaml', providerRegistry);
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.target?.default).toBe('');
@@ -327,28 +338,26 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('Original work item:');
     });
 
-    it('archon-deliver preserves the conditional-lens bindings', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+    it('archon-deliver-block preserves the conditional-lens bindings', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
-      const resolveScope = parsed.workflow.nodes.find(node => node.id === 'resolve-scope');
-      expect(resolveScope).toBeDefined();
-      expect(resolveScope?.kind).toBe('exec');
-      if (resolveScope?.kind !== 'exec') throw new Error('resolve-scope is not executable');
-      expect(resolveScope.runtime).toBe('bun');
-      expect(resolveScope.script).toBe('resolve-review-scope');
-      expect(resolveScope.with).toEqual({
-        c_errors: '$classify.output.errors',
-      });
-
-      const review = parsed.workflow.nodes.find(node => node.id === 'review');
+      const rounds = parsed.workflow.nodes.find(node => node.id === 'rounds');
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      const review = rounds.loop_group.nodes.find(node => node.id === 'review');
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
         scope: '$pr.output',
         work_order: '$INPUTS.work',
-        errors: '$resolve-scope.output.errors',
-        docs: '$classify.output.docs',
+        errors: '$INPUTS.errors',
+        // Later rounds review the delta since the last reviewed commit.
+        prior_report: '$LOOP_PREV.round.output.prior_report',
+        light: '$LOOP_PREV.round.output.light_review',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).
@@ -356,71 +365,217 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
-    it('archon-deliver delegates the optional CI read timeout to the engine', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+    // Every implementation pass before CI is reviewed: the first by the full routed
+    // review, later ones by delta (the code lens plus the lenses route selects after
+    // review findings, the general code reviewer alone after a CI fix). One named exception: the post-review reshape,
+    // which adopts or declines the structure pass's findings and goes straight to CI.
+    it('archon-deliver-block reviews every implementation pass except the post-review reshape', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
-      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
-      expect(corrections?.kind).toBe('loop_group');
-      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-
-      const ciNote = corrections.loop_group.nodes.find(node => node.id === 'ci-note');
-      expect(ciNote?.kind).toBe('exec');
-      if (ciNote?.kind !== 'exec') throw new Error('ci-note is not executable');
-      expect(ciNote).toMatchObject({
-        runtime: 'bun',
-        timeout: 45_000,
-        on_timeout: 'skip',
-        with: { pr: { from: '$pr.output' } },
-      });
-      expect(ciNote.script).not.toContain('mktemp');
-      expect(ciNote.script).not.toContain('GH_PID');
-      expect(ciNote.script).not.toContain('WATCHDOG');
-
-      const ciEvidence = corrections.loop_group.nodes.find(node => node.id === 'ci-evidence');
-      expect(ciEvidence?.kind).toBe('exec');
-      if (ciEvidence?.kind !== 'exec') throw new Error('ci-evidence is not executable');
-      expect(ciEvidence).toMatchObject({
-        runtime: 'bun',
-        depends_on: ['ci-note'],
-        trigger_rule: 'all_done',
-        with: {
-          note: {
-            from: '$ci-note.output',
-            if_skipped:
-              'No CI evidence is available for this round (the check read timed out). Proceed on the review findings alone.',
-          },
-        },
-      });
-
-      const fix = corrections.loop_group.nodes.find(node => node.id === 'fix');
-      expect(fix?.depends_on).toEqual(['ci-evidence']);
+      type ParsedNode = (typeof parsed.workflow.nodes)[number];
+      const unreviewed: string[] = [];
+      const checkScope = (nodes: readonly ParsedNode[]): void => {
+        const dependents = new Map<string, string[]>();
+        for (const node of nodes) {
+          for (const dep of node.depends_on ?? []) {
+            dependents.set(dep, [...(dependents.get(dep) ?? []), node.id]);
+          }
+        }
+        const byId = new Map(nodes.map(node => [node.id, node]));
+        const isInclude = (id: string, target: string): boolean => {
+          const node = byId.get(id);
+          return node?.kind === 'include' && node.include === target;
+        };
+        const reviewedAfter = (id: string, seen = new Set<string>()): boolean =>
+          (dependents.get(id) ?? []).some(next => {
+            if (seen.has(next)) return false;
+            seen.add(next);
+            return isInclude(next, 'archon-review-block') || reviewedAfter(next, seen);
+          });
+        for (const node of nodes) {
+          if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
+          if (node.id === 'reshape') continue; // the named exception above
+          if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
+            unreviewed.push(node.id);
+          }
+        }
+      };
+      checkScope(parsed.workflow.nodes);
+      expect(unreviewed).toEqual([]);
     });
 
-    it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
-      // The flip used to name ten ancestors because a failure propagated exactly one
-      // hop: a join that named only the tail of a chain never saw the chain's gates
-      // fail. Failure-cascade skips carry `upstream_failed` across every hop now, so
-      // the list is the four the flip actually needs. gate-validated, gate-ready and
-      // validate are reachable through ci-verdict; ci-verdict stays because the rule
-      // needs one successful dependency, and a clean-review delivery has no other.
-      // That the cascade really blocks is proved by execution, not by this list —
-      // deliver's validate-red* and late-red-unconverged fixtures expect the gate
-      // itself as the failed node and never reach the flip.
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+    // OpenAI Structured Outputs (the Codex provider's path) accepts only an object at a
+    // schema's root, so a root union or scalar ends the node on every call there. A
+    // decision with variants nests its union under a property instead.
+    it('every bundled output_format has a plain object at its root', () => {
+      const offenders: string[] = [];
+      const visit = (workflow: string, nodes: readonly unknown[]): void => {
+        for (const node of nodes as Record<string, unknown>[]) {
+          const format = node.output_format as Record<string, unknown> | undefined;
+          if (
+            format !== undefined &&
+            (format.type !== 'object' ||
+              'anyOf' in format ||
+              'oneOf' in format ||
+              'allOf' in format)
+          ) {
+            offenders.push(`${workflow}:${String(node.id)}`);
+          }
+          const group = node.loop_group as { nodes?: unknown[] } | undefined;
+          if (group?.nodes) visit(workflow, group.nodes);
+        }
+      };
+      for (const [name, source] of Object.entries(BUNDLED_WORKFLOWS)) {
+        const raw = Bun.YAML.parse(source) as { nodes?: unknown[] };
+        visit(name, raw.nodes ?? []);
+      }
+      expect(offenders).toEqual([]);
+    });
+
+    // One round loop owns delivery: implement, pr, review, then simplify and one CI
+    // agent once the review passes. The pr step runs every round and owns the push;
+    // a red the change caused drives another round, whose fix is reviewed before CI
+    // runs again. After CI the round answers and reads the pull request's review
+    // threads. The graph has no engine wait and no separate ready-mark node.
+    it('archon-deliver-block runs one round loop that ends in a single CI agent', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver-block'],
+        'archon-deliver-block.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flipReady?.depends_on).toEqual([
-        'ci-verdict',
-        'ci-attention-route',
-        'ci-attention',
-        'publish-pr-body',
+      const nodes = parsed.workflow.nodes;
+      const waits = nodes.flatMap(candidate =>
+        candidate.kind === 'loop_group'
+          ? candidate.loop_group.nodes.filter(body => body.kind === 'wait')
+          : candidate.kind === 'wait'
+            ? [candidate]
+            : []
+      );
+      expect(waits).toEqual([]);
+      expect(nodes.map(candidate => candidate.id)).toEqual([
+        'forge',
+        'rounds',
+        'update-pr-body',
+        'outcome',
+        'report',
       ]);
-      expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
+      const rounds = nodes[1];
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
+        'implement',
+        'pr',
+        'review',
+        'simplify',
+        'reshape',
+        'rereview',
+        'settle-threads',
+        'ci',
+        'threads',
+        'round',
+      ]);
+      expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
+      expect(parsed.workflow.returns).toBe('report');
+      expect(parsed.workflow.outcome_field).toBe('ready');
     });
 
-    it('archon-review exposes the three-way action contract behind a successful preflight', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+    // The forge source is checked before any agent spends, and the agents that act on
+    // the forge read the source that check certified rather than the environment.
+    it('checks the forge source first and admits a run without a GitHub identity', () => {
+      interface RawNode {
+        id: string;
+        script?: string;
+        depends_on?: string[];
+        with?: Record<string, unknown>;
+        loop_group?: { nodes: RawNode[] };
+      }
+      const raw = (name: string) =>
+        Bun.YAML.parse(BUNDLED_WORKFLOWS[name]) as { requires?: unknown; nodes: RawNode[] };
+      for (const name of [
+        'archon-deliver-block',
+        'archon-pr',
+        'archon-ship-block',
+        'archon-upkeep',
+      ]) {
+        expect(raw(name).requires).toBeUndefined();
+      }
+      for (const name of [
+        'archon-deliver-block',
+        'archon-pr',
+        'archon-ship-block',
+        'archon-upkeep',
+      ]) {
+        const [first, ...rest] = raw(name).nodes;
+        expect(first).toMatchObject({ id: 'forge', script: 'forge-check' });
+        const roots = rest.filter(
+          node => !node.depends_on?.some(dependency => dependency !== 'forge')
+        );
+        expect(roots.length).toBeGreaterThan(0);
+        for (const node of roots) expect(node.depends_on).toEqual(['forge']);
+      }
+      const rounds = raw('archon-deliver-block').nodes.find(node => node.id === 'rounds');
+      const ci = rounds?.loop_group?.nodes.find(node => node.id === 'ci');
+      expect(ci?.with).toEqual({ pr: '$pr.output', source: '$forge.output.source' });
+    });
+
+    // A delivery ending travels from round through deliver's report and ship's outcome
+    // to ship's report; the schemas must name the same endings or a valid one fails
+    // certification. `failed` is the reports' own ending: a node failure skipped the
+    // composer.
+    it("deliver's endings are the same set at every node that carries them", () => {
+      const parse = (name: string) => {
+        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name], `${name}.yaml`, providerRegistry);
+        if (parsed.workflow === null) throw new Error(parsed.error.error);
+        return parsed.workflow;
+      };
+      const reasons = (node: object | undefined): string[] => {
+        const format =
+          node !== undefined && 'output_format' in node
+            ? (node.output_format as { properties?: { reason?: { enum?: string[] } } } | undefined)
+            : undefined;
+        return [...(format?.properties?.reason?.enum ?? [])];
+      };
+      const deliver = parse('archon-deliver-block');
+      const rounds = deliver.nodes.find(node => node.id === 'rounds');
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      const round = reasons(rounds.loop_group.nodes.find(node => node.id === 'round'));
+      expect(round.length).toBeGreaterThan(0);
+      const delivered = reasons(deliver.nodes.find(node => node.id === 'report'));
+      expect([...delivered].sort()).toEqual([...round, 'failed'].sort());
+      const ship = reasons(parse('archon-ship-block').nodes.find(node => node.id === 'report'));
+      expect(ship).toEqual(expect.arrayContaining(delivered));
+    });
+
+    // Agents create scratch trees under the run, where a reviewer's is removed by the
+    // workflow; a tree outside it would outlive the node that died.
+    it('every SDLC scratch worktree lives under the run and is removed by the workflow', () => {
+      for (const [key, content] of Object.entries(BUNDLED_COMMANDS)) {
+        if (!key.includes(':sdlc:') || !content.includes('git worktree add --detach')) continue;
+        expect({ key, underRun: content.includes('mktemp -d "$ARTIFACTS_DIR/scratch/') }).toEqual({
+          key,
+          underRun: true,
+        });
+        expect(content).not.toContain('removed when you are done');
+      }
+    });
+
+    it('the errors lens probes the complete independent-work blast radius', () => {
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-errors']).toContain(
+        "- **Blast radius** — does a failure owned by one item (another project, one case, one iteration) abort work that does not depend on it? 'Identifiable' does not clear it."
+      );
+    });
+
+    it('archon-review-block exposes the three-way action contract behind a successful preflight', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.work_order?.default).toBe('');
@@ -432,32 +587,108 @@ describe('bundled-defaults', () => {
       expect(parsed.workflow.inputs?.pr_number).toBeUndefined();
       expect(parsed.workflow.inputs?.pr_head).toBeUndefined();
       const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
-      expect(scope?.depends_on).toEqual(['mode']);
+      expect(scope?.depends_on).toBeUndefined();
+      expect(parsed.workflow.nodes.find(node => node.id === 'mode')).toMatchObject({
+        depends_on: ['scope'],
+        when: '$scope.output.head_matches == true',
+      });
       expect(scope?.kind).toBe('agent');
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
-      expect(scope.output_format).toEqual({
+      const scopeSchema = scope.output_format;
+      if (scopeSchema === undefined) throw new Error('scope has no output_format');
+      expect(scopeSchema).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
-        required: ['docs', 'pr'],
+        properties: {
+          head_matches: { type: 'boolean' },
+          pr: {
+            type: ['object', 'null'],
+            properties: {
+              repo: {
+                type: 'object',
+                properties: {
+                  host: { type: 'string', pattern: '\\S' },
+                  path: { type: 'string', pattern: '\\S' },
+                },
+                required: ['host', 'path'],
+              },
+              number: { type: 'integer', minimum: 1 },
+            },
+            required: ['repo', 'number'],
+          },
+          report: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['archon_artifact'] },
+              run_id: { type: 'string' },
+              path: { type: 'string', enum: ['review/scope.md'] },
+            },
+            required: ['type', 'run_id', 'path'],
+          },
+        },
+        required: ['head_matches', 'pr', 'report'],
       });
-      expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
-      const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
-      expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
+      const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: null, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(true);
+      expect(validateStructuredOutput({ head_matches: true, pr: null }, scopeSchema).valid).toBe(
+        false
+      );
+      expect(
+        validateStructuredOutput(
+          {
+            head_matches: true,
+            pr: {
+              repo: { host: 'github.com', path: 'coleam00/Archon' },
+              number: 3557,
+            },
+            report: scopeReport,
+          },
+          scopeSchema
+        ).valid
+      ).toBe(true);
+      expect(
+        validateStructuredOutput({ head_matches: true, pr: {}, report: scopeReport }, scopeSchema)
+          .valid
+      ).toBe(false);
+      // One route agent picks the lenses; no tier, coverage script or lens-status node.
+      expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
+      expect(parsed.workflow.inputs?.tier).toBeUndefined();
+      for (const id of ['focused', 'coverage', 'lens-status']) {
+        expect(parsed.workflow.nodes.find(node => node.id === id)).toBeUndefined();
+      }
 
-      const specialists = ['code', 'seams', 'simplify', 'tests', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(specialists);
+      expect(reviewComplete?.depends_on).toEqual(['scope', 'route', ...specialists]);
+      // Structure is judged once, by delivery after a review passes, not as a lens.
+      expect(parsed.workflow.nodes.find(node => node.id === 'simplify')).toBeUndefined();
+      // Reviewers are read-only by the engine's check, not only by their prompts.
+      for (const id of [
+        'scope',
+        'seams',
+        'code',
+        'tests',
+        'route',
+        'errors',
+        'docs',
+        'synthesize',
+      ]) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        expect(node && 'mutates_checkout' in node ? node.mutates_checkout : undefined).toBe(false);
+      }
       expect(reviewComplete?.trigger_rule).toBe('all_done');
 
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['policy', 'mode', 'scope', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
-          action: { type: 'string', enum: ['none', 'correct', 'replan'] },
+          action: { type: 'string', enum: ['none', 'correct', 'replan', 'needs_human'] },
         },
         required: expect.arrayContaining(['action']),
       });
@@ -476,12 +707,13 @@ describe('bundled-defaults', () => {
       );
       // The lens this restores was cut as inert, not as unwanted (#2898/#2899): its charter
       // demoted every finding to a Suggestion. Pin the two halves of the posture that
-      // replaced it — the values frame it reasons from, and the blocking severity.
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
+      // replaced it — the values frame it reasons from, and the blocking severity, which
+      // synthesis owns because it assigns every label.
+      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
         'Writing code is cheap; maintaining it and recovering option value are not'
       );
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
-        'a verdict may rest on simplification alone'
+      expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '- **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes'
       );
       expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         'report-round-N.md'
@@ -495,6 +727,9 @@ describe('bundled-defaults', () => {
           `sources: [${lens}]`
         );
       }
+      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
+        'sources: [simplify]'
+      );
     });
 
     // Attribution is only measurable if it lands somewhere a script can read (#2898):
@@ -504,6 +739,9 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/review/findings.json');
       expect(synthesize).toContain('{id, severity, sources, claim, status, round}');
+      // scripts/lens-yield.ts tallies blocking and disproved findings by these values.
+      expect(synthesize).toContain('`severity` is `blocking` or `note`');
+      expect(synthesize).toContain('`status` is `open`, `fixed`, `declined`');
       // Carried-forward findings keep the lens that found them, or a multi-round review
       // reattributes every surviving finding to its last round.
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
@@ -511,8 +749,8 @@ describe('bundled-defaults', () => {
 
     // The lenses judge defects in what changed; only synthesis runs on every round, so it
     // owns holding the change to the contract's acceptance, invariants, and steering. Scope
-    // must carry those items for it to judge, and an unmet one must block like any
-    // Important finding and stay attributable in findings.json.
+    // must carry those items for it to judge, and an unmet one must block as a blocking
+    // finding and stay attributable in findings.json.
     it('review holds the change to the accepted contract on every round', () => {
       // Triage is where the delivery chain first restates the contract; a count or summary
       // of acceptance there is where the items were lost.
@@ -524,23 +762,16 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('## Judge contract coverage');
       expect(synthesize).toContain('`sources: [contract]`');
-      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
+      expect(synthesize).toContain('An unmet contract item is a blocking finding');
     });
 
-    // The same "does this diff earn a docs review" call is made in two packs — at
-    // delivery time by the classifier, and at review time when `docs` is `auto`. They
-    // drifted once: only the delivery copy carried the trivial-diff carve-out, so the
-    // same doc-adjacent typo fix earned the lens through one entry point and not the
-    // other. Whitespace-normalized so the guard survives either file being rewrapped.
-    it('applies the trivial-diff carve-out in both docs classifiers', () => {
+    // A small mechanical change rarely earns the errors or docs lens; the route agent,
+    // the one place the lens decision is made, carries that carve-out.
+    it('applies the trivial-diff carve-out in the lens decision', () => {
       const squash = (text: string): string => text.replace(/\s+/g, ' ');
-      const carveOut = 'a version bump, a one-line fix, a rename, a test-only tweak';
       expect(
-        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'])
-      ).toContain(carveOut);
-      expect(
-        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'])
-      ).toContain(carveOut);
+        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::route-review'])
+      ).toContain('a version bump, a one-line fix, a rename, a test-only tweak');
     });
 
     // Calibration lesson 4 (#2898): the run that motivated this rewrite produced a false
@@ -564,7 +795,11 @@ describe('bundled-defaults', () => {
     });
 
     it('archon-validate re-discovers and re-runs the checks on resume (#3092)', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-validate'], 'archon-validate.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-validate'],
+        'archon-validate.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       for (const id of ['discover', 'run']) {
@@ -583,7 +818,7 @@ describe('bundled-defaults', () => {
     // profile: an unpinned node routes to the install's default assistant, so an install
     // pinned to Codex is the reachable strict case. A node explicitly pinned to a
     // non-enforcing provider (Claude) is the documented opt-out and is skipped.
-    it('every bundled workflow satisfies Codex strict-mode required coverage', () => {
+    it('every bundled workflow is compatible with Codex strict-mode schemas', () => {
       const violations: string[] = [];
 
       type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
@@ -613,16 +848,18 @@ describe('bundled-defaults', () => {
             if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
           }
           // provider === undefined routes to the install default, scanned as Codex.
-          for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+          for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
             violations.push(
-              `${name}:${node.id} ${gap.schemaPath} missing ${gap.missing.join(', ')}`
+              issue.kind === 'missing-properties'
+                ? `${name}:${node.id} ${issue.schemaPath} missing properties`
+                : `${name}:${node.id} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
             );
           }
         }
       };
 
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        const parsed = parseWorkflow(content, `${name}.yaml`);
+        const parsed = parseWorkflow(content, `${name}.yaml`, providerRegistry);
         if (parsed.workflow === null) throw new Error(parsed.error.error);
         walk(parsed.workflow.nodes, parsed.workflow.provider, name);
       }
@@ -640,8 +877,8 @@ describe('bundled-defaults', () => {
     // discover or mutate the just-created PR (an empty/unset --repo value does
     // NOT fail: gh silently falls back to its default resolution, verified).
     // `gh pr view` is intentionally NOT guarded here: review-path commands
-    // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
-    // workflow input — pinning those is a separate concern.
+    // view explicit PR numbers supplied as workflow input — pinning those is a
+    // separate concern.
 
     // Join backslash-continued shell lines so multi-line `gh pr create \`
     // blocks are checked as a single command.
@@ -683,42 +920,40 @@ describe('bundled-defaults', () => {
   });
 
   describe('run-owned public actions (#2909)', () => {
-    it('records a PR identity and uses it for review, the body resync and the ready flip', () => {
+    it('records a PR identity and uses it for review and the body update', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
-      const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
-      const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::sync-pr-body'];
+      const deliver = BUNDLED_WORKFLOWS['archon-deliver-block'];
+      const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::update-pr-body'];
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
       expect(deliver).toContain('scope: "$pr.output"');
-      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml');
+      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver-block.yaml', providerRegistry);
       if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
-      const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flip).toMatchObject({
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'flip-ready',
-        with: { pr: { from: '$pr.output' } },
-      });
       expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
       // never the INPUTS_<UPPER_SNAKE> env form — that one is built only for
       // bash/script nodes, and naming it here left the agent reading the literal
       // token with no PR number in it (#2909 R1).
       expect(sync).toContain('$INPUTS.pr');
-      expect(sync).toContain('$INPUTS.current_body');
       expect(sync).not.toContain('INPUTS_PR');
 
       // The public write belongs to a deterministic node, not to a prompt: the
       // identity it writes to is the recorded record, and the same node performs
       // the write whichever forge source the run selected.
-      const prParsed = parseWorkflow(pr, 'archon-pr.yaml');
+      const prParsed = parseWorkflow(pr, 'archon-pr.yaml', providerRegistry);
       if (prParsed.workflow === null) throw new Error(prParsed.error.error);
-      const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
+      const prNode = prParsed.workflow.nodes.find(node => node.id === 'prepare');
       expect(prNode?.kind).toBe('agent');
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      expect(publish.with?.body).toEqual({ from: '$prepare.output.body' });
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:pr::pr']).toContain(
+        'gh pr view <number> --repo <host>/<owner>/<repo>'
+      );
+      expect(publish.timeout).toBe(180000);
+      expect(publish.retry).toBeUndefined();
       expect(publish.output_type).toBe('pull-request');
       expect(publish.output_format).toMatchObject({
         properties: {
@@ -733,23 +968,15 @@ describe('bundled-defaults', () => {
       });
       expect(prParsed.workflow.returns).toBe('publish');
 
-      const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml');
+      const deliverParsed = parseWorkflow(deliver, 'archon-deliver-block.yaml', providerRegistry);
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
-      const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
-      expect(syncNode?.kind).toBe('agent');
-      if (syncNode?.kind !== 'agent') throw new Error('sync-pr-body is not an agent node');
+      const updateNode = deliverParsed.workflow.nodes.find(node => node.id === 'update-pr-body');
+      expect(updateNode?.kind).toBe('agent');
+      if (updateNode?.kind !== 'agent') throw new Error('update-pr-body is not an agent node');
       // A command node carries its bindings on `source`, not the node root.
-      expect(syncNode.source).toMatchObject({
+      expect(updateNode.source).toMatchObject({
         kind: 'command',
-        with: { pr: '$pr.output', current_body: '$read-pr-body.output.body' },
-      });
-      expect(
-        deliverParsed.workflow.nodes.find(node => node.id === 'publish-pr-body')
-      ).toMatchObject({
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'publish-pr-body',
-        with: { pr: '$pr.output', intent: '$sync-pr-body.output.intent' },
+        with: { pr: '$rounds.output.pr_url', source: '$forge.output.source' },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
@@ -761,10 +988,102 @@ describe('bundled-defaults', () => {
       expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
+    it('returns the published verdict or the scope message through the terminal adapter', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const result = parsed.workflow.nodes.find(node => node.id === 'result');
+      if (result?.kind !== 'exec' || !result.output_format || !result.with)
+        throw new Error('result is not a typed exec');
+      const root = track(mkdtempSync(join(tmpdir(), 'archon-review-result-')));
+      mkdirSync(join(root, 'review'));
+      const message =
+        'Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature\n';
+      const scopeReport = {
+        type: 'archon_artifact',
+        run_id: 'run',
+        path: 'review/renamed-scope.md',
+      };
+      writeFileSync(join(root, scopeReport.path), message);
+      const verdict = {
+        ready: true,
+        action: 'none',
+        findings_summary: 'clean',
+        report: { ...scopeReport, path: 'review/report.md' },
+        discoveries: [],
+        contract_left: [],
+      };
+      expect(result.with).toEqual({
+        verdict: { from: '$publish.output', if_skipped: null },
+        head_matches: '$scope.output.head_matches',
+        scope_report: { from: '$scope.output.report' },
+      });
+      for (const headMatches of [true, false]) {
+        const child = Bun.spawn([process.execPath, '-e', result.script], {
+          env: {
+            ...process.env,
+            INPUTS_VERDICT: JSON.stringify(headMatches ? verdict : null),
+            INPUTS_HEAD_MATCHES: JSON.stringify(headMatches),
+            INPUTS_SCOPE_REPORT: JSON.stringify(scopeReport),
+            ARTIFACTS_DIR: root,
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const actual: unknown = JSON.parse(await new Response(child.stdout).text());
+        expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
+        expect(actual).toEqual(
+          headMatches
+            ? verdict
+            : {
+                ready: false,
+                action: 'needs_human',
+                findings_summary: message,
+                report: scopeReport,
+                discoveries: [],
+                contract_left: ['PR head mismatch prevented contract review.'],
+              }
+        );
+      }
+    });
+
+    it('shows the mismatch command in the top-level summary alongside cleanup', async () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error(parsed.error.error);
+      const owner = BUNDLED_WORKFLOW_OWNERS['archon-review-block'];
+      if (!owner) throw new Error('review has no owner');
+      qualifyWorkflowResources(parsed.workflow, { ...owner, source: 'bundled' });
+      const workflow = resolveWorkflow(parsed.workflow);
+      const { stubs } = parseFixtureFile(
+        readFileSync(
+          join(REPO_ROOT, '.archon/workflows/sdlc/review/fixtures/head-mismatch.stubs.yaml'),
+          'utf8'
+        ),
+        'head-mismatch.stubs.yaml'
+      );
+      expect(workflow.plan.sinks).toEqual(['result', 'prune-scratch']);
+      const run = await dryRunWorkflow({ workflow, cwd: REPO_ROOT, userMessage: '', stubs });
+      expect(run.outcome, JSON.stringify(run)).toBe('completed');
+      expect(run.summary).toContain('archon workflow run archon-review --input scope=');
+      expect(run.summary).toContain('--branch feature');
+      expect(run.trace.find(node => node.nodeId === 'prune-scratch')?.state).toBe('stubbed');
+    });
+
     it('publishes the review report from a deterministic node, not the reviewer', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review-block'],
+        'archon-review-block.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      expect(parsed.workflow.returns).toBe('publish');
+      expect(parsed.workflow.returns).toBe('result');
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({
         kind: 'exec',
@@ -782,120 +1101,6 @@ describe('bundled-defaults', () => {
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesizeCommand).not.toContain('gh pr comment');
       expect(synthesizeCommand).not.toContain('gh api');
-    });
-
-    it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      for (const [groupId, probeId, pauseId] of [
-        ['await-checks', 'ci-probe', 'ci-pause'],
-        ['await-fix-checks', 'fix-ci-probe', 'fix-ci-pause'],
-      ] as const) {
-        const group = parsed.workflow.nodes.find(node => node.id === groupId);
-        if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
-        expect(group.loop_group.max_iterations).toBe(13);
-        // Completion reads the probe's own certified field. It shelled out to `gh`
-        // while a resumed wait was believed unable to see the iteration's outputs;
-        // that was a quoting error in this predicate, not an engine limit, so the
-        // reference is bare and the probe owns the answer.
-        expect(group.loop_group.until_bash).toBe(`test $${probeId}.output.state != "pending"`);
-
-        const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
-        const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
-        expect(probeIndex).toBeGreaterThanOrEqual(0);
-        expect(pauseIndex).toBeGreaterThan(probeIndex);
-        const pause = group.loop_group.nodes[pauseIndex];
-        if (pause?.kind !== 'wait') throw new Error(`${pauseId} is not a wait node`);
-        expect(pause.wait).toEqual({ event: 'checks.complete', deadline_ms: 300000 });
-        expect(pause.wait).not.toHaveProperty('duration_ms');
-        expect(pause.depends_on).toEqual([probeId]);
-        expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
-      }
-    });
-  });
-
-  // A binary install executes the shipped copies of the deliver check scripts, so
-  // these run the bundled pack rather than the source tree. The full matrix for
-  // both sources lives in .archon/scripts/__tests__; this pins the default and
-  // the loud opt-in failure on what actually ships.
-  describe('deliver check source (bundled pack)', () => {
-    const runShipped = async (
-      script: 'check-ci' | 'flip-ready',
-      options: { source?: string; checks?: GhFake['checks'] }
-    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
-      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
-      try {
-        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
-          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
-          writeFileSync(join(root, 'sdlc', path), content);
-        }
-        const ghLog = join(root, 'gh.log');
-        const preload = join(root, 'fake-gh.ts');
-        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
-        const run = spawnSync(
-          process.execPath,
-          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
-          {
-            cwd: root,
-            encoding: 'utf8',
-            env: {
-              ...process.env,
-              INPUTS_PR: JSON.stringify({
-                repo: { host: 'github.com', path: 'owner/repo' },
-                number: 42,
-              }),
-              ARCHON_SDLC_FORGE: options.source ?? '',
-              ARCHON_CLI_COMMAND: '',
-            },
-          }
-        );
-        return {
-          code: run.status ?? -1,
-          stdout: run.stdout,
-          stderr: run.stderr,
-          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
-        };
-      } finally {
-        await removeTempTree(root);
-      }
-    };
-
-    it('reads checks through gh by default', async () => {
-      const probe = await runShipped('check-ci', {
-        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
-      });
-      expect(probe.code).toBe(0);
-      expect(JSON.parse(probe.stdout)).toEqual({
-        state: 'red',
-        detail: 'non-green checks: build (failure)',
-      });
-      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,state');
-
-      const flip = await runShipped('flip-ready', {
-        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-      });
-      expect(flip.code).toBe(0);
-      expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
-    });
-
-    it('refuses the ready flip when the default gh read fails', async () => {
-      const flip = await runShipped('flip-ready', { checks: 'fail' });
-      expect(flip.code).not.toBe(0);
-      expect(flip.stderr).toContain('flip-ready: could not read check state');
-      expect(flip.gh.some(call => call.startsWith('pr ready'))).toBe(false);
-    });
-
-    it('fails loudly when the forge source is selected but unavailable', async () => {
-      for (const script of ['check-ci', 'flip-ready'] as const) {
-        const run = await runShipped(script, {
-          source: 'forge',
-          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-        });
-        expect(run.code).not.toBe(0);
-        expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge: ARCHON_CLI_COMMAND is not set');
-        expect(run.gh).toEqual([]);
-      }
     });
   });
 
@@ -919,7 +1124,7 @@ describe('bundled-defaults', () => {
         const source = BUNDLED_WORKFLOWS[name];
         if (source === undefined) continue;
 
-        const parsed = parseWorkflow(source, name);
+        const parsed = parseWorkflow(source, name, providerRegistry);
         expect(parsed.error).toBeNull();
         const workflow = parsed.workflow;
         if (workflow === null) continue;

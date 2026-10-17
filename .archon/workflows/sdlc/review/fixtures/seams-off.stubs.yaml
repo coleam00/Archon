@@ -1,0 +1,34 @@
+# Dry-run fixture: a prose-only change. The route agent turns seams off because the
+# change touches no type, contract, state or boundary, and selects only docs.
+mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
+route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
+scope:
+  head_matches: true
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+docs: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+publish: &published_verdict
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+result: *published_verdict
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+policy: { defaults: "fixture-policy-defaults" }
+fixture:
+  expect: completed
+  reached: [route, docs, synthesize]
+  # The policy node's output reaches synthesis as the pack's default rulings.
+  resolved-text-contains:
+    synthesize: "the pack's defaults are in `fixture-policy-defaults`"

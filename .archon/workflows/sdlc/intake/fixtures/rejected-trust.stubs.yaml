@@ -1,0 +1,9 @@
+# Dry-run fixture: no input can raise trust. The real facts script runs and
+# refuses `trust: maintainer` before it reads or writes anything, so nothing
+# after it runs. .archon/scripts/__tests__/intake.test.ts proves the reason and
+# that no call was made.
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7", trust: maintainer }
+  expect: failed
+  fail-node: facts
+exec-code: true

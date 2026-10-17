@@ -34,7 +34,7 @@ Always clarify what you're reviewing at the start.
 
 ### Step 1: Gather Context
 
-1. Read project guidelines (CLAUDE.md or equivalent)
+1. Read project guidelines (AGENTS.md or equivalent)
 2. Get the diff or files to review
 3. Identify the languages and frameworks involved
 
@@ -104,7 +104,7 @@ Rate each potential issue 0-100:
 ### Scope
 - **Reviewing**: [git diff / specific files / PR diff]
 - **Files**: [list of files in scope]
-- **Guidelines**: [CLAUDE.md / other source]
+- **Guidelines**: [AGENTS.md / other source]
 
 ---
 
@@ -116,7 +116,7 @@ Rate each potential issue 0-100:
 **Category**: Bug / Guideline Violation / Security
 
 **Problem**: [Clear description]
-**Guideline/Rule**: > [Quote from CLAUDE.md or explain the bug]
+**Guideline/Rule**: > [Quote from AGENTS.md or explain the bug]
 **Current Code**: [snippet]
 **Suggested Fix**: [snippet]
 

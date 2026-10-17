@@ -1,0 +1,264 @@
+import { closeSync, writeSync, existsSync, writeFileSync } from 'node:fs';
+import { Readable, Writable } from 'node:stream';
+import { spawn } from 'node:child_process';
+import {
+  PROVIDER_PLUGIN_PROTOCOL,
+  PluginRemoteError,
+  PluginRpc,
+  serveProvider,
+} from '@archon/provider-contract/plugin';
+import type {
+  ProviderChunk,
+  CredentialStatus,
+  IAgentProvider,
+  ProviderDiagnostics,
+  ProviderModelList,
+} from '@archon/provider-contract';
+import { descriptor as fixtureDescriptor, chunks } from './process-provider-data';
+
+const mode = process.argv[2];
+const descriptor =
+  mode === 'pi-gated'
+    ? (await import('@archon/providers/pi/descriptor')).descriptor
+    : fixtureDescriptor;
+if (mode === 'mismatch') {
+  descriptor.id = process.argv[4] ?? descriptor.id;
+  descriptor.version = '2';
+}
+if (mode === 'record-pid' || mode === 'hung-models' || mode === 'hung-diagnose')
+  writeFileSync(process.argv[3], String(process.pid));
+async function closeOutput(): Promise<never> {
+  writeFileSync(process.argv[3], String(process.pid));
+  // On Windows closeSync(1) leaves the standard output handle open, so the host would
+  // never see EOF; closing the handle itself does.
+  if (process.platform === 'win32') {
+    const ffi = await import('bun:ffi');
+    const kernel32 = ffi.dlopen('kernel32.dll', {
+      GetStdHandle: { args: [ffi.FFIType.i32], returns: ffi.FFIType.ptr },
+      CloseHandle: { args: [ffi.FFIType.ptr], returns: ffi.FFIType.bool },
+    });
+    const STD_OUTPUT_HANDLE = -11;
+    kernel32.symbols.CloseHandle(kernel32.symbols.GetStdHandle(STD_OUTPUT_HANDLE));
+  } else closeSync(1);
+  setInterval(() => undefined, 1000);
+  return await new Promise<never>(() => undefined);
+}
+if (mode === 'protocol') {
+  // serveProvider only serves its own protocol, so a plugin from another one is a raw peer.
+  const rpc = new PluginRpc({
+    readable: Readable.toWeb(process.stdin),
+    writable: Writable.toWeb(process.stdout),
+  });
+  rpc.handle('initialize', () => ({
+    protocolVersion: 1,
+    agentCapabilities: {
+      _meta: { archon: { ...descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 } },
+    },
+    authMethods: [],
+  }));
+  await rpc.done.catch(() => undefined);
+  await rpc.close();
+  process.exit(0);
+}
+await serveProvider(
+  {
+    descriptor,
+    create: (log): IAgentProvider => ({
+      getType: (): string => descriptor.id,
+      getCapabilities: (): typeof descriptor.capabilities => descriptor.capabilities,
+      diagnose:
+        mode === 'no-diagnose'
+          ? undefined
+          : async ({ assistantConfig }): Promise<ProviderDiagnostics> => {
+              if (mode === 'hung-diagnose') {
+                setInterval(() => undefined, 1000);
+                return await new Promise<never>(() => undefined);
+              }
+              if (mode === 'live-eof') return await closeOutput();
+              if (mode === 'information-crash') {
+                process.stderr.write('private message and token');
+                throw new PluginRemoteError(-32603, 'private message and token', {
+                  detail: 'private message and token',
+                });
+              }
+              return {
+                checks: [
+                  {
+                    id: 'config',
+                    label: 'Configuration',
+                    status: assistantConfig?.model ? 'ok' : 'skip',
+                    message: 'Configuration inspected',
+                    remedy: 'Select a model',
+                  },
+                ],
+              };
+            },
+      async listModels(): Promise<ProviderModelList> {
+        if (mode === 'hung-models') {
+          setInterval(() => undefined, 1000);
+          return await new Promise<never>(() => undefined);
+        }
+        if (mode === 'live-eof') return await closeOutput();
+        return {
+          models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
+        };
+      },
+      async checkCredential({ env, signal }): Promise<CredentialStatus> {
+        if (mode === 'live-eof') return await closeOutput();
+        if (mode === 'credential-crash') {
+          process.stderr.write(process.env.CUSTOM_CREDENTIAL ?? '');
+          process.exit(7);
+        }
+        if (mode === 'hung-check')
+          await new Promise<void>(resolve => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                resolve();
+              },
+              { once: true }
+            );
+          });
+        return env.TEST_CREDENTIAL
+          ? { state: 'usable', source: 'native' }
+          : { state: 'not_connected', source: 'native' };
+      },
+      async resolveCredentialModel(request): Promise<string> {
+        if (mode === 'live-eof') return await closeOutput();
+        return request.model ?? 'openai/native-model';
+      },
+      async *sendQuery(prompt, _cwd, resume, options): AsyncGenerator<ProviderChunk> {
+        if (mode === 'pi-gated') {
+          writeFileSync(`${process.argv[3]}.${prompt}.pid`, String(process.pid));
+          yield { type: 'agent_message_chunk', text: 'started' };
+          while (!existsSync(`${process.argv[3]}.${prompt}.release`)) {
+            options?.abortSignal?.throwIfAborted();
+            await Bun.sleep(5);
+          }
+          yield { type: 'result' };
+          yield { type: 'settled' };
+          return;
+        }
+        if (mode === 'live-eof') return await closeOutput();
+        if (mode === 'resume') {
+          yield { type: 'result', sessionId: resume };
+          yield { type: 'settled' };
+          return;
+        }
+        if (mode === 'slow-exit') {
+          const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+            stdio: 'ignore',
+          });
+          grandchild.unref();
+          writeFileSync(`${process.argv[3]}.pids`, JSON.stringify([process.pid, grandchild.pid]));
+        }
+        if (mode === 'mismatch') writeFileSync(process.argv[3], 'session started');
+        if (mode === 'tree') {
+          const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+            stdio: 'ignore',
+          });
+          writeFileSync(process.argv[3], JSON.stringify([process.pid, grandchild.pid]));
+          options?.abortSignal?.addEventListener(
+            'abort',
+            () => {
+              writeFileSync(`${process.argv[3]}.cancelled`, 'cancel received');
+            },
+            { once: true }
+          );
+          yield { type: 'state_update', state: 'running' };
+          await new Promise<void>(() => undefined);
+        }
+        if (mode === 'crash') {
+          yield { type: 'state_update', state: 'running' };
+          process.stderr.write(`${prompt.split('\n')[0]}\n${process.env.REQUEST_AUTH ?? ''}\n`);
+          const secret = process.env.TEST_CREDENTIAL ?? '';
+          process.stderr.write(secret.slice(0, 6));
+          await Bun.sleep(30);
+          process.stderr.write(`${secret.slice(6)} crash evidence\n`);
+          process.exit(7);
+        }
+        if (mode === 'logs') {
+          await log({
+            level: 'warn',
+            msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''} ${prompt}`,
+            bindings: {
+              failureClass: 'auth',
+              module: 'provider.forged',
+              token: options?.env?.CONTAINER_TOKEN ?? '',
+              hostToken: process.env.CONTAINER_TOKEN ?? '',
+              custom: options?.env?.CUSTOM_AUTH ?? '',
+              nested: { message: prompt, lines: prompt.split('\n'), count: 1 },
+              excerpt: prompt.slice(0, 7),
+              escaped: JSON.stringify(prompt),
+              system: options?.systemPrompt ?? '',
+              numeric: Number(options?.env?.NUMERIC_TOKEN),
+              [prompt]: [true, null],
+            },
+          });
+        }
+        if (mode === 'logs-untrusted') {
+          process.stdout.write(
+            `${JSON.stringify({
+              jsonrpc: '2.0',
+              method: '_archon/log',
+              params: {
+                level: process.argv[3],
+                msg: 'credential-secret private message',
+                bindings: {
+                  ...(prompt ? { failureClass: prompt } : {}),
+                  module: 'provider.forged',
+                },
+              },
+            })}\n`
+          );
+        }
+        if (mode === 'plugin-env') {
+          yield {
+            type: 'result',
+            text: JSON.stringify({
+              host: process.env.PROCESS_HOST_CANARY,
+              path: process.env.PATH,
+              container: process.env.PROCESS_CANARY,
+            }),
+          };
+          yield { type: 'settled' };
+          return;
+        }
+        if (mode === 'env') {
+          yield { type: 'result', text: JSON.stringify(options?.env) };
+          yield { type: 'settled' };
+          return;
+        }
+        if (prompt === 'failure') {
+          yield { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } };
+          yield { type: 'settled' };
+          return;
+        }
+        if (mode === 'background') writeFileSync(process.argv[3], 'running');
+        for (const chunk of chunks) {
+          if (chunk.type === 'subtask' && chunk.status === 'completed') {
+            if (mode === 'background') {
+              while (!existsSync(`${process.argv[3]}.ack`)) await Bun.sleep(5);
+              writeFileSync(process.argv[3], 'completed');
+            } else await Bun.sleep(50);
+          }
+          yield chunk;
+        }
+      },
+    }),
+  },
+  mode === 'live-eof'
+    ? {
+        readable: Readable.toWeb(process.stdin),
+        writable: new WritableStream<Uint8Array>({
+          write(data): void {
+            writeSync(1, data);
+          },
+        }),
+      }
+    : undefined
+);
+if (mode === 'slow-exit') {
+  writeFileSync(process.argv[3], 'closing');
+  await Bun.sleep(500);
+}

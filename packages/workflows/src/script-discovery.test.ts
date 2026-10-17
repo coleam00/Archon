@@ -35,13 +35,12 @@ let mockHomeWorkflowsPath = '/home/workflows';
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home'),
-  getDefaultWorkflowsPath: mock(() => '/app/workflows/defaults'),
-  getDefaultCommandsPath: mock(() => '/app/commands/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/workflows'),
   getHomeScriptsPath: mock(() => mockHomeScriptsPath),
   getHomeWorkflowsPath: mock(() => mockHomeWorkflowsPath),
 }));
 
-import { discoverScripts, discoverScriptsForCwd, getDefaultScripts } from './script-discovery';
+import { discoverScripts, discoverScriptsForCwd } from './script-discovery';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
 // On Windows, path.join produces backslashes (e.g. `\scripts\triage`). The
@@ -378,19 +377,5 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
         'shared'
       ),
     ]);
-  });
-});
-
-describe('getDefaultScripts', () => {
-  test('returns an empty Map', () => {
-    const defaults = getDefaultScripts();
-    expect(defaults).toBeInstanceOf(Map);
-    expect(defaults.size).toBe(0);
-  });
-
-  test('returns a new Map each call', () => {
-    const a = getDefaultScripts();
-    const b = getDefaultScripts();
-    expect(a).not.toBe(b);
   });
 });

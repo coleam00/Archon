@@ -73,7 +73,6 @@ import * as git from '@archon/git';
 
 **Functions:**
 ```typescript
-// All functions need explicit return types
 async function createSession(id: string): Promise<Session> { ... }
 // No implicit any
 ```
@@ -142,17 +141,11 @@ Fix any failures before proceeding to the next package group.
 
 ---
 
-## Step 5: Run Full Validation
+## Step 5: Check Your Changes
 
-After all tasks are complete, run the full validation suite:
+After all tasks are complete, run the tests that cover what you changed, and lint, format-check and type-check the packages you touched. Fix any failure your change caused before reporting completion.
 
-```bash
-bun run validate
-```
-
-This runs: `type-check && lint --max-warnings 0 && format:check && test`
-
-All four must pass. If any fail, fix them before reporting completion.
+CI is the full validation; don't run `bun run validate`.
 
 ---
 
@@ -179,7 +172,6 @@ Provide a structured completion report:
 - lint: PASS / FAIL (N warnings)
 - format:check: PASS / FAIL
 - tests: PASS / FAIL (N passed, N failed)
-- Full `bun run validate`: PASS / FAIL
 
 ### Manual Verification
 {Any curl commands or UI steps to manually verify the feature works.}

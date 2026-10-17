@@ -91,7 +91,7 @@ Compiled-binary builds of Archon no longer embed Claude Code / Codex — you ins
 
 **Fix (Codex):**
 - Install: `npm install -g @openai/codex` (or platform-specific instructions)
-- Set `CODEX_CLI_PATH=/path/to/codex` or `assistants.codex.codexBinaryPath` in config
+- Set `CODEX_BIN_PATH=/path/to/codex` or `assistants.codex.codexBinaryPath` in config
 - Autodetect covers the standard npm / Homebrew locations per platform
 
 See [archon.diy/getting-started/installation/](https://archon.diy/getting-started/installation/) for full platform-specific install paths.
@@ -101,7 +101,7 @@ See [archon.diy/getting-started/installation/](https://archon.diy/getting-starte
 Three possibilities:
 
 1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool` or `assistant` events in the tail, it's fine. Wait.
-2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "No Autonomous Lifecycle Mutation" rule — `CLAUDE.md`). Transition it manually:
+2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "Do not guess lifecycle ownership" rule — `AGENTS.md`). Transition it manually:
    - Any cancel (Web UI Cancel, `archon workflow cancel <run-id>`, chat `/workflow cancel [id]`) stops a live owner process before marking the row cancelled, and refuses when no owner answers — an orphan row gets that refusal, with the host and pid it recorded
    - Verified orphan: `archon workflow abandon <run-id>` (or Abandon in the Web UI after the refused Cancel, or `/workflow abandon <id>` in chat) — marks the row cancelled
 3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.
@@ -120,15 +120,15 @@ archon workflow resume <run-id>
 
 **Session caveat:** A cold resume does not reconstruct the ambient sequential
 `context: shared` cursor. Explicit `context: { resume: node-id }` ancestry is
-restored from saved run-scoped handles, and an interactive loop with
+restored from saved run-scoped handles, and a deprecated interactive loop with
 `fresh_context: false` resumes its pre-pause session when the provider supports
 it. Artifact-based handoff remains the provider-independent path.
 
-### Approval gate not appearing on web UI
+### Paused run with no chat message
 
-The workflow has an approval node but still runs in the background and no chat message appears.
+A run is paused at a gate or an attention wait, but no message reached the conversation that started it.
 
-**Fix:** Set `interactive: true` at the **workflow level**. Node-level `interactive` is not a supported field; the loader ignores it and warns that the key is unknown.
+**Cause:** the platform could not deliver the pause notice. The run still waits. The failure is logged as `platform_message_send_failed` and recorded on the run as a `pause_notice_undelivered` event, which the console's run view shows. Answer the run by id: `archon workflow status`, then `approve`, `reject`, or `respond`.
 
 ### `MCP server connection failed: <plugin>` noise in chat
 
@@ -162,11 +162,15 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`interactive`, `effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
+Invalid values for optional workflow-level fields (`effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 
 A `persist_session` node whose provider couldn't restore the prior session runs FRESH with a warning (it does not fail). The warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
+
+### `cannot fork a session` warning
+
+The node's provider cannot fork a session (no `sessionFork` in the [provider capabilities](https://archon.diy/reference/provider-capabilities/)), so a `persist_session` node on it never continues an earlier run's session: every run starts fresh. `archon validate workflows` reports this when the provider is written in the workflow file. Once an earlier run has saved a session for this node and provider, each later run also posts this warning in chat and records a `node_session_not_continued` event naming the session it skipped. This is expected, not broken state, and `reset-sessions` does not change it. To carry context across runs, move the node to a provider that forks sessions, or have it write what the next run needs as an artifact and read that instead. If neither applies, remove `persist_session` from the node.
 
 ## Useful Diagnostic Commands
 

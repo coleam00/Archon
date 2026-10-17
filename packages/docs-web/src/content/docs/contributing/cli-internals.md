@@ -46,9 +46,9 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ loadArchonEnv(cwd)  — both loads use override: true             │
+│ loadCliEnv(cwd) — wraps loadArchonEnv with identity protection  │
 │   1. ~/.archon/.env        (home scope)                         │
-│   2. <cwd>/.archon/.env    (repo scope, wins over home)         │
+│   2. <cwd>/.archon/.env    (repo scope, exceptions below)       │
 │   Emits one [archon] loaded N keys from <path> line per file    │
 │   when N > 0 and ARCHON_VERBOSE_BOOT=1 or LOG_LEVEL=debug/trace.│
 └─────────────────────────────────┬───────────────────────────────┘
@@ -61,9 +61,9 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ cli.ts  Git repository check                                    │
-│                 Skip for version/help, validate and resolve to  │
-│                 repo root for workflow/isolation commands       │
+│ cli.ts  Project resolution                                      │
+│                 Honor folder selection and registered folders;  │
+│                 otherwise resolve the nearest Git checkout      │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -80,11 +80,16 @@ packages/cli/
 
 **Code:** `packages/cli/src/cli.ts`
 
-**Git repository check:**
-- Commands `workflow`, `isolation`, and `complete` require running from a git repository
-- Commands `version`, `help`, `setup`, and `chat` bypass this check
-- When in a subdirectory, automatically resolves to repository root
-- Exit code 1 if not in a git repository
+Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
+
+**Project resolution:**
+
+- `workflow run --folder` uses the supplied canonical directory, even inside Git, and explicitly registers it as a folder project.
+- A registered folder and its ordinary descendants resolve to the folder directory. Archon runs folder workflows in place without managing a worktree, branch or PR.
+- A Git repository nested inside a registered folder retains its own repository identity. Other Git paths resolve to the nearest repository root, preserving linked-checkout ownership.
+- Unregistered non-Git execution requires folder registration; first-use CLI execution uses `workflow run --folder`. Without registration or that flag, execution exits with code 1.
+- File-only dry runs and fixture tests can inspect local files without registration. On a readable registry they honor folder ownership; if lookup fails they use the proven Git root or supplied directory. `workflow list` and `validate` retain their Git-root fallback when the registry cannot open.
+- `version`, `help`, `setup`, and `chat` bypass project resolution.
 
 ---
 
@@ -103,7 +108,7 @@ packages/cli/
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ @archon/workflows/workflow-discovery                              │
-│ discoverWorkflowsWithConfig(cwd, config)                          │
+│ discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry)    │
 │ - Loads bundled defaults                                         │
 │ - Searches .archon/workflows/ recursively                        │
 │ - Merges (repo overrides defaults by name)                       │
@@ -263,34 +268,26 @@ can fail before either write.
 
 ## `isolation cleanup` Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation cleanup [days]                                 │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:62-99  isolationCleanupCommand(daysStale)          │
-│                     default: 7 days                             │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.findStaleEnvironments(days)            │
-│ - WHERE last_activity_at < now - days                           │
-│ - Excludes telegram platform                                    │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ For each stale environment:                                     │
-│ 1. provider.destroy(path, options)                              │
-│ 2. Update DB status → 'destroyed'                               │
-│ 3. Log result                                                   │
-└─────────────────────────────────────────────────────────────────┘
+```text
+archon isolation cleanup [days] (default: 7)
+  │
+  ├─ Reconcile missing worktrees (preserve container rows)
+  │
+  ├─ findStaleEnvironments(days)
+  │    └─ Filter provider = 'worktree'
+  │         └─ For each stale worktree:
+  │              ├─ Skip environments owned by resumable runs
+  │              ├─ Skip any with a commit on no remote (getCleanupRunLock)
+  │              └─ provider.destroy(path, options)
+  │                   └─ Mark destroyed only after complete removal
+  │
+  └─ cleanupContainerEnvironments(days), even when no worktrees are stale
+       ├─ Skip containers owned by resumable runs
+       └─ Container backend removes container and volume
+            └─ Mark destroyed only after successful removal
 ```
 
-**Code:** `packages/cli/src/commands/isolation.ts:62-99`
+**Code:** `isolationCleanupCommand` in `packages/cli/src/commands/isolation.ts`
 
 ---
 
@@ -318,22 +315,24 @@ can fail before either write.
 │  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE/  │
 │                                      UNAVAILABLE)               │
 │                                                                 │
-│  any git signal          → 'reclaimable' if the worktree HEAD   │
+│  any git signal          → 'merged' if the worktree HEAD        │
 │                            also passes `git cherry <base> HEAD` │
-│  MERGED                  → 'reclaimable' if the worktree HEAD   │
+│  MERGED                  → 'merged' if the worktree HEAD        │
 │                            and the branch ref (where each       │
 │                            exists) are at or behind the PR head │
-│  CLOSED                  → same, only if includeClosed          │
+│  CLOSED                  → 'pr-closed' the same way, only if    │
+│                            includeClosed                        │
 │  OPEN                    → 'open-pr', always kept               │
 │  UNAVAILABLE             → 'pr-unavailable', kept and reported  │
 │  NONE and ref present    → 'unmerged', not reclaimed            │
 │  NONE and ref gone       → 'unjudgeable', kept and reported     │
 └─────────────────────────────────┬───────────────────────────────┘
-                                  │ 'reclaimable'
+                                  │ 'merged' or 'pr-closed'
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Guard checks: no uncommitted changes, no run can still claim    │
-│ the env (getRemovalBlocker)                                     │
+│ Guard checks: no uncommitted changes, no run lock (checkRemoval │
+│ → getCleanupRunLock; a failed run's lock is released by the     │
+│ verdict, running/pending/paused runs always lock)               │
 │ provider.destroy() → remove worktree + delete remote branch     │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -359,7 +358,7 @@ fetched by SHA from the branch's remote first; if that fetch fails, the check fa
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
-**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getRemovalBlocker()`
+**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getCleanupRunLock()`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
 **Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
 
@@ -389,7 +388,7 @@ Implements `IPlatformAdapter` for terminal output.
 
 | Function | Package | Location | Purpose |
 |----------|---------|----------|---------|
-| `discoverWorkflowsWithConfig(cwd, config)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | Find and parse workflow YAML |
+| `discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | Find and parse workflow YAML |
 | `executeWorkflow(...)` | `@archon/workflows/executor` | `workflows/src/executor.ts` | Run workflow steps |
 | `getIsolationProvider()` | `@archon/isolation` | `isolation/src/factory.ts` | Get WorktreeProvider singleton |
 | `conversationDb.*` | `@archon/core` | `core/src/db/conversations.ts` | Conversation CRUD |
@@ -404,9 +403,9 @@ Implements `IPlatformAdapter` for terminal output.
 
 CLI conversations use ID format: `cli-{timestamp}-{random}`
 
-Example: `cli-1705932847321-a7f3b2`
+The random suffix contains 16 cryptographically random bytes encoded as 32 hex characters.
 
-Generated at: `packages/cli/src/commands/workflow.ts`
+Generated at: `packages/cli/src/utils/conversation-id.ts`
 
 ---
 
@@ -432,8 +431,11 @@ Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | Error (logged to stderr, including not in git repo) |
+| 0 | Success, except for the JSON control refusals noted below. |
+| 1 | Error. Answer commands (`answer`, `respond`, `approve`, `reject`) and `resume --detach` also return 1 on refusal. Human-mode diagnostics go to stderr; JSON refusals emit `ok: false` with the reason on stdout. |
+
+Non-detached JSON `resume`, `abandon`, and `cancel` can return 0 with `ok: false`.
+Check `ok` when consuming those acknowledgments.
 
 ---
 

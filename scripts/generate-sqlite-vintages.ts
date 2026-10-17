@@ -36,6 +36,7 @@
 import { spawnSync } from 'child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { isFinalReleaseTag } from './release-tags';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const ADAPTER_REPO_PATH = 'packages/core/src/db/adapters/sqlite.ts';
@@ -44,8 +45,24 @@ const CHECK_ONLY = process.argv.includes('--check');
 const SCHEMA_SIGNATURE = 'private createSchema(): void {';
 
 /**
+ * The final release tags in `git tag` output (`v<major>.<minor>.<patch>`), in the
+ * given order; tags of any other shape are ignored. Throws when
+ * none is left: an empty tag set would make write mode delete every checked-in
+ * fixture while exiting 0, so no release history means this script cannot run.
+ */
+export function releaseTags(gitTagOutput: string): string[] {
+  const tags = gitTagOutput.split('\n').filter(isFinalReleaseTag);
+  if (tags.length === 0) {
+    throw new Error(
+      'git tag listed no release tags — cannot regenerate vintage fixtures (shallow or broken checkout?)'
+    );
+  }
+  return tags;
+}
+
+/**
  * Deliberately `spawnSync` rather than `@archon/git`: this script must run in the
- * `schema-upgrade` CI job with no `bun install` (it imports nothing outside Node
+ * `schema-upgrade` CI job with no `bun install` (only local modules and Node
  * builtins), and reads history — `git show <ref>:<path>` — rather than
  * manipulating worktrees, which is what `@archon/git` covers. The argument array
  * means no ref ever reaches a shell.
@@ -128,14 +145,7 @@ function vintages(): Map<string, string> {
   if (!tagResult.ok) {
     throw new Error(`git tag failed: ${tagResult.stderr.trim() || '(no stderr)'}`);
   }
-  const tags = tagResult.stdout.split('\n').filter(Boolean);
-  if (tags.length === 0) {
-    // An empty tag set would make write mode delete every checked-in fixture
-    // while exiting 0; no release history means this script cannot run.
-    throw new Error(
-      'git tag listed no tags — cannot regenerate vintage fixtures (shallow or broken checkout?)'
-    );
-  }
+  const tags = releaseTags(tagResult.stdout);
   const oldestTagPerSchema = new Map<string, string>();
   let withoutAdapter = 0;
 
@@ -173,12 +183,12 @@ function vintages(): Map<string, string> {
   return oldestTagPerSchema;
 }
 
-/** Fixture filename for a tag. Tags are `vX.Y.Z`, so the name is injection-safe. */
+/** Fixture filename for a tag. Tags come from `releaseTags`, so the name is injection-safe. */
 function fixtureName(tag: string): string {
-  if (!/^v[\w.-]+$/.test(tag)) throw new Error(`unexpected tag shape: ${tag}`);
   return `${tag}.sql`;
 }
 
+/** Regenerates the vintage fixtures, or with `--check` verifies they are current. */
 function main(): void {
   const expected = new Map<string, string>();
   for (const [sql, tag] of vintages()) expected.set(fixtureName(tag), sql);

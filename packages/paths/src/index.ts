@@ -24,11 +24,11 @@ export {
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
   getAppArchonBasePath,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  toSafeNameSegment,
   resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
@@ -58,10 +58,16 @@ export {
   ensureFolderProjectStructure,
   ensureProjectStructure,
   createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
   findMarkdownFilesRecursive,
   findCommandFiles,
   getWebDistDir,
   getSourceWebDistDir,
+  getSourceServerEntry,
+  getSourceProviderEntry,
+  getServerDistDir,
+  projectKeyForStorageRoot,
+  projectKeyForCodebase,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 
@@ -74,10 +80,17 @@ export {
 export type { DetachedInstallContext, DetachedInstallContextKey } from './detached-install-context';
 
 // Env loader
-export { loadArchonEnv, isVerboseBoot, getPluginsPath } from './env-loader';
+export { loadArchonEnv, isVerboseBoot, getPluginsPath, getArchonEnvNames } from './env-loader';
 
 // Logger
-export { createLogger, setLogLevel, getLogLevel, setLogDestination, rootLogger } from './logger';
+export {
+  createLogger,
+  setLogLevel,
+  getLogLevel,
+  setLogDestination,
+  setLogSink,
+  rootLogger,
+} from './logger';
 export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)
@@ -86,6 +99,7 @@ export {
   BUNDLED_VERSION,
   BUNDLED_GIT_COMMIT,
   BUNDLED_WEB_DIST_SHA256,
+  BUNDLED_SERVER_SHA256,
 } from './bundled-build';
 
 // Compiled CLI discovery manifest
@@ -96,6 +110,7 @@ export type { InstallManifest } from './install-manifest';
 export {
   checkForUpdate,
   getCachedUpdateCheck,
+  takeCachedUpdateNotice,
   isNewerVersion,
   parseLatestRelease,
 } from './update-check';

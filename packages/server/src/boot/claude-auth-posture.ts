@@ -35,10 +35,10 @@ export function shouldDefaultClaudeGlobalAuth(env: NodeJS.ProcessEnv): boolean {
 export function hasClaudeBootAuthPosture(env: NodeJS.ProcessEnv): boolean {
   return Boolean(
     env.CLAUDE_API_KEY ||
-    env.CLAUDE_CODE_OAUTH_TOKEN ||
-    // Enabled-only: `CLAUDE_USE_GLOBAL_AUTH=false` is an explicit opt-out (setup.ts
-    // writes it), so plain truthiness would wrongly count it as a valid posture.
-    env.CLAUDE_USE_GLOBAL_AUTH === 'true' ||
-    env.TOKEN_ENCRYPTION_KEY // per-user keys deliver Claude auth per request
+      env.CLAUDE_CODE_OAUTH_TOKEN ||
+      // Enabled-only: `CLAUDE_USE_GLOBAL_AUTH=false` is an explicit opt-out (setup.ts
+      // writes it), so plain truthiness would wrongly count it as a valid posture.
+      env.CLAUDE_USE_GLOBAL_AUTH === 'true' ||
+      env.TOKEN_ENCRYPTION_KEY // per-user keys deliver Claude auth per request
   );
 }

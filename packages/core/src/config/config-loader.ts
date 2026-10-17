@@ -1,3 +1,12 @@
+import { validateWorktreePostCreate } from '@archon/isolation';
+import { installedProviders, missingProviderMessage } from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
+import type { OpencodeProviderDefaults } from '@archon/providers/types';
+import {
+  DEFAULT_TOOL_CALL_ATTENTION_MS,
+  deprecatedQuotaPolicyWarning,
+  liveWorkflowPolicy,
+} from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
  *
@@ -7,14 +16,10 @@
  * 3. Repository config (.archon/config.yaml)
  * 4. Environment variables
  */
-
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
-import {
-  getArchonConfigPath,
-  getArchonWorkspacesPath,
-  getArchonWorktreesPath,
-} from '@archon/paths';
+import { getArchonConfigPath } from '@archon/paths';
 
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
@@ -35,18 +40,24 @@ import type {
   SafeConfig,
   AssistantDefaults,
   AssistantDefaultsConfig,
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  CopilotProviderDefaults,
+  PiProviderDefaults,
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { workflowContinuationConfigSchema } from './config-types';
+import {
+  attentionNoticeRoutesSchema,
+  platformStreamingSchema,
+  workflowContinuationConfigSchema,
+} from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
   getRegisteredProviders,
   getRegistration,
   InvalidProviderRunConfigError,
-  registerBuiltinProviders,
-  registerCommunityProviders,
 } from '@archon/providers';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -68,23 +79,7 @@ export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
  */
 export type AliasesPatch = Record<string, RawAliasEntry | null>;
 
-/**
- * Populate the provider registry. Idempotent, and called from every config
- * entrypoint because each one validates `assistants.*` against the registry —
- * a loader reached directly (not through `loadConfig`) would otherwise see an
- * empty registry and skip every provider.
- */
-function ensureProvidersRegistered(): void {
-  registerBuiltinProviders();
-  registerCommunityProviders();
-}
-
-/**
- * Pure read of registered provider IDs. Registration is guaranteed by
- * `ensureProvidersRegistered()` at each config entrypoint, so this helper must
- * NOT trigger side-effecting registration itself — that hid the ordering
- * coupling and surprised readers.
- */
+/** The host registers providers before loading configuration. */
 function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
 }
@@ -154,15 +149,28 @@ function mergeAssistantDefaults(
  * but none of its defaults. Providers whose defaults are safe to surface
  * register their fields here.
  */
-const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
+const SAFE_ASSISTANT_FIELDS: {
+  [P in keyof SafeFieldOwners]: readonly (keyof SafeFieldOwners[P])[];
+} = {
   claude: ['model'],
   codex: ['model', 'modelReasoningEffort', 'webSearchMode'],
   // community providers — list each field we're confident is safe to
   // show in the web UI. Unknown providers fall through with no fields.
-  opencode: ['model', 'agent'],
+  opencode: ['model'],
   pi: ['model'],
   copilot: ['model'],
 };
+
+/** Each listed field must be a key of its provider's schema-derived defaults. */
+interface SafeFieldOwners {
+  claude: ClaudeProviderDefaults;
+  codex: CodexProviderDefaults;
+  opencode: OpencodeProviderDefaults;
+  pi: PiProviderDefaults;
+  copilot: CopilotProviderDefaults;
+}
+
+const safeFieldsByProvider: Partial<Record<string, readonly string[]>> = SAFE_ASSISTANT_FIELDS;
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
   const safeAssistants: SafeConfig['assistants'] = {};
@@ -170,7 +178,7 @@ function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['ass
   for (const [providerId, providerDefaults] of Object.entries(assistants)) {
     if (!providerDefaults || typeof providerDefaults !== 'object') continue;
 
-    const allowed = SAFE_ASSISTANT_FIELDS[providerId] ?? [];
+    const allowed = safeFieldsByProvider[providerId] ?? [];
     const safeDefaults: Record<string, unknown> = {};
     for (const field of allowed) {
       const value = (providerDefaults as Record<string, unknown>)[field];
@@ -197,6 +205,25 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function parseYaml(content: string): unknown {
   return Bun.YAML.parse(content);
+}
+
+/**
+ * Parse a config file into its top-level map of settings; an empty file is `{}`.
+ * Bun's YAML error names neither the file nor the line, so the message adds the file.
+ */
+function parseConfigMapping(content: string, configPath: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(content);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`'${configPath}' is not valid YAML (${reason}).`, { cause: error });
+  }
+  if (parsed === null || parsed === undefined) return {};
+  if (!isConfigRecord(parsed)) {
+    throw new Error(`'${configPath}' is not a map of settings at its top level.`);
+  }
+  return parsed;
 }
 
 // Cache for loaded configs
@@ -245,22 +272,6 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 `;
 
 /**
- * Log config error with specific message based on error type
- */
-function logConfigError(configPath: string, error: unknown): void {
-  const err = error as { code?: string; message?: string };
-  const message = err.message ?? String(error);
-
-  if (err.code === 'EACCES' || err.code === 'EPERM') {
-    getLog().error({ configPath, err: error, code: err.code }, 'config_permission_denied');
-  } else if (error instanceof SyntaxError || message.includes('YAML')) {
-    getLog().error({ configPath, err: error }, 'config_invalid_yaml');
-  } else {
-    getLog().error({ configPath, err: error }, 'config_load_error');
-  }
-}
-
-/**
  * Create default config file if it doesn't exist
  */
 async function createDefaultConfig(configPath: string): Promise<void> {
@@ -305,6 +316,10 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
       .join('; ');
     throw new InvalidConfigError('Invalid workflows config', configPath, issues);
   }
+  const warning = deprecatedQuotaPolicyWarning(result.data);
+  if (warning !== undefined) {
+    getLog().warn({ configPath, warning }, 'config.workflows_quota_keys_deprecated');
+  }
   config.workflows = result.data;
 }
 
@@ -317,9 +332,8 @@ function isConfigRecord(value: unknown): value is Record<string, unknown> {
  * the same one an explicitly selected `--config` run layer uses, so a value is
  * accepted or refused identically on both paths.
  *
- * Deliberately NOT inside the loaders' degrade-and-log `catch`: a setting the
- * provider would drop must refuse to load, because the run reports it as the
- * value the node ran at (#2582). Values are checked, not rewritten — narrowing
+ * A setting the provider would drop must refuse to load, because the run
+ * reports it as the value the node ran at (#2582). Values are checked, not rewritten — narrowing
  * stays with the defensive parsers at the execution boundary.
  *
  * Entries for unregistered providers pass through untouched. There is no owner
@@ -382,47 +396,101 @@ function validateModelBindingConfig(parsed: unknown, configPath: string): void {
   }
 }
 
-/**
- * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
- * or unreadable. A missing file is created from the documented template; any
- * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases` or
- * `workflows` block — is logged and the install falls back to defaults.
- */
-async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
-  try {
-    const content = await readConfigFile(configPath);
-    const parsed = parseYaml(content);
-    validateWorkflowContinuationConfig(parsed, configPath);
-    validateModelBindingConfig(parsed, configPath);
-    return (parsed as GlobalConfig | null) ?? {};
-  } catch (error) {
-    const err = error as { code?: string };
-    if (err.code === 'ENOENT') {
-      // File doesn't exist - create default config
-      await createDefaultConfig(configPath);
-    } else {
-      // Log specific error message based on error type
-      logConfigError(configPath, error);
-    }
-    return {};
+function validateStreamingConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.streaming === undefined) return;
+  const result = platformStreamingSchema.safeParse(parsed.streaming);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `streaming.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid streaming config', configPath, issues);
+  }
+  parsed.streaming = result.data;
+}
+
+function validateAttentionNoticesConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.attentionNotices === undefined) return;
+  const result = attentionNoticeRoutesSchema.safeParse(parsed.attentionNotices);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `attentionNotices.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid attentionNotices config', configPath, issues);
+  }
+  parsed.attentionNotices = result.data;
+}
+
+function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
+  if (!isConfigRecord(parsed.concurrency)) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency' must be an object."
+    );
+  }
+  const limit = parsed.concurrency.maxConversations;
+  if (limit === undefined) return;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency.maxConversations' must be a finite positive integer."
+    );
   }
 }
 
 /**
- * Load global config from ~/.archon/config.yaml
- * Creates default config if file doesn't exist
+ * Read a config file, or `undefined` when it does not exist.
  *
- * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults.
+ * Only a missing file falls back to defaults. An unreadable file fails the load,
+ * as do invalid YAML and a block a validator refuses: degrading would silently
+ * replace every setting in the file, including models and concurrency.
+ */
+async function readConfigFileIfPresent(configPath: string): Promise<string | undefined> {
+  try {
+    return await readConfigFile(configPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Read ~/.archon/config.yaml. A missing file is created from the documented
+ * template and loads as empty. Every other failure throws, naming the file:
+ * permissions, YAML syntax, a top level that is not a mapping, or a rejected `tiers`/`aliases`, `streaming`,
+ * `attentionNotices`, `concurrency` or `workflows` block.
+ */
+async function readGlobalConfig(configPath: string): Promise<GlobalConfig> {
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) {
+    await createDefaultConfig(configPath);
+    return {};
+  }
+  const parsed = parseConfigMapping(content, configPath);
+  validateWorkflowContinuationConfig(parsed, configPath);
+  validateModelBindingConfig(parsed, configPath);
+  validateStreamingConfig(parsed, configPath);
+  validateAttentionNoticesConfig(parsed, configPath);
+  validateConversationConcurrencyConfig(parsed, configPath);
+  return parsed as GlobalConfig;
+}
+
+/**
+ * Load global config from ~/.archon/config.yaml, creating it from the template
+ * when missing.
+ *
+ * Throws when the file cannot be read or parsed, or when any block, including
+ * `assistants.*`, names a value Archon cannot honour.
  */
 export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfig> {
   if (cachedGlobalConfig && !forceReload) {
     return cachedGlobalConfig;
   }
 
-  ensureProvidersRegistered();
   const configPath = getArchonConfigPath();
-  const parsed = await readGlobalConfigOrDegrade(configPath);
+  const parsed = await readGlobalConfig(configPath);
   validateAssistantDefaults(parsed, configPath);
   cachedGlobalConfig = parsed;
   return cachedGlobalConfig;
@@ -453,47 +521,36 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
   return cleaned;
 }
 
-/** Read .archon/config.yaml, degrading to an empty config when it is missing or unreadable. */
-async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> {
-  try {
-    const content = await readConfigFile(configPath);
-    const raw = parseYaml(content);
-    validateWorkflowContinuationConfig(raw, configPath);
-    validateModelBindingConfig(raw, configPath);
-    const parsed = (raw as RepoConfig | null) ?? {};
-    const recommendedWorkflows = sanitizeRecommendedWorkflows(
-      (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
-      configPath
-    );
-    if (recommendedWorkflows !== undefined) {
-      parsed.recommendedWorkflows = recommendedWorkflows;
-    } else {
-      delete parsed.recommendedWorkflows;
-    }
-    return parsed;
-  } catch (error) {
-    const err = error as { code?: string };
-    if (err.code === 'ENOENT') {
-      // File doesn't exist - expected, use defaults
-      return {};
-    }
-    // Log specific error message based on error type
-    logConfigError(configPath, error);
-    return {};
+async function readRepoConfig(configPath: string): Promise<RepoConfig> {
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) return {};
+  const raw = parseConfigMapping(content, configPath);
+  validateWorkflowContinuationConfig(raw, configPath);
+  validateModelBindingConfig(raw, configPath);
+  const parsed = raw as RepoConfig;
+  const recommendedWorkflows = sanitizeRecommendedWorkflows(
+    (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
+    configPath
+  );
+  if (recommendedWorkflows !== undefined) {
+    parsed.recommendedWorkflows = recommendedWorkflows;
+  } else {
+    delete parsed.recommendedWorkflows;
   }
+  return parsed;
 }
 
 /**
- * Load repository config from .archon/config.yaml
- * Returns empty object if no config found
+ * Load repository config from .archon/config.yaml. A missing file loads as `{}`.
  *
- * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults.
+ * Every other failure throws, naming the file: an unreadable file, invalid
+ * YAML, a top level that is not a mapping, or a refused `workflows`, `tiers`,
+ * `aliases`, `assistants.*` or `worktree.postCreate` value.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
-  ensureProvidersRegistered();
   const configPath = join(repoPath, '.archon', 'config.yaml');
-  const parsed = await readRepoConfigOrDegrade(configPath);
+  const parsed = await readRepoConfig(configPath);
+  validateWorktreePostCreate(parsed.worktree);
   validateAssistantDefaults(parsed, configPath);
   return parsed;
 }
@@ -502,13 +559,8 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
-  // Seed one empty entry per registered provider — built-in OR community.
-  // No per-provider listing here: adding a new provider must not require
-  // editing this function. `registerBuiltinProviders()` + any community
-  // registrations run at process bootstrap (see `packages/providers/src/
-  // registry.ts#registerCommunityProviders`), so by the time this runs the
-  // registry is populated.
   const providers = getRegisteredProviders();
+  const installed = installedProviders(providerRegistry);
   const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
   for (const provider of providers) {
     if (!(provider.id in registeredAssistants)) {
@@ -516,33 +568,29 @@ function getDefaults(): MergedConfig {
     }
   }
 
+  const streaming: MergedConfig['streaming'] = {};
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (policy.streaming) streaming[policy.id] = policy.streaming.defaultMode;
+  }
+
   return {
     botName: 'Archon',
-    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
+    assistant: installed.length === 1 ? installed[0].id : undefined,
     assistants: registeredAssistants,
-    streaming: {
-      telegram: 'stream',
-      discord: 'batch',
-      slack: 'batch',
-    },
-    paths: {
-      workspaces: getArchonWorkspacesPath(),
-      worktrees: getArchonWorktreesPath(),
-    },
+    streaming,
+    attentionNotices: [],
     concurrency: {
       maxConversations: 10,
     },
     workflows: {
-      autoResumeOnQuotaReset: false,
-      quotaMaxAttempts: 1,
-      quotaDeadlineMs: 24 * 60 * 60 * 1000,
+      toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
+      autoResumeOnQuotaReset: true,
     },
     commands: {
       folder: undefined,
       autoLoad: true,
     },
     defaults: {
-      copyDefaults: true,
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
@@ -575,8 +623,7 @@ function applyEnvOverrides(
         config.assistant = envAssistant;
       } else {
         throw new Error(
-          `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
-            `Available providers: ${getRegisteredProviderNames().join(', ')}`
+          `DEFAULT_AI_ASSISTANT='${envAssistant}': ${missingProviderMessage(providerRegistry, envAssistant)}`
         );
       }
     } else if (!isRegisteredProvider(envAssistant)) {
@@ -589,25 +636,11 @@ function applyEnvOverrides(
     }
   }
 
-  // Streaming overrides
-  const streamingModes = ['stream', 'batch'] as const;
-  const telegramMode = process.env.TELEGRAM_STREAMING_MODE;
-  if (telegramMode && streamingModes.includes(telegramMode as 'stream' | 'batch')) {
-    config.streaming.telegram = telegramMode as 'stream' | 'batch';
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (!policy.streaming) continue;
+    const mode = process.env[policy.streaming.envVar];
+    if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
-
-  const discordMode = process.env.DISCORD_STREAMING_MODE;
-  if (discordMode && streamingModes.includes(discordMode as 'stream' | 'batch')) {
-    config.streaming.discord = discordMode as 'stream' | 'batch';
-  }
-
-  const slackMode = process.env.SLACK_STREAMING_MODE;
-  if (slackMode && streamingModes.includes(slackMode as 'stream' | 'batch')) {
-    config.streaming.slack = slackMode as 'stream' | 'batch';
-  }
-
-  // Path overrides (these come from archon-paths.ts which already checks env vars)
-  // No need to re-apply here since getDefaults() uses those functions
 
   // Concurrency override
   const maxConcurrent = process.env.MAX_CONCURRENT_CONVERSATIONS;
@@ -641,8 +674,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
       result.assistant = global.defaultAssistant;
     } else {
       throw new Error(
-        `defaultAssistant: '${global.defaultAssistant}' in global config (~/.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `defaultAssistant in global config (~/.archon/config.yaml): ${missingProviderMessage(providerRegistry, global.defaultAssistant)}`
       );
     }
   }
@@ -652,18 +684,11 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.aliases = mergeAliases(result.aliases, global.aliases);
   result.tiers = mergeTiers(result.tiers, global.tiers);
 
-  // Streaming preferences
   if (global.streaming) {
-    if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
-    if (global.streaming.discord) result.streaming.discord = global.streaming.discord;
-    if (global.streaming.slack) result.streaming.slack = global.streaming.slack;
+    result.streaming = { ...result.streaming, ...global.streaming };
   }
 
-  // Path preferences
-  if (global.paths) {
-    if (global.paths.workspaces) result.paths.workspaces = global.paths.workspaces;
-    if (global.paths.worktrees) result.paths.worktrees = global.paths.worktrees;
-  }
+  if (global.attentionNotices) result.attentionNotices = global.attentionNotices;
 
   // Concurrency preferences
   if (global.concurrency?.maxConversations) {
@@ -671,7 +696,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   }
 
   if (global.workflows) {
-    result.workflows = { ...result.workflows, ...global.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(global.workflows) };
   }
 
   // Container backend defaults (folder projects)
@@ -697,8 +722,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
       result.assistant = repo.assistant;
     } else {
       throw new Error(
-        `assistant: '${repo.assistant}' in repo config (.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `assistant in repo config (.archon/config.yaml): ${missingProviderMessage(providerRegistry, repo.assistant)}`
       );
     }
   }
@@ -709,7 +733,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   result.tiers = mergeTiers(result.tiers, repo.tiers);
 
   if (repo.workflows) {
-    result.workflows = { ...result.workflows, ...repo.workflows };
+    result.workflows = { ...result.workflows, ...liveWorkflowPolicy(repo.workflows) };
   }
 
   // Commands config
@@ -725,7 +749,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   if (repo.defaults) {
     result.defaults = {
       ...result.defaults,
-      copyDefaults: repo.defaults.copyDefaults ?? result.defaults.copyDefaults,
       loadDefaultCommands: repo.defaults.loadDefaultCommands ?? result.defaults.loadDefaultCommands,
       loadDefaultWorkflows:
         repo.defaults.loadDefaultWorkflows ?? result.defaults.loadDefaultWorkflows,
@@ -777,8 +800,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  * @returns Merged configuration with all overrides applied
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
-  ensureProvidersRegistered();
-
   // 1. Start with defaults
   let config = getDefaults();
 
@@ -823,32 +844,15 @@ export function logConfig(config: MergedConfig): void {
 /**
  * Read ~/.archon/config.yaml for a settings write: the file's actual parsed
  * content, unvalidated, so a patch can repair a bad value and every unrelated
- * key survives. Unlike the loaders this never degrades — merging into a
- * fallback `{}` would replace the operator's whole file with just the patch.
- * Only a missing file starts empty; an unreadable file or invalid YAML throws.
+ * key survives, where the loaders would refuse the file. Only a missing file
+ * starts empty; an unreadable file, invalid YAML or a top level that is not a
+ * mapping throws, because merging into `{}` would replace the operator's whole
+ * file with just the patch.
  */
 async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
-  let content: string;
-  try {
-    content = await readConfigFile(configPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(content);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot update '${configPath}': it is not valid YAML (${reason}).`, {
-      cause: error,
-    });
-  }
-  if (parsed === null || parsed === undefined) return {};
-  if (!isConfigRecord(parsed)) {
-    throw new Error(`Cannot update '${configPath}': its top level is not a map of settings.`);
-  }
-  return parsed as GlobalConfig;
+  const content = await readConfigFileIfPresent(configPath);
+  if (content === undefined) return {};
+  return parseConfigMapping(content, configPath) as GlobalConfig;
 }
 
 /**
@@ -887,7 +891,6 @@ export async function updateGlobalConfig(
   const configPath = getArchonConfigPath();
 
   try {
-    ensureProvidersRegistered();
     const current = await readGlobalConfigForUpdate(configPath);
 
     // Deep-merge: only overwrite defined keys
@@ -938,11 +941,14 @@ export async function updateGlobalConfig(
       merged.aliases = mergeBindingPatch(current.aliases, updates.aliases);
     }
 
-    // Refuse to persist what the loaders would then refuse to read or silently
-    // degrade: a bad value from the settings UI would otherwise brick every later
-    // config load, and a bad block already on disk must be repaired, not kept.
+    // Refuse to persist what the loaders would then refuse to read: a bad value
+    // from the settings UI would otherwise brick every later config load, and a
+    // bad block already on disk must be repaired, not kept.
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
+    validateStreamingConfig(merged, configPath);
+    validateAttentionNoticesConfig(merged, configPath);
+    validateConversationConcurrencyConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write
@@ -975,7 +981,7 @@ export async function updateGlobalConfig(
  * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
  * yields `undefined` (every consumer uses optional chaining).
  */
-function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
+function tierDefaultsFor(provider: string | undefined): RawTiersConfig | undefined {
   try {
     const profile = buildAiProfile(provider);
     const out: RawTiersConfig = {};
@@ -1005,14 +1011,9 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     botName: config.botName,
     assistant: config.assistant,
     assistants: toSafeAssistantDefaults(config.assistants),
-    streaming: {
-      telegram: config.streaming.telegram,
-      discord: config.streaming.discord,
-      slack: config.streaming.slack,
-    },
+    streaming: { ...config.streaming },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {
-      copyDefaults: config.defaults.copyDefaults,
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },

@@ -16,7 +16,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, readlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { execFileAsync } from '@archon/git';
-import type { ExecutionContext } from '@archon/providers/types';
+import type { ExecutionContext } from '@archon/provider-contract';
 import { ARTIFACT_POINTER_TYPE } from './schemas/artifact-pointer';
 import {
   CHECKOUT_MANIFEST_VERSION,

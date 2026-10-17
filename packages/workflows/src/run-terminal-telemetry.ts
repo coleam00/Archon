@@ -1,5 +1,6 @@
+import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@archon/paths';
 import type { WorkflowTerminalProperties } from '@archon/paths';
-import type { TokenUsage } from '@archon/providers/types';
+import type { TokenUsage } from '@archon/provider-contract';
 import { readNodeRecordData } from './node-record-reader';
 import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
@@ -134,4 +135,21 @@ function stringOf(value: unknown): string | undefined {
 
 function time(event: RunTelemetryEvent): number {
   return new Date(event.created_at).getTime();
+}
+
+export function reportRunTerminalTelemetry(
+  run: WorkflowRun,
+  events: readonly RunTelemetryEvent[],
+  usage: { costUsd: number; tokens?: TokenUsage }
+): void {
+  if (isTelemetryDisabled()) return;
+  try {
+    const telemetry = buildRunTerminalTelemetry({ run, events, usage });
+    if (telemetry) captureWorkflowTerminal(telemetry);
+  } catch (err) {
+    createLogger('workflow-terminal-telemetry').warn(
+      { err, runId: run.id },
+      'run_terminal_telemetry_failed'
+    );
+  }
 }

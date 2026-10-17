@@ -1,13 +1,12 @@
-import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@archon/paths';
+import { createLogger, isTelemetryDisabled } from '@archon/paths';
 import {
-  buildRunTerminalTelemetry,
+  reportRunTerminalTelemetry,
   RUN_TELEMETRY_EVENT_TYPES,
   type RunTelemetryEvent,
 } from '@archon/workflows/run-terminal-telemetry';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { pool } from './connection';
 import { getDagResumeSnapshot } from './workflow-events';
-import { normalizeWorkflowRun } from './workflow-run-normalization';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -27,8 +26,8 @@ function getLog(): ReturnType<typeof createLogger> {
 export async function reportRunTerminal(runId: string): Promise<void> {
   if (isTelemetryDisabled()) return;
   try {
-    const runResult = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    const runResult = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [runId]
     );
     const run = runResult.rows[0];
@@ -43,12 +42,7 @@ export async function reportRunTerminal(runId: string): Promise<void> {
       [runId, ...RUN_TELEMETRY_EVENT_TYPES]
     );
     const usage = await getDagResumeSnapshot(runId);
-    const telemetry = buildRunTerminalTelemetry({
-      run: normalizeWorkflowRun(run),
-      events: events.rows,
-      usage: { costUsd: usage.costUsd, tokens: usage.tokens },
-    });
-    if (telemetry) captureWorkflowTerminal(telemetry);
+    reportRunTerminalTelemetry(normalizeWorkflowRun(run), events.rows, usage);
   } catch (error) {
     getLog().warn(
       { err: error as Error, workflowRunId: runId },

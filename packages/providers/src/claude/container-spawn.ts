@@ -3,10 +3,10 @@
  *
  * Implements the Claude Agent SDK's `spawnClaudeCodeProcess` option so the CLI
  * runs INSIDE a prepared isolation container via `docker exec -i`, rather than
- * on the host. The SDK bypasses its own disk resolution entirely when this hook
- * is set (so `pathToClaudeCodeExecutable` is intentionally omitted for container
- * runs) and drives the returned {@link SpawnedProcess} over stdin/stdout exactly
- * as it would a local child.
+ * on the host. The provider supplies a placeholder executable path to prevent
+ * SDK host-binary resolution before this hook runs. The hook ignores the SDK's
+ * command and drives the returned {@link SpawnedProcess} over stdin/stdout
+ * exactly as it would a local child.
  *
  * The one thing a plain `ChildProcess` gets wrong across the docker boundary is
  * signalling: `child.kill()` signals the LOCAL `docker exec` client, which does
@@ -75,21 +75,83 @@ export function buildDockerExecArgs(
   options: SpawnOptions,
   pidFile: string
 ): string[] {
-  const args = ['exec', '-i'];
-  if (execContext.execUser) args.push('-u', execContext.execUser);
-  if (options.cwd) args.push('-w', options.cwd);
-  for (const [key, value] of Object.entries(options.env)) {
-    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
-    args.push('-e', `${key}=${value}`);
-  }
-  args.push(
-    execContext.containerId,
+  return [
+    ...dockerExecPrefix(execContext, options.cwd, options.env),
     'sh',
     '-c',
     `echo $$ > ${pidFile}; exec ${CONTAINER_CLAUDE_BIN} "$@"`,
     CONTAINER_CLAUDE_BIN, // $0 (cosmetic — "$@" starts at the real SDK args below)
-    ...options.args
-  );
+    ...options.args,
+  ];
+}
+
+/**
+ * `docker exec` argv for a one-shot in-container Claude CLI command (no pidfile:
+ * nothing signals it). Runs the same in-container binary, user, cwd and env as a
+ * session, so a CLI query such as `plugin list` sees what the session will see.
+ */
+export function buildDockerExecCommandArgs(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  cliArgs: readonly string[]
+): string[] {
+  return [...dockerExecPrefix(execContext, cwd, env), CONTAINER_CLAUDE_BIN, ...cliArgs];
+}
+
+export function buildDockerExecTranscriptReadArgs(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  sessionId: string
+): string[] {
+  const script = [
+    'config="${CLAUDE_CONFIG_DIR-${HOME}/.claude}"',
+    'root="${config:+$config/}projects"',
+    'found=""',
+    'for project in "$root"/*; do',
+    '  [ -d "$project" ] || continue',
+    '  file="$project/$1.jsonl"',
+    '  [ -f "$file" ] || continue',
+    '  [ -z "$found" ] || exit 2',
+    '  found="$file"',
+    'done',
+    '[ -n "$found" ] || exit 1',
+    'cat "$found"',
+  ].join('\n');
+  return [
+    ...dockerExecPrefix(
+      execContext,
+      cwd,
+      env.CLAUDE_CONFIG_DIR === undefined
+        ? env
+        : {
+            ...env,
+            CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR.normalize('NFC'),
+          }
+    ),
+    'sh',
+    '-c',
+    script,
+    'read-cost-state',
+    sessionId,
+  ];
+}
+
+/** `exec -i [-u user] [-w cwd] -e K=V... <container>`, shared by container commands. */
+function dockerExecPrefix(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>
+): string[] {
+  const args = ['exec', '-i'];
+  if (execContext.execUser) args.push('-u', execContext.execUser);
+  if (cwd) args.push('-w', cwd);
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
+    args.push('-e', `${key}=${value}`);
+  }
+  args.push(execContext.containerId);
   return args;
 }
 

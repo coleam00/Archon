@@ -128,20 +128,22 @@ async function upsertPrefsColumn(
 }
 
 /** Serialize a merged map: empty object → NULL (never persist `'{}'`). */
-function toJsonOrNull(map: Record<string, RawAliasEntry>): string | null {
+function toJsonOrNull(map: Partial<Record<string, RawAliasEntry>>): string | null {
   return Object.keys(map).length > 0 ? JSON.stringify(map) : null;
 }
 
 /** Apply a per-key patch (`null` = unset) on top of the stored map. */
-function applyPatch(
-  current: Record<string, RawAliasEntry>,
-  patch: Record<string, RawAliasEntry | null | undefined>
-): Record<string, RawAliasEntry> {
-  const merged: Record<string, RawAliasEntry> = {};
-  for (const [name, entry] of Object.entries(current)) {
-    if (patch[name] !== null) merged[name] = entry;
+function applyPatch<K extends string>(
+  current: Partial<Record<K, RawAliasEntry>>,
+  patch: Partial<Record<K, RawAliasEntry | null>>
+): Partial<Record<K, RawAliasEntry>> {
+  const merged: Partial<Record<K, RawAliasEntry>> = {};
+  for (const name in current) {
+    const entry = current[name];
+    if (entry !== undefined && patch[name] !== null) merged[name] = entry;
   }
-  for (const [name, entry] of Object.entries(patch)) {
+  for (const name in patch) {
+    const entry = patch[name];
     if (entry !== null && entry !== undefined) merged[name] = entry;
   }
   return merged;
@@ -158,7 +160,7 @@ function applyPatch(
  */
 export async function setUserTiers(userId: string, patch: UserTiersPatch): Promise<void> {
   const current = (await getUserAiPrefs(userId)).tiers ?? {};
-  const merged = applyPatch(current as Record<string, RawAliasEntry>, patch);
+  const merged = applyPatch(current, patch);
   await upsertPrefsColumn(userId, 'tiers', toJsonOrNull(merged));
 }
 

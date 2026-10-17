@@ -4,6 +4,8 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
+import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
@@ -20,6 +22,7 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  resolveRepoProjectIdentity,
   createLogger,
 } from '@archon/paths';
 import {
@@ -27,13 +30,11 @@ import {
   addSafeDirectory,
   toRepoPath,
   toBranchName,
-  isWorktreePath,
   cloneRepository,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as userDb from '@archon/core/db/users';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { GitLabWebhookEvent, GitLabIssue, GitLabMergeRequest } from './types';
@@ -53,6 +54,10 @@ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
 export class GitLabAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private readonly gitlabUrl: string;
   private readonly token: string;
   private readonly webhookSecret: string;
@@ -87,10 +92,7 @@ export class GitLabAdapter implements IPlatformAdapter {
       getLog().info('gitlab.whitelist_disabled');
     }
 
-    getLog().info(
-      { botMention: this.botMention, gitlabUrl: this.gitlabUrl },
-      'gitlab.adapter_initialized'
-    );
+    getLog().info({ gitlabUrl: this.gitlabUrl }, 'gitlab.adapter_initialized');
   }
 
   // ---------------------------------------------------------------------------
@@ -141,7 +143,7 @@ export class GitLabAdapter implements IPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'gitlab';
+    return gitlabPolicy.id;
   }
 
   async start(): Promise<void> {
@@ -425,13 +427,15 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   private async ensureRepoReady(
     projectPath: string,
     defaultBranch: string,
-    repoPath: string,
+    codebase: { name: string; default_cwd: string },
     shouldSync: boolean
   ): Promise<void> {
-    let directoryExists = false;
+    const { name: projectName, default_cwd: repoPath } = codebase;
+    // An empty source/ is what a failed clone leaves; any other content is a
+    // checkout, or a registered subdirectory of one, and is never cloned over.
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      repositoryExists = (await readdir(repoPath)).length > 0;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -443,7 +447,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       }
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'gitlab.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -465,15 +469,13 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
     // cloning so worktree paths resolve correctly on first webhook clone.
-    // For nested namespaces (group/subgroup/repo), the namespace becomes the
-    // owner and the leaf segment becomes the repo.
-    const cloneSegments = projectPath.split('/');
-    const cloneRepo = cloneSegments[cloneSegments.length - 1];
-    const cloneOwner = cloneSegments.slice(0, -1).join('/');
-    await ensureProjectStructure(cloneOwner, cloneRepo);
+    const storage = resolveRepoProjectIdentity(projectName, repoPath);
+    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
+    await ensureProjectStructure(storage.owner, storage.repo);
 
     const urlObj = new URL(this.gitlabUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
+    await addSafeDirectory(toRepoPath(repoPath));
     const cloneResult = await cloneRepository(repoUrl, toRepoPath(repoPath), {
       credentials: { username: 'oauth2', password: this.token },
     });
@@ -498,8 +500,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         cloneResult.error.code === 'unknown' ? cloneResult.error.message : cloneResult.error.code;
       throw new Error(`Failed to clone ${projectPath}: ${detail}`);
     }
-
-    await addSafeDirectory(toRepoPath(repoPath));
   }
 
   private async autoDetectAndLoadCommands(repoPath: string, codebaseId: string): Promise<void> {
@@ -557,14 +557,18 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     const canonicalPath = getProjectSourcePath(gitlabOwner, gitlabRepo);
 
     if (existing) {
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      const checkout = await resolveSavedCheckout(
+        existing,
+        repoUrlNoGit,
+        'Restoring its original checkout preserves its storage. Before using /update-project to move it, identify and migrate its existing storage root; see the legacy nested GitLab recovery guidance in Troubleshooting.'
+      );
+      if (checkout !== existing.default_cwd) {
+        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
+        existing.default_cwd = checkout;
         getLog().info(
-          { codebaseName: existing.name, canonicalPath },
+          { codebaseName: existing.name, canonicalPath: checkout },
           'gitlab.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
       }
 
       getLog().info(
@@ -574,15 +578,17 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
-    const codebase = await codebaseDb.createCodebase({
+    const codebase = await codebaseDb.createManagedCodebase({
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
-    getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');
-    return { codebase, repoPath: canonicalPath, isNew: true };
+    getLog().info(
+      { codebaseName: codebase.name, path: codebase.default_cwd },
+      'gitlab.codebase_created'
+    );
+    return { codebase, repoPath: codebase.default_cwd, isNew: true };
   }
 
   private async cleanupWorktree(
@@ -595,7 +601,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     getLog().info({ conversationId, merged }, 'gitlab.isolation_cleanup_started');
 
     try {
-      await onConversationClosed('gitlab', conversationId, { merged });
+      await onConversationClosed(gitlabPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'gitlab.isolation_cleanup_completed');
     } catch (error) {
       const err = error as Error;
@@ -610,10 +616,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   async handleWebhook(payload: string, token: string): Promise<void> {
     // 1. Verify token
     if (!verifyWebhookToken(token, this.webhookSecret)) {
-      getLog().error(
-        { tokenPrefix: token?.substring(0, 8) + '...', payloadSize: payload.length },
-        'gitlab.invalid_webhook_token'
-      );
+      getLog().error({ payloadSize: payload.length }, 'gitlab.invalid_webhook_token');
       return;
     }
 
@@ -629,8 +632,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     // 3. Authorization check
     const senderUsername = event.user?.username;
     if (!isGitLabUserAuthorized(senderUsername, this.allowedUsers)) {
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'gitlab.unauthorized_webhook');
+      getLog().info({ platform: gitlabPolicy.id }, 'gitlab.unauthorized_webhook');
       return;
     }
 
@@ -659,11 +661,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // 5. Self-trigger prevention
     if (comment.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.user?.username }, 'gitlab.ignoring_marked_comment');
+      getLog().debug('gitlab.ignoring_marked_comment');
       return;
     }
     if (event.user?.username?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor: event.user.username }, 'gitlab.ignoring_own_comment');
+      getLog().debug('gitlab.ignoring_own_comment');
       return;
     }
 
@@ -678,14 +680,14 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     if (senderUsername) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'gitlab',
+          gitlabPolicy.id,
           senderUsername,
           senderUsername
         );
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), gitlabUsername: senderUsername },
+          { err: toError(err), platform: gitlabPolicy.id },
           'gitlab.user_resolve_failed'
         );
       }
@@ -695,8 +697,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     try {
       // 8. Conversation + codebase setup
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
-      const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
-      const isNewConversation = !existingConv.codebase_id;
 
       const {
         codebase,
@@ -704,7 +704,20 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         isNew: isNewCodebase,
       } = await this.getOrCreateCodebaseForRepo(projectPath);
 
-      if (isNewConversation) {
+      // 9. Get default branch
+      const defaultBranch = event.project.default_branch;
+
+      // 10. Ensure repo ready
+      await this.ensureRepoReady(projectPath, defaultBranch, codebase, isNewCodebase);
+
+      const existingConv = await db.getOrCreateConversation(
+        gitlabPolicy.id,
+        conversationId,
+        codebase.id
+      );
+      const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+      if (needsProjectContext) {
         try {
           await db.updateConversation(existingConv.id, {
             codebase_id: codebase.id,
@@ -721,12 +734,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           throw updateError;
         }
       }
-
-      // 9. Get default branch
-      const defaultBranch = event.project.default_branch;
-
-      // 10. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
 
       // 11. Auto-load commands
       if (isNewCodebase) {
@@ -762,7 +769,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
       if (isSlashCommand) {
         finalMessage = strippedComment.split('\n')[0].trim();
-        getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
+        getLog().debug('gitlab.slash_command_processing');
 
         if (isMR && mergeRequest) {
           contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
@@ -793,7 +800,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
             issueContext: contextToAppend,
             threadContext,
             isolationHints,
-            userId: archonUserId,
+            actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
           });
         } catch (error) {
           const err = toError(error);

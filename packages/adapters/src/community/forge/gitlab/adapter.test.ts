@@ -3,8 +3,11 @@
  *
  * Runs in its own test batch to avoid mock.module pollution with other adapters.
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '@archon/core';
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
@@ -28,6 +31,9 @@ function makeFetchMock(response: Response): FetchMock {
   );
 }
 
+const paths = await import('@archon/paths');
+const git = await import('@archon/git');
+
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -44,6 +50,7 @@ const mockLogger = {
   level: 'info',
 };
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
@@ -70,12 +77,14 @@ mock.module('@archon/core/db/users', () => ({
 }));
 const mockGetOrCreateConversation = mock(
   async (): Promise<
-    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+    Pick<Conversation, 'id' | 'codebase_id' | 'cwd' | 'platform_type' | 'platform_conversation_id'>
   > => {
     throw new Error('DB not mocked in tests');
   }
 );
-const mockUpdateConversation = mock(async () => {
+const mockUpdateConversation = mock<
+  typeof import('@archon/core/db/conversations')['updateConversation']
+>(async () => {
   throw new Error('DB not mocked in tests');
 });
 const mockGetConversation = mock(async () => null);
@@ -88,15 +97,17 @@ mock.module('@archon/core/db/conversations', () => ({
 const mockFindCodebaseByRepoUrl = mock(
   async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
 );
-const mockCreateCodebase = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockCreateCodebase = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'repository_url'>> => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockGetCodebaseCommands = mock(async () => ({}));
 const mockUpdateCodebaseCommands = mock(async () => undefined);
 const mockUpdateCodebase = mock(async () => undefined);
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
+  createManagedCodebase: mockCreateCodebase,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   updateCodebase: mockUpdateCodebase,
@@ -119,20 +130,21 @@ mock.module('@archon/core', () => ({
   },
 }));
 
+const mockCloneRepository = mock<typeof import('@archon/git')['cloneRepository']>(async () => ({
+  ok: true,
+  value: undefined,
+}));
+
 // Mock @archon/git
 mock.module('@archon/git', () => ({
-  cloneRepository: mock(async () => ({ ok: true })),
+  ...git,
+  cloneRepository: mockCloneRepository,
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),
   toRepoPath: mock((p: string) => p),
   toBranchName: mock((b: string) => b),
   isWorktreePath: mock(async () => false),
   execFileAsync: mock(async () => ({ stdout: '', stderr: '' })),
-}));
-
-// Mock @archon/isolation
-mock.module('@archon/isolation', () => ({
-  IsolationHints: {},
 }));
 
 // Mock global fetch to prevent real HTTP calls (gitlab.example.com hangs on CI Linux)
@@ -215,11 +227,162 @@ function createNotePayload(overrides?: {
 
 describe('GitLabAdapter', () => {
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
+    mockGetOrCreateConversation.mockClear();
     mockHandleMessage.mockClear();
     mockOnConversationClosed.mockClear();
     mockFetch.mockClear();
     // Reset env
     delete process.env.GITLAB_ALLOWED_USERS;
+  });
+
+  test('initialization logs only operational configuration', () => {
+    createAdapter();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { gitlabUrl: 'https://gitlab.example.com' },
+      'gitlab.adapter_initialized'
+    );
+  });
+
+  test('refuses ambiguous stale checkout repair for a bare project name', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'bare-project',
+      name: 'local-api',
+      default_cwd: '/repos/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
+    // @ts-expect-error - exercise the private registration boundary
+    await expect(adapter.getOrCreateCodebaseForRepo('testuser/testrepo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/repos/worktrees/old');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('stale suffixed checkout repair keeps its allocated project identity', async () => {
+    const adapter = createAdapter();
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'testuser/testrepo-2',
+      default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
+      repository_url: 'https://example.com/testuser/testrepo',
+    });
+    // @ts-expect-error - exercise the private registration boundary
+    const result = await adapter.getOrCreateCodebaseForRepo('testuser/testrepo');
+    expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
+    expect(result.codebase.default_cwd).toBe(result.repoPath);
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(expect.objectContaining({ id: 'allocated' }), {
+      default_cwd: result.repoPath,
+    });
+  });
+
+  test('refuses legacy nested repair without changing its storage identity', async () => {
+    const adapter = createAdapter();
+    const existing = {
+      id: 'nested',
+      name: 'group/subgroup/repo',
+      default_cwd: '/tmp/test-workspaces/group/subgroup/repo/worktrees/old',
+      repository_url: 'https://gitlab.example.com/group/subgroup/repo',
+    };
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
+    mockUpdateCodebase.mockClear();
+    // @ts-expect-error - exercise the private registration boundary
+    await expect(adapter.getOrCreateCodebaseForRepo('group/subgroup/repo')).rejects.toThrow(
+      '/update-project'
+    );
+    expect(existing.default_cwd).toBe('/tmp/test-workspaces/group/subgroup/repo/worktrees/old');
+    expect(existing.name).toBe('group/subgroup/repo');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('webhook clones an absent saved checkout before dispatch', async () => {
+    const adapter = createAdapter();
+    const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+      id: 'saved-project',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: 'https://gitlab.example.com/mygroup/myproject',
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-saved',
+      codebase_id: 'saved-project',
+      cwd: path,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockHandleMessage.mockClear();
+    mockCloneRepository.mockClear();
+    mockCloneRepository.mockImplementationOnce(async () => {
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      return { ok: true, value: undefined };
+    });
+
+    await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+    expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+    expect(mockCloneRepository.mock.calls[0]?.slice(0, 2)).toEqual([
+      'https://gitlab.example.com/mygroup/myproject.git',
+      path,
+    ]);
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('allocated checkout path reaches preparation and conversation storage', async () => {
+    const adapter = createAdapter();
+    const path = '/tmp/test-workspaces/mygroup/myproject-2/source';
+    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce({
+      id: 'allocated',
+      name: 'mygroup/myproject-2',
+      default_cwd: path,
+      repository_url: null,
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      id: 'conv-allocated',
+      codebase_id: null,
+      cwd: null,
+      platform_type: 'gitlab',
+      platform_conversation_id: 'mygroup/myproject#1',
+    });
+    mockUpdateConversation.mockResolvedValueOnce(undefined);
+    // @ts-expect-error - observe the private checkout boundary
+    const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+    try {
+      await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
+      expect(prepare).toHaveBeenCalledWith(
+        'mygroup/myproject',
+        'main',
+        expect.objectContaining({ default_cwd: path }),
+        true
+      );
+      expect(mockUpdateConversation).toHaveBeenCalledWith('conv-allocated', {
+        codebase_id: 'allocated',
+        cwd: path,
+      });
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+
+  test.each(['own', 'marked'])('suppresses %s comments without logging identities', async kind => {
+    const adapter = createAdapter({ botMention: 'private-bot' });
+    await adapter.handleWebhook(
+      createNotePayload({
+        username: kind === 'own' ? 'private-bot' : 'alice',
+        note:
+          kind === 'marked' ? '@archon hello <!-- archon-bot-response -->' : '@private-bot hello',
+      }),
+      'test-secret'
+    );
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      kind === 'own' ? 'gitlab.ignoring_own_comment' : 'gitlab.ignoring_marked_comment'
+    );
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   describe('basic interface', () => {
@@ -249,9 +412,15 @@ describe('GitLabAdapter', () => {
   describe('webhook token verification', () => {
     test('rejects invalid token', async () => {
       const adapter = createAdapter({ secret: 'correct-secret' });
+      mockLogger.error.mockClear();
       await adapter.handleWebhook('{}', 'wrong-token');
       // Should log error and return without processing
       expect(mockHandleMessage).not.toHaveBeenCalled();
+      // A rejected token is often a real but stale secret: no fragment of it is logged.
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { payloadSize: 2 },
+        'gitlab.invalid_webhook_token'
+      );
     });
 
     test('rejects empty token', async () => {
@@ -678,44 +847,57 @@ describe('GitLabAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ gitlabUsername: 'testuser' }),
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitlab' },
         'gitlab.user_resolve_failed'
       );
     });
 
-    test('passes resolved archonUserId to handleMessage', async () => {
-      // Seed DB mocks so handleWebhook reaches handleMessage
-      mockGetOrCreateConversation.mockImplementation(async () => ({
-        id: 'conv-test-uuid',
-        codebase_id: 'codebase-test-uuid',
-        platform_type: 'gitlab',
-        platform_conversation_id: 'mygroup/myproject#1',
-      }));
-      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
-        id: 'codebase-test-uuid',
-        repository_url: 'https://gitlab.example.com/mygroup/myproject',
-        default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
-        name: 'myproject',
-      }));
+    test.each(['fix this', '/workflow run @alice'])(
+      'dispatches %s with internal identity and private logs',
+      async message => {
+        // Seed DB mocks so handleWebhook reaches handleMessage
+        mockGetOrCreateConversation.mockImplementation(async () => ({
+          id: 'conv-test-uuid',
+          codebase_id: 'codebase-test-uuid',
+          cwd: '/tmp/project',
+          platform_type: 'gitlab',
+          platform_conversation_id: 'mygroup/myproject#1',
+        }));
+        mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+          id: 'codebase-test-uuid',
+          repository_url: 'https://gitlab.example.com/mygroup/myproject',
+          default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
+          name: 'myproject',
+        }));
 
-      const adapter = createAdapter();
-      const payload = createNotePayload({ username: 'testuser' });
+        const adapter = createAdapter();
+        const payload = createNotePayload({ username: 'testuser', note: `@archon ${message}` });
 
-      await adapter.handleWebhook(payload, 'test-secret');
+        await adapter.handleWebhook(payload, 'test-secret');
 
-      expect(mockHandleMessage).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ userId: 'user-test-uuid' })
-      );
-    });
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('gitlab.slash_command_processing');
+
+        expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+          'gitlab',
+          expect.any(String),
+          'codebase-test-uuid'
+        );
+        expect(mockHandleMessage).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
+        );
+      }
+    );
 
     test('skips user resolution when sender username is missing', async () => {
       // Seed DB mocks so handleWebhook reaches handleMessage
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitlab',
         platform_conversation_id: 'mygroup/myproject#1',
       }));
@@ -738,7 +920,7 @@ describe('GitLabAdapter', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: undefined })
+        expect.objectContaining({ actor: { kind: 'unidentified' } })
       );
     });
   });

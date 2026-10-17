@@ -1,3 +1,8 @@
+import {
+  configureWorktreeIsolation,
+  createRunWorktreeSetupExecutor,
+  type WorktreeSetupDeps,
+} from './worktree-setup';
 /**
  * Child-isolation resolver factory (#2121 slice 2, PR-A).
  *
@@ -5,15 +10,13 @@
  * per `workflow:` child whose node declares `isolation: 'worktree'`. Lives in
  * `@archon/core` — the layer that already depends on BOTH `@archon/workflows` (the
  * port TYPE) and `@archon/isolation` (`WorktreeProvider`) — so the port stays
- * isolation-free (`@archon/workflows` never imports `@archon/isolation`) AND the
- * five injection sites (CLI + orchestrator dispatch/resume/background) share one
- * implementation instead of duplicating the worktree-create wiring.
+ * isolation-free (`@archon/workflows` never imports `@archon/isolation`) AND every
+ * injection site (CLI, orchestrator, continuation and resource start) builds it
+ * through {@link createCodebaseChildResolver}, which owns the folder-project policy.
  *
- * Mirrors the top-level CLI worktree creation (`packages/cli/src/commands/workflow.ts`):
- * `WorktreeProvider.create({ workflowType: 'task', … })` for a fresh
- * `archon/task-<parent>-<node>-<hash>-child-<i>` branch, then registers the
- * `isolation_environments` row so standard `isolation list`/`cleanup`/`complete`
- * hygiene applies to child worktrees.
+ * Creates a fresh `archon/task-<parent>-<node>-<hash>-child-<i>` branch through
+ * {@link createRegisteredWorktree}, the recipe every launch path shares, so standard
+ * `isolation list`/`cleanup`/`complete` hygiene applies to child worktrees.
  */
 
 import type {
@@ -22,15 +25,11 @@ import type {
   ChildIsolationResult,
 } from '@archon/workflows/executor';
 import { createHash } from 'node:crypto';
-import {
-  getIsolationProvider,
-  configureIsolation,
-  classifyIsolationError,
-} from '@archon/isolation';
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
-import { loadRepoConfig } from '../config/config-loader';
-import * as isolationDb from '../db/isolation-environments';
+import type { IIsolationStore } from '@archon/isolation';
+import type { Codebase } from '../schemas/codebase';
+import { createRegisteredWorktree } from './registered-worktree';
 
 /**
  * How much of the node id goes into the branch name verbatim. `WorktreeProvider`
@@ -48,8 +47,8 @@ const NODE_HASH_LEN = 8;
  * so it must be UNIQUE per (parent run, workflow node, fan-out index).
  *
  * Uniqueness is load-bearing, not cosmetic: `WorktreeProvider.create()` ADOPTS an
- * existing worktree at the computed path (an INFO `worktree_adopted` line, no error).
- * Two children colliding on an identifier therefore silently share one checkout —
+ * existing worktree at the computed path (a WARN `worktree_adopted` line, no error).
+ * Two children colliding on an identifier therefore share one checkout —
  * the opposite of what `isolation: worktree` asked for — and, when they're in the
  * same DAG layer, land on the same `working_path`, where the sibling path-lock
  * cancels one of them (#2180 Defect A, reproduced in the case the author got right).
@@ -92,34 +91,6 @@ export function buildChildIdentifier(
     .join('-');
 }
 
-/** Codebase-scoped context captured when the caller builds the resolver. */
-export interface ChildWorktreeResolverConfig {
-  /** Codebase the child worktrees belong to (attribution + worktree pathing). */
-  codebaseId: string;
-  /** "owner/repo" name — lets the provider resolve the project-scoped worktree path. */
-  codebaseName: string;
-  /** Canonical checkout path of the main repo (the codebase's `default_cwd`). */
-  canonicalRepoPath: string;
-  /**
-   * Base-branch fallback for new child worktrees (the codebase's `default_branch`).
-   *
-   * This is the ONLY base input a child worktree gets. The per-dispatch `--base` /
-   * `--from` overrides (#2203) are deliberately NOT threaded here: unlike the
-   * top-level CLI path, `resolve()` passes no `baseOverride`/task branch selection to the
-   * provider, so a child is cut from `origin/<worktree.baseBranch ?? this ?? auto>`
-   * of the canonical repo no matter what the parent run was dispatched with. Which
-   * also means a child sees neither the parent's uncommitted work nor its commits —
-   * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
-   * Threading `--base` down is a real design question (stacked-from-parent vs
-   * cut-from-base) rather than an oversight; documented in the authoring guide.
-   */
-  baseBranch?: string;
-  /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
-  createdByPlatform: string;
-  /** Archon user id recorded as the environment creator (attribution). */
-  createdByUserId?: string;
-}
-
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflows.child-isolation');
@@ -127,37 +98,46 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Build a {@link ChildIsolationResolver} bound to one codebase. `resolve()` creates
- * a per-child worktree + branch (`archon/task-<parent>-<node>-<hash>-child-<i>`) and registers it.
- * Throws (surfaced by the engine as a failed node outcome) when the worktree cannot
- * be created — never returns the shared checkout as a fallback.
+ * Build the {@link ChildIsolationResolver} for a run in `codebase`, or `undefined` for
+ * a folder project: it cannot make worktrees, so no resolver is injected and the engine
+ * fails a `workflow:` node requesting `isolation: 'worktree'` fast.
+ *
+ * `resolve()` creates a per-child worktree + branch
+ * (`archon/task-<parent>-<node>-<hash>-child-<i>`) and registers it. It throws (surfaced
+ * by the engine as a failed node outcome) when the worktree cannot be created — never
+ * returns the shared checkout as a fallback.
  */
-export function createChildWorktreeResolver(
-  config: ChildWorktreeResolverConfig
-): ChildIsolationResolver {
-  // Configure the isolation provider HERE rather than relying on the caller.
-  //
-  // `configureIsolation` is what gives `WorktreeProvider` the repo-config loader;
-  // without it the factory falls back to `() => Promise.resolve(null)` and the
-  // repo's ENTIRE `worktree:` block is silently ignored — `baseBranch`, `path`,
-  // `remote`, and `copyFiles` (the sting: files the repo seeds into worktrees,
-  // e.g. `.env`, simply never arrive, and the child's build fails confusingly).
-  //
-  // Both existing callers only configure it on paths that create a TOP-LEVEL
-  // worktree: the CLI inside `else if (wantsIsolation && codebase)`, the
-  // orchestrator via `getResolver()`. A `--no-worktree` parent — the shape the
-  // authoring guide explicitly endorses, "a parent started with --no-worktree can
-  // still hand an isolated child its own worktree" — skips both and would create
-  // the child's worktree unconfigured. Binding it to the resolver instead means
-  // every construction site is covered, including ones added later.
-  //
-  // Idempotent and cheap: it swaps the loader and drops the provider singleton,
-  // which is rebuilt lazily. Re-running it after the CLI/orchestrator already
-  // configured it is a no-op in effect — all three loaders are the same function.
-  configureIsolation(async (repoPath: string) => {
-    const repoConfig = await loadRepoConfig(repoPath);
-    return repoConfig?.worktree ?? null;
-  });
+export function createCodebaseChildResolver(
+  isolation: IIsolationStore,
+  codebase: Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'kind'>,
+  surface: {
+    /**
+     * Base-branch fallback for new child worktrees (the codebase's `default_branch`).
+     *
+     * This is the ONLY base input a child worktree gets. The per-dispatch `--base` /
+     * `--from` overrides (#2203) are deliberately NOT threaded here: unlike the
+     * top-level CLI path, `resolve()` passes no `baseOverride`/task branch selection to the
+     * provider, so a child is cut from `origin/<worktree.baseBranch ?? this ?? auto>`
+     * of the canonical repo no matter what the parent run was dispatched with. Which
+     * also means a child sees neither the parent's uncommitted work nor its commits —
+     * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
+     * Threading `--base` down is a real design question (stacked-from-parent vs
+     * cut-from-base) rather than an oversight; documented in the authoring guide.
+     */
+    baseBranch: string | undefined;
+    /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
+    createdByPlatform: string;
+    /** Archon user id recorded as the environment creator (attribution). */
+    createdByUserId: string | undefined;
+  },
+  deps: WorktreeSetupDeps
+): ChildIsolationResolver | undefined {
+  if (codebase.kind === 'folder') return undefined;
+
+  // Configure here, not in the caller: a `--no-worktree` parent skips the CLI and
+  // orchestrator configuration, and an unconfigured provider silently ignores the
+  // repo's `worktree:` block (copyFiles, postCreate) for the child's worktree.
+  configureWorktreeIsolation();
 
   return {
     async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
@@ -167,9 +147,9 @@ export function createChildWorktreeResolver(
       // codebase this resolver was built for. A mismatch means the resolver was
       // wired to the wrong codebase (worktrees would land in the wrong repo) —
       // fail loud rather than create a checkout in the wrong project.
-      if (req.codebaseId !== undefined && req.codebaseId !== config.codebaseId) {
+      if (req.codebaseId !== undefined && req.codebaseId !== codebase.id) {
         throw new Error(
-          `Child-isolation resolver bound to codebase '${config.codebaseId}' but the sub-run ` +
+          `Child-isolation resolver bound to codebase '${codebase.id}' but the sub-run ` +
             `carries codebase '${req.codebaseId}'.`
         );
       }
@@ -179,107 +159,53 @@ export function createChildWorktreeResolver(
       const identifier = buildChildIdentifier(req.parentRun.id, req.nodeId, childIndex);
 
       try {
-        const provider = getIsolationProvider();
-        const isolatedEnv = await provider.create({
-          workflowType: 'task',
-          identifier,
-          baseBranch: config.baseBranch ? git.toBranchName(config.baseBranch) : undefined,
-          codebaseId: config.codebaseId,
-          codebaseName: config.codebaseName,
-          canonicalRepoPath: git.toRepoPath(config.canonicalRepoPath),
-          description: `sub-run child ${String(childIndex)} (node ${req.nodeId})`,
-        });
-
-        // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
-        const envRecord = await isolationDb.create({
-          codebase_id: config.codebaseId,
-          workflow_type: 'task',
-          workflow_id: identifier,
-          provider: 'worktree',
-          working_path: isolatedEnv.workingPath,
-          branch_name: isolatedEnv.branchName,
-          created_by_platform: config.createdByPlatform,
-          ...(config.createdByUserId ? { created_by_user_id: config.createdByUserId } : {}),
-          // `adopted` records whether this row describes a worktree Archon created or
-          // one that was already on disk — see the note below on why re-use is allowed.
-          // Durable on purpose: a log line is gone by the time anyone asks why two runs
-          // touched one checkout.
-          metadata: {
-            parent_run_id: req.parentRun.id,
-            child_index: childIndex,
-            adopted: isolatedEnv.metadata.adopted,
+        const created = await createRegisteredWorktree(isolation, {
+          request: {
+            workflowType: 'task',
+            identifier,
+            baseBranch: surface.baseBranch ? git.toBranchName(surface.baseBranch) : undefined,
+            codebaseId: codebase.id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
+            description: `sub-run child ${String(childIndex)} (node ${req.nodeId})`,
           },
+          setupExecutor: createRunWorktreeSetupExecutor(deps, req.parentRun, req.setupEnvironment, {
+            parentNodeId: req.nodeId,
+            childIndex,
+          }),
+          createdByPlatform: surface.createdByPlatform,
+          ...(surface.createdByUserId ? { createdByUserId: surface.createdByUserId } : {}),
+          metadata: { parent_run_id: req.parentRun.id, child_index: childIndex },
         });
-
-        // `WorktreeProvider.create()` ADOPTS a worktree already sitting at the computed
-        // path instead of failing. That is what made the pre-fix identifier collision
-        // silent, so it must never be quiet on this path again.
-        //
-        // Adoption stays ALLOWED rather than rejected. The reason is NOT that resume
-        // can't reach this code — it can. The parent's re-entry finds its child by
-        // (parent_run_id, parent_node_id); when that row was never written, or was
-        // deleted, the node takes the fresh-spawn path and calls `resolve()` again.
-        // Two properties are what make that safe, and both are load-bearing:
-        //
-        //  1. `buildChildIdentifier` is deterministic in (parentRunId, nodeId,
-        //     childIndex), so re-spawning the SAME slot recomputes the SAME path.
-        //     Nothing else computes this identifier, so whatever is sitting there is
-        //     this slot's own from an earlier attempt — never a sibling's live checkout.
-        //  2. `isolationDb.create()` is an UPSERT (`ON CONFLICT (codebase_id,
-        //     workflow_type, workflow_id) WHERE status = 'active' DO UPDATE`, see
-        //     `db/isolation-environments.ts`), so the re-spawn refreshes the existing
-        //     env row rather than failing on the unique index. "Simplifying" that to a
-        //     plain INSERT breaks exactly the recovery this comment is describing.
-        //
-        // Rejecting adoption would turn a spawn that died between `provider.create()`
-        // and `createWorkflowRun` from "recovers on the next resume" into "wedged
-        // permanently". If this WARN ever fires for a SIBLING's checkout, the
-        // identifier has regressed and this line is the evidence.
-        if (isolatedEnv.metadata.adopted) {
-          getLog().warn(
-            {
-              parentRunId: req.parentRun.id,
-              nodeId: req.nodeId,
-              childIndex,
-              branch: isolatedEnv.branchName,
-              workingPath: isolatedEnv.workingPath,
-            },
-            'workflow.child_worktree_adopted'
-          );
-        }
+        const { env } = created;
 
         getLog().info(
           {
             parentRunId: req.parentRun.id,
             nodeId: req.nodeId,
             childIndex,
-            branch: isolatedEnv.branchName,
-            envId: envRecord.id,
-            adopted: isolatedEnv.metadata.adopted,
+            branch: env.branchName,
+            envId: created.envId,
+            adopted: env.metadata.adopted,
           },
           'workflow.child_worktree_created'
         );
 
         return {
-          cwd: isolatedEnv.workingPath,
-          envId: envRecord.id,
-          branchName: isolatedEnv.branchName,
-          ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
-            ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
-            : {}),
+          cwd: env.workingPath,
+          envId: created.envId,
+          ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),
+          branchName: env.branchName,
+          ...(created.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
         };
       } catch (err) {
-        const error = err as Error;
         // Paired failure log for the `_created` info line above (CLAUDE.md convention).
+        // The executor prepends the sub-run context to the message.
         getLog().error(
-          { err: error, parentRunId: req.parentRun.id, nodeId: req.nodeId, childIndex },
+          { err, parentRunId: req.parentRun.id, nodeId: req.nodeId, childIndex },
           'workflow.child_worktree_create_failed'
         );
-        // Map raw git/disk/permission stderr to an actionable message (the repo
-        // pattern the top-level worktree path uses); the executor prepends the
-        // sub-run context. classifyIsolationError falls through to the raw message
-        // for anything it doesn't recognize, so nothing is swallowed.
-        throw new Error(classifyIsolationError(error));
+        throw err;
       }
     },
   };

@@ -29,9 +29,9 @@ import { spawnSync } from 'child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { defaultBaselines, SCHEMA_REPO_PATH } from './schema-upgrade-baselines';
 
-const SCHEMA_PATH = resolve(import.meta.dir, '..', 'migrations', '000_combined.sql');
-const SCHEMA_REPO_PATH = 'migrations/000_combined.sql';
+const SCHEMA_PATH = resolve(import.meta.dir, '..', SCHEMA_REPO_PATH);
 
 interface Baseline {
   ref: string;
@@ -40,7 +40,7 @@ interface Baseline {
 
 /**
  * Deliberately `spawnSync` rather than `@archon/git`: this script must run in CI
- * with no `bun install` (it imports nothing outside Node builtins), and reads
+ * with no `bun install` (only local modules and Node builtins), and reads
  * history — `git show <ref>:<path>` — rather than manipulating worktrees, which
  * is what `@archon/git` covers. The argument array means no ref ever reaches a
  * shell.
@@ -97,41 +97,6 @@ function admin(sql: string): { code: number; out: string } {
   return psql('postgres', { sql });
 }
 
-/**
- * Every DISTINCT schema ever shipped in a release tag, oldest tag per version.
- *
- * A release that does not touch the schema ships the same file as the one before
- * it — 21 tags carry 8 distinct versions today, and v0.3.0 through v0.3.12 are all
- * byte-identical. Deduplicating by blob therefore makes this the set of vintages a
- * real install can actually have, rather than a sample of recent releases, and it
- * grows with schema churn instead of release cadence.
- */
-function defaultBaselines(): string[] {
-  const tags = git('tag', '--sort=creatordate').stdout.split('\n').filter(Boolean);
-  const oldestTagPerSchema = new Map<string, string>();
-  let withoutSchema = 0;
-
-  for (const tag of tags) {
-    const blob = git('rev-parse', `${tag}:${SCHEMA_REPO_PATH}`);
-    if (!blob.ok) {
-      withoutSchema++;
-      continue;
-    }
-    const id = blob.stdout.trim();
-    if (!oldestTagPerSchema.has(id)) oldestTagPerSchema.set(id, tag);
-  }
-
-  if (withoutSchema > 0) {
-    console.log(
-      `note: ${withoutSchema} tag(s) predate ${SCHEMA_REPO_PATH} and cannot be a baseline`
-    );
-  }
-  console.log(
-    `note: ${tags.length - withoutSchema} tag(s) carry ${oldestTagPerSchema.size} distinct schema version(s)`
-  );
-  return [...oldestTagPerSchema.values()];
-}
-
 function loadBaselines(refs: string[], dir: string): Baseline[] {
   const out: Baseline[] = [];
   for (const ref of refs) {
@@ -166,6 +131,7 @@ const CATALOG_QUERIES: Record<string, string> = {
                  WHERE d.objid = (schemaname||'.'||sequencename)::regclass AND d.deptype = 'a'),
                 '-')
               FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1`,
+  triggers: 'SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1',
 };
 
 /**
@@ -229,7 +195,7 @@ function dbNameFor(ref: string): string {
 }
 
 const requested = process.argv.slice(2).filter(a => !a.startsWith('-'));
-const refs = requested.length > 0 ? requested : defaultBaselines();
+const refs = requested.length > 0 ? requested : defaultBaselines(git);
 if (refs.length === 0) {
   console.error('no baseline refs to test (no release tags carry the schema file)');
   process.exit(1);
@@ -271,6 +237,24 @@ try {
     const upgrade = psql(db, { file: SCHEMA_PATH });
     if (upgrade.code !== 0) {
       console.error(`FAIL ${ref}: upgrading to the current schema aborted\n${upgrade.out}`);
+      failures++;
+      drop(db);
+      continue;
+    }
+
+    const olderWriter = psql(db, {
+      sql: `WITH conversation AS (
+              INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id)
+              VALUES ('cli', 'upgrade-old-writer') RETURNING id
+            )
+            INSERT INTO remote_agent_workflow_runs
+              (workflow_name, conversation_id, user_message)
+            SELECT 'upgrade-old-writer', id, 'legacy insert after upgrade' FROM conversation;
+            SELECT COUNT(*) FROM remote_agent_workflow_runs
+             WHERE workflow_name = 'upgrade-old-writer' AND origin IS NULL;`,
+    });
+    if (olderWriter.code !== 0 || olderWriter.out.trim() !== '1') {
+      console.error(`FAIL ${ref}: older writer insert after upgrade failed\n${olderWriter.out}`);
       failures++;
       drop(db);
       continue;

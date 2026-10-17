@@ -1,15 +1,29 @@
+import { resolveProjectPaths } from '@archon/workflows/executor';
+import { listWorkflowEvents } from '@archon/core/db/workflow-events';
+import { randomUUID } from 'node:crypto';
+import { getOrCreateConversation } from '@archon/core/db/conversations';
+import { listMessages } from '@archon/core/db/messages';
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
+import { execFileSync } from 'node:child_process';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
+import { getWorkflowRun } from '@archon/core/db/workflows';
+import { execFileAsync } from '@archon/git';
 /**
  * The server hosting resource starts against a real SQLite database, a real workflow
  * checkout and a real source-plugin module. Only the engine is recorded: it claims the
  * pending run exactly as the executor does, so the claim fence stays the real one.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
-import { getStartReceipt } from '@archon/core/db/resource-starts';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { registerFolder, registerRepository } from '@archon/core';
+import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
+import { getStartReceipt, hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
   drainResourceStartHost,
@@ -18,7 +32,7 @@ import {
 import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
-import { HeadlessPlatform } from '../adapters/headless';
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
 import { createServerResourceStartHost } from './resource-start-hosting';
 import { loadWebhookSourcePlugins } from './webhook-source-plugins';
@@ -26,6 +40,9 @@ import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
 } from './workflow-resume-service';
+
+registerBuiltinProviders();
+registerCommunityProviders();
 
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const HOST_ID = 'server-host';
@@ -55,6 +72,12 @@ function recordingEngine(): IWorkflowEngine & {
     async resume() {
       throw new Error('not used');
     },
+    async subscribe() {
+      throw new Error('not used');
+    },
+    async watchAttention() {
+      throw new Error('not used');
+    },
   };
 }
 
@@ -81,7 +104,14 @@ interface Fixture {
 
 async function fixture(
   autoDrain = true,
-  isolation: { kind: 'in-place' } | { kind: 'worktree' } = { kind: 'in-place' }
+  isolation:
+    | { kind: 'in-place' }
+    | { kind: 'worktree'; fromBranch?: string; branch?: string }
+    | { kind: 'default' } = {
+    kind: 'in-place',
+  },
+  initGit = true,
+  launchCwd?: string
 ): Promise<Fixture> {
   const project = join(root, 'project');
   await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
@@ -89,7 +119,7 @@ async function fixture(
     join(project, '.archon', 'workflows', 'hosted.yaml'),
     'name: hosted\ndescription: Server-hosted start.\nnodes:\n  - id: one\n    bash: echo one\n'
   );
-  expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
+  if (initGit) expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
   if (isolation.kind === 'worktree') {
     // A worktree syncs from the remote's base branch, so give the project a local one.
     const origin = join(root, 'origin.git');
@@ -163,7 +193,8 @@ async function fixture(
               resource: 'repo:hosted',
               capacity: 1,
               launch: {
-                cwd: project,
+                cwd: launchCwd ?? project,
+                discoveryCwd: project,
                 workflowName: 'hosted',
                 inputs: {},
                 isolation,
@@ -176,11 +207,16 @@ async function fixture(
   );
 
   const engine = recordingEngine();
-  const host = createServerResourceStartHost(HOST_ID, engine);
+  const workflowHost = { ...createSqlWorkflowHost(), engine };
+  const host = createServerResourceStartHost(HOST_ID, workflowHost);
   const app = new OpenAPIHono();
   registerWebhookSourceRoutes(
     app,
-    await loadWebhookSourcePlugins(configPath),
+    await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
+      isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+      hasDeliveryReceipt: hasStartReceiptForDelivery,
+    }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
   return {
@@ -216,7 +252,11 @@ async function bindingOf(delivery: string): Promise<{
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-server-resource-host-')));
   process.env.ARCHON_HOME = join(root, 'home');
+  // Conversations need a configured default provider.
+  await mkdir(process.env.ARCHON_HOME);
+  await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
   delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
   resetDatabase();
   await getDatabase().query(
     `INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Trigger actor')`,
@@ -235,8 +275,83 @@ afterEach(async () => {
 });
 
 describe('server resource-start host', () => {
+  test('a version-1 queued launch delivers output and metadata to its real conversation', async () => {
+    const { deliver } = await fixture(false);
+    expect((await deliver('blocker', 'queue')).status).toBe(200);
+    const blockerId = await admitWithoutStarting();
+    const sqlHost = createSqlWorkflowHost();
+    const blocker = await sqlHost.deps.store.getResourceStartRequest(blockerId);
+    if (!blocker) throw new Error('Missing blocker');
+    const conversation = await getOrCreateConversation('cli', 'legacy-thread');
+    const id = randomUUID();
+    const launch = {
+      ...blocker.launch,
+      run: {
+        ...blocker.launch.run,
+        id,
+        origin: { conversationId: conversation.id, userId: USER_ID },
+      },
+    };
+    expect(
+      (
+        await sqlHost.deps.store.admitResourceStart({
+          resource: blocker.resource,
+          capacity: 1,
+          hostId: HOST_ID,
+          overlap: 'queue',
+          launch,
+        })
+      ).status
+    ).toBe('queued');
+    const { origin: _origin, ...run } = launch.run;
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+      [
+        JSON.stringify({
+          version: 1,
+          run: { ...run, conversation_id: conversation.id, user_id: USER_ID },
+          execution: launch.execution,
+        }),
+        id,
+      ]
+    );
+    await sqlHost.deps.store.claimPendingWorkflowRun(blockerId);
+    await sqlHost.deps.store.completeWorkflowRun(blockerId, { duration_ms: 1 });
+    const engine = recordingEngine();
+    let delivered = false;
+    const host = createServerResourceStartHost(HOST_ID, {
+      ...sqlHost,
+      engine: {
+        ...engine,
+        async submit(input) {
+          const result = await engine.submit(input);
+          expect(input.origin).toEqual({ conversationId: conversation.id, userId: USER_ID });
+          await input.platform.sendMessage(input.conversationId, 'Legacy output', {
+            category: 'workflow_status',
+            segment: 'new',
+          });
+          delivered = true;
+          return result;
+        },
+      },
+    });
+    await host.requestDrain();
+    await until(() => (delivered ? true : undefined));
+    expect(engine.claimed).toEqual([id]);
+    const messages = await listMessages(conversation.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      conversation_id: conversation.id,
+      role: 'assistant',
+      content: 'Legacy output',
+    });
+    expect(JSON.parse(messages[0].metadata)).toEqual({ category: 'workflow_status' });
+  });
+
   test('a webhook receipt is prepared, admitted and started through the engine port', async () => {
     const { deliver, engine } = await fixture();
+    await writeFile(join(root, 'home', 'config.yaml'), 'defaultAssistant: pi\n');
+    await writeFile(join(root, 'project', '.archon', 'config.yaml'), 'assistant: codex\n');
     expect((await deliver('first', 'queue')).status).toBe(200);
 
     // Nothing but the route's post-commit hook drains this host.
@@ -246,6 +361,9 @@ describe('server resource-start host', () => {
     const runId = binding.disposition?.requestId;
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
+    const run = submitted.options?.preCreatedRun;
+    expect(run?.conversation_id).toBeNull();
+    expect(run?.origin).toEqual({ userId: USER_ID });
     expect(submitted.workflow.name).toBe('hosted');
     // Provenance is data on the run, not prose in the user message.
     expect(submitted.userMessage).toBe('');
@@ -256,8 +374,194 @@ describe('server resource-start host', () => {
     await until(() => (engine.claimed.includes(runId ?? '') ? true : undefined));
   });
 
-  test('a queued receipt starts when its blocker ends and the scheduler tick drains', async () => {
+  test.each(['folder', 'repo'] as const)(
+    'a nested repository belongs to itself under a registered parent %s',
+    async parentKind => {
+      if (parentKind === 'repo') {
+        expect(await Bun.spawn(['git', 'init', '-q'], { cwd: root }).exited).toBe(0);
+      }
+      const parent = await (parentKind === 'repo'
+        ? registerRepository(root)
+        : registerFolder(root));
+      const { deliver, engine, host } = await fixture(false);
+      expect((await deliver('nested', 'queue')).status).toBe(200);
+      await host.requestDrain();
+      await until(() => engine.claimed[0]);
+      const child = await findCodebaseByDefaultCwd(join(root, 'project'));
+      expect(child).not.toBeNull();
+      expect(child?.id).not.toBe(parent.codebaseId);
+      expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(child?.id);
+    }
+  );
+
+  test('reuses an existing nested repository registration', async () => {
+    const parent = await registerFolder(root);
+    const { deliver, engine, host } = await fixture(false);
+    const child = await registerRepository(join(root, 'project'));
+    expect((await deliver('registered-child', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    expect(child.codebaseId).not.toBe(parent.codebaseId);
+    expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(child.codebaseId);
+  });
+
+  test('a folder descendant inside Git prepares and starts in place', async () => {
+    expect(await Bun.spawn(['git', 'init', '-q', root]).exited).toBe(0);
+    const project = join(root, 'project');
+    const descendant = join(project, 'deep');
+    await mkdir(descendant, { recursive: true });
+    const folder = await registerFolder(project);
+    const before = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    const { deliver, engine, host } = await fixture(false, { kind: 'default' }, false, descendant);
+    expect((await deliver('folder-in-git', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    const binding = await bindingOf('folder-in-git');
+    const request = await createSqlWorkflowHost().deps.store.getResourceStartRequest(
+      binding.disposition?.requestId ?? ''
+    );
+    expect(request?.launch).toMatchObject({
+      run: { codebase_id: folder.codebaseId, working_path: await realpath(descendant) },
+      execution: { cwd: await realpath(descendant), isolation: { kind: 'in-place' } },
+    });
+    expect(engine.submitted[0]?.cwd).toBe(await realpath(descendant));
+    expect(engine.submitted[0]?.options?.codebaseId).toBe(folder.codebaseId);
+    expect(engine.submitted[0]?.options?.ownedWorktree).toBeUndefined();
+    expect(
+      (await getDatabase().query('SELECT id FROM remote_agent_isolation_environments')).rows
+    ).toEqual([]);
+    expect(
+      execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' })
+    ).toBe(before);
+  });
+
+  test('retains parent folder resolution outside Git', async () => {
+    const parent = await registerFolder(root);
+    const { deliver, engine, host } = await fixture(false, { kind: 'in-place' }, false);
+    expect((await deliver('folder-child', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(parent.codebaseId);
+  });
+
+  test.each([false, true])(
+    'worktree provisioning is durable before engine submission (failure: %s)',
+    async fails => {
+      const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+      await writeFile(
+        join(root, 'project', '.archon', 'config.yaml'),
+        `worktree:\n  postCreate:\n    - echo setup-evidence; ${fails ? 'echo valuable > installer-output; exit 7' : 'true'}\n`
+      );
+      expect((await deliver('setup', 'queue')).status).toBe(200);
+      const workflowHost = { ...createSqlWorkflowHost(), engine };
+      const admitted: string[] = [];
+      await drainResourceStartHost({
+        ...workflowHost,
+        hostId: HOST_ID,
+        startAdmitted: async id => {
+          admitted.push(id);
+        },
+      });
+      const runId = admitted[0];
+      if (!runId) throw new Error('Expected admitted run');
+      const start = (): ReturnType<typeof startAdmittedResourceStart> =>
+        startAdmittedResourceStart({
+          host: workflowHost,
+          hostId: HOST_ID,
+          requestId: runId,
+          createPlatform: () => new HeadlessPlatform(),
+        });
+      if (fails) {
+        await expect(start()).rejects.toThrow('exit code 7');
+        expect(engine.submitted).toHaveLength(0);
+        expect((await getWorkflowRun(runId))?.status).toBe('pending');
+      } else {
+        await start();
+        expect(engine.submitted[0]?.options?.preCreatedRun?.id).toBe(runId);
+      }
+      const events = await listWorkflowEvents(runId);
+      const setup = events.filter(event => event.event_type.startsWith('worktree_setup_'));
+      expect(setup.map(event => event.event_type)).toEqual([
+        'worktree_setup_started',
+        fails ? 'worktree_setup_failed' : 'worktree_setup_completed',
+      ]);
+      expect(setup[1]?.data?.stdoutTail).toContain('setup-evidence');
+      const run = await getWorkflowRun(runId);
+      if (!run) throw new Error('Expected setup audit owner');
+      const { logDir } = await resolveProjectPaths(
+        workflowHost.deps,
+        join(root, 'project'),
+        runId,
+        run.codebase_id ?? undefined
+      );
+      const transcript: unknown[] = (await readFile(join(logDir, `${runId}.jsonl`), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line: string) => JSON.parse(line));
+      expect(transcript).toMatchObject([
+        { type: setup[0]?.event_type, workflow_id: runId, setup: setup[0]?.data },
+        { type: 'exec_output', stdout_tail: 'setup-evidence', exit_code: fails ? 7 : 0 },
+        { type: setup[1]?.event_type, workflow_id: runId, setup: setup[1]?.data },
+      ]);
+      expect(setup[0]?.data?.message).toContain('started');
+      expect(setup[1]?.data?.message).toContain(fails ? 'exit code 7' : 'completed');
+      if (fails) {
+        expect(setup[1]?.data?.exitCode).toBe(7);
+        await expect(start()).rejects.toThrow('its setup did not finish');
+        expect(engine.submitted).toHaveLength(0);
+      }
+    },
+    30000
+  );
+
+  for (const base of [null, 'release']) {
+    test(`resource start forwards ${String(base)} at worktree creation and engine submission`, async () => {
+      const { deliver, engine, host } = await fixture(false, { kind: 'worktree' });
+      const project = join(root, 'project');
+      if (base) {
+        execFileSync('git', ['-C', project, 'checkout', '-qb', base]);
+        execFileSync('git', [
+          '-C',
+          project,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'release',
+        ]);
+        execFileSync('git', ['-C', project, 'push', '-q', 'origin', base]);
+        execFileSync('git', ['-C', project, 'checkout', '-q', 'main']);
+      }
+      const registered = await registerRepository(project);
+      await updateCodebase(
+        { id: registered.codebaseId, name: registered.name },
+        { default_branch: base }
+      );
+      expect((await deliver('branch', 'queue')).status).toBe(200);
+      await host.requestDrain();
+      const submitted = await until(() => engine.submitted[0]);
+      expect(submitted.options?.baseBranch).toBe(base ?? undefined);
+      expect(submitted.cwd).not.toBe(join(root, 'project'));
+      expect(submitted.options?.resolveChildIsolation).toBeDefined();
+      const commit = (cwd: string, ref: string): string =>
+        execFileSync('git', ['-C', cwd, 'rev-parse', ref], { encoding: 'utf8' }).trim();
+      expect(commit(submitted.cwd, 'HEAD')).toBe(commit(project, `origin/${base ?? 'main'}`));
+    }, 30000);
+  }
+
+  test('a queued receipt retains its prepared AI policy when config changes before admission', async () => {
     const { deliver, engine, host } = await fixture();
+    const configPath = join(root, 'project', '.archon', 'config.yaml');
+    await writeFile(
+      configPath,
+      'assistant: codex\nassistants:\n  codex:\n    model: launch-model\n'
+    );
     expect((await deliver('first', 'queue')).status).toBe(200);
     const firstRun = (await until(() => engine.submitted[0])).options?.preCreatedRun?.id;
     await until(() => (engine.claimed.length === 1 ? true : undefined));
@@ -273,15 +577,30 @@ describe('server resource-start host', () => {
     });
     await host.requestDrain();
     expect(engine.submitted).toHaveLength(1);
+    await writeFile(
+      configPath,
+      'assistant: claude\nassistants:\n  codex:\n    model: changed-model\n'
+    );
 
     await getDatabase().query(
       "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
       [firstRun]
     );
     // The scheduler's first tick runs immediately; no receipt or CLI drain happens here.
-    startWorkflowContinuationScheduler(undefined, () => void host.requestDrain());
+    startWorkflowContinuationScheduler(
+      createSqlWorkflowHost(),
+      undefined,
+      () => void host.requestDrain()
+    );
     const second = await until(() => engine.submitted[1]);
     expect(second.options?.preCreatedRun?.id).toBe(queued.disposition?.requestId);
+    expect(second.options?.preparedAiConfiguration?.config.assistant).toBe('codex');
+    expect(second.options?.preparedAiConfiguration?.config.assistants.codex.model).toBe(
+      'launch-model'
+    );
+    expect(second.options?.preCreatedRun?.metadata.ai_configuration).toEqual(
+      second.options?.preparedAiConfiguration?.aiConfigurationSnapshot
+    );
     expect((await bindingOf('second')).disposition).toMatchObject({ status: 'admitted' });
   });
 
@@ -303,12 +622,70 @@ describe('server resource-start host', () => {
     expect(engine.submitted).toHaveLength(1);
   });
 
+  test('a dead connected credential fails before worktree creation and releases the resource slot on the next drain', async () => {
+    const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+    const project = join(root, 'project');
+    await writeFile(
+      join(project, '.archon', 'workflows', 'hosted.yaml'),
+      'name: hosted\ndescription: AI start\nnodes:\n  - id: one\n    provider: claude\n    prompt: do work\n'
+    );
+    await saveUserProviderKey({
+      userId: USER_ID,
+      provider: 'anthropic',
+      kind: 'api_key',
+      apiKey: 'planted-secret',
+    });
+    await getDatabase().query(
+      "UPDATE remote_agent_user_provider_keys SET api_key_encrypted = 'unreadable' WHERE user_id = $1",
+      [USER_ID]
+    );
+    const before = (
+      await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: project })
+    ).stdout;
+    expect((await deliver('dead', 'queue')).status).toBe(200);
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
+      hostId: HOST_ID,
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    const result = await startAdmittedResourceStart({
+      requestId: admitted[0],
+      hostId: HOST_ID,
+      host: { ...createSqlWorkflowHost(), engine },
+      createPlatform: () => new HeadlessPlatform(),
+    });
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toBe(
+      "Credential preflight failed for provider 'claude' (vendor 'anthropic'): credential cannot be used: The stored credential cannot be read."
+    );
+    expect(result.error).not.toContain('planted-secret');
+    expect((await getWorkflowRun(admitted[0]))?.status).toBe('failed');
+    expect(engine.submitted).toHaveLength(0);
+    expect(
+      (await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: project })).stdout
+    ).toBe(before);
+    expect((await deliver('next', 'queue')).status).toBe(200);
+    await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
+      hostId: HOST_ID,
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    expect(admitted).toHaveLength(2);
+  });
+
   test('two starters of one admitted request execute it once', async () => {
     const { deliver, engine } = await fixture(false);
     expect((await deliver('first', 'queue')).status).toBe(200);
     // Admit without starting, so both starters race for the same pending run.
     const admitted: string[] = [];
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async requestId => {
         admitted.push(requestId);
@@ -320,53 +697,106 @@ describe('server resource-start host', () => {
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+        host: { ...createSqlWorkflowHost(), engine },
+        createPlatform: () => new HeadlessPlatform(),
       });
 
     await Promise.allSettled([start(), start()]);
     expect(engine.claimed).toEqual([requestId]);
   });
 
-  test('an unbranched worktree start that failed before submission reuses its checkout on retry', async () => {
-    const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+  test('a worktree creation failure reports the classified isolation message, not raw git output', async () => {
+    const { deliver, engine } = await fixture(false, {
+      kind: 'worktree',
+      fromBranch: 'no-such-branch',
+    });
     expect((await deliver('first', 'queue')).status).toBe(200);
     const requestId = await admitWithoutStarting();
-    const failedCwds: string[] = [];
-    const failing: IWorkflowEngine = {
-      async submit(input) {
-        failedCwds.push(input.cwd);
-        throw new Error('engine unavailable');
-      },
-      async resume() {
-        throw new Error('not used');
-      },
-    };
-    const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
+
+    await expect(
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine: target,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
-      });
-
-    await expect(start(failing)).rejects.toThrow('engine unavailable');
-    // The operator's retry of the still-pending run reaches the engine in the same checkout.
-    expect((await start(engine)).success).toBe(true);
-    expect(engine.claimed).toEqual([requestId]);
-    expect(engine.submitted.map(input => input.cwd)).toEqual(failedCwds);
-    expect(failedCwds).toHaveLength(1);
+        host: { ...createSqlWorkflowHost(), engine },
+        createPlatform: () => new HeadlessPlatform(),
+      })
+    ).rejects.toThrow(/^\*\*Error:\*\* /);
+    expect(engine.submitted).toHaveLength(0);
   });
+
+  test.each([undefined, 'named-reuse'])(
+    'a worktree start on branch %s records reuse on retry',
+    async branch => {
+      const { deliver, engine } = await fixture(false, {
+        kind: 'worktree',
+        ...(branch ? { branch } : {}),
+      });
+      expect((await deliver('first', 'queue')).status).toBe(200);
+      const requestId = await admitWithoutStarting();
+      const failedCwds: string[] = [];
+      const failing: IWorkflowEngine = {
+        async submit(input) {
+          failedCwds.push(input.cwd);
+          throw new Error('engine unavailable');
+        },
+        async resume() {
+          throw new Error('not used');
+        },
+        async subscribe() {
+          throw new Error('not used');
+        },
+        async watchAttention() {
+          throw new Error('not used');
+        },
+      };
+      const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
+        startAdmittedResourceStart({
+          requestId,
+          hostId: HOST_ID,
+          host: { ...createSqlWorkflowHost(), engine: target },
+          createPlatform: () => new HeadlessPlatform(),
+        });
+
+      await expect(start(failing)).rejects.toThrow('engine unavailable');
+      // The operator's retry of the still-pending run reaches the engine in the same checkout.
+      const logged = captureLogLines();
+      try {
+        expect((await start(engine)).success).toBe(true);
+        expect(
+          logged.lines.filter(line => line.msg === 'worktree_adopted' && line.level === 40)
+        ).toHaveLength(1);
+        const codebase = await findCodebaseByDefaultCwd(join(root, 'project'));
+        if (!codebase) throw new Error('Expected registered project');
+        const rows = await createSqlWorkflowHost().records.isolation.listByCodebase(codebase.id);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].metadata.adopted).toBe(true);
+      } finally {
+        logged.restore();
+      }
+      expect(engine.claimed).toEqual([requestId]);
+      expect(engine.submitted.map(input => input.cwd)).toEqual(failedCwds);
+      expect(failedCwds).toHaveLength(1);
+    }
+  );
 
   test('a start that fails before submission logs its run and the recovery command', async () => {
     const { deliver } = await fixture(false);
     expect((await deliver('first', 'queue')).status).toBe(200);
     const host = createServerResourceStartHost(HOST_ID, {
-      async submit() {
-        throw new Error('engine unavailable');
-      },
-      async resume() {
-        throw new Error('not used');
+      ...createSqlWorkflowHost(),
+      engine: {
+        async submit() {
+          throw new Error('engine unavailable');
+        },
+        async resume() {
+          throw new Error('not used');
+        },
+        async subscribe() {
+          throw new Error('not used');
+        },
+        async watchAttention() {
+          throw new Error('not used');
+        },
       },
     });
 
@@ -391,6 +821,7 @@ describe('server resource-start host', () => {
 async function admitWithoutStarting(): Promise<string> {
   const admitted: string[] = [];
   await drainResourceStartHost({
+    ...createSqlWorkflowHost(),
     hostId: HOST_ID,
     startAdmitted: async requestId => {
       admitted.push(requestId);

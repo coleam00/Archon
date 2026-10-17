@@ -1,3 +1,4 @@
+import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useEffect, useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
@@ -107,7 +108,8 @@ export function RunDetailHeader({
         </span>
       </div>
 
-      <RunOutcomeBadge outcome={run.outcome} />
+      <ToolCallAttentionSection run={run} />
+      <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
 
       {/* Workflow name */}
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>

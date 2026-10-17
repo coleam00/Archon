@@ -53,8 +53,13 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
-| Block until the run ends or needs a human decision | `archon workflow wait <run-id> --json` |
+| Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
+| Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
+| The queue item one run stands for | `archon workflow attention <run-id> --json` |
+| Every change in the queue, as it happens | `archon workflow attention --watch --json [--all] [--label k=v] [--after <cursor>]` |
+| Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
+| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
@@ -64,12 +69,53 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 ## The approve/resume two-step
 
 With `--json`, `approve`/`reject`/`respond` **record the decision and stop** —
-the run becomes resumable but does not execute (streaming output would corrupt
-the JSON). To record AND continue:
+this command does not execute the run (streaming output would corrupt the JSON).
+The answered gate is a due continuation: a running `archon serve`, or
+`archon workflow wake [--watch]`, continues it without anyone resuming by hand.
+Container runs (including a container write-back gate) are the exception: the
+hosts cannot continue them, so run `archon workflow resume <run-id>` yourself.
+To record AND continue in this process:
 
 ```bash
 archon workflow approve <run-id> "ship it"   # no --json: records + auto-resumes; background task!
 ```
+
+A `wait: attention` pause (`attention.kind: "attention"`) is answered in the `form` it
+reports, with one of the `options` ids it lists:
+
+```bash
+archon workflow answer <run-id> --occurrence <id> --text "done" --json            # message
+archon workflow answer <run-id> --occurrence <id> --choose use-dev --json         # approval/select
+archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json    # multi_select
+```
+
+`approve`/`reject`/`respond <option>` are shorthand for the same answer. In the
+`approval` form `reject` is an answer and does not cancel the run. Like a gate answer,
+the answered wait is a due continuation. Answer only what the user actually decided; an
+undeclared option is refused. A `legacy:` occurrence is a wait paused before answers
+existed: it takes no answer, so `workflow resume` it once its action is done.
+
+To work the whole queue instead of one run, `archon workflow attention --json` lists
+every item that needs someone, each with its `kind`, `occurrence`, `form`, `options`,
+`labels`, typed `project` and pointers to its transcript and artifacts. Answer an item
+by its `runId` and `occurrence` exactly as above. Labels are the user's routing data:
+`--label ci=other` selects one class, and `attention label` writes a classification
+without answering. Archon never routes by them.
+
+`workflow wait` follows one run whose id you hold. To follow every run in scope,
+including runs started later by triggers, schedules or other sessions, run
+`archon workflow attention --watch --json --all` as a background task. It prints one
+JSON line per change: each `attention` line is an item that needs attention, carrying
+the same item the list returns, so treat it as a wake and answer by its `runId` and
+`occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
+lines before `ready` are the whole open set. Keep the `cursor` of the last line you
+handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
+store cannot read the stream's cursor: rerun without `--after`.
+
+When you answer from a run you saw paused earlier, pass the occurrence that
+`workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the
+run has since moved to a different pause, the answer is refused and the error names
+the current occurrence, instead of landing on a question you never read.
 
 Or deliberately in two steps:
 
@@ -81,9 +127,12 @@ archon workflow resume <run-id>                     # executes; background task
 To let the continuation own a background process, add `--detach` to
 `approve`/`reject`/`respond`/`resume`. The parent validates the run and returns an
 ack with `continues: true`; the detached child records the decision and continues
-without `--json`.
+without `--json`. Detached `resume` acknowledges after engine acceptance clears the
+old pause, so immediately follow it with `workflow wait`. A new pause is still
+reported. If acceptance is unconfirmed after 60 seconds, inspect the run before
+retrying; the child may still continue.
 
-## Interactive-loop gates: comment or no comment is a decision
+## Deprecated interactive-loop gates: comment or no comment is a decision
 
 Read the gate state first:
 
@@ -96,8 +145,9 @@ archon workflow get <run-id> --json | jq .metadata.approval.completionSignaled
 - You approve **with** a comment → another full iteration runs using your text
   as feedback.
 - Reject always needs a reason. Gates with authored `decisions:` expose it as
-  `$gate.output.text`; only legacy `approval.on_reject` prompts receive
-  `$REJECTION_REASON`.
+  `$gate.output.text`; only deprecated `approval.on_reject` prompts receive
+  `$REJECTION_REASON`. At an attention wait, reject is an answer
+  (`decision: reject`) and the run continues.
 
 Choose deliberately after reading what the gate produced — not by reflex.
 
@@ -146,11 +196,13 @@ A convention of the bundled sdlc workflows (`archon-ship`, `archon-deliver`,
 general. Their review lenses record *proven* findings that fall outside the
 run's accepted scope as discovery sidecars instead of blocking findings: raw
 per-producer files at `<artifacts>/discoveries/*.json` (records of `title`,
-`claim`, `evidence`, `relation: adjacent | scope_conflict`, `source_node`),
-consolidated by the review into `discoveries.json` plus a human-readable
-`discoveries.md`. The terminal report ends with a discoveries section addressed
-to you, the relaying agent — deliberately, because the run itself never files
-issues from them. **If you drop a discovery at this hop, nobody ever sees it.**
+`claim`, `evidence`, `relation: unrelated | scope_conflict | note`, `source_node`),
+consolidated by the review into the verdict's `discoveries` records plus a
+human-readable `discoveries.md`. A delivery run files each one as an issue
+(reusing an open issue that already describes it) and its terminal report lists
+the issue links. A run that ended before filing, or a standalone review, lists the
+records with a relay addressed to you, the relaying agent. **If you drop an
+unfiled discovery at this hop, nobody ever sees it.**
 
 When such a run reaches terminal:
 
@@ -159,13 +211,13 @@ When such a run reaches terminal:
 2. On a **failed** run, also check the raw `discoveries/*.json` sidecars —
    consolidation runs late, so a run that died mid-flight can hold raw records
    no report mentions.
-3. Surface each worthwhile discovery to the user with its evidence, and ask
+3. Surface each worthwhile discovery the run did not file to the user with its evidence, and ask
    where it goes: an evidence comment on the existing issue it belongs to, a
    new issue when it is a novel defect, or an explicit drop. File nothing
    without the user's go unless they have given standing authorization.
 
 Discoveries arrive validated (`evidence` carries concrete `file:line` facts or
-command results), and `adjacent` ones never affected the run's readiness — do
+command results), and `unrelated` and `note` ones never affected the run's readiness — do
 not re-litigate the verdict from them; route them.
 
 ## When a run looks wrong

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 // ---- pg mock setup --------------------------------------------------------
@@ -581,27 +582,11 @@ describe('postgresDialect', () => {
 
   describe('jsonMerge()', () => {
     // Behavior (null removes the key) is proven against a real server in
-    // workflows.metadata-merge.postgres.integration.test.ts.
+    // workflows.postgres.integration.test.ts.
     test('merges the bound patch into the given column', () => {
       const sql = postgresDialect.jsonMerge('extra_fields', 3);
       expect(sql).toStartWith('(extra_fields || $3::jsonb)');
       expect(sql).not.toContain('$1');
-    });
-  });
-
-  describe('jsonArrayContains()', () => {
-    test('returns correct containment expression', () => {
-      expect(postgresDialect.jsonArrayContains('tags', 'labels', 1)).toBe("tags->'labels' ? $1");
-    });
-
-    test('uses provided param index', () => {
-      expect(postgresDialect.jsonArrayContains('data', 'ids', 5)).toBe("data->'ids' ? $5");
-    });
-
-    test('uses provided column and path', () => {
-      expect(postgresDialect.jsonArrayContains('meta', 'related_issues', 2)).toBe(
-        "meta->'related_issues' ? $2"
-      );
     });
   });
 
@@ -626,6 +611,36 @@ describe('postgresDialect', () => {
       expect(postgresDialect.daysSince('updated_at')).toBe(
         'EXTRACT(EPOCH FROM (NOW() - updated_at)) / 86400'
       );
+    });
+  });
+
+  describe('jsonText()', () => {
+    test('reads a top-level key as text', () => {
+      expect(postgresDialect.jsonText('metadata', 'phase')).toBe("metadata->>'phase'");
+    });
+
+    test('walks a dotted path as jsonb and reads only the last key as text', () => {
+      expect(postgresDialect.jsonText('w.metadata', 'approval.attempt')).toBe(
+        "w.metadata->'approval'->>'attempt'"
+      );
+    });
+  });
+
+  describe('jsonRemove()', () => {
+    test('subtracts every key from the column', () => {
+      expect(postgresDialect.jsonRemove('metadata', 'approval', 'wait')).toBe(
+        "metadata - 'approval' - 'wait'"
+      );
+    });
+  });
+
+  describe('rowLock()', () => {
+    test('locks the selected row', () => {
+      expect(postgresDialect.rowLock()).toBe(' FOR UPDATE');
+    });
+
+    test('locks only the named table in a join', () => {
+      expect(postgresDialect.rowLock('w')).toBe(' FOR UPDATE OF w');
     });
   });
 });

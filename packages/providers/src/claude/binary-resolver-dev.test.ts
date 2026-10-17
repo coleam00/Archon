@@ -7,7 +7,7 @@
  * environments where SDK auto-resolution picks the wrong variant — most
  * notably glibc Linux hosts, where the SDK prefers the musl binary first
  * and silently falls over with a misleading "not found" error.
- * Config-file path is intentionally NOT honored in dev mode (still binary-only).
+ * Config-file pins are also honored before the SDK fallback.
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { join } from 'node:path';
@@ -45,9 +45,26 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
     expect(result).toBeUndefined();
   });
 
-  test('returns undefined when only config path is set (config is binary-mode only)', async () => {
-    const result = await resolver.resolveClaudeBinaryPath('/some/custom/path');
-    expect(result).toBeUndefined();
+  test('honors a configured executable and reports its source', async () => {
+    expect(await resolver.resolveClaudeBinaryPath(process.execPath)).toBe(process.execPath);
+    expect(await resolver.resolveClaudeBinaryWithSource(process.execPath)).toEqual({
+      path: process.execPath,
+      source: 'config',
+    });
+  });
+
+  test('an invalid config pin fails instead of using the SDK', async () => {
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
+    await expect(resolver.resolveClaudeBinaryPath('/missing/config/claude')).rejects.toThrow(
+      'assistants.claude.claudeBinaryPath'
+    );
+  });
+
+  test('an invalid env pin fails even when the config pin is valid', async () => {
+    process.env.CLAUDE_BIN_PATH = '/missing/env/claude';
+    await expect(resolver.resolveClaudeBinaryPath(process.execPath)).rejects.toThrow(
+      'CLAUDE_BIN_PATH'
+    );
   });
 
   test('honors CLAUDE_BIN_PATH env var when file exists', async () => {
@@ -68,11 +85,11 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
   });
 
   test('env var wins over config path in dev mode', async () => {
-    process.env.CLAUDE_BIN_PATH = '/env/claude';
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
-
-    const result = await resolver.resolveClaudeBinaryPath('/config/claude');
-    expect(result).toBe('/env/claude');
+    process.env.CLAUDE_BIN_PATH = process.execPath;
+    expect(await resolver.resolveClaudeBinaryWithSource('/missing/config/claude')).toEqual({
+      path: process.execPath,
+      source: 'env',
+    });
   });
 
   test('falls through to undefined when CLAUDE_BIN_PATH is the empty string', async () => {

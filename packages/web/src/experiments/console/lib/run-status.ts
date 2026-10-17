@@ -7,8 +7,9 @@
  * must never collide with the "running" signal.
  */
 import type { Run } from '../primitives/run';
+import type { components } from '@/lib/api.generated';
 
-export type RunStatus = 'running' | 'paused' | 'failed' | 'completed' | 'cancelled';
+export type RunStatus = Exclude<components['schemas']['WorkflowRun']['status'], 'pending'>;
 
 export const statusLabel: Record<RunStatus, string> = {
   running: 'Running',
@@ -38,6 +39,8 @@ export const statusLabel: Record<RunStatus, string> = {
  * default.
  */
 export function runStatusLabel(run: Run): string {
+  if (run.status === 'running' && run.toolCallAttention?.length)
+    return 'Running · tool call needs attention';
   if (run.status === 'failed') {
     const stopReason = run.stopReason;
     if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;
@@ -45,6 +48,7 @@ export function runStatusLabel(run: Run): string {
   }
   if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
   if (run.wait.kind === 'attention') return 'Waiting for action';
+  if (run.wait.kind === 'quota') return 'Waiting for provider limit';
   return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
 }
 

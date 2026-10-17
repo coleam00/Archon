@@ -1,13 +1,13 @@
-import type { SessionConfig } from '@github/copilot-sdk';
-import type { CopilotProviderDefaults } from '../../types';
-import { clampEffort, isEffortRung, type AssertNever } from '@archon/paths/effort';
+import type { CopilotClientOptions, SessionConfig } from '@github/copilot-sdk';
 import {
-  assertKnownRunConfigKeys,
-  invalidRunConfigValue,
-  normalizeRunConfigString,
-} from '../../shared/run-config';
-
-export type { CopilotProviderDefaults };
+  EFFORT_LADDER,
+  clampEffort,
+  snapshotConfigSchema,
+  type AssertNever,
+  type ProviderConfigScope,
+} from '@archon/provider-contract';
+import { z } from 'zod';
+import { configStringSchema, parseConfigLenient, parseConfigSchema } from '../../shared/run-config';
 
 /**
  * The reasoning-depth rungs Copilot's SDK accepts, weakest → strongest.
@@ -22,101 +22,91 @@ export const COPILOT_EFFORTS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const satisfies readonly CopilotEffort[];
 
 export type CopilotEffortsAreComplete = AssertNever<
   Exclude<CopilotEffort, (typeof COPILOT_EFFORTS)[number]>
 >;
 
-/**
- * Parse raw `assistants.copilot` config into a typed `CopilotProviderDefaults`.
- *
- * Fallback behavior: fields with unexpected types (or enum values outside the
- * declared set) are silently omitted rather than throwing. A broken user
- * config must not prevent provider registration or workflow discovery.
- * Callers that want strict validation should validate upstream.
- */
+/** Copilot CLI log levels, imported from the SDK's client options. */
+type CopilotLogLevel = NonNullable<CopilotClientOptions['logLevel']>;
+
+const COPILOT_LOG_LEVELS = [
+  'none',
+  'error',
+  'warning',
+  'info',
+  'debug',
+  'all',
+] as const satisfies readonly CopilotLogLevel[];
+
+export type CopilotLogLevelsAreComplete = AssertNever<
+  Exclude<CopilotLogLevel, (typeof COPILOT_LOG_LEVELS)[number]>
+>;
+
+const portableFields = {
+  /** Default model ref, e.g. 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5'. */
+  model: configStringSchema.optional(),
+  /**
+   * Reasoning effort passed to the SDK as `reasoningEffort`. Accepts any rung
+   * of Archon's shared ladder, the same vocabulary a workflow's `effort:`
+   * takes, and clamps it to the SDK's enum at parse time.
+   */
+  modelReasoningEffort: z
+    .enum(EFFORT_LADDER, { error: 'expected a valid Archon effort level' })
+    .transform(effort => clampEffort(effort, COPILOT_EFFORTS))
+    .optional(),
+};
+const localFields = {
+  /**
+   * Absolute path to the Copilot CLI binary. Required in compiled Archon
+   * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
+   * the SDK resolve from `$PATH`.
+   */
+  copilotCliPath: configStringSchema.optional(),
+  /**
+   * Override Copilot's config directory. When unset the SDK uses its own
+   * default (typically `~/.copilot`).
+   */
+  configDir: configStringSchema.optional(),
+  /**
+   * Opt in to Copilot's config discovery from the repo (MCP servers, skills,
+   * etc. declared in the repo's `.copilot/` directory). Disabled by default
+   * so arbitrary repos do not implicitly load MCP servers or skills.
+   * @default false
+   */
+  enableConfigDiscovery: z.boolean({ error: 'expected a boolean' }).optional(),
+  /**
+   * Reuse the CLI's logged-in user credentials (from `copilot login`) when
+   * no explicit token is provided via env vars.
+   * @default true
+   */
+  useLoggedInUser: z.boolean({ error: 'expected a boolean' }).optional(),
+  /** Copilot CLI log level. When unset the SDK picks its own default. */
+  logLevel: z
+    .enum(COPILOT_LOG_LEVELS, { error: 'expected none, error, warning, info, debug, or all' })
+    .optional(),
+};
+const fields = { ...portableFields, ...localFields };
+export const configSchemas = {
+  install: z.strictObject(fields),
+  run: z.strictObject(fields),
+  snapshot: snapshotConfigSchema(portableFields, localFields),
+};
+
+/** Community provider defaults for GitHub Copilot (@github/copilot-sdk). */
+export type CopilotProviderDefaults = z.output<typeof configSchemas.install>;
+
+/** Parse raw `assistants.copilot` config into typed defaults, dropping invalid values. */
 export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
-  const config: CopilotProviderDefaults = {};
-
-  if (typeof raw.model === 'string') {
-    config.model = raw.model;
-  }
-
-  // Accept any rung of Archon's shared ladder and clamp it to the SDK's enum
-  // (which has neither `minimal` nor `max`/`ultra`), so
-  // `assistants.copilot.*` takes the same vocabulary a workflow's `effort:`
-  // does. Normalizing at parse time keeps
-  // `CopilotProviderDefaults.modelReasoningEffort` SDK-shaped.
-  const effort = clampEffort(raw.modelReasoningEffort, COPILOT_EFFORTS);
-  if (effort !== undefined) {
-    config.modelReasoningEffort = effort;
-  }
-
-  if (typeof raw.copilotCliPath === 'string') {
-    config.copilotCliPath = raw.copilotCliPath;
-  }
-
-  if (typeof raw.configDir === 'string') {
-    config.configDir = raw.configDir;
-  }
-
-  if (typeof raw.enableConfigDiscovery === 'boolean') {
-    config.enableConfigDiscovery = raw.enableConfigDiscovery;
-  }
-
-  if (typeof raw.useLoggedInUser === 'boolean') {
-    config.useLoggedInUser = raw.useLoggedInUser;
-  }
-
-  if (
-    raw.logLevel === 'none' ||
-    raw.logLevel === 'error' ||
-    raw.logLevel === 'warning' ||
-    raw.logLevel === 'info' ||
-    raw.logLevel === 'debug' ||
-    raw.logLevel === 'all'
-  ) {
-    config.logLevel = raw.logLevel;
-  }
-
-  return config;
+  return parseConfigLenient(configSchemas.install, raw, 'copilot');
 }
 
 /** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseCopilotConfigStrict(raw: Record<string, unknown>): CopilotProviderDefaults {
-  assertKnownRunConfigKeys(raw, [
-    'model',
-    'modelReasoningEffort',
-    'copilotCliPath',
-    'configDir',
-    'enableConfigDiscovery',
-    'useLoggedInUser',
-    'logLevel',
-  ]);
-  const model = normalizeRunConfigString(raw.model, 'model');
-  const copilotCliPath = normalizeRunConfigString(raw.copilotCliPath, 'copilotCliPath');
-  const configDir = normalizeRunConfigString(raw.configDir, 'configDir');
-  if (raw.modelReasoningEffort !== undefined && !isEffortRung(raw.modelReasoningEffort)) {
-    invalidRunConfigValue('modelReasoningEffort', 'a valid Archon effort level');
-  }
-  for (const key of ['enableConfigDiscovery', 'useLoggedInUser'] as const) {
-    if (raw[key] !== undefined && typeof raw[key] !== 'boolean') {
-      invalidRunConfigValue(key, 'a boolean');
-    }
-  }
-  if (
-    raw.logLevel !== undefined &&
-    (typeof raw.logLevel !== 'string' ||
-      !['none', 'error', 'warning', 'info', 'debug', 'all'].includes(raw.logLevel))
-  ) {
-    invalidRunConfigValue('logLevel', 'none, error, warning, info, debug, or all');
-  }
-  const parsed = parseCopilotConfig(raw);
-  return {
-    ...parsed,
-    ...(model === undefined ? {} : { model }),
-    ...(copilotCliPath === undefined ? {} : { copilotCliPath }),
-    ...(configDir === undefined ? {} : { configDir }),
-  };
+export function parseCopilotConfigStrict(
+  raw: Record<string, unknown>,
+  scope: ProviderConfigScope = 'install'
+): CopilotProviderDefaults {
+  return parseConfigSchema(configSchemas[scope], raw);
 }

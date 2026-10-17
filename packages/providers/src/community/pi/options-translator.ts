@@ -8,8 +8,10 @@ import {
   createReadTool,
   createWriteTool,
   type BashSpawnContext,
+  type AgentSession,
   type BashSpawnHook,
 } from '@earendil-works/pi-coding-agent';
+import { delimiter } from 'node:path';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
@@ -22,7 +24,7 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
-import { clampEffort, type AssertNever } from '@archon/paths/effort';
+import { clampEffort, type AssertNever } from '@archon/provider-contract';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
@@ -91,15 +93,26 @@ export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 /**
  * Build a Pi `spawnHook` that merges managed env vars into every bash
  * subprocess. Matches Claude/Codex precedence: caller-provided env keys
- * override Pi's inherited baseline. Returns undefined when `env` is empty
- * so bash spawns without an unnecessary hook allocation.
+ * override Pi's inherited baseline. A caller PATH (the run's `gh` shim) goes
+ * first, but Pi's baseline entries stay after it: Pi prepends its own bin dir,
+ * and replacing PATH outright would hide the tools Pi installed there.
+ * Returns undefined when `env` is empty so bash spawns without an unnecessary
+ * hook allocation.
  */
 function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnHook | undefined {
   if (!env || Object.keys(env).length === 0) return undefined;
-  return (context: BashSpawnContext): BashSpawnContext => ({
-    ...context,
-    env: { ...context.env, ...env },
-  });
+  return (context: BashSpawnContext): BashSpawnContext => {
+    const merged = { ...context.env, ...env };
+    const basePath = context.env.PATH;
+    if (env.PATH !== undefined && basePath) {
+      const callerEntries = env.PATH.split(delimiter);
+      merged.PATH = [
+        ...callerEntries,
+        ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
+      ].join(delimiter);
+    }
+    return { ...context, env: merged };
+  };
 }
 
 /** Map a normalized (lowercase) Pi tool name to its Pi-internal factory. */
@@ -150,6 +163,30 @@ const PI_DEFAULT_TOOL_NAMES = [
 export function buildDefaultPiTools(cwd: string, env?: Record<string, string>): PiTool[] {
   const spawnHook = buildBashSpawnHook(env);
   return PI_DEFAULT_TOOL_NAMES.map(name => buildPiTool(name, cwd, spawnHook));
+}
+
+/**
+ * The tools a fresh Pi session with no tool options starts with: the
+ * `defaultTools` setting (or Pi's default four) plus every extension tool that
+ * activates on registration. Mirrors `AgentSession`'s initial loadout so a
+ * reopened session can be reset to it; Pi 1.3+ otherwise restores the loadout
+ * its transcript records. Pi's own built-in tools carry the `builtin:<name>`
+ * source path; Archon loads no built-in extensions, so nothing else does.
+ */
+export function freshPiToolNames(
+  session: Pick<AgentSession, 'getAllTools' | 'getToolDefinition'>,
+  defaultToolNames: readonly string[] | undefined
+): string[] {
+  const extensionTools = session
+    .getAllTools()
+    .filter(
+      tool =>
+        tool.sourceInfo.path !== `builtin:${tool.name}` &&
+        (tool.exposure === 'direct' || tool.exposure === 'model-only') &&
+        session.getToolDefinition(tool.name)?.defaultActive !== false
+    )
+    .map(tool => tool.name);
+  return [...(defaultToolNames ?? PI_DEFAULT_TOOL_NAMES), ...extensionTools];
 }
 
 /**
@@ -236,5 +273,5 @@ export function resolvePiTools(
 // Skill resolution is shared across providers. Re-export `resolvePiSkills` as
 // an alias of the shared `resolveSkillDirectories` so existing Pi callers and
 // tests keep their import path stable.
-export { resolveSkillDirectories as resolvePiSkills } from '../../shared/skills';
-export type { ResolvedSkills } from '../../shared/skills';
+export { resolveSkillDirectories as resolvePiSkills } from '@archon/paths/skills';
+export type { ResolvedSkills } from '@archon/paths/skills';

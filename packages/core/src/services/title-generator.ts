@@ -45,30 +45,32 @@ export async function generateAndSetTitle(
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
 
-    // TITLE_GENERATION_MODEL is an emergency literal override for operators.
-    // Normal title generation should be resolved by the caller to the `small` tier.
-    const titleModel = process.env.TITLE_GENERATION_MODEL || undefined;
+    // Credential-aware callers resolve the literal override before authorizing the model.
+    const titleModel = requestOptions?.model ?? (process.env.TITLE_GENERATION_MODEL || undefined);
 
     // Build the title generation prompt
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);
 
-    // Use the configured AI client with no tools (pure text generation)
     const client = getAgentProvider(assistantType);
     let generatedTitle = '';
 
     const options: SendQueryOptions = {
       ...(requestOptions ?? {}),
+      purpose: 'title-generation',
       ...(titleModel ? { model: titleModel } : {}),
       assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
       nodeConfig: {
         ...(requestOptions?.nodeConfig ?? {}),
-        allowed_tools: [], // No tool access — pure text generation
+        allowed_tools: [],
       },
     };
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, options)) {
-      if (chunk.type === 'assistant') {
-        generatedTitle += chunk.content;
+      if (chunk.type === 'agent_message_chunk') {
+        generatedTitle += chunk.text;
+      } else if (chunk.type === 'result' && chunk.failure !== undefined) {
+        // A failed turn is a failed title, not an empty one: take the failure path below.
+        throw new Error(`title turn failed (${chunk.failure.class}): ${chunk.failure.evidence}`);
       }
     }
 

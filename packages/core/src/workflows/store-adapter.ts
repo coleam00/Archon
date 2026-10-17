@@ -2,11 +2,24 @@
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
  */
-import type { IWorkflowStore } from '@archon/workflows/store';
+import { createSqlStateDocumentStore } from '../db/state-documents';
+import { getDatabase } from '../db/connection';
+import { providerRegistry } from '@archon/providers';
+import type { StoredCredentialKind } from '@archon/provider-contract';
+import {
+  WorkflowEventCursorError,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+  type IWorkflowStore,
+  type WorkflowStoreKind,
+} from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
+import * as resourceStarts from '../db/resource-starts';
+import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
@@ -14,13 +27,17 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
+import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
-import type { IGitHubAppAuthProvider } from '../github-auth';
-import { isPerUserGitHubEnabled } from '../github-auth/config';
-import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import type { IGitHubAppAuthProvider } from '../github-auth/types';
+import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { installGitHubCliShim } from '../github-auth/gh-shim-install';
+import { loadGitHubAppConfig, isPerUserGitHubEnabled } from '../github-auth/config';
+import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { join } from 'node:path';
 import {
@@ -29,7 +46,41 @@ import {
   PI_AUTH_JSON_RELATIVE_PATH,
   PI_AUTH_PATH_ENV,
 } from '../credentials/delivery';
-import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import {
+  listUserProviderKeys,
+  getDecryptedProviderCredential,
+  getStoredCredentialStatus,
+} from '../db/user-provider-key-store';
+import { normalizeCredentialVendor } from '@archon/providers';
+import { StoredCredentialDeliveryError } from '@archon/workflows/run-preflight';
+
+function hydrateWorkflowEventRow(row: WorkflowEventRow): WorkflowEventRow {
+  return { ...row, created_at: toHydratedTimestamp(row.created_at).toISOString() };
+}
+
+function sqlCursor(order: string | number): WorkflowEventCursor {
+  return `sql:${String(order)}` as WorkflowEventCursor;
+}
+function sqlCursorOrder(cursor: WorkflowEventCursor): string {
+  if (!/^sql:(0|[1-9][0-9]*)$/.test(cursor)) throw new WorkflowEventCursorError();
+  const order = cursor.slice(4);
+  if (BigInt(order) > 9223372036854775807n) throw new WorkflowEventCursorError();
+  return order;
+}
+
+async function requiredCredentialRows(
+  userId: string,
+  vendors: readonly string[]
+): Promise<{ vendor: string; provider: string; kind: StoredCredentialKind }[]> {
+  const rows = await listUserProviderKeys(userId);
+  return vendors.flatMap(vendor => {
+    const row =
+      rows.find(r => r.provider === vendor) ??
+      rows.find(r => normalizeCredentialVendor(r.provider) === vendor);
+    return row ? [{ vendor, provider: row.provider, kind: row.kind }] : [];
+  });
+}
+
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '../config/run-config';
 
@@ -60,6 +111,62 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
+    ...createSqlStateDocumentStore(getDatabase),
+    setToolCallAttention: workflowDb.setToolCallAttention,
+    admitResourceStart: resourceStarts.admitResourceStart,
+    drainResourceStarts: resourceStarts.drainResourceStarts,
+    hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
+    acceptStartReceipt: resourceStarts.acceptStartReceipt,
+    getStartReceipt: resourceStarts.getStartReceipt,
+    listStartReceipts: resourceStarts.listStartReceipts,
+    listPendingStartBindings: resourceStarts.listPendingStartBindings,
+    getResourceStartRequest: resourceStarts.getResourceStartRequest,
+    listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
+    withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
+    claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
+    completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
+    failStartBindingPreparation: resourceStarts.failStartBindingPreparation,
+    resetStartBindingPreparation: resourceStarts.resetStartBindingPreparation,
+    resolveApprovalGate: workflowDb.resolveApprovalGate,
+    resolveAndCancelApprovalGate: workflowDb.resolveAndCancelApprovalGate,
+    cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
+    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
+    listWorkflowRuns: workflowDb.listDashboardRuns,
+    findOpenWorkRuns: workflowDb.findOpenWorkRuns,
+    findAdoptingRuns: workflowDb.findAdoptingRuns,
+    deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
+    getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
+    readWorkflowEventsAfter: async (after, { limit, eventTypes }): Promise<WorkflowEventPage> => {
+      const order = sqlCursorOrder(after);
+      if (!Number.isSafeInteger(limit) || limit <= 0)
+        throw new RangeError('limit must be a positive integer');
+      const rows = await workflowEventDb.readWorkflowEventsAfter(order, limit);
+      // A returned row proves the cursor is behind the head; only an empty page can hide
+      // a cursor this install never issued (another database, a restored backup).
+      if (rows.length === 0 && BigInt(order) > BigInt(await workflowEventDb.getWorkflowEventHead()))
+        throw new WorkflowEventCursorError();
+      const deliveries = rows.map(event => {
+        if (event.event_order == null) throw new Error('Feed row has no event order');
+        return { cursor: sqlCursor(event.event_order), event: hydrateWorkflowEventRow(event) };
+      });
+      return {
+        events: deliveries.filter(
+          ({ event }) =>
+            eventTypes === undefined || eventTypes.some(type => type === event.event_type)
+        ),
+        next: deliveries.at(-1)?.cursor ?? after,
+      };
+    },
+    listWorkflowEvents: async (...args) =>
+      (await workflowEventDb.listWorkflowEvents(...args)).map(hydrateWorkflowEventRow),
+    listEventsForRuns: async (...args) =>
+      new Map(
+        [...(await workflowEventDb.listEventsForRuns(...args))].map(([id, rows]) => [
+          id,
+          rows.map(hydrateWorkflowEventRow),
+        ])
+      ),
+    findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,
@@ -68,7 +175,16 @@ export function createWorkflowStore(): IWorkflowStore {
     getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
     findResumableRun: workflowDb.findResumableRun,
+    listDueWorkflowContinuations: (now, limit = 25) =>
+      workflowDb.listDueWorkflowContinuations(now, limit),
+    deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,
+    releaseRunForUnreadableSource: workflowDb.releaseRunForUnreadableSource,
+    answerAttentionWait: workflowDb.answerAttentionWait,
+    labelAttentionWait: workflowDb.labelAttentionWait,
+    listAttentionQueueRows: () => workflowDb.listAttentionQueueRows(),
+    signalWorkflowWait: workflowDb.signalWorkflowWait,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
+    releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
@@ -81,10 +197,7 @@ export function createWorkflowStore(): IWorkflowStore {
     failWorkflowRun: workflowDb.failWorkflowRun,
     pauseWorkflowRun: workflowDb.pauseWorkflowRun,
     pauseWorkflowRunForWait: workflowDb.pauseWorkflowRunForWait,
-    failPausedAttentionWait: workflowDb.failPausedAttentionWait,
     clearWorkflowWaitContext: workflowDb.clearWorkflowWaitContext,
-    rewriteApprovalContext: (id, approvalContext) =>
-      workflowDb.resolveApprovalGate(id, { approval: approvalContext }, []),
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,
@@ -104,42 +217,98 @@ export function createWorkflowStore(): IWorkflowStore {
     persistWorkflowEvent: workflowEventDb.persistWorkflowEvent,
     persistWorkflowEventIfRunning: workflowEventDb.persistWorkflowEventIfRunning,
     getDagResumeSnapshot: workflowEventDb.getDagResumeSnapshot,
+    listProviderEvents: workflowEventDb.listProviderEvents,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
-    getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,
+    listWorkflowNodeSessions: workflowNodeSessionDb.listWorkflowNodeSessions,
     upsertWorkflowNodeSession: workflowNodeSessionDb.upsertWorkflowNodeSession,
-    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRunNodeSessions,
     upsertWorkflowRunNodeSession,
   };
 }
 
-/**
- * Module-singleton registration for the GitHub App auth provider. Set by the
- * server bootstrap (`registerGitHubAppAuthProvider(provider)`) when App mode
- * is active; remains null in PAT mode and during CLI execution. The
- * workflow-deps factory reads this to decide whether to expose
- * `resolveBotGitHubToken` to the engine.
- *
- * Singleton because the provider is itself a process-singleton (one cache
- * shared by the GitHub adapter, the workflow executor, and the internal
- * credential-helper endpoint). Threading it through every createWorkflowDeps
- * caller would just smuggle a singleton through more arguments.
- */
+/** One provider cache per process, shared by workflow execution and server adapters. */
 let registeredGitHubAppAuthProvider: IGitHubAppAuthProvider | null = null;
 
 export function registerGitHubAppAuthProvider(provider: IGitHubAppAuthProvider | null): void {
   registeredGitHubAppAuthProvider = provider;
 }
 
+export function initializeWorkflowGitHubAppAuth(
+  env: NodeJS.ProcessEnv = process.env
+): IGitHubAppAuthProvider | null {
+  if (registeredGitHubAppAuthProvider) return registeredGitHubAppAuthProvider;
+  const config = loadGitHubAppConfig(env);
+  if (!config) return null;
+  const provider = createGitHubAppAuthProvider(config);
+  registerGitHubAppAuthProvider(provider);
+  return provider;
+}
+
+export interface CompletedRunWorktreeTools {
+  cleanup: typeof import('../services/cleanup-service');
+  store: IIsolationStore;
+  readers: WorktreeOwnershipReaders;
+}
+
+/**
+ * Wire a host's completed-run worktree release. A failed load is reported as a
+ * `check_failed` retention like any other failed check: it runs before the assessment's
+ * own catch, and `assess` must not throw.
+ */
+export function completedRunWorktreeDeps(
+  load: () => Promise<CompletedRunWorktreeTools>
+): NonNullable<WorkflowDeps['completedRunWorktree']> {
+  return {
+    assess: async run => {
+      let tools: CompletedRunWorktreeTools;
+      try {
+        tools = await load();
+      } catch (err) {
+        getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_load_failed');
+        return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
+      }
+      return tools.cleanup.assessCompletedRunWorktree(run, tools.store, tools.readers);
+    },
+    release: async run => {
+      const { cleanup, store, readers } = await load();
+      await cleanup.releaseCompletedRunWorktree(run, store, readers);
+    },
+  };
+}
+
+// Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
+// the isolation provider and repo config.
+const sqlCompletedRunWorktree = completedRunWorktreeDeps(async () => {
+  const [cleanup, isolationDb] = await Promise.all([
+    import('../services/cleanup-service'),
+    import('../db/isolation-environments'),
+  ]);
+  return {
+    cleanup,
+    store: isolationDb.createIsolationStore(),
+    readers: {
+      getCodebase: codebaseDb.getCodebase,
+      getLiveRunOwningEnv: isolationDb.getLiveRunOwningEnv,
+    },
+  };
+});
+
 /**
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
-export function createWorkflowDeps(): WorkflowDeps {
+export function createWorkflowDeps(
+  store: IWorkflowStore = createWorkflowStore(),
+  credentialStore: WorkflowStoreKind = 'database'
+): Omit<WorkflowDeps, 'loadConfig'> & {
+  loadConfig: typeof loadMergedConfig;
+} {
   const provider = registeredGitHubAppAuthProvider;
   return {
-    store: createWorkflowStore(),
+    store,
+    credentialStore,
+    providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,
     sealRunConfig: sealWorkflowRunConfig,
@@ -147,98 +316,110 @@ export function createWorkflowDeps(): WorkflowDeps {
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.
-    resolveBotGitHubToken: provider
-      ? async (owner: string, repo: string): Promise<string | undefined> => {
-          try {
-            return await provider.getInstallationToken(owner, repo);
-          } catch (err) {
-            getLog().warn(
-              { err: err as Error, owner, repo },
-              'workflow_deps.bot_token_resolve_failed'
-            );
-            return undefined;
-          }
+    githubApp: provider
+      ? {
+          resolveInstallationToken: (owner, repo): Promise<string> =>
+            provider.getInstallationToken(owner, repo),
+          installCliShim: installGitHubCliShim,
         }
       : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed
     // on read), or scrub the org/bot token when they haven't connected.
-    isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
-    getUserGithubToken: async (userId: string): Promise<string | undefined> => {
-      try {
-        return (await getDecryptedAccessToken(userId)) ?? undefined;
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_token_resolve_failed');
-        return undefined;
-      }
-    },
-    // Per-user AI-provider credentials (Phase 2): list the user's decrypted
-    // credentials and translate each through the delivery map into an env bag
-    // (and optional file deliveries) for the run. Exact decrypted values travel
-    // beside that bag only so the workflow subprocess boundary can scrub echoed
-    // file-delivered credentials without knowing provider-specific file shapes.
-    isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-    getUserProviderEnv: async (
-      userId: string,
-      artifactsDir: string
-    ): Promise<{
-      env: Record<string, string>;
-      files: { path: string; contents: string }[];
-      protectedValues: string[];
-    }> => {
-      try {
-        const creds = await listDecryptedUserProviderCredentials(userId);
-        const env: Record<string, string> = {};
-        const files: { path: string; contents: string }[] = [];
-        const protectedValues = new Set<string>();
-        for (const { provider, cred } of creds) {
-          try {
-            const result = deliverCredential(provider, cred, { artifactsDir });
-            Object.assign(env, result.env);
-            if (result.files) files.push(...result.files);
-            if (cred.kind === 'api_key') {
-              protectedValues.add(cred.apiKey);
-            } else {
-              protectedValues.add(cred.oauthApiKey);
-              collectOAuthCredentialValues(cred.rawCreds, protectedValues);
+    ...(credentialStore === 'database'
+      ? {
+          completedRunWorktree: sqlCompletedRunWorktree,
+          isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
+          getUserGithubAuthor,
+          getUserGithubToken: async (userId: string): Promise<string | undefined> => {
+            try {
+              return (await getDecryptedAccessToken(userId)) ?? undefined;
+            } catch (err) {
+              getLog().warn(
+                { err: err as Error, userId },
+                'workflow_deps.user_token_resolve_failed'
+              );
+              return undefined;
             }
-          } catch (err) {
-            // Unknown provider / shape mismatch — log at ERROR (no per-credential
-            // user-facing skip event yet) and skip this credential rather than
-            // abort all delivery.
-            getLog().error(
-              { err: err as Error, userId, provider },
-              'workflow_deps.provider_creds_deliver_failed'
-            );
-          }
+          },
+          // Deliver only this graph's vendors. A failed connected credential must not
+          // disappear and allow the provider to use another account.
+          // Exact decrypted values travel
+          // beside that bag only so the workflow subprocess boundary can scrub echoed
+          // file-delivered credentials without knowing provider-specific file shapes.
+          isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
+          getUserProviderCredential: async (userId, vendor) => {
+            const [row] = await requiredCredentialRows(userId, [vendor]);
+            return row
+              ? { kind: row.kind, getStatus: () => getStoredCredentialStatus(userId, row.provider) }
+              : undefined;
+          },
+          getUserProviderEnv: async (
+            userId: string,
+            artifactsDir: string,
+            vendors: readonly string[],
+            connectedVendors: readonly string[]
+          ): Promise<{
+            env: Record<string, string>;
+            files: { path: string; contents: string }[];
+            protectedValues: string[];
+          }> => {
+            const rows = await requiredCredentialRows(userId, vendors);
+            for (const vendor of connectedVendors) {
+              if (!rows.some(row => row.vendor === vendor)) {
+                throw new StoredCredentialDeliveryError(vendor, {
+                  state: 'not_connected',
+                  source: 'archon',
+                });
+              }
+            }
+            const creds = [];
+            for (const { vendor, provider } of rows) {
+              const stored = await getDecryptedProviderCredential(userId, provider);
+              if (stored.state === 'usable') creds.push({ provider, cred: stored.credential });
+              else throw new StoredCredentialDeliveryError(vendor, stored);
+            }
+            const env: Record<string, string> = {};
+            const files: { path: string; contents: string }[] = [];
+            const protectedValues = new Set<string>();
+            for (const { provider, cred } of creds) {
+              Object.assign(env, deliverCredential(provider, cred).env);
+              if (cred.kind === 'api_key') {
+                protectedValues.add(cred.apiKey);
+              } else {
+                protectedValues.add(cred.oauthApiKey);
+                collectOAuthCredentialValues(cred.rawCreds, protectedValues);
+              }
+            }
+            // Aggregate Pi auth.json (the keys + subscriptions Pi consumes) so a `pi` node
+            // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
+            // a real artifactsDir (file delivery); the chat path is env-only.
+            if (artifactsDir) {
+              const piAuthJson = buildPiAuthJson(creds);
+              if (piAuthJson) {
+                const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
+                files.push({ path: piAuthPath, contents: piAuthJson });
+                env[PI_AUTH_PATH_ENV] = piAuthPath;
+              }
+            }
+            return { env, files, protectedValues: [...protectedValues] };
+          },
+          // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
+          // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
+          // a DB failure means the run falls back to install-wide config.
+          getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
+            try {
+              return await getUserAiPrefs(userId);
+            } catch (err) {
+              getLog().warn(
+                { err: err as Error, userId },
+                'workflow_deps.user_ai_prefs_resolve_failed'
+              );
+              return {};
+            }
+          },
         }
-        // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
-        // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
-        // a real artifactsDir (file delivery); the chat path is env-only.
-        if (artifactsDir) {
-          const piAuthJson = buildPiAuthJson(creds);
-          if (piAuthJson) {
-            const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
-            files.push({ path: piAuthPath, contents: piAuthJson });
-            env[PI_AUTH_PATH_ENV] = piAuthPath;
-          }
-        }
-        return { env, files, protectedValues: [...protectedValues] };
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.provider_creds_resolve_failed');
-        return { env: {}, files: [], protectedValues: [] };
-      }
-    },
-    // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
-    // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
-    // a DB failure means the run falls back to install-wide config.
-    getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
-      try {
-        return await getUserAiPrefs(userId);
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_ai_prefs_resolve_failed');
-        return {};
-      }
-    },
+      : // Files hold no stored credentials; preflight refuses a run that would need them.
+        { isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled() }),
   };
 }

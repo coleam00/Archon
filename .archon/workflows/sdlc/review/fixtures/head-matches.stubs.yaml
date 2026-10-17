@@ -1,0 +1,34 @@
+# A matching PR head keeps selected lenses and the published verdict.
+# Unselected lenses have no stubs, so running one fails this fixture.
+mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
+route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
+scope:
+  head_matches: true
+  pr: { repo: { host: github.com, path: example/repo }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+seams: "0 findings"
+code: "0 findings"
+docs: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+publish: &published_verdict
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: []
+result: *published_verdict
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+policy: { defaults: "fixture-policy-defaults" }
+fixture:
+  expect: completed
+  reached: [route, seams, code, docs, synthesize, publish, result]
+  resolved-text-contains:
+    route: "operator's setting is `auto`"

@@ -1,7 +1,11 @@
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import type { WorkflowResumeCursor } from './store';
+import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type { AttentionLabels } from './schemas/dag-node';
+import type { AttentionQueueScope } from './attention-queue';
+import type { AttentionStreamLine } from './attention-watch';
 
 // These lists own both the public input exclusions and their runtime validation.
 export const FRESH_RUN_FORBIDDEN_OPTIONS = [
@@ -14,6 +18,7 @@ export const RESUME_FORBIDDEN_OPTIONS = [
   ...FRESH_RUN_FORBIDDEN_OPTIONS,
   'preCreatedRun',
   'runConfig',
+  'preparedAiConfiguration',
   'modelOverrideLayer',
   'inputs',
   'preparedSource',
@@ -34,7 +39,7 @@ interface WorkflowEngineCallBase {
   conversationId: string;
   cwd: string;
   userMessage: string;
-  conversationDbId: string;
+  origin?: import('./schemas/workflow-run').WorkflowRunOrigin;
 }
 
 export interface WorkflowEngineSubmitInput extends WorkflowEngineCallBase {
@@ -60,9 +65,69 @@ export type WorkflowResumeAdmission =
       settled: Promise<WorkflowExecutionResult>;
     };
 
+/** One committed event of the subscribed run tree. Resubscribing `after` its cursor continues the feed. */
+export interface WorkflowRunDelivery {
+  cursor: WorkflowEventCursor;
+  event: WorkflowEventRow;
+}
+
+export interface WorkflowRunSubscriptionOptions {
+  /** Start after this cursor instead of at the current head. */
+  after?: WorkflowEventCursor;
+  pollIntervalMs?: number;
+}
+
+export interface WorkflowRunSubscription {
+  /** Drains to the head once more, then stops. Rejects if that final read fails. Idempotent. */
+  close(): Promise<void>;
+}
+
+/**
+ * A host's early wake for new events in the feed, whatever run they belong to. Resolves
+ * to an unsubscribe, or null when the host has no notifications; polling still runs.
+ */
+export type WorkflowEventDoorbell = (onEvent: () => void) => Promise<(() => void) | null>;
+
+export interface AttentionWatchOptions {
+  /** Replay from this cursor, after the snapshot, instead of starting at the head. */
+  after?: WorkflowEventCursor;
+  scope: AttentionQueueScope;
+  /** Exact label matches for `attention` and `resolved` lines; every one must hold. */
+  labels?: Readonly<AttentionLabels>;
+  pollIntervalMs?: number;
+}
+
+export interface AttentionWatch {
+  /** Stops the watch and waits for lines in flight. Idempotent. */
+  close(): Promise<void>;
+}
+
 /** Hosts supply execution context; the implementation owns its dependencies. */
 export interface IWorkflowEngine {
   submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult>;
   /** Claims and starts a continuation before returning acceptance. */
   resume(input: WorkflowResumeInput): Promise<WorkflowResumeAdmission>;
+  /**
+   * Deliver every committed event of `runId` and of its descendant runs, in commit order,
+   * one at a time; a throwing listener is logged and delivery continues. Resolves once the
+   * starting cursor is fixed. Observes only: a delivered event can later be retracted by
+   * recovery, so run reads remain the state of record.
+   */
+  subscribe(
+    runId: string,
+    listener: (delivery: WorkflowRunDelivery) => void,
+    options?: WorkflowRunSubscriptionOptions
+  ): Promise<WorkflowRunSubscription>;
+  /**
+   * Stream the attention queue across every run in scope, including runs started later:
+   * the open items as a snapshot, then `ready`, then a line for every change the feed
+   * commits. Delivery is at least once and one line at a time; the listener's promise is
+   * awaited before the next line. Observes only: no run state is written. Rejects with
+   * `WorkflowEventCursorError`, before any line, when `after` cannot be read; a tail that
+   * later cannot read its own cursor sends an `error` line and stops.
+   */
+  watchAttention(
+    listener: (line: AttentionStreamLine) => void | Promise<void>,
+    options: AttentionWatchOptions
+  ): Promise<AttentionWatch>;
 }

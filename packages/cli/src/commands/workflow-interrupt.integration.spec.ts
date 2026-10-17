@@ -30,7 +30,7 @@ interface Fixture {
   archonHome: string;
   /** Written by `hold` on its first pass, so the second pass can succeed instead. */
   marker: string;
-  /** The pid of the `hold` node's own process, so the forced exit strands nothing. */
+  /** A background descendant of the `hold` node, which only the owner's interrupt ends. */
   pidFile: string;
 }
 
@@ -66,8 +66,9 @@ function makeFixture(): Fixture {
       '    bash: |',
       `      if [ -f '${marker}' ]; then echo resumed; exit 0; fi`,
       `      touch '${marker}'`,
-      `      echo $$ > '${pidFile}'`,
-      '      exec sleep 60',
+      '      sleep 60 &',
+      `      echo $! > '${pidFile}'`,
+      '      wait',
       '',
     ].join('\n')
   );
@@ -82,7 +83,12 @@ interface CliResult {
 function runCli(fixture: Fixture, args: string[]): CliResult {
   const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome, ARCHON_TELEMETRY_DISABLED: '1' },
+    env: {
+      ...process.env,
+      ARCHON_HOME: fixture.archonHome,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      DATABASE_URL: '',
+    },
   });
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
@@ -94,7 +100,7 @@ interface ForegroundOwner {
 }
 
 /** Start `workflow run` as a real foreground owner and keep its handle. */
-function startForegroundRun(fixture: Fixture): ForegroundOwner {
+function startForegroundRun(fixture: Fixture, setup = false): ForegroundOwner {
   const child = Bun.spawn(
     [
       process.execPath,
@@ -104,11 +110,16 @@ function startForegroundRun(fixture: Fixture): ForegroundOwner {
       WORKFLOW_NAME,
       '--cwd',
       fixture.repo,
-      '--no-worktree',
+      ...(setup ? [] : ['--no-worktree']),
     ],
     {
       cwd: fixture.repo,
-      env: { ...process.env, ARCHON_HOME: fixture.archonHome, ARCHON_TELEMETRY_DISABLED: '1' },
+      env: {
+        ...process.env,
+        ARCHON_HOME: fixture.archonHome,
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
+      },
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -150,10 +161,9 @@ function readRun(fixture: Fixture): RunRow | undefined {
   const database = openDatabase(fixture);
   try {
     return database
-      .query<
-        RunRow,
-        [string]
-      >('SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1')
+      .query<RunRow, [string]>(
+        'SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1'
+      )
       .get(WORKFLOW_NAME) as RunRow | undefined;
   } catch {
     // The owner creates archon.db before applying the schema, so an early read throws
@@ -173,9 +183,10 @@ function readRun(fixture: Fixture): RunRow | undefined {
 async function waitFor<T>(
   what: string,
   read: () => T | undefined,
-  owner?: ForegroundOwner
+  owner?: ForegroundOwner,
+  timeoutMs = 90_000
 ): Promise<T> {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ownerExited = owner !== undefined && owner.child.exitCode !== null;
     const value = read();
@@ -195,17 +206,107 @@ function getRunJson(fixture: Fixture, runId: string): Record<string, unknown> {
   return JSON.parse(result.output.trim()) as Record<string, unknown>;
 }
 
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    throw error;
+  }
+}
+
 // Windows has no POSIX signal delivery, so there is no interrupt to deliver or record.
 describe.skipIf(process.platform === 'win32')('an interrupted foreground run', () => {
+  test('Ctrl-C during worktree setup ends its background descendant', async () => {
+    const fixture = makeFixture();
+    const root = join(fixture.repo, '..');
+    const ready = join(root, 'setup.ready');
+    const go = join(root, 'setup.go');
+    const leaked = join(root, 'setup.leaked');
+    const pidFile = join(root, 'setup.pid');
+    const command = `bash -c 'echo $$ > "${pidFile}"; touch "${ready}"; while [ ! -f "${go}" ]; do sleep 0.01; done; touch "${leaked}"' & wait`;
+    writeFileSync(
+      join(fixture.repo, '.archon', 'config.yaml'),
+      `worktree:\n  baseBranch: main\n  postCreate:\n    - ${JSON.stringify(command)}\n`
+    );
+    const origin = join(root, 'origin.git');
+    mkdirSync(origin);
+    const git = (cwd: string, args: string[]): void => {
+      const result = spawnSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
+        { cwd, encoding: 'utf8' }
+      );
+      if (result.status !== 0) throw new Error(result.stderr);
+    };
+    git(origin, ['init', '--bare', '-q']);
+    git(fixture.repo, ['add', '.archon']);
+    git(fixture.repo, ['commit', '-qm', 'Setup interrupt fixture']);
+    git(fixture.repo, ['branch', '-M', 'main']);
+    git(fixture.repo, ['remote', 'add', 'origin', origin]);
+    git(fixture.repo, ['push', '-q', 'origin', 'main']);
+    const owner = startForegroundRun(fixture, true);
+    try {
+      await waitFor('setup to start', () => (existsSync(ready) ? true : undefined), owner);
+      const descendantPid = Number(readFileSync(pidFile, 'utf8'));
+      expect(processExists(descendantPid)).toBe(true);
+      owner.child.kill('SIGINT');
+      await owner.settled;
+      await waitFor(
+        'the setup descendant to exit',
+        () => (!processExists(descendantPid) ? true : undefined),
+        undefined,
+        3000
+      );
+      writeFileSync(go, '');
+      expect(existsSync(leaked)).toBe(false);
+    } finally {
+      if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
+      await owner.settled;
+      writeFileSync(go, '');
+      await Bun.sleep(100);
+    }
+  }, 120000);
+
+  // A hangup, a second Ctrl-C and SIGKILL all end the owner before its teardown runs.
+  test('an owner that dies without its teardown still ends the node tree', async () => {
+    const fixture = makeFixture();
+    const owner = startForegroundRun(fixture);
+    try {
+      const holdPid = await waitFor(
+        'the hold node to start',
+        () => {
+          if (!existsSync(fixture.pidFile)) return undefined;
+          const pid = Number(readFileSync(fixture.pidFile, 'utf8').trim());
+          return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+        },
+        owner
+      );
+      owner.child.kill('SIGHUP');
+      await owner.settled;
+      await waitFor(
+        'the orphaned node tree to exit',
+        () => (!processExists(holdPid) ? true : undefined),
+        undefined,
+        3000
+      );
+    } finally {
+      if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
+      await owner.settled;
+    }
+  }, 120_000);
+
   test('records why it stopped and still resumes to completion', async () => {
     const fixture = makeFixture();
     const owner = startForegroundRun(fixture);
-    let holdPid: number | undefined;
 
     try {
       // The pidfile exists only once `hold` is executing, which is also the point at which
       // `settle` has completed and the owner's signal handlers are installed.
-      holdPid = await waitFor(
+      const holdPid = await waitFor(
         'the hold node to start',
         () => {
           if (!existsSync(fixture.pidFile)) return undefined;
@@ -229,6 +330,13 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
         return run?.status === 'failed' ? run : undefined;
       });
       expect(interrupted.id).toBe(started.id);
+      // A resume must never overlap the interrupted attempt.
+      await waitFor(
+        'the interrupted node tree to exit',
+        () => (!processExists(holdPid) ? true : undefined),
+        undefined,
+        3000
+      );
 
       // Between the interrupt and the resume: the reason is readable, and the run is
       // still `failed` — the resumable status. Recording `cancelled` here would have
@@ -254,14 +362,6 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
       const completed = getRunJson(fixture, started.id);
       expect((completed.metadata as { stop_reason?: unknown }).stop_reason).toBeUndefined();
     } finally {
-      // The forced exit skips the owner's teardown, so its `sleep` outlives it.
-      if (holdPid !== undefined) {
-        try {
-          process.kill(holdPid, 'SIGKILL');
-        } catch {
-          // Already gone.
-        }
-      }
       if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
       await owner.settled;
     }

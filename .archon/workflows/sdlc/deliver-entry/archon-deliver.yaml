@@ -1,0 +1,92 @@
+name: archon-deliver
+description: |
+  The delivery tail, autonomous on its green path: capped rounds of implement, draft
+  PR, review, simplify and one CI agent that marks the PR ready on green
+  (archon-deliver-block). When the rounds end not ready, whether they ran out, a
+  review asked for a replan or a person, or CI stayed red, the run pauses as one
+  attention item instead of ending with nothing to take it forward. The answer
+  delivers another capped batch of rounds with the person's note, or ends the run
+  with the outcome as it stands. Merging stays on the forge, outside the run.
+
+  Use when: decided work should become a reviewed, ready-to-merge PR —
+  "deliver this plan", "take this to a PR", "build and ship this".
+  NOT for: deciding what to build, or merging (always human).
+
+inputs:
+  pull_request:
+    default: ""
+    description: >-
+      The number of an open pull request this delivery continues instead of opening
+      one, as a caller resolved it. Empty or `null` when the caller names none; the
+      run can still continue one it was launched onto.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it. When an
+      open pull request already has that head, the push updates it instead of
+      opening another. Empty opens it from the checkout's branch.
+  work:
+    default: ""
+    description: >-
+      What to deliver — a plan path, findings, a description, or the repair of
+      an existing pull request when this run was launched on its branch
+      (`--adopt`, or from the pull request). Empty means the run's trigger
+      message is the work.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this delivery is, forwarded
+      unchanged to every review in the rounds. archon-review's `part` input
+      owns its shape. Empty delivers the whole contract.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+
+returns: result
+outcome_field: ready
+
+nodes:
+  # One pass is the delivery and its attention block (see archon-attention). Each
+  # answer to the item permits one more pass.
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: 'done=$attend.output.done; test "$done" = true'
+      nodes:
+        - id: go
+          bash: "true"
+          when: "$LOOP_PREV.attend__ask.output.decision == '' || $LOOP_PREV.attend__ask.output.decision == 'rerun'"
+
+        - id: stage
+          include: archon-deliver-block
+          depends_on: [go]
+          with:
+            pull_request: "$INPUTS.pull_request"
+            branch: "$INPUTS.branch"
+            part: "$INPUTS.part"
+            errors: "$INPUTS.errors"
+            work: |-
+              $INPUTS.work
+              $LOOP_PREV.attend__settle.output.brief
+              $LOOP_PREV.attend__ask.output.text
+
+        - id: attend
+          include: archon-attention
+          depends_on: [stage]
+          trigger_rule: all_done
+          with:
+            stage: archon-deliver
+            outcome: "$stage.output"
+
+  - id: result
+    depends_on: [cycle]
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_CYCLE).outcome))
+    with:
+      cycle: "$cycle.output"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+      required: [ready]

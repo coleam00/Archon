@@ -18,6 +18,9 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * its own working directory and its own process. When nothing names an owner the run
  * fails: the root cannot guess a working directory, and answering with a full green suite
  * is what made a mistyped path look like a pass.
+ *
+ * `--plan <kind>` walks only the plan steps of that kind. CI runs the workspace half and the
+ * root half on separate runners so they finish side by side.
  */
 
 /** One step of the no-argument run. */
@@ -39,9 +42,11 @@ const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
 const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Directories the root tests directly. Every other test belongs to a workspace package. */
-const ROOT_OWNED_PREFIXES = ROOT_TEST_PLAN.flatMap((step): string[] =>
+const ROOT_OWNED_DIRECTORIES = ROOT_TEST_PLAN.flatMap((step): string[] =>
   step.kind === 'root'
-    ? step.selectors.map((selector): string => selector.replace(/^\.\//, ''))
+    ? step.selectors.map((selector): string =>
+        normalizePath(relative(REPO_ROOT, resolve(REPO_ROOT, selector)))
+      )
     : []
 );
 
@@ -68,8 +73,8 @@ function normalizePath(path: string): string {
 
 /**
  * Places one argument with the owner that can run it, rewriting the path so it is
- * relative to that owner's working directory. Arguments this cannot place — flags, flag
- * values and substring filters — come back `undefined` and are forwarded verbatim.
+ * relative to that owner's working directory. Arguments this cannot place come back
+ * `undefined` and are forwarded verbatim. The caller excludes test-name option values.
  *
  * A relative argument is read against the repository root, which is where `bun run test`
  * always runs from. Reading it against some other working directory would let the same
@@ -93,7 +98,9 @@ function routeArgument(argument: string): RoutedArgument | undefined {
       : undefined;
   }
 
-  return ROOT_OWNED_PREFIXES.some((prefix): boolean => repoPath.startsWith(prefix))
+  return ROOT_OWNED_DIRECTORIES.some(
+    (directory): boolean => repoPath === directory || repoPath.startsWith(`${directory}/`)
+  )
     ? { owner: { label: 'the repository root', cwd: REPO_ROOT }, selector: `./${repoPath}` }
     : undefined;
 }
@@ -107,8 +114,9 @@ async function run(command: string[], cwd: string): Promise<number> {
   return await child.exited;
 }
 
-async function runPlan(): Promise<number> {
+async function runPlan(kind?: RootTestStep['kind']): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
+    if (kind !== undefined && step.kind !== kind) continue;
     const command =
       step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : bunTestCommand(step.selectors);
     const code = await run(command, REPO_ROOT);
@@ -118,17 +126,34 @@ async function runPlan(): Promise<number> {
 }
 
 /**
+ * The plan half `--plan <kind>` selects, or `undefined` when the arguments are not a `--plan`
+ * request. `bun test` has no `--plan` flag, so the form cannot shadow a forwarded argument.
+ */
+export function planKind(requested: readonly string[]): RootTestStep['kind'] | undefined {
+  if (requested[0] !== '--plan') return undefined;
+  const kinds = [...new Set(ROOT_TEST_PLAN.map((step): RootTestStep['kind'] => step.kind))];
+  const kind = kinds.find((candidate): boolean => candidate === requested[1]);
+  if (requested.length !== 2 || kind === undefined) {
+    throw new Error(`Usage: bun run test --plan <${kinds.join('|')}>`);
+  }
+  return kind;
+}
+
+/**
  * Turns the requested arguments into one run per owner they name, in the order the owners
  * were first named. Arguments this cannot place go to every run, since a flag value or a
  * substring filter is meaningful to whichever owner the placed arguments chose. No named
  * owner means no run: the caller reports that rather than falling back to the full suite.
  */
 export function planRequestedRuns(requested: string[]): RequestedRun[] {
+  let expectsTestName = false;
   const routes = requested.map(
-    (argument): { argument: string; route: RoutedArgument | undefined } => ({
-      argument,
-      route: routeArgument(argument),
-    })
+    (argument): { argument: string; route: RoutedArgument | undefined } => {
+      const route = expectsTestName ? undefined : routeArgument(argument);
+      expectsTestName =
+        !expectsTestName && (argument === '-t' || argument === '--test-name-pattern');
+      return { argument, route };
+    }
   );
 
   const owners = new Map<string, TestOwner>();
@@ -168,7 +193,16 @@ async function runRequested(requested: string[]): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) {
-  const requested = Bun.argv.slice(2);
-  process.exit(requested.length > 0 ? await runRequested(requested) : await runPlan());
+async function main(requested: string[]): Promise<number> {
+  let kind: RootTestStep['kind'] | undefined;
+  try {
+    kind = planKind(requested);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  if (kind !== undefined) return await runPlan(kind);
+  return requested.length > 0 ? await runRequested(requested) : await runPlan();
 }
+
+if (import.meta.main) process.exit(await main(Bun.argv.slice(2)));

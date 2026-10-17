@@ -63,19 +63,23 @@ Work through these questions in order, with the user where marked:
      versioned rubric/directions file in the repo — an agent judgment gate stands
      in for a typical human reviewer: same criteria, same questions, recorded
      answers, every run.
-   - **Human `approval:` gates** — only two cases justify them: an
-     **interactive** workflow where a human is present at the console and reads
-     each iteration, or a **super load-bearing** action — irreversible,
+   - **Attention pauses** (`wait: { attention: ..., form: approval }`) — only
+     two cases justify them: an **interactive** workflow where someone is present
+     at the console and reads each iteration, or a **super load-bearing** action — irreversible,
      public-facing, or expensive beyond easy rollback (deploy, post publicly,
      delete data, send customer-facing communication). Everything else should be
-     decidable by code or by another agent. Remember: any `approval:` gate forces
-     `interactive: true` at the workflow level. The fresh launch cannot detach;
-     continuation actions on an already-paused run can.
+     decidable by code or by another agent. The pause holds the run durably in the
+     attention queue, whether it started in the foreground, detached, or from a
+     trigger. Container-isolated workflows cannot hold one: Archon refuses a
+     workflow with any `wait:` node under container isolation before creating the
+     run. Reject is an answer, not a cancel: add a `cancel:` node behind
+     `when: "$<id>.output.decision == 'reject'"` where rejecting should end the run.
+     The older `approval:` node is deprecated.
 
    On a project-specific workflow the user often already knows some of these —
    "never push before I see the diff", "stop if the migration touches billing",
    "no applicant advances without both scorecards agreeing" — collect them
-   verbatim; they become approval gates, cancel nodes, or `when:` conditions.
+   verbatim; they become attention pauses, cancel nodes, or `when:` conditions.
    Everything else defaults to a prompt command gate until a real run proves
    which part can be made deterministic.
 
@@ -144,9 +148,11 @@ script language for logic. Ask the user their script-language preference if they
 will maintain it. Declare Python dependencies inline (`deps:` for `uv`); keep
 `node_modules` and virtual environments out of the packaged script tree.
 
-Put shared `.ts`, `.js`, or `.py` modules in `<pack>/.shared/` (subfolders are
-supported). This reserved directory supplies modules, never workflow definitions
-or `script:` targets. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
+Put shared `.ts`, `.js`, or `.py` modules and `.md` documents in
+`<pack>/.shared/` (subfolders are supported). This reserved directory supplies
+modules and documents, never workflow definitions or `script:` targets. Documents
+ship beside the modules in every build, so a script finds one relative to its own
+location and hands its path to a prompt node through `with:`. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
 `../../.shared/result.ts`. Python files can add
 `str(Path(__file__).resolve().parents[2] / ".shared")` to `sys.path` using
 `pathlib.Path`, then import normally; Archon does not inject `PYTHONPATH`.
@@ -162,8 +168,8 @@ beside a script; Python bytecode caching is disabled in runs and executable fixt
 
 `command` (prompt file) · `prompt` (inline) · `bash` (shell, no AI) · `script`
 (py/ts, no AI) · `loop` (iterate one AI node) · `loop_group` (repeat a sub-DAG) ·
-`approval` (human gate) · `cancel` (terminate with reason, usually behind `when:`) ·
-`wait` (durable suspension) · `workflow` (governed child run) · `include`
+`approval` (deprecated; use `wait: attention`) · `cancel` (terminate with reason, usually behind `when:`) ·
+`wait` (durable suspension, or an `attention:` question answered in a form) · `workflow` (governed child run) · `include`
 (plain load-time composition or runtime-width in-run composition with `fan_out:`).
 
 Selection rules of thumb:
@@ -178,7 +184,7 @@ Selection rules of thumb:
 
 - Completion externally checkable → `until_bash: "<exit-0 check>"`.
 - Completion is the model's judgment → `output_format` + `until_field: <bool-field>`.
-- Prose sentinel (`until: TOKEN`) only at interactive gates a human reads.
+- Prose sentinel (`until: TOKEN`) is deprecated; prefer the channels above.
   Declare at least one channel per loop.
 
 ## Structured output: only where a machine decides
@@ -194,8 +200,8 @@ tax on non-enforcing providers. Provider-agnostic YAML always: tiers
   leaves the choice to the caller. On a `workflow:` child node,
   `isolation: worktree` explicitly gives the child its own worktree. A worktree
   bounds git files; it does NOT isolate `~/.archon`, env, database, or sessions.
-- Any `approval:` gate requires `interactive: true` at the workflow level. A fresh
-  interactive launch cannot detach; continuation actions on an already-paused run can.
+- A `wait: attention` node pauses the run in the attention queue until it is answered. It
+  needs no workflow-level declaration and does not stop a detached or triggered launch.
 - Composition (`include:`) runs inside the parent's single run/isolation/audit
   trail. Use `workflow:` sub-runs only when a separately governed launch is the
   actual requirement.

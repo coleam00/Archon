@@ -22,8 +22,16 @@ Each column is a registered provider id (the value you set as `provider:` in a
 workflow or `.archon/config.yaml`). A ✅ means Archon translates the corresponding
 capability for that provider; a ❌ means the capability is unsupported. Unsupported
 behavior is feature-specific: some optional fields are ignored with a warning, while
-strict contracts fail closed. In particular, `context.resume` rejects an explicitly
-unsupported provider at load time and an implicitly resolved one at runtime.
+strict contracts fail closed. In particular, a node naming `mcp:`, `skills:` or
+`plugins:` on a provider without that capability fails the run before any node
+starts, and `context.resume` rejects an explicitly unsupported provider at load
+time and an implicitly resolved one at runtime. An `mcp:` declared `optional: true`
+instead runs the node without its servers and records why.
+
+The columns are the providers built from this repository. Release binaries install
+Claude, Codex and Pi as provider plugins, with the same capabilities. A third-party
+provider plugin declares its capabilities in its install-time descriptor and is not
+a column in this generated table. The same pre-spend capability checks apply.
 
 Reporting flags describe SDK fields that Archon translates into execution results.
 Supported does not guarantee that every result reports a value or that usage includes
@@ -32,27 +40,37 @@ count events as turns, or substitute the requested model for an unreported model
 Cost reporting is independent of spend-limit support. Older providers may omit
 reporting declarations; absence means unknown, not unsupported.
 
+Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
+`unobserved` means background work may exist without an observable lifecycle. A process
+backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
+Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
+through `commandExecution` items with source `unifiedExecStartup`. Idle thread status is
+not evidence that this work has ended. See [Streaming event mapping](/contributing/adding-a-community-provider/#streaming-event-mapping)
+for the background-start admission and observation cutoff rules.
+
 ## Providers
 
 - `claude` — Claude (Anthropic)
 - `codex` — Codex (OpenAI)
-- `opencode` — OpenCode (community) *(community provider)*
-- `pi` — Pi (community) *(community provider)*
-- `copilot` — Copilot (GitHub) *(community provider)*
+- `opencode` — OpenCode (community) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
+- `pi` — Pi
+- `copilot` — Copilot (GitHub) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
 
 ## Capabilities
 
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
+| Background work observation | reported | reported | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ✅ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Plugins (`plugins:`) | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Env injection (`env:`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Token reporting | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -63,7 +81,7 @@ reporting declarations; absence means unknown, not unsupported.
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
+| In-process native tools | ✅ | ✅ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Strict-mode `required` coverage (every key in `properties` MUST appear in `required`) | ❌ | ✅ | ❌ | ❌ | ❌ |
 
@@ -81,7 +99,10 @@ reporting declarations; absence means unknown, not unsupported.
   `best-effort` (schema appended to the prompt, then validated + re-asked up to 3×),
   or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
 - **In-process native tools** — the provider can register Archon `NativeTool`s for a
-  turn (gates auto-injection of Archon's `manage_run` tool into project-scoped chat).
+  turn. It gates auto-injection of Archon's `invoke_workflow` and `register_project` tools
+  into every chat, and of `manage_run` into project-scoped chat. Providers without it
+  launch workflows and register projects by writing `/invoke-workflow` and
+  `/register-project` lines that Archon reads from the reply.
 
 For per-provider field-level notes (YAML syntax, caveats), see the
 [AI Assistants guide](/getting-started/ai-assistants/).

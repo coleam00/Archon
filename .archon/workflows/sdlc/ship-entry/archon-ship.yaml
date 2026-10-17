@@ -1,0 +1,101 @@
+name: archon-ship
+description: |
+  Ground an issue or request against the current repository before spending on
+  it, then take the least speculative path: investigate an unknown cause, plan
+  an undecided shape, deliver an implementation-ready work order, or stop when
+  no work remains (archon-ship-block). Actionable paths converge on the reviewed
+  delivery tail. When the run stops where only a person can take it forward, on a
+  triage or planning question, an unrooted cause or a delivery that ended not
+  ready, it pauses as one attention item. The answer runs the pipeline again with
+  the person's note, or ends the run with the outcome as it stands.
+
+  Use when: an issue or request should be taken from current-truth check
+  through to a reviewed PR — "fix this issue", "implement issue #123", "take
+  this work item to a PR".
+  NOT for: bypassing triage with already-prepared work (deliver directly),
+  reviewing an existing PR, or merging.
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to take through the pipeline — an issue, document, plan, report, or
+      free-form request. When empty, the run's trigger message is the target.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this run delivers, forwarded
+      unchanged to delivery's reviews. archon-review's `part` input owns its
+      shape. Empty delivers the whole contract.
+  publish:
+    default: "false"
+    description: >-
+      Let triage write its derived labels to the tracker item — true or false.
+      Off by default. Forwarded unchanged to triage; a scheduled ship run is the
+      only place an unattended intake can turn it on.
+  pull_request:
+    default: ""
+    description: >-
+      The number of an open pull request this run continues, as the caller
+      resolved it; empty or `null` when it names none. Delivery finishes it
+      whichever route triage takes; triage naming a different one refuses the run.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it,
+      forwarded unchanged to delivery. When an open pull request already has that
+      head, the push updates it instead of opening another. Empty opens it from the
+      checkout's branch.
+
+returns: result
+outcome_field: delivered
+
+nodes:
+  # One pass is the pipeline and its attention block (see archon-attention). Each
+  # answer to the item permits one more pass.
+  - id: cycle
+    loop_group:
+      max_iterations: 1
+      fresh_context: true
+      until_bash: 'done=$attend.output.done; test "$done" = true'
+      nodes:
+        - id: go
+          bash: "true"
+          when: "$LOOP_PREV.attend__ask.output.decision == '' || $LOOP_PREV.attend__ask.output.decision == 'rerun'"
+
+        - id: stage
+          include: archon-ship-block
+          depends_on: [go]
+          with:
+            errors: "$INPUTS.errors"
+            part: "$INPUTS.part"
+            publish: "$INPUTS.publish"
+            pull_request: "$INPUTS.pull_request"
+            branch: "$INPUTS.branch"
+            target: |-
+              $INPUTS.target
+              $LOOP_PREV.attend__settle.output.brief
+              $LOOP_PREV.attend__ask.output.text
+
+        - id: attend
+          include: archon-attention
+          depends_on: [stage]
+          trigger_rule: all_done
+          with:
+            stage: archon-ship
+            outcome: "$stage.output"
+
+  - id: result
+    depends_on: [cycle]
+    runtime: bun
+    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_CYCLE).outcome))
+    with:
+      cycle: "$cycle.output"
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+      required: [delivered]

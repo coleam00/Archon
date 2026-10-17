@@ -56,14 +56,19 @@ nano /opt/archon/.env
 #   DOMAIN=archon.example.com
 #   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
-# (Optional) Set up basic auth to protect Web UI:
-# docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# Add to .env: CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
+# (Optional) Basic Auth: see Authentication (Optional Basic Auth) below.
+# Uncomment the whole assignment in .env; replace admin and paste the complete hash:
+# docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+# CADDY_BASIC_AUTH='basic_auth @protected {
+#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+# }'
 
 # Start
 cd /opt/archon
 docker compose --profile with-db --profile cloud up -d
 ```
+
+See [Authentication (Optional Basic Auth)](#authentication-optional-basic-auth) for the complete recipe.
 
 > **Don't forget DNS**: Before starting, point your domain's A record to the server's IP.
 
@@ -187,8 +192,12 @@ DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
 # Basic Auth (optional) — protects Web UI when exposed to the internet
 # Skip if using IP-based firewall rules instead.
-# Generate hash: docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$... }
+# See Authentication (Optional Basic Auth) below for the complete steps.
+# Uncomment the whole assignment; replace admin and paste the complete hash unchanged.
+# Generate hash: docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+# CADDY_BASIC_AUTH='basic_auth @protected {
+#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+# }'
 
 # Platform tokens (set the ones you use)
 # TELEGRAM_BOT_TOKEN=123456789:ABCdef...
@@ -294,29 +303,33 @@ Caddy handles HTTPS certificates, HTTP->HTTPS redirect, HTTP/3, and SSE streamin
 
 ### Authentication (Optional Basic Auth)
 
-Caddy can enforce HTTP Basic Auth on all routes except webhooks (`/webhooks/*`) and the health check (`/api/health`). This is optional — skip it if you use IP-based firewall rules or other network-level access control.
+Caddy can enforce HTTP Basic Auth on routes matched by `@protected`, which excludes `/internal/*`, `/webhooks/*`, and `/api/health`. This is optional — skip it if you use IP-based firewall rules or other network-level access control.
 
 **To enable:**
 
 1. Generate a bcrypt password hash:
 
    ```bash
-   docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+   docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
    ```
 
-2. Set `CADDY_BASIC_AUTH` in `.env` (use `$$` to escape `$` in bcrypt hashes):
+2. Set `CADDY_BASIC_AUTH` in the Compose `.env`. Replace `admin` with your username and paste the command's complete hash output unchanged:
 
    ```ini
-   CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$abc123... }
+   CADDY_BASIC_AUTH='basic_auth @protected {
+     admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+   }'
    ```
 
-3. Restart: `docker compose --profile cloud restart caddy`
+   This is a single-quoted multiline Compose dotenv value: real newlines and literal `$` characters are preserved. Do not double the dollars or source this assignment as a shell command. See [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/) and [Caddy Basic Auth syntax](https://caddyserver.com/docs/caddyfile/directives/basic_auth).
 
-Your browser will prompt for username/password when accessing the Archon URL. Webhook endpoints bypass auth since they use HMAC signature verification.
+3. Recreate Caddy to apply the changed container environment: `docker compose --profile cloud up -d --force-recreate caddy`
+
+Your browser will prompt for username/password when accessing the Archon URL. The protected matcher excludes `/internal/*`, `/webhooks/*`, and `/api/health`; webhook endpoints use HMAC signature verification.
 
 To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it to nothing.
 
-> **Important:** Always use the `docker run caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
+> **Important:** Always use the `docker run --rm caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
 
 ### Form-Based Authentication (HTML Login Page)
 
@@ -416,10 +429,10 @@ CLAUDE_API_KEY=sk-ant-xxxxx
 **Codex (alternative):**
 
 ```ini
-CODEX_ID_TOKEN=eyJhbGc...
-CODEX_ACCESS_TOKEN=eyJhbGc...
-CODEX_REFRESH_TOKEN=rt_...
-CODEX_ACCOUNT_ID=6a6a7ba6-...
+ARCHON_CODEX_ID_TOKEN=eyJhbGc...
+ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
+ARCHON_CODEX_REFRESH_TOKEN=rt_...
+ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
 
 ### Platform Tokens (optional)
@@ -478,7 +491,7 @@ The container runs as `appuser` with `$HOME=/home/appuser`. The base compose mou
 | `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, projects (conversation history), memory, OAuth state, keybindings, file-history |
 | `~/.codex/` | Codex auth (`auth.json` from interactive `codex login`; the env-var path via `setup-auth` overwrites this on every container start) |
 | `~/.pi/agent/` | Pi `auth.json` from interactive `pi /login`, plus `models.json`, global settings (`~/.pi/agent/settings.json`), and sessions (Archon's Pi adapter reads `auth.json` and `settings.json` on every request) |
-| `~/.gitconfig` | Author identity, signing config, custom aliases, plus the `safe.directory` entries baked into the image |
+| `~/.gitconfig` | Author identity, signing config, custom aliases, plus `safe.directory` entries from the image and runtime setup |
 | `~/.bash_history` | Shell history when you `docker compose exec app bash` |
 | `~/.config/gh/` | GitHub CLI auth from interactive `gh auth login` (the `GH_TOKEN` env-var path works without it) |
 
@@ -500,6 +513,8 @@ The entrypoint fixes ownership on every container start, touching only files who
 :::caution
 Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
 :::
+
+Runtime `safe.directory` grants also persist in this home volume across restarts and rebuilds. A grant remains if clone or worktree setup fails, adoption is rejected, or the checkout is removed; Git will still trust a later checkout at that path. Archon leaves removal to the operator because concurrent setup may rely on the same grant. See [Git directory trust](/reference/security/#git-directory-trust).
 
 If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
 
@@ -546,7 +561,8 @@ socket (`/var/run/docker.sock`).
 **When Archon itself runs inside Docker (this compose stack), `--container` does not work:**
 the app image ships no `docker` CLI and the compose stack deliberately does **not** mount
 `/var/run/docker.sock`. A `--container` run fails fast at preflight with a
-"Cannot connect to the Docker daemon" error (the message calls out the dockerized case).
+"Cannot connect to the Docker daemon" error. The logged error keeps the CLI failure
+and explains that the `--container` backend is unavailable when Archon runs inside Docker.
 Worktree isolation (the default for git repos) and in-place folder runs are unaffected —
 only the `--container` backend requires the daemon.
 
@@ -564,23 +580,41 @@ instead.
 
 ### GitHub CLI Authentication
 
-`GH_TOKEN` from `.env` is picked up automatically. Alternatively:
+`GH_TOKEN` from `.env` is picked up automatically. Alternatively, log in inside the container for `gh` and `git`. The forge opt-in also reads this login after trying `GH_TOKEN` and `GITHUB_TOKEN`:
 
 ```bash
-docker compose exec app gh auth login
+docker compose exec -u appuser -e HOME=/home/appuser app gh auth login
 ```
 
-When `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
+The server and this command use `/home/appuser`; its `.config/gh` login is on the persisted user-home volume.
 
-### Forge plugins
+With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` with no `GITHUB_TOKEN` set rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.
 
-Install the GitHub forge plugin inside the running container:
+Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
+
+In GitHub App mode (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. An incomplete App configuration leaves the PAT helper in place. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
+
+The entrypoint decides the mode from the container environment (`env_file: .env` or `environment:` in compose), not from `/.archon/.env`, which only the server loads. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the container environment. If they are set only in `/.archon/.env`, the server and the entrypoint disagree on the mode: in App mode the PAT helper stays and clones keep using the old PAT.
+
+### Plugins
+
+Install plugins inside the running container. The GitHub forge plugin:
 
 ```bash
-docker compose exec -u appuser app bun run cli plugin install coleam00/Archon/plugins/forge-github
+docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github
 ```
 
-It lands in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so it survives restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin).
+A workflow pack, from a public GitHub repository that publishes one:
+
+```bash
+docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
+```
+
+The bundled SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`, `archon-pr`) use `gh` by default. To opt into this plugin, set `ARCHON_SDLC_FORGE=forge` and install a release supporting every pack operation (v0.11.1 is insufficient). Configure a credential inside the container: the host tries `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Prefer `GH_TOKEN` in the compose `.env`, or [GitHub App mode](/adapters/github-app-setup/). The host machine's `gh` login is not shared automatically. To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+
+Both land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
+
+The image has `git` and Bun, but not `uv`, Python, or the tools a pack's own scripts call (such as ffmpeg). Add those in [`Dockerfile.user`](#customizing-the-image).
 
 ---
 
@@ -616,11 +650,44 @@ Uses `ghcr.io/coleam00/archon:latest`. To add PostgreSQL, uncomment the `postgre
 
 To layer custom tools on top of the pre-built image, see [Customizing the Image](#customizing-the-image).
 
+### Verifying image attestations
+
+Published images include BuildKit provenance and SPDX SBOM attestations. With Docker
+Buildx installed, resolve the tag you plan to deploy to a digest, then inspect that
+immutable image reference:
+
+```bash
+docker buildx imagetools inspect ghcr.io/coleam00/archon:latest
+# Copy the top-level Digest above, not a platform manifest's digest.
+image='ghcr.io/coleam00/archon@sha256:<digest>'
+docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}'
+docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}'
+```
+
+Both results must be non-empty. For multi-platform images, each platform's
+provenance has a non-empty `SLSA` object and its SBOM has a non-empty `SPDX` object.
+In the provenance, check the source repository is `https://github.com/coleam00/Archon`,
+the commit SHA matches the release you intend to run, and the workflow ref identifies
+`.github/workflows/publish.yml` at the expected ref. Current releases record the
+source and revision in `buildDefinition.externalParameters.request.args`
+(`label:org.opencontainers.image.source` and `label:org.opencontainers.image.revision`),
+and the workflow ref in `buildDefinition.internalParameters.github_workflow_ref`.
+Older BuildKit versions may use `invocation.configSource` and `invocation.environment`.
+The builder ID links to the GitHub Actions run (`builder.id` or `runDetails.builder.id`).
+Inspect the SBOM's package inventory under `SPDX.packages`.
+
+The `unknown/unknown` entries in the manifest list are expected attestation
+manifests. These BuildKit attestations are unsigned metadata; their presence
+alone does not cryptographically authenticate the publisher. See
+[Docker's provenance documentation](https://docs.docker.com/build/metadata/attestations/slsa-provenance/)
+for the metadata format. Deploy the same digest you inspected to avoid a tag
+changing between inspection and deployment.
+
 ---
 
 ## Building the Image
 
-The Dockerfile uses three stages:
+The Dockerfile uses three main stages, fed by two helper stages (**manifests** and **sources**) that derive the workspace layout from `packages/`, so adding a package needs no Dockerfile edit:
 
 1. **deps** — Installs all dependencies (including devDependencies for the web build)
 2. **web-build** — Builds the React web UI with Vite
@@ -633,10 +700,10 @@ docker run --env-file .env -p 3000:3000 archon
 
 **What's in the image:**
 
-- **Runtime**: Bun 1.2 (runs TypeScript directly, no compile step)
+- **Runtime**: Bun (runs TypeScript directly, no compile step)
 - **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
 - **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: All 10 workspace packages (source), pre-built web UI
+- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (installed as a plugin). The `sources` stage lists the exclusions.
 - **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
 
@@ -711,7 +778,7 @@ docker system df               # Check disk usage
 No AI assistant configured. Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`. Set one of these in `.env`:
 - `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...` (run `claude setup-token` locally to get one)
 - `CLAUDE_API_KEY=sk-ant-...` (from console.anthropic.com)
-- Or Codex credentials (`CODEX_ID_TOKEN`, `CODEX_ACCESS_TOKEN`, etc.)
+- Or Codex credentials (`ARCHON_CODEX_ID_TOKEN`, `ARCHON_CODEX_ACCESS_TOKEN`, etc.)
 
 ### Caddy fails to start: "not a directory"
 

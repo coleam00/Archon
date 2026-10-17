@@ -63,3 +63,24 @@ test("loads native guidance and only the workflow node's declared skill", async 
   );
   expect(loader.getSkills().skills.map(skill => skill.name)).toEqual(['declared-skill']);
 });
+
+// An extension factory that never settles wedges the one shared reload (issue #3769).
+// The watchdog abort must end the caller's wait without touching the shared reload.
+test('an abort ends the wait on a pending extension reload', async () => {
+  scratchDir = mkdtempSync(join(tmpdir(), 'archon-pi-hung-'));
+  const agentDir = join(scratchDir, 'agent');
+  const cwd = join(scratchDir, 'project');
+  mkdirSync(join(agentDir, 'extensions'), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(
+    join(agentDir, 'extensions', 'hang.ts'),
+    'export default async function () { await new Promise(() => {}); }\n'
+  );
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const watchdog = new AbortController();
+  const attempt = getOrCreateReloadedExtensionLoader(cwd, {}, watchdog.signal);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  watchdog.abort();
+  await expect(attempt).rejects.toThrow('Query aborted');
+});

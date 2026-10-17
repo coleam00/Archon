@@ -2,8 +2,9 @@
 # that the verdict fields bind. Structured stubs are YAML mappings (they hydrate
 # structuredOutput); plain-string stubs stay strings.
 investigate:
-  rooted: true
+  verdict: rooted
   summary: "stub: cause established — full report at investigation.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 fixture:
   expect: completed
+exec-code: true

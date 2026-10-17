@@ -1,10 +1,20 @@
 import { afterAll, describe, test, expect } from 'bun:test';
 import { Hono } from 'hono';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { HTML_CACHE_CONTROL, IMMUTABLE_ASSET_CACHE_CONTROL, serveWebUi } from './static-cache';
+
+test('the shipped worker supports exactly the payload schema attention kinds', () => {
+  const script = readFileSync(new URL('../../web/public/attention-sw.js', import.meta.url), 'utf8');
+  const workerKinds: unknown = runInNewContext(`${script}\nObject.keys(attentionBodies).sort()`, {
+    self: { addEventListener: () => {} },
+  });
+  expect(workerKinds).toEqual([...webPushPayloadSchema.shape.kind.options].sort());
+});
 
 // Each describe reads its tree across several tests, so clean up once at the end.
 const tempRoots: string[] = [];
@@ -21,6 +31,7 @@ function webUiApp(...parentSegments: string[]): Hono {
   writeFileSync(join(root, 'assets', 'index-a1b2c3.js'), 'console.log(1)');
   writeFileSync(join(root, 'index.html'), '<html>app</html>');
   writeFileSync(join(root, 'favicon.png'), 'png');
+  writeFileSync(join(root, 'attention-sw.js'), 'self.addEventListener("push", () => {});');
   const app = new Hono();
   serveWebUi(app, root);
   return app;
@@ -52,6 +63,13 @@ describe('serveWebUi cache headers', () => {
     const res = await app.request('/conversations/abc-123');
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe(HTML_CACHE_CONTROL);
+  });
+
+  test('the attention service worker is served as JavaScript and revalidated', async () => {
+    const res = await app.request('/attention-sw.js');
+    expect(res.headers.get('Content-Type')).toContain('javascript');
+    expect(res.headers.get('Cache-Control')).toBe(HTML_CACHE_CONTROL);
+    expect(await res.text()).toContain('addEventListener');
   });
 
   test('the favicon carries no cache directive', async () => {

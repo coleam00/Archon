@@ -8,7 +8,7 @@ How to discover, select, and invoke Archon workflows against real work.
 archon workflow list                 # human-readable compact descriptions and errors
 archon workflow list --json          # compact descriptions + descriptionTruncated state
 archon workflow list <name> --full   # exact description for one candidate
-archon workflow search "pr review"  # search the marketplace (installable packs)
+archon plugin add owner/repo     # install a workflow pack published on GitHub
 ```
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
@@ -75,8 +75,7 @@ archon workflow run <workflow> --branch <branch-name> "<message>" --detach
 # Start from a specific base instead of the current branch
 archon workflow run <workflow> --branch <name> --from <base> "<message>" --detach
 
-# Foreground (blocks the shell) — REQUIRED for interactive-class workflows,
-# whose fresh launches refuse --detach
+# Foreground (blocks the shell)
 archon workflow run <workflow> --branch <name> "<message>"
 
 # No isolation — only when the user explicitly asks to work on the checkout directly
@@ -114,7 +113,7 @@ Rules:
 ## Monitoring
 
 ```bash
-archon workflow wait <run-id> --json        # block until the run ends or needs a human decision
+archon workflow wait <run-id> --json        # block until the run ends or needs attention
 archon workflow runs --json                 # recent runs for this project
 archon workflow status --json               # active only for this project (running/paused)
 archon workflow status --all --json         # active across all projects
@@ -167,6 +166,11 @@ A failed or paused run resumes from completed nodes:
 archon workflow resume <run-id>
 archon workflow resume <run-id> --detach
 ```
+
+Detached resume returns after engine acceptance, before completion. Immediately use
+`workflow wait <run-id> --json` for the next attention or terminal outcome. If the
+60-second acceptance confirmation fails, inspect the run before retrying: the
+child may still continue.
 
 The ambient sequential session cursor is not reconstructed by a cold resume.
 Explicit `context: { resume: node-id }` ancestry is restored from the completed

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "provider",
+  "name": "provider-pi",
+  "description": "Archon maintained Pi provider.",
+  "executable": "archon-provider-pi"
+}

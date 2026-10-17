@@ -1,4 +1,6 @@
+// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
+import { testTimeout } from '@archon/paths/test-utils';
 import {
   chmodSync,
   existsSync,
@@ -35,6 +37,12 @@ import {
  * to state one and say why rather than inherit this.
  */
 const LIVE_OWNER_EVENT_DEADLINE_MS = 3_000;
+
+/**
+ * Longer than the cold Windows process listing a stop waits on (4-8 s on a loaded runner),
+ * which is longer than the idle lease timeout that used to cut a slow stop off (#3516).
+ */
+const SLOW_STOP_IDLE_MS = 9_000;
 
 async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -139,8 +147,8 @@ describe('run live owner', () => {
     const second: RunLiveOwnerWatchEvent[] = [];
     const firstWatch = await watchRunLiveOwner(runId, event => first.push(event));
     const secondWatch = await watchRunLiveOwner(runId, event => second.push(event));
-    expect(firstWatch).not.toBeNull();
-    expect(secondWatch).not.toBeNull();
+    expect(firstWatch.kind).toBe('attached');
+    expect(secondWatch.kind).toBe('attached');
 
     await owner.close();
     await waitForOwnerEvent(() => first.length === 1 && second.length === 1);
@@ -159,7 +167,7 @@ describe('run live owner', () => {
     try {
       await withRunLiveOwner(runId, {}, async () => {
         const watch = await watchRunLiveOwner(runId, event => events.push(event));
-        expect(watch).not.toBeNull();
+        expect(watch.kind).toBe('attached');
         throw executionError;
       });
     } catch (error) {
@@ -190,7 +198,7 @@ describe('run live owner', () => {
     const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
     const events: RunLiveOwnerWatchEvent[] = [];
     const watch = await watchRunLiveOwner(runId, event => events.push(event));
-    expect(watch).not.toBeNull();
+    expect(watch.kind).toBe('attached');
     const lease = await requestRunLiveOwnerStop(runId);
     try {
       expect(lease.pid).toBe(process.pid);
@@ -205,6 +213,29 @@ describe('run live owner', () => {
     await waitForOwnerEvent(() => events.includes('attention'));
     expect(events).toEqual(['control_handoff', 'attention']);
   });
+
+  test(
+    'holds a committed stop lease for as long as both ends are alive, however slow the stop',
+    async () => {
+      // A Windows stop lists the process table before it kills, and a cold listing on a
+      // loaded host takes 4-8 s with nothing sent on the lease (#3516). An idle timer on
+      // either end used to close the lease during that listing, and the stop then refused
+      // a live owner. Idle past that window, then prove both ends still hold the lease.
+      const runId = `slow-stop-${crypto.randomUUID()}`;
+      const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+      const lease = await requestRunLiveOwnerStop(runId);
+      try {
+        await lease.commit();
+        await Bun.sleep(SLOW_STOP_IDLE_MS);
+        expect(lease.isLive()).toBe(true);
+        expect(owner.isStopRequested()).toBe(true);
+      } finally {
+        lease.release();
+        await owner.close();
+      }
+    },
+    testTimeout(SLOW_STOP_IDLE_MS + 5_000)
+  );
 
   test('bounds close while a controller retains an uncommitted stop lease', async () => {
     const runId = `retained-${crypto.randomUUID()}`;
@@ -295,7 +326,7 @@ describe('run live owner', () => {
     const events: RunLiveOwnerWatchEvent[] = [];
     try {
       const watch = await watchRunLiveOwner(runId, event => events.push(event));
-      expect(watch).not.toBeNull();
+      expect(watch.kind).toBe('attached');
       await waitForOwnerEvent(() => events.length > 0);
       expect(events).toEqual(['disconnected']);
     } finally {
@@ -305,7 +336,9 @@ describe('run live owner', () => {
 
   test('reports an unreachable owner only when nothing accepts the connection', async () => {
     // No endpoint at all: the path does not exist.
-    expect((await stopRefusal(`absent-${crypto.randomUUID()}`)).reason).toBe('unreachable');
+    const absentRunId = `absent-${crypto.randomUUID()}`;
+    expect((await stopRefusal(absentRunId)).reason).toBe('unreachable');
+    expect(await watchRunLiveOwner(absentRunId, () => undefined)).toEqual({ kind: 'unreachable' });
 
     // A socket left behind by an owner that died without closing refuses the
     // connection. A second link keeps the socket inode when close() unlinks the path,
@@ -321,6 +354,7 @@ describe('run live owner', () => {
     renameSync(residue, path);
     try {
       expect((await stopRefusal(runId)).reason).toBe('unreachable');
+      expect(await watchRunLiveOwner(runId, () => undefined)).toEqual({ kind: 'unreachable' });
     } finally {
       rmSync(path, { force: true });
     }
@@ -340,6 +374,7 @@ describe('run live owner', () => {
       const refusal = await stopRefusal(runId);
       expect(refusal.detail).toBe('EACCES');
       expect(refusal.reason).toBe('unproven');
+      expect(await watchRunLiveOwner(runId, () => undefined)).toEqual({ kind: 'unproven' });
     } finally {
       await close(server);
       rmSync(path, { force: true });

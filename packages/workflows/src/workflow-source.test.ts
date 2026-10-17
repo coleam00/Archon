@@ -2,8 +2,10 @@
  * Source capture: what a run freezes, and what it must keep resolving after the
  * authoring checkout moves on.
  */
+import { providerRegistry } from '@archon/providers';
 import { readBundleIndex } from './defaults/bundle-inventory';
-import { describe, test, expect, afterAll, mock } from 'bun:test';
+import { describe, test, expect, afterAll, mock, spyOn } from 'bun:test';
+import * as fs from 'fs/promises';
 import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, symlink, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -20,8 +22,7 @@ afterAll(async () => {
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
-  getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
+  getBundledWorkflowsPath: () => bundledDefaultsRoot,
 }));
 
 import {
@@ -33,7 +34,9 @@ import {
   resolveChildDiscoveryRoot,
   resolveRunSourceCapture,
   WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
   DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  isSourceReadFailure,
 } from './workflow-source';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -45,7 +48,7 @@ import { loadCommandPrompt } from './executor-shared';
 import { withCapturedSource } from './executor';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 /** One test's paths. Created by the test, never shared with another. */
 interface Sandbox {
@@ -384,9 +387,18 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
    */
   test('a later capture in the same process sees a bundled-scope edit', async () => {
     const { source, runArtifacts, root } = await createSandbox();
-    const bundledFile = join(bundledDefaultsRoot, 'defaults', 'late-bundled-edit.yaml');
+    const [pack] = await readBundleIndex();
+    const bundledDir = join(bundledDefaultsRoot, pack, 'late-flow');
+    const bundledFile = join(bundledDir, 'late-bundled-edit.yaml');
     const capturedAt = (capture: { anchor: { root: string } }): string =>
-      join(capture.anchor.root, 'bundled', 'workflows', 'defaults', 'late-bundled-edit.yaml');
+      join(
+        capture.anchor.root,
+        'bundled',
+        'workflows',
+        pack,
+        'late-flow',
+        'late-bundled-edit.yaml'
+      );
     // The digests below are compared to each other, so the global scope has to be a tree
     // this test owns rather than whatever `~/.archon` holds while the suite runs.
     const previousHome = process.env.ARCHON_HOME;
@@ -399,7 +411,8 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       });
       await expect(readFile(capturedAt(before), 'utf-8')).rejects.toThrow();
 
-      // A file that did not exist when the first capture ran.
+      // A workflow that did not exist when the first capture ran.
+      await mkdir(bundledDir, { recursive: true });
       await writeFile(bundledFile, 'name: late-bundled-edit\n');
       const added = await captureWorkflowSource({
         sourceRoot: source,
@@ -420,7 +433,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       expect(edited.manifest.digest).not.toBe(added.manifest.digest);
 
       // And a removal.
-      await rm(bundledFile, { force: true });
+      await removeTempTree(bundledDir);
       const removed = await captureWorkflowSource({
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'removed'),
@@ -428,7 +441,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       await expect(readFile(capturedAt(removed), 'utf-8')).rejects.toThrow();
       expect(removed.manifest.digest).toBe(before.manifest.digest);
     } finally {
-      await rm(bundledFile, { force: true });
+      await removeTempTree(bundledDir);
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }
@@ -701,7 +714,10 @@ describe('the capture is authoritative, not advisory', () => {
     );
 
     await expect(
-      discoverWorkflows(target, { sourceRoots: capturedSourceRoots(capture.anchor) })
+      discoverWorkflows(target, {
+        providers: providerRegistry,
+        sourceRoots: capturedSourceRoots(capture.anchor),
+      })
     ).rejects.toThrow(WorkflowSourceIntegrityError);
   });
 
@@ -720,9 +736,16 @@ describe('the capture is authoritative, not advisory', () => {
       'TAMPERED'
     );
 
-    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toThrow(
-      WorkflowSourceIntegrityError
-    );
+    const error = await loadWorkflowSource(capture.anchor.root).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorkflowSourceIntegrityError);
+    expect(error).toMatchObject({
+      name: 'WorkflowSourceIntegrityError',
+      path: capture.anchor.root,
+    });
+    // The bytes are readable; they changed. The message must not send the operator to
+    // check permissions.
+    expect((error as Error).message).toContain('does not match its recorded digest');
+    expect((error as Error).message).not.toContain('cannot be read');
   });
 
   test('a run whose capture no longer verifies refuses to resolve a source root', async () => {
@@ -1046,5 +1069,83 @@ describe('a capture is adopted or reclaimed, whichever way the caller leaves', (
     await expect(withCapturedSource(async () => 'no capture taken')).resolves.toBe(
       'no capture taken'
     );
+  });
+});
+
+test('an unreadable capture directory remains a typed read failure with its cause', async () => {
+  const { source, runArtifacts } = await createSandbox();
+  const capture = await captureWorkflowSource({
+    sourceRoot: source,
+    captureRoot: captureRootIn(runArtifacts),
+  });
+  const cause = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  const readDirectory = spyOn(fs, 'readdir').mockRejectedValue(cause);
+  try {
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toMatchObject({
+      name: 'WorkflowSourceUnavailableError',
+      path: capture.anchor.root,
+      cause,
+    });
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toBeInstanceOf(
+      WorkflowSourceIntegrityError
+    );
+  } finally {
+    readDirectory.mockRestore();
+  }
+});
+
+test('an unreadable captured file preserves the structural type and cause', async () => {
+  const { source, runArtifacts } = await createSandbox();
+  await writeFile(join(source, '.archon', 'commands', 'review.md'), 'review');
+  const capture = await captureWorkflowSource({
+    sourceRoot: source,
+    captureRoot: captureRootIn(runArtifacts),
+  });
+  const manifest = await readFile(join(capture.anchor.root, 'manifest.json'), 'utf8');
+  const cause = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  const reader = spyOn(fs, 'readFile').mockResolvedValueOnce(manifest).mockRejectedValue(cause);
+  try {
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toMatchObject({
+      name: 'WorkflowSourceUnavailableError',
+      path: capture.anchor.root,
+      cause,
+    });
+    expect(reader.mock.calls[1]?.[0]).toBe(
+      join(capture.anchor.root, 'project', '.archon', 'commands', 'review.md')
+    );
+  } finally {
+    reader.mockRestore();
+  }
+});
+
+describe('isSourceReadFailure', () => {
+  const systemError = (code: string, syscall: string): Error =>
+    Object.assign(new Error(`${code}: ${syscall}`), { code, syscall });
+
+  test.each([
+    [
+      'an unavailable capture',
+      new WorkflowSourceUnavailableError('/capture', systemError('EACCES', 'scandir')),
+      true,
+    ],
+    [
+      'a capture read and found wrong',
+      new WorkflowSourceIntegrityError('captured source has changed'),
+      false,
+    ],
+    ['a raw system error', systemError('EMFILE', 'open'), true],
+    [
+      'a system error wrapped as cause',
+      new Error('discovery failed', { cause: systemError('EIO', 'read') }),
+      true,
+    ],
+    [
+      'an error with a code but no syscall',
+      Object.assign(new Error('x'), { code: 'EACCES' }),
+      false,
+    ],
+    ['a duplicate script name', new Error("Duplicate script name 'check'"), false],
+  ])('%s → %p', (_label, error, expected) => {
+    expect(isSourceReadFailure(error)).toBe(expected);
   });
 });

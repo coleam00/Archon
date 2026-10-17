@@ -2,59 +2,54 @@
 # the full delivery tail runs and the real outcome node reports the result.
 # Run with --default-stubs --exec-code.
 #
-# `outcome` is deliberately unstubbed: the real script runs and must report pull
-# request 7 from the delivered flip value alone. The exec workspace is a DETACHED
+# Both outcomes are deliberately unstubbed: the real scripts run and must report the
+# pull request from the rounds' typed result alone. The exec workspace is a DETACHED
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
+forge: { source: forge }
+deliver__forge: { source: forge }
 assess:
   action: update
   summary: "stub: locked 1.2.3, target 1.2.9 admitted by the constraint, two usage sites, no breaking changes apply"
   report: { type: archon_artifact, run_id: "fixture-run", path: "upkeep-assessment.md" }
-deliver__impl__implement:
+implement__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: bump applied, lockfile updated for the target only, checks green"
-deliver__review__synthesize:
+  summary: "stub: implemented; focused checks pass"
+implement__assert-changed: "3 files changed"
+pr__forge: { source: forge }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
+review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
+review__scope:
+  head_matches: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+review__seams: "0 findings"
+review__code: "0 findings"
+review__tests: "0 findings"
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
   ready: true
   action: none
-  findings_summary: "stub: no open findings"
+  findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-deliver__review__publish:
+  discoveries: []
+  contract_left: []
+review__publish:
   ready: true
   action: none
-  findings_summary: "stub: no open findings"
+  findings_summary: "stub: none"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
-deliver__validate__run: { status: green, summary: "stub: project gate green" }
-ci-probe: '{"state":"concluded","detail":"all checks green"}'
-deliver__classify:
-  errors: false
-  docs: false
-  reasons:
-    errors: "stub: no failure paths"
-    docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false"}'
+  discoveries: []
+  contract_left: []
+simplify__simplify: { findings: false }
+simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
+deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed
 exec-code: true
-deliver__gate-ready: '{"gate":"ready"}'
-deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
-deliver__impl__assert-changed: "2 files changed"
-deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
-deliver__outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
-deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
-deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__review__mode: '{"continuation":false}'
-deliver__review__scope:
-  # PR diff in scope; head sha stubbed
-  docs: false
-  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
-deliver__review__code: "0 findings"
-deliver__review__seams: "0 findings"
-deliver__review__simplify: "0 findings"
-deliver__review__tests: "0 findings"
-deliver__review__review-complete: "settled"

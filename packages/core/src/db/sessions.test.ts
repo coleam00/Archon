@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { ZodError } from 'zod';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';

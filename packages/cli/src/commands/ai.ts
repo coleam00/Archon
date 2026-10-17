@@ -1,3 +1,4 @@
+import { missingProviderMessage } from '@archon/provider-contract';
 /**
  * `archon ai` — per-user AI-provider credentials AND install-wide model config.
  *
@@ -26,6 +27,7 @@
  * $USER/$USERNAME, resolved to a stable Archon user via the 'cli' platform
  * identity so a connected key attaches to the same user across invocations.
  */
+import { providerRegistry } from '@archon/providers';
 import { password, text, isCancel, cancel } from '@clack/prompts';
 import { writeJsonLine } from '../utils/stdout';
 import { createLogger } from '@archon/paths';
@@ -52,11 +54,10 @@ import {
   type EffortRung,
   type UserAiPrefs,
 } from '@archon/core';
-import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
+import { isRegisteredProvider, getProviderInfoList, getRegistration } from '@archon/providers';
 import {
   TIER_NAMES,
   buildAiProfile,
-  isEffortValidForProvider,
   isTierName as isTierNameStrict,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
@@ -354,19 +355,26 @@ function validateEntryInputs(
   effort: string | undefined
 ): effort is EffortRung | undefined {
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    console.error(missingProviderMessage(providerRegistry, provider));
     return false;
   }
   if (effort !== undefined && !isEffortRung(effort)) {
     console.error(`Invalid effort '${effort}'.`);
     return false;
   }
-  if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {
-    console.error(
-      `Invalid effort '${effort}' for provider '${provider}'. ` +
-        `Valid: ${validEffortsForProvider(provider)?.join(', ') ?? '(this provider has no effort setting)'}.`
-    );
-    return false;
+  if (effort !== undefined) {
+    const validEfforts = validEffortsForProvider(providerRegistry, provider);
+    if (validEfforts === null) {
+      console.error(`Provider '${provider}' does not support effort.`);
+      return false;
+    }
+    if (!validEfforts.includes(effort)) {
+      console.error(
+        `Invalid effort '${effort}' for provider '${provider}'. ` +
+          `Valid: ${validEfforts.join(', ')}.`
+      );
+      return false;
+    }
   }
   return true;
 }
@@ -709,7 +717,7 @@ export async function aiDefaultCommand(
     return 1;
   }
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    console.error(missingProviderMessage(providerRegistry, provider));
     return 1;
   }
   try {
@@ -732,6 +740,8 @@ export async function aiDefaultCommand(
         console.log(`✓ Default assistant set to '${provider}'.`);
       }
     }
+    const notice = getRegistration(provider).deprecationNotice;
+    if (notice) console.log(`! ${notice}`);
     return 0;
   } catch (err) {
     getLog().error(
@@ -759,10 +769,10 @@ export async function aiCapacityListCommand(json?: boolean): Promise<number> {
   }
   console.log('Provider attempts holding capacity:');
   for (const h of holders) {
-    const where = h.ownerOnThisHost ? 'this host' : 'another host';
-    console.log(
-      `  ${h.provider.padEnd(10)} ${h.attemptId}  ${h.owner.host} pid ${String(h.owner.pid)} (${where}) since ${h.acquiredAt}`
-    );
+    const owner = h.owner
+      ? `${h.owner.host} pid ${String(h.owner.pid)} (${h.ownerOnThisHost ? 'this host' : 'another host'})`
+      : h.invalidOwner;
+    console.log(`  ${h.provider.padEnd(10)} ${h.attemptId}  ${owner} since ${h.acquiredAt}`);
   }
   return 0;
 }

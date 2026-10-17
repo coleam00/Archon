@@ -437,15 +437,6 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description OAuth callback port still held by a previous login attempt — retry shortly */
-        503: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
       };
     };
     delete?: never;
@@ -799,8 +790,26 @@ export interface paths {
             'application/json': components['schemas']['ConversationListResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -843,8 +852,26 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -888,6 +915,15 @@ export interface paths {
             'application/json': components['schemas']['Conversation'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -899,6 +935,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -931,6 +976,15 @@ export interface paths {
             'application/json': components['schemas']['SuccessResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -942,6 +996,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -987,6 +1050,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -998,6 +1070,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1039,6 +1120,15 @@ export interface paths {
             'application/json': components['schemas']['MessageListResponse'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1050,6 +1140,15 @@ export interface paths {
         };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1109,8 +1208,35 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -1302,6 +1428,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Active container environments or newly registered worktrees require cleanup */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1313,6 +1448,129 @@ export interface paths {
         };
       };
     };
+    options?: never;
+    head?: never;
+    /**
+     * Rename a codebase
+     * @description Changes the display name. Refused with 409 when another codebase already uses the name, or when the new name would move the project storage (worktrees, state, logs, artifacts).
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['RenameCodebaseBody'];
+        };
+      };
+      responses: {
+        /** @description Renamed codebase */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Codebase'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Name already used, or the rename would move project storage */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
+  '/api/codebases/base-branch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Inspect the remote default without registering a project */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['InspectBaseBranchBody'];
+        };
+      };
+      responses: {
+        /** @description Base branch inspection */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['InspectBaseBranchResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -1546,6 +1804,238 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/attention': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List or count the attention queue */
+    get: {
+      parameters: {
+        query?: {
+          project?: string;
+          all?: 'true' | 'false';
+          label?: string | string[];
+          sort?: string;
+          countBy?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The items in scope, or their counts when countBy is given */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json':
+              | components['schemas']['RunsNeedingAttentionResponse']
+              | components['schemas']['AttentionQueueCountsResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/{runId}/attention': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read the attention queue item a run stands for */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The item, or null when the run needs no one now */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionQueueItemResponse'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/{runId}/attention/labels': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Set or remove labels on the attention wait a run is paused at */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['LabelAttentionBody'];
+        };
+      };
+      responses: {
+        /** @description Labeled */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['LabelAttentionResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The write names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1655,6 +2145,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1729,8 +2228,26 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Resource busy; the run keeps its state */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -1764,7 +2281,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Signal the exact external event awaited by a paused workflow run */
+    /** Signal an external event awaited by a paused workflow run; use occurrence for an exact match */
     post: {
       parameters: {
         query?: never;
@@ -1776,12 +2293,21 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': {
-            event: string;
-            /** Format: date-time */
-            resumeAt: string;
-            payload?: unknown;
-          };
+          'application/json':
+            | {
+                event: string;
+                occurrence: string;
+                /** Format: date-time */
+                resumeAt?: string;
+                payload?: unknown;
+              }
+            | {
+                event: string;
+                occurrence?: string;
+                /** Format: date-time */
+                resumeAt: string;
+                payload?: unknown;
+              };
         };
       };
       responses: {
@@ -1796,6 +2322,15 @@ export interface paths {
         };
         /** @description Run is not waiting on this event */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run action forbidden */
+        403: {
           headers: {
             [name: string]: unknown;
           };
@@ -1868,6 +2403,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1877,7 +2421,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description A live owner answered but could not be stopped; the run was not changed */
+        /** @description Abandonment or worktree release refused; inspect the reported reason */
         409: {
           headers: {
             [name: string]: unknown;
@@ -1946,8 +2490,26 @@ export interface paths {
             'application/json': components['schemas']['GateRefusal'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -2015,8 +2577,26 @@ export interface paths {
             'application/json': components['schemas']['GateRefusal'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -2084,8 +2664,113 @@ export interface paths {
             'application/json': components['schemas']['GateRefusal'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/workflows/runs/{runId}/answer': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Answer a paused attention wait in its declared form */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['AnswerWorkflowRunBody'];
+        };
+      };
+      responses: {
+        /** @description Answered */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WorkflowRunActionResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -2190,6 +2875,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -2259,8 +2953,44 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description All-scopes reset is unavailable while conversations are private */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
           headers: {
             [name: string]: unknown;
           };
@@ -2353,6 +3083,81 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['WorkflowRunByWorkerResponse'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/workflows/runs/{runId}/provider-events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a run's provider events
+     * @description Every event the run's providers streamed (text, thinking, tool calls with output, warnings, MCP status, compaction, subtasks, hooks, state), as the engine recorded them. Grouped by node; each node's in emission order. Rows written before the engine recorded envelopes come back translated, with a null attemptId.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Only this node (its persisted step name). */
+          step?: string;
+          /** @description Cursor attempt. Requires `step` and `afterSeq`. */
+          attemptId?: string;
+          /** @description Cursor seq: return the attempt's events after it and every later attempt's. Requires `step` and `attemptId`. */
+          afterSeq?: number | null;
+        };
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Provider events */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderEventsResponse'];
+          };
+        };
+        /** @description Invalid cursor */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
         /** @description Not found */
@@ -3135,6 +3940,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/web-push/key': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Browser push public key */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description VAPID public key */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushKey'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/web-push/subscriptions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Opt this browser into push */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WebPushSubscription'];
+        };
+      };
+      responses: {
+        /** @description Subscribed */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushSuccess'];
+          };
+        };
+      };
+    };
+    /** Opt this browser out of push */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WebPushDelete'];
+        };
+      };
+      responses: {
+        /** @description Unsubscribed */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushSuccess'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/health': {
     parameters: {
       query?: never;
@@ -3279,6 +4184,8 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              /** @enum {boolean} */
+              fanOut?: true;
             }
           | {
               id: string;
@@ -3414,7 +4321,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -3450,19 +4363,33 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           costUsd:
             | {
                 /** @enum {string} */
                 source: 'provider';
                 value: number;
+                /** @enum {boolean} */
+                partial?: true;
               }
             | {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           stopReason:
             | {
@@ -3474,7 +4401,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           numTurns:
             | {
@@ -3486,7 +4419,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
         };
         /** @enum {string} */
@@ -3511,6 +4450,8 @@ export interface components {
                 | 'fatal'
                 | 'transient'
                 | 'unknown'
+                | 'rate_limited'
+                | 'overloaded'
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'
@@ -3518,6 +4459,22 @@ export interface components {
                 | 'child_failed'
                 | 'cancelled'
                 | 'config';
+              providerFailure?: {
+                /** @enum {string} */
+                class:
+                  | 'auth'
+                  | 'quota_exhausted'
+                  | 'budget_exceeded'
+                  | 'misconfigured'
+                  | 'rate_limited'
+                  | 'overloaded'
+                  | 'transient'
+                  | 'unknown';
+                retryAfterMs?: number;
+                /** Format: date-time */
+                resetAt?: string;
+                evidence: string;
+              };
             }
           | {
               /** @enum {string} */
@@ -3558,7 +4515,9 @@ export interface components {
           | {
               /** @enum {string} */
               status: 'suspended';
-              point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+              point:
+                | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                | 'wait';
             };
       };
       timestamp: number;
@@ -3594,6 +4553,108 @@ export interface components {
           /** @enum {string} */
           kind: 'upstream_skipped';
           origin: string;
+        };
+    WebPushPayload: {
+      runId: string;
+      workflowName: string;
+      /** @enum {string} */
+      kind: 'gate' | 'attention' | 'terminal';
+    };
+    RunAttention:
+      | {
+          /** @enum {string} */
+          kind: 'stalled_tool_calls';
+          runId: string;
+          /** @enum {string} */
+          status: 'running';
+          calls: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'awaiting_response';
+          runId: string;
+          respondTo: {
+            runId: string;
+            nodeId: string;
+          };
+          message: string;
+          occurrence: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'attention';
+          runId: string;
+          nodeId: string;
+          message: string;
+          occurrence: string;
+          /** @enum {string} */
+          form: 'message' | 'approval' | 'select' | 'multi_select';
+          options: {
+            id: string;
+            label?: string;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          nodeId: string;
+          /** Format: date-time */
+          resumeAt: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_child';
+          runId: string;
+          childRunId: string;
+          nodeId: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_children';
+          runId: string;
+          nodeId: string;
+          childRunIds: string[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable';
+          runId: string;
+          /** @enum {string} */
+          reason:
+            | 'malformed_tool_call_attention'
+            | 'malformed_gate'
+            | 'unrecognized_gate_type'
+            | 'child_pointer_missing'
+            | 'child_run_missing'
+            | 'child_chain_too_deep'
+            | 'source_release_not_continued';
+          detail: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'terminal';
+          runId: string;
+          /** @enum {string} */
+          status: 'completed' | 'failed' | 'cancelled';
+          /** Format: date-time */
+          at: string | null;
         };
     AuthStatusResponse: {
       enabled: boolean;
@@ -3653,9 +4714,11 @@ export interface components {
       kinds: ('api_key' | 'subscription' | 'ambient')[];
       /** @enum {string|null} */
       connected: 'api_key' | 'oauth' | null;
+      connectionConsumed: boolean;
       subscriptionAvailable: boolean;
       installEnv: boolean;
       ambientConfigured?: boolean;
+      usable: boolean;
     };
     ProviderKeySetResponse: {
       success: boolean;
@@ -3788,7 +4851,7 @@ export interface components {
       repository_url: string | null;
       default_cwd: string;
       default_branch: string | null;
-      ai_assistant_type: string;
+      ai_assistant_type: string | null;
       /** @enum {string} */
       kind: 'repo' | 'folder';
       commands: {
@@ -3802,9 +4865,37 @@ export interface components {
       /** Format: date-time */
       updated_at: string;
     };
-    AddCodebaseBody: {
-      url?: string;
-      path?: string;
+    InspectBaseBranchResponse:
+      | {
+          /** @enum {string} */
+          kind: 'folder';
+        }
+      | {
+          /** @enum {string} */
+          kind: 'repo';
+          defaultBranch: string | null;
+          /** @enum {string|null} */
+          reason: 'no_remote' | 'ambiguous_remote' | 'remote_unavailable' | 'unknown_head' | null;
+        };
+    InspectBaseBranchBody:
+      | {
+          url: string;
+        }
+      | {
+          path: string;
+        };
+    AddCodebaseBody:
+      | {
+          url: string;
+          base_branch?: string | null;
+        }
+      | {
+          path: string;
+          base_branch?: string | null;
+          folder?: boolean;
+        };
+    RenameCodebaseBody: {
+      name: string;
     };
     DeleteCodebaseResponse: {
       success: boolean;
@@ -3846,7 +4937,6 @@ export interface components {
         | 'persistent';
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
-      interactive?: boolean;
       /** @enum {string} */
       effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
       fallbackModel?: string;
@@ -3892,6 +4982,10 @@ export interface components {
       };
       evidence_policy?: {
         required: boolean;
+      };
+      budget?: {
+        max_work_units?: number;
+        max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
@@ -4086,8 +5180,14 @@ export interface components {
           timeout?: number;
         }[];
       };
-      mcp?: string;
+      mcp?:
+        | string
+        | {
+            path: string;
+            optional?: boolean;
+          };
       skills?: string[];
+      plugins?: string[];
       agents?: {
         [key: string]: {
           description: string;
@@ -4203,6 +5303,17 @@ export interface components {
           }
         | {
             attention: string;
+            /** @enum {string} */
+            form?: 'message' | 'approval' | 'select' | 'multi_select';
+            options?:
+              | {
+                  id: string;
+                  label?: string;
+                }[]
+              | string;
+            labels?: {
+              [key: string]: string;
+            };
           };
       cancel?: string;
       include?: string;
@@ -4231,27 +5342,24 @@ export interface components {
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
       filename: string;
+      workflowName?: string;
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
     };
-    DashboardRunsResponse: {
+    RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
-      total: number;
-      counts: {
-        all: number;
-        running: number;
-        completed: number;
-        failed: number;
-        cancelled: number;
-        pending: number;
-        paused: number;
-      };
+      items: components['schemas']['AttentionQueueItem'][];
     };
     DashboardWorkflowRun: {
+      origin: {
+        conversationId?: string;
+        parentConversationId?: string;
+        userId?: string;
+      } | null;
       id: string;
       workflow_name: string;
-      conversation_id: string;
+      conversation_id: string | null;
       parent_conversation_id: string | null;
       codebase_id: string | null;
       /** @enum {string} */
@@ -4329,8 +5437,491 @@ export interface components {
       agents_completed: number | null;
       agents_failed: number | null;
       agents_total: number | null;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     WorkflowRunMetadata: {
+      tool_call_attention?: {
+        streamId: string;
+        nodeId: string;
+        provider: string;
+        toolCallId: string;
+        name: string;
+        title?: string;
+        /** Format: date-time */
+        startedAt: string;
+        /** Format: date-time */
+        lastProgressAt: string;
+        /** Format: date-time */
+        raisedAt: string;
+        thresholdMs: number;
+      }[];
+      approval?: {
+        nodeId: string;
+        pauseId?: string;
+        message: string;
+        /** @enum {string} */
+        type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out';
+        childRunId?: string;
+        childRunIds?: string[];
+        unspawnedItems?: number;
+        bodyGateId?: string;
+        iteration?: number;
+        sessionId?: string | null;
+        sessionProvider?: string | null;
+        bodySessionCursors?: {
+          [key: string]: {
+            sessionId: string;
+            provider: string;
+          };
+        };
+        bodySessionCursorAncestry?: {
+          [key: string]: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+        };
+        captureResponse?: boolean;
+        onRejectPrompt?: string;
+        onRejectMaxAttempts?: number;
+        /** @enum {string|null} */
+        resolved?: 'approved' | 'rejected' | null;
+        answeredVia?: string;
+        answeredAt?: string;
+        completionSignaled?: boolean | null;
+        signaledOutput?: string | null;
+        signaledStructuredOutput?: unknown;
+        signaledTokens?: {
+          input: number;
+          output: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          /** @enum {boolean} */
+          cachePartial?: true;
+          total?: number;
+          cost?: number;
+        } | null;
+        signaledCostUsd?: number | null;
+        execution?: {
+          runId: string;
+          path: string;
+          node:
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'agent';
+                source:
+                  | {
+                      /** @enum {string} */
+                      kind: 'inline';
+                    }
+                  | {
+                      /** @enum {string} */
+                      kind: 'command';
+                      name: string;
+                    };
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'exec';
+                /** @enum {string} */
+                runtime: 'sh' | 'bun' | 'uv';
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'loop';
+                command?: string;
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'loop_group';
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'gate';
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'halt';
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'wait';
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'workflow';
+                /** @enum {boolean} */
+                fanOut?: true;
+              }
+            | {
+                id: string;
+                /** @enum {string} */
+                kind: 'compose_fan_out';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'compose_fan_out_instance';
+                id: string;
+              };
+          invocation: {
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            loopPath: {
+              groupId: string;
+              iteration: number;
+            }[];
+            checkoutStart?:
+              | {
+                  /** @enum {string} */
+                  kind: 'git';
+                  /** Format: date-time */
+                  sampledAt: string;
+                  commit: string | null;
+                  tree: string | null;
+                  worktree:
+                    | {
+                        /** @enum {string} */
+                        status: 'clean';
+                      }
+                    | {
+                        /** @enum {string} */
+                        status: 'dirty';
+                        /** @enum {string} */
+                        content: 'complete' | 'incomplete';
+                        staged: number;
+                        unstaged: number;
+                        untracked: number;
+                        manifest: {
+                          pointer: {
+                            /** @enum {string} */
+                            type: 'archon_artifact';
+                            run_id: string;
+                            path: string;
+                          };
+                          sha256: string;
+                          entries: number;
+                        };
+                      };
+                  cutFromCommit?: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'not_git';
+                  /** Format: date-time */
+                  sampledAt: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'unavailable';
+                  /** Format: date-time */
+                  sampledAt: string;
+                  /** @enum {string} */
+                  reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+                };
+          };
+          attempt: {
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            checkoutStart?:
+              | {
+                  /** @enum {string} */
+                  kind: 'git';
+                  /** Format: date-time */
+                  sampledAt: string;
+                  commit: string | null;
+                  tree: string | null;
+                  worktree:
+                    | {
+                        /** @enum {string} */
+                        status: 'clean';
+                      }
+                    | {
+                        /** @enum {string} */
+                        status: 'dirty';
+                        /** @enum {string} */
+                        content: 'complete' | 'incomplete';
+                        staged: number;
+                        unstaged: number;
+                        untracked: number;
+                        manifest: {
+                          pointer: {
+                            /** @enum {string} */
+                            type: 'archon_artifact';
+                            run_id: string;
+                            path: string;
+                          };
+                          sha256: string;
+                          entries: number;
+                        };
+                      };
+                  cutFromCommit?: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'not_git';
+                  /** Format: date-time */
+                  sampledAt: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'unavailable';
+                  /** Format: date-time */
+                  sampledAt: string;
+                  /** @enum {string} */
+                  reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+                };
+          };
+          binding: {
+            provider?: string;
+            model?: {
+              requested?: string;
+              resolved:
+                | {
+                    /** @enum {string} */
+                    source: 'provider';
+                    value: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    source: 'unavailable';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  };
+            };
+            /** @enum {string} */
+            tier?: 'small' | 'medium' | 'large';
+            /** @enum {string} */
+            effort?:
+              | 'minimal'
+              | 'low'
+              | 'medium'
+              | 'high'
+              | 'xhigh'
+              | 'max'
+              | 'ultra'
+              | 'persistent';
+            sessionPreview?: string;
+            /** @enum {string} */
+            sessionOrigin?: 'fresh' | 'resumed' | 'resume-failed-cold';
+          };
+          timing: {
+            /** Format: date-time */
+            startedAt: string;
+            durationMs?: number;
+          };
+          spend: {
+            tokens:
+              | {
+                  /** @enum {string} */
+                  source: 'provider';
+                  value: {
+                    input: number;
+                    output: number;
+                    cacheRead?: number;
+                    cacheWrite?: number;
+                    /** @enum {boolean} */
+                    cachePartial?: true;
+                    total?: number;
+                    cost?: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  source: 'unavailable';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                };
+            costUsd:
+              | {
+                  /** @enum {string} */
+                  source: 'provider';
+                  value: number;
+                  /** @enum {boolean} */
+                  partial?: true;
+                }
+              | {
+                  /** @enum {string} */
+                  source: 'unavailable';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                };
+            stopReason:
+              | {
+                  /** @enum {string} */
+                  source: 'provider';
+                  value: string;
+                }
+              | {
+                  /** @enum {string} */
+                  source: 'unavailable';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                };
+            numTurns:
+              | {
+                  /** @enum {string} */
+                  source: 'provider';
+                  value: number;
+                }
+              | {
+                  /** @enum {string} */
+                  source: 'unavailable';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                };
+          };
+          /** @enum {string} */
+          accounting: 'node' | 'aggregate' | 'instance' | 'amendment';
+          lifecycle:
+            | {
+                /** @enum {string} */
+                status: 'started';
+              }
+            | {
+                /** @enum {string} */
+                status: 'completed';
+              }
+            | {
+                /** @enum {string} */
+                status: 'failed';
+                error: string;
+                /** @enum {boolean} */
+                retryable?: false;
+                /** @enum {string} */
+                failureKind?:
+                  | 'fatal'
+                  | 'transient'
+                  | 'unknown'
+                  | 'rate_limited'
+                  | 'overloaded'
+                  | 'timeout'
+                  | 'exec_failed'
+                  | 'output_contract'
+                  | 'max_iterations'
+                  | 'child_failed'
+                  | 'cancelled'
+                  | 'config';
+                providerFailure?: {
+                  /** @enum {string} */
+                  class:
+                    | 'auth'
+                    | 'quota_exhausted'
+                    | 'budget_exceeded'
+                    | 'misconfigured'
+                    | 'rate_limited'
+                    | 'overloaded'
+                    | 'transient'
+                    | 'unknown';
+                  retryAfterMs?: number;
+                  /** Format: date-time */
+                  resetAt?: string;
+                  evidence: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                status: 'skipped';
+                /** @enum {string} */
+                reason:
+                  | 'prior_success'
+                  | 'when_condition'
+                  | 'when_condition_parse_error'
+                  | 'trigger_rule'
+                  | 'timeout';
+                cause:
+                  | {
+                      /** @enum {string} */
+                      kind: 'condition';
+                      expr: string;
+                    }
+                  | {
+                      /** @enum {string} */
+                      kind: 'condition_parse_error';
+                      expr: string;
+                    }
+                  | {
+                      /** @enum {string} */
+                      kind: 'timeout';
+                    }
+                  | {
+                      /** @enum {string} */
+                      kind: 'upstream_failed';
+                      origin: string;
+                    }
+                  | {
+                      /** @enum {string} */
+                      kind: 'upstream_skipped';
+                      origin: string;
+                    };
+              }
+            | {
+                /** @enum {string} */
+                status: 'suspended';
+                point:
+                  | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                  | 'wait';
+              };
+        };
+        commandSnapshot?: string | null;
+      } & (
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored: true;
+            decisions: {
+              id: string;
+              label?: string;
+            }[];
+          }
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored?: false;
+            decisions?: {
+              id: string;
+              label?: string;
+            }[];
+          }
+      );
       wait?: components['schemas']['WorkflowWaitContext'];
       stop_reason?: components['schemas']['RunStopReason'];
     } & {
@@ -4341,6 +5932,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -4352,6 +5944,7 @@ export interface components {
           /** @enum {string} */
           owner: 'node';
           nodeId: string;
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -4372,6 +5965,44 @@ export interface components {
           /** Format: date-time */
           waitingSince: string;
           message: string;
+          pauseId?: string;
+          /** @enum {string} */
+          form?: 'message' | 'approval' | 'select' | 'multi_select';
+          options?: {
+            id: string;
+            label?: string;
+          }[];
+          answer?:
+            | {
+                text: string;
+              }
+            | {
+                decision: string;
+                text: string;
+              }
+            | {
+                decisions: string[];
+                text: string;
+              };
+          answeredVia?: string;
+          /** Format: date-time */
+          answeredAt?: string;
+          labels?: {
+            [key: string]: string;
+          };
+          revision?: number;
+        }
+      | {
+          /** @enum {string} */
+          owner: 'node';
+          nodeId: string;
+          pauseId: string;
+          /** @enum {string} */
+          kind: 'quota';
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          resumeAt: string;
         }
       | {
           /** @enum {string} */
@@ -4381,6 +6012,21 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -4396,6 +6042,21 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
+          pauseId?: string;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -4415,11 +6076,51 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'attention';
           /** Format: date-time */
           waitingSince: string;
           message: string;
+          pauseId?: string;
+          /** @enum {string} */
+          form?: 'message' | 'approval' | 'select' | 'multi_select';
+          options?: {
+            id: string;
+            label?: string;
+          }[];
+          answer?:
+            | {
+                text: string;
+              }
+            | {
+                decision: string;
+                text: string;
+              }
+            | {
+                decisions: string[];
+                text: string;
+              };
+          answeredVia?: string;
+          /** Format: date-time */
+          answeredAt?: string;
+          labels?: {
+            [key: string]: string;
+          };
+          revision?: number;
         };
     RunStopReason: {
       /** @enum {string} */
@@ -4428,6 +6129,7 @@ export interface components {
         | 'node_error'
         | 'unhandled_error'
         | 'evidence_missing'
+        | 'budget_refused'
         | 'source_unavailable'
         | 'not_finalized'
         | 'process_terminated'
@@ -4435,6 +6137,338 @@ export interface components {
         | 'run_not_created';
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
+    };
+    AttentionQueueItem:
+      | {
+          /** @enum {string} */
+          kind: 'attention';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          node: string;
+          occurrence: string;
+          message: string;
+          /** @enum {string} */
+          form: 'message' | 'approval' | 'select' | 'multi_select';
+          options: {
+            id: string;
+            label?: string;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'awaiting_response';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          node: string;
+          occurrence: string;
+          message: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'usage_limit';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          node: string;
+          /** Format: date-time */
+          resetAt: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable';
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          /** @enum {string} */
+          reason:
+            | 'malformed_tool_call_attention'
+            | 'malformed_gate'
+            | 'unrecognized_gate_type'
+            | 'child_pointer_missing'
+            | 'child_run_missing'
+            | 'child_chain_too_deep'
+            | 'source_release_not_continued';
+          detail: string;
+        };
+    AttentionQueueCountsResponse: {
+      counts: components['schemas']['AttentionQueueCounts'];
+    };
+    AttentionQueueCounts:
+      | {
+          /** @enum {string} */
+          by: 'project';
+          counts: {
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            count: number;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          by: 'label';
+          key: string;
+          counts: {
+            value: string | null;
+            count: number;
+          }[];
+        };
+    AttentionQueueItemResponse: {
+      item:
+        | {
+            /** @enum {string} */
+            kind: 'attention';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
+            message: string;
+            /** @enum {string} */
+            form: 'message' | 'approval' | 'select' | 'multi_select';
+            options: {
+              id: string;
+              label?: string;
+            }[];
+          }
+        | {
+            /** @enum {string} */
+            kind: 'awaiting_response';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
+            message: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'usage_limit';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            /** Format: date-time */
+            resetAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable';
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            /** @enum {string} */
+            reason:
+              | 'malformed_tool_call_attention'
+              | 'malformed_gate'
+              | 'unrecognized_gate_type'
+              | 'child_pointer_missing'
+              | 'child_run_missing'
+              | 'child_chain_too_deep'
+              | 'source_release_not_continued';
+            detail: string;
+          }
+        | unknown;
+    };
+    LabelAttentionResponse: {
+      runId: string;
+      occurrence: string;
+      revision: number;
+      labels: {
+        [key: string]: string;
+      };
+    };
+    LabelAttentionBody: {
+      occurrence: string;
+      set?: {
+        [key: string]: string;
+      };
+      unset?: string[];
+    };
+    DashboardRunsResponse: {
+      runs: components['schemas']['DashboardWorkflowRun'][];
+      total: number;
+      counts: {
+        all: number;
+        running: number;
+        completed: number;
+        failed: number;
+        cancelled: number;
+        pending: number;
+        paused: number;
+      };
     };
     CancelWorkflowRunResponse: {
       success: boolean;
@@ -4449,12 +6483,35 @@ export interface components {
     };
     ApproveWorkflowRunBody: {
       comment?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RejectWorkflowRunBody: {
       reason?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RespondWorkflowRunBody: {
       decision: string;
+      text?: string;
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
+    };
+    AnswerWorkflowRunBody: {
+      occurrence: string;
+      choose?: string[];
       text?: string;
     };
     ResetWorkflowNodeSessionsResponse: {
@@ -4465,9 +6522,14 @@ export interface components {
       runs: components['schemas']['WorkflowRun'][];
     };
     WorkflowRun: {
+      origin: {
+        conversationId?: string;
+        parentConversationId?: string;
+        userId?: string;
+      } | null;
       id: string;
       workflow_name: string;
-      conversation_id: string;
+      conversation_id: string | null;
       parent_conversation_id: string | null;
       codebase_id: string | null;
       /** @enum {string} */
@@ -4532,6 +6594,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
@@ -4631,7 +6694,6 @@ export interface components {
                 /** Format: date-time */
                 producedAt: string;
                 size: number;
-                sessionId?: string;
               };
             }[];
             limitations: {
@@ -4647,7 +6709,66 @@ export interface components {
               code?: string;
             }[];
           };
+          worktree_disposition?:
+            | {
+                /** @enum {string} */
+                disposition: 'release';
+              }
+            | {
+                /** @enum {string} */
+                disposition: 'retained';
+                /** @enum {string} */
+                reason:
+                  | 'resumable'
+                  | 'cancelled'
+                  | 'workspace_retained'
+                  | 'in_use'
+                  | 'uncommitted_changes'
+                  | 'unpushed_commits'
+                  | 'published_branch'
+                  | 'check_failed';
+                detail?: string;
+              };
         } | null;
+        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
+        nodes: {
+          node_id: string;
+          /** @enum {string} */
+          state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+          error?: string;
+          /** @enum {string} */
+          reason?:
+            | 'prior_success'
+            | 'when_condition'
+            | 'when_condition_parse_error'
+            | 'trigger_rule'
+            | 'timeout';
+          cause?:
+            | {
+                /** @enum {string} */
+                kind: 'condition';
+                expr: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'condition_parse_error';
+                expr: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'timeout';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_failed';
+                origin: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_skipped';
+                origin: string;
+              };
+        }[];
       };
       events: components['schemas']['WorkflowEvent'][];
     };
@@ -4663,6 +6784,116 @@ export interface components {
       /** Format: date-time */
       created_at: string;
       event_order?: number | null;
+      /**
+       * @description What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.
+       * @enum {string}
+       */
+      cost_scope?: 'own' | 'total';
+    };
+    ProviderEventsResponse: {
+      events: components['schemas']['ProviderEventRecord'][];
+    };
+    ProviderEventRecord: {
+      attemptId: string | null;
+      seq: number;
+      /** Format: date-time */
+      observedAt: string;
+      event:
+        | {
+            /** @enum {string} */
+            type: 'agent_message_chunk';
+            text: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'agent_thought_chunk';
+            text: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'tool_call';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            rawInput?:
+              | string
+              | number
+              | boolean
+              | {
+                  [key: string]: unknown;
+                }
+              | unknown[]
+              | null;
+          }
+        | {
+            /** @enum {string} */
+            type: 'tool_call_update';
+            toolCallId: string;
+            /** @enum {string} */
+            status: 'completed' | 'failed' | 'cancelled';
+            output?: string;
+            /** @enum {boolean} */
+            outputTruncated?: true;
+            exitCode?: number;
+          }
+        | {
+            code: string;
+            message: string;
+            /** @enum {string} */
+            type: 'warning';
+          }
+        | {
+            /** @enum {string} */
+            type: 'mcp_server_status';
+            server: string;
+            /** @enum {string} */
+            status: 'connected' | 'failed' | 'needs_auth' | 'pending' | 'disabled';
+            error?: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'compaction';
+            /** @enum {string} */
+            phase: 'started' | 'completed';
+            /** @enum {string} */
+            trigger?: 'manual' | 'auto';
+            tokensBefore?: number;
+            tokensAfter?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'subtask';
+            taskId: string;
+            /** @enum {string} */
+            status: 'started' | 'running' | 'completed' | 'failed' | 'stopped';
+            description?: string;
+            summary?: string;
+            taskType?: string;
+            parentToolCallId?: string;
+            lastToolName?: string;
+            outputFile?: string;
+            usage?: {
+              [key: string]: unknown;
+            };
+          }
+        | {
+            /** @enum {string} */
+            type: 'hook';
+            hookId: string;
+            hookName: string;
+            hookEvent: string;
+            /** @enum {string} */
+            status: 'started' | 'succeeded' | 'failed' | 'cancelled';
+            exitCode?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'state_update';
+            /** @enum {string} */
+            state: 'running' | 'requires_action';
+          };
+      runId: string;
+      stepName: string;
     };
     ValidateWorkflowResponse: {
       valid: boolean;
@@ -4675,6 +6906,9 @@ export interface components {
     };
     GetWorkflowResponse: {
       workflow: components['schemas']['WorkflowDefinition'];
+      authored?: {
+        [key: string]: unknown;
+      };
       filename: string;
       source: components['schemas']['WorkflowSource'];
     };
@@ -4708,23 +6942,17 @@ export interface components {
     };
     SafeConfig: {
       botName: string;
-      assistant: string;
+      assistant?: string;
       assistants: {
         [key: string]: components['schemas']['ProviderDefaults'];
       };
       streaming: {
-        /** @enum {string} */
-        telegram: 'stream' | 'batch';
-        /** @enum {string} */
-        discord: 'stream' | 'batch';
-        /** @enum {string} */
-        slack: 'stream' | 'batch';
+        [key: string]: 'stream' | 'batch';
       };
       concurrency: {
         maxConversations: number;
       };
       defaults: {
-        copyDefaults: boolean;
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };
@@ -4780,11 +7008,14 @@ export interface components {
       )[];
     };
     ProviderCapabilities: {
+      /** @enum {string} */
+      backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
+      plugins: boolean;
       agents: boolean;
       toolRestrictions: boolean;
       knownToolNames?: string[];
@@ -4850,11 +7081,37 @@ export interface components {
       updated_at: string;
       days_since_activity: number;
     };
+    WebPushKey: {
+      publicKey: string;
+    };
+    WebPushSuccess: {
+      /** @enum {boolean} */
+      success: true;
+    };
+    WebPushSubscription: {
+      /** Format: uri */
+      endpoint: string;
+      keys: {
+        p256dh: string;
+        auth: string;
+      };
+    };
+    WebPushDelete: {
+      /** Format: uri */
+      endpoint: string;
+    };
     HealthResponse: {
       status: string;
       adapter: string;
       concurrency: {
-        [key: string]: unknown;
+        active: number;
+        queuedTotal: number;
+        queuedByConversation: {
+          conversationId: string;
+          queuedMessages: number;
+        }[];
+        maxConcurrent: number;
+        activeConversationIds: string[];
       };
       runningWorkflows: number;
       version?: string;
@@ -4862,6 +7119,11 @@ export interface components {
       is_wsl: boolean;
       wsl_distro?: string;
       activePlatforms?: string[];
+      attentionDestinations?: {
+        id: string;
+        /** @enum {string} */
+        state: 'active' | 'no_subscribers' | 'plugin_down' | 'misconfigured';
+      }[];
       schema?: {
         createdAppVersion: string | null;
         appVersion: string;

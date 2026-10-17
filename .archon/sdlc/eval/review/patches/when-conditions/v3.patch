@@ -1,0 +1,14 @@
+diff --git a/packages/workflows/src/when-atom.ts b/packages/workflows/src/when-atom.ts
+index b62e75390..5edad34f1 100644
+--- a/packages/workflows/src/when-atom.ts
++++ b/packages/workflows/src/when-atom.ts
+@@ -223,8 +223,7 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
+         nodeId !== undefined &&
+         operator !== undefined &&
+         isWhenOperator(operator) &&
+-        expected !== undefined &&
+-        isComparableLiteral(operator, expected)
++        expected !== undefined
+       ) {
+         return {
+           ref: { kind: 'loop_prev', nodeId, field },

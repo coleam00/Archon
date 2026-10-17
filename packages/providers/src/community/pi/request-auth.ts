@@ -15,7 +15,9 @@
  * substituted values and pass it as `modelsPath` to `ModelRuntime.create()`.
  * Pi's own `ModelConfig.load` then resolves the literal directly — no
  * `${VAR}` substitution at request time, so the missing-fallback path can't
- * fire.
+ * fire. The caller passes the env to substitute from: the Pi provider passes
+ * one layered env (request over process over assistant config), so its login
+ * check and a turn resolve every reference the same way.
  *
  * The protected-env contract: protected `${VAR}` references are substituted
  * with a structurally-valid but provably-unresolvable placeholder
@@ -28,21 +30,23 @@
  * it cannot collide with any user-named env var.
  *
  * The file is written with mode 0o600 (and explicit chmod to defeat umask);
- * the containing directory with mode 0o700. The file is meant to be removed
- * by the caller after `ModelRuntime.create()` returns — `ModelConfig.load`
- * reads the file once and the SDK never touches it again. The provider wraps
- * the SDK call in try/finally so the file is cleaned up whether the SDK
- * succeeds or fails.
+ * the containing directory with mode 0o700. The runtime re-reads the file on
+ * every `refresh()`, so it must outlive the runtime — see
+ * `createRequestModelRuntime`.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { expandTilde } from '@archon/paths';
+// Type-only: erased at compile time, so Pi's config.js never loads here.
+import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent';
 
 export interface CustomProviderEnvScope {
   provider: string;
-  requestEnv: Readonly<Record<string, string>> | undefined;
+  authoritativeCredential?: boolean;
+  /** The values `${VAR}` references are substituted with. */
+  env: Readonly<Record<string, string>>;
   protectedEnvKeys: readonly string[] | undefined;
 }
 
@@ -110,8 +114,7 @@ interface SubstitutionResult {
  *
  * Mirrors the SDK's `resolveConfigValue` (`@earendil-works/pi-coding-agent/dist/core/resolve-config-value.js`)
  * — same parser, same `${VAR}` / `$$` / `$!` semantics — except:
- *   - never falls back to `process.env` (Archon keeps per-call secrets off
- *     process.env; a fallback would silently expose the host shell's value);
+ *   - never reads `process.env` itself: the caller decides which env applies;
  *   - protected keys are substituted with a structurally-valid placeholder
  *     (`${__ARCHON_BLOCKED_${VAR}__}`) so the SDK's own resolver surfaces a
  *     host-environment-independent "no value for env var" error at request
@@ -168,7 +171,7 @@ function resolveProviderConfigValue(
       // Placeholder is one valid identifier the SDK's parser recognises;
       // the SDK attempts to resolve `__ARCHON_BLOCKED_<VAR>` at request
       // time and fails (the name is provably absent from any context —
-      // neither requestEnv nor process.env can supply it). The literal
+      // neither the substitution env nor process.env can supply it). The literal
       // protected value never appears in the per-call file. This
       // substitution is UNCONDITIONAL — a different, merely-missing ref in
       // the same template must never cancel it (the bail-out above only
@@ -214,25 +217,21 @@ export function getUserModelsPath(): string {
 }
 
 /**
- * Build a per-call `models.json` with the targeted custom provider's
- * `${VAR}` references substituted against `requestEnv`. Returns the path to
- * the written file (suitable for `ModelRuntime.create({ modelsPath })`), or
- * `undefined` when no substitution applies and the SDK's default `modelsPath`
- * lookup should be left in place.
- *
- * Returns `undefined` when:
- *   - `requestEnv` is undefined (no per-call env to substitute against);
- *   - the user's `models.json` doesn't exist or isn't valid JSON;
- *   - the targeted provider isn't in `models.json`;
- *   - no `${VAR}` reference in the provider's `apiKey`/`headers` produces a
- *     substitution: the provider has no template values, or every templated
- *     field references only missing/empty (and no protected) keys. A
- *     protected reference ALWAYS produces a substitution (its placeholder),
- *     so a file is written whenever one is present.
+ * The user's Pi catalog store (`models-store.json`, beside `models.json`).
+ * The one place Archon derives it: the per-call runtime reads it, and
+ * error remedies name it.
+ */
+export function getUserModelsStorePath(): string {
+  return join(dirname(getUserModelsPath()), 'models-store.json');
+}
+
+/**
+ * Substitute custom-provider env references, or remove competing native auth for a
+ * delivered credential. The returned private file must live until runtime release.
+ * Without delivery, unreadable configuration retains the native SDK failure path.
  */
 export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): string | undefined {
-  const { provider, requestEnv, protectedEnvKeys } = scope;
-  if (requestEnv === undefined) return undefined;
+  const { provider, env, protectedEnvKeys } = scope;
 
   const userModelsPath = getUserModelsPath();
   if (!existsSync(userModelsPath)) return undefined;
@@ -240,13 +239,23 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   let raw: string;
   try {
     raw = readFileSync(userModelsPath, 'utf-8');
-  } catch {
+  } catch (err) {
+    if (scope.authoritativeCredential) throw err;
     return undefined;
   }
   let parsed: { providers?: Record<string, Record<string, unknown>> };
   try {
-    parsed = JSON.parse(raw) as { providers?: Record<string, Record<string, unknown>> };
-  } catch {
+    // Pi's private stripJsonComments utility is not exported. Mirror its syntax;
+    // the real-SDK credential-authority test checks native/rewrite conformance.
+    const json = (raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw)
+      .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, match => (match[0] === '"' ? match : ''))
+      .replace(
+        /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g,
+        (match, tail: string | undefined) => tail ?? (match[0] === '"' ? match : '')
+      );
+    parsed = JSON.parse(json) as { providers?: Record<string, Record<string, unknown>> };
+  } catch (err) {
+    if (scope.authoritativeCredential) throw err;
     return undefined;
   }
   const providerEntry = parsed.providers?.[provider];
@@ -255,10 +264,36 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   const protectedSet = new Set(protectedEnvKeys ?? []);
   // Clone to avoid mutating the parsed object graph.
   const substituted: Record<string, unknown> = structuredClone(providerEntry);
-  let anySubstitution = false;
+  let anySubstitution = scope.authoritativeCredential === true;
+  if (scope.authoritativeCredential) {
+    const removeAuth = (entry: Record<string, unknown>): void => {
+      delete entry.apiKey;
+      if (entry.headers && typeof entry.headers === 'object') {
+        entry.headers = Object.fromEntries(
+          Object.entries(entry.headers).filter(
+            ([name]) =>
+              !['authorization', 'x-api-key', 'api-key', 'x-goog-api-key'].includes(
+                name.toLowerCase()
+              )
+          )
+        );
+      }
+    };
+    removeAuth(substituted);
+    if (Array.isArray(substituted.models)) {
+      for (const model of substituted.models) {
+        if (model && typeof model === 'object') removeAuth(model);
+      }
+    }
+    if (substituted.modelOverrides && typeof substituted.modelOverrides === 'object') {
+      for (const model of Object.values(substituted.modelOverrides)) {
+        if (model && typeof model === 'object') removeAuth(model as Record<string, unknown>);
+      }
+    }
+  }
 
   if (typeof substituted.apiKey === 'string') {
-    const result = resolveProviderConfigValue(substituted.apiKey, requestEnv, protectedSet);
+    const result = resolveProviderConfigValue(substituted.apiKey, env, protectedSet);
     if (result?.didSubstitute) {
       substituted.apiKey = result.resolved;
       anySubstitution = true;
@@ -273,7 +308,7 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
     const headers = substituted.headers as Record<string, unknown>;
     for (const [key, value] of Object.entries(headers)) {
       if (typeof value !== 'string') continue;
-      const result = resolveProviderConfigValue(value, requestEnv, protectedSet);
+      const result = resolveProviderConfigValue(value, env, protectedSet);
       if (result?.didSubstitute) {
         headers[key] = result.resolved;
         anySubstitution = true;
@@ -294,12 +329,19 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   // 0o700 explicitly so the dir is owner-only on every call.
   chmodSync(dir, 0o700);
   // Per-call, per-process uniqueness: PID + hrtime-style random suffix. The
-  // file is owned by the calling process; no cross-run sharing is intended
-  // (the SDK reads `modelsPath` once at `ModelRuntime.create()` time and the
-  // provider removes the file in a `finally` block immediately after).
+  // file is owned by the calling process; no cross-run sharing is intended.
   const fileName = `models-${provider}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`;
   const filePath = join(dir, fileName);
-  const payload = JSON.stringify({ providers: { [provider]: substituted } }, null, 2);
+  const payload = JSON.stringify(
+    {
+      providers: {
+        ...(scope.authoritativeCredential ? parsed.providers : {}),
+        [provider]: substituted,
+      },
+    },
+    null,
+    2
+  );
   // mode is diluted by the process umask; set it explicitly AND chmod after
   // to guarantee 0o600 on disk. Mirrors the token-crypto pattern in
   // `packages/core/src/utils/token-crypto.ts:100-102`. If the chmod (or a
@@ -314,4 +356,46 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
     throw err;
   }
   return filePath;
+}
+
+export interface RequestModelRuntime {
+  runtime: ModelRuntime;
+  /** Remove the per-call `models.json`, if one was written. Call once nothing uses `runtime`. */
+  release(): void;
+}
+
+/**
+ * Create the `ModelRuntime` for one call. For a custom provider whose
+ * `models.json` entry has `${VAR}` references (`customProvider` set), the
+ * runtime reads a per-call file with the values substituted.
+ *
+ * The file must exist for as long as the runtime is used: `refresh()` re-reads
+ * `modelsPath` and treats a missing file as an empty config, and every
+ * `registerProvider()` call (an extension registering its provider, for
+ * example) ends with a background `refresh()`. Deleting the file earlier drops
+ * the custom provider mid-session. The caller owns `release()`.
+ *
+ * `modelsStorePath` stays the user's catalog store: Pi otherwise derives it
+ * from `dirname(modelsPath)` and would read and write a store beside the
+ * per-call files.
+ */
+export async function createRequestModelRuntime(
+  create: (options: CreateModelRuntimeOptions) => Promise<ModelRuntime>,
+  authPath: string | undefined,
+  customProvider: CustomProviderEnvScope | undefined
+): Promise<RequestModelRuntime> {
+  const modelsPath = customProvider ? buildCustomProviderModelsPath(customProvider) : undefined;
+  const release = (): void => {
+    if (modelsPath) rmSync(modelsPath, { force: true });
+  };
+  try {
+    const runtime = await create({
+      authPath,
+      ...(modelsPath ? { modelsPath, modelsStorePath: getUserModelsStorePath() } : {}),
+    });
+    return { runtime, release };
+  } catch (err) {
+    release();
+    throw err;
+  }
 }

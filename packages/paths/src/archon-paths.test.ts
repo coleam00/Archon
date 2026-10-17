@@ -29,11 +29,11 @@ import {
   canonicalizeProjectPath,
   getAppArchonBasePath,
   getSourceWebDistDir,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  toSafeNameSegment,
   resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
@@ -47,6 +47,8 @@ import {
   resolveProjectStorageKey,
   getProjectStoragePaths,
   resolveRunStorageRoot,
+  projectKeyForStorageRoot,
+  projectKeyForCodebase,
   getRunArtifactsDirForKey,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
@@ -62,6 +64,7 @@ import {
   isInsideArchonHome,
   ensureProjectStructure,
   createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
   findMarkdownFilesRecursive,
 } from './archon-paths';
 
@@ -326,18 +329,14 @@ describe('archon-paths', () => {
   });
 
   describe('getCommandFolderSearchPaths', () => {
-    test('returns .archon/commands and defaults by default', () => {
+    test('returns .archon/commands by default', () => {
       const paths = getCommandFolderSearchPaths();
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands']);
     });
 
     test('includes configured folder when provided', () => {
       const paths = getCommandFolderSearchPaths('.claude/commands/archon');
-      expect(paths).toEqual([
-        '.archon/commands',
-        '.archon/commands/defaults',
-        '.claude/commands/archon',
-      ]);
+      expect(paths).toEqual(['.archon/commands', '.claude/commands/archon']);
     });
 
     test('.archon/commands has highest priority', () => {
@@ -345,19 +344,9 @@ describe('archon-paths', () => {
       expect(paths[0]).toBe('.archon/commands');
     });
 
-    test('.archon/commands/defaults has second priority', () => {
-      const paths = getCommandFolderSearchPaths('.custom/commands');
-      expect(paths[1]).toBe('.archon/commands/defaults');
-    });
-
     test('does not duplicate .archon/commands if configured', () => {
       const paths = getCommandFolderSearchPaths('.archon/commands');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
-    });
-
-    test('does not duplicate .archon/commands/defaults if configured', () => {
-      const paths = getCommandFolderSearchPaths('.archon/commands/defaults');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands']);
     });
   });
 
@@ -499,26 +488,12 @@ describe('archon-paths', () => {
     });
   });
 
-  describe('getDefaultCommandsPath', () => {
-    test('returns commands/defaults under app archon base', () => {
+  describe('getBundledWorkflowsPath', () => {
+    test('returns workflows under app archon base', () => {
       delete process.env.ARCHON_DOCKER;
       delete process.env.WORKSPACE_PATH;
-      const path = getDefaultCommandsPath();
-      expect(path).toContain('.archon');
-      expect(path).toContain('commands');
-      expect(path).toContain('defaults');
-      expect(path).not.toContain('packages/core');
-    });
-  });
-
-  describe('getDefaultWorkflowsPath', () => {
-    test('returns workflows/defaults under app archon base', () => {
-      delete process.env.ARCHON_DOCKER;
-      delete process.env.WORKSPACE_PATH;
-      const path = getDefaultWorkflowsPath();
-      expect(path).toContain('.archon');
-      expect(path).toContain('workflows');
-      expect(path).toContain('defaults');
+      const path = getBundledWorkflowsPath();
+      expect(path).toBe(join(getAppArchonBasePath(), 'workflows'));
       expect(path).not.toContain('packages/core');
     });
   });
@@ -534,6 +509,13 @@ describe('archon-paths', () => {
 
     test('returns null for bare name', () => {
       expect(parseOwnerRepo('widget')).toBeNull();
+    });
+
+    test('accepts any segment made safe by toSafeNameSegment', () => {
+      expect(parseOwnerRepo(`_local/${toSafeNameSegment('org/team app~ü')}-2`)).toEqual({
+        owner: '_local',
+        repo: 'org-team-app---2',
+      });
     });
 
     test('returns null for empty string', () => {
@@ -685,6 +667,50 @@ describe('archon-paths', () => {
           '/tmp/scratch'
         )
       ).toEqual({ kind: 'cwd', cwd: '/tmp/scratch' });
+    });
+  });
+
+  describe('project keys', () => {
+    beforeEach(() => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+    });
+
+    test('each storage key kind yields its workspace-relative key', () => {
+      expect(
+        projectKeyForCodebase(
+          { kind: 'repo', name: 'acme/widget', default_cwd: '/repos/widget' },
+          '/repos/widget'
+        )
+      ).toBe('acme/widget');
+      expect(
+        projectKeyForCodebase(
+          { kind: 'folder', name: 'My Ops Folder', default_cwd: '/srv/ops' },
+          '/srv/ops'
+        )
+      ).toBe('_folder/my-ops-folder');
+      expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe('_cwd/scratch-repo');
+    });
+
+    test('a storage root and the codebase it came from give the same key', () => {
+      const codebase = { kind: 'repo', name: 'acme/widget', default_cwd: '/repos/widget' };
+      const root = resolveRunStorageRoot({ output_root: null }, codebase);
+      if (!root) throw new Error('Expected a storage root');
+      expect(projectKeyForStorageRoot(root)).toBe(
+        projectKeyForCodebase(codebase, codebase.default_cwd)
+      );
+    });
+
+    test('a first segment that merely starts with two dots is still a key', () => {
+      expect(projectKeyForStorageRoot(join('/custom/archon', 'workspaces', '..foo', 'bar'))).toBe(
+        '..foo/bar'
+      );
+    });
+
+    test('a root outside the workspaces directory has no key', () => {
+      for (const root of ['/elsewhere/acme/widget', join('/custom/archon', 'workspaces')])
+        expect(() => projectKeyForStorageRoot(root)).toThrow('not inside the workspaces directory');
     });
   });
 
@@ -1286,6 +1312,17 @@ describe('ensureProjectStructure', () => {
     const sourcePath = getProjectSourcePath('acme', 'widget');
     expect((await lstat(sourcePath)).isDirectory()).toBe(true);
   });
+
+  test('reports a file at the source path as an occupied source', async () => {
+    const sourcePath = getProjectSourcePath('acme', 'widget');
+    await mkdir(dirname(sourcePath), { recursive: true });
+    await writeFile(sourcePath, 'foreign');
+
+    const error = await ensureProjectStructure('acme', 'widget').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ProjectSourceOccupiedError);
+    expect(error).toMatchObject({ sourcePath });
+  });
 });
 
 describe('ensureArchonWorkspacesPath', () => {
@@ -1387,23 +1424,49 @@ describe('createProjectSourceSymlink', () => {
     }
   });
 
-  test.skipIf(isWindows)(
-    'is a no-op when real directory with contents exists (clone case)',
-    async () => {
-      await ensureProjectStructure('acme', 'widget');
+  test('refuses a populated source belonging to another checkout', async () => {
+    await ensureProjectStructure('acme', 'widget');
 
-      // Put a file in the source dir to simulate a clone
-      const sourcePath = getProjectSourcePath('acme', 'widget');
-      await writeFile(join(sourcePath, 'README.md'), '# Hello');
+    // Put a file in the source dir to simulate a clone
+    const sourcePath = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(sourcePath, 'README.md'), '# Hello');
 
-      // Should not overwrite the directory with a symlink
-      await createProjectSourceSymlink('acme', 'widget', tempTarget);
+    await expect(createProjectSourceSymlink('acme', 'widget', tempTarget)).rejects.toThrow(
+      'already contains'
+    );
 
-      const stats = await lstat(sourcePath);
-      expect(stats.isDirectory()).toBe(true);
-      expect(stats.isSymbolicLink()).toBe(false);
-    }
-  );
+    const stats = await lstat(sourcePath);
+    expect(stats.isDirectory()).toBe(true);
+    expect(stats.isSymbolicLink()).toBe(false);
+  });
+
+  test('preserves a populated source when its requested target is missing', async () => {
+    await ensureProjectStructure('acme', 'widget');
+    const source = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(source, 'README.md'), 'foreign checkout');
+    await expect(
+      createProjectSourceSymlink('acme', 'widget', join(tempTarget, 'missing'))
+    ).rejects.toThrow();
+    expect(readFileSync(join(source, 'README.md'), 'utf8')).toBe('foreign checkout');
+  });
+
+  test('refuses a source path occupied by a regular file', async () => {
+    const source = getProjectSourcePath('acme', 'widget');
+    await mkdir(getProjectRoot('acme', 'widget'), { recursive: true });
+    await writeFile(source, 'operator file');
+    await expect(createProjectSourceSymlink('acme', 'widget', tempTarget)).rejects.toThrow(
+      'already contains'
+    );
+    expect(readFileSync(source, 'utf8')).toBe('operator file');
+  });
+
+  test('keeps a populated source when registering that directory itself', async () => {
+    await ensureProjectStructure('acme', 'widget');
+    const source = getProjectSourcePath('acme', 'widget');
+    await writeFile(join(source, 'README.md'), '# Hello');
+    await createProjectSourceSymlink('acme', 'widget', source);
+    expect((await lstat(source)).isDirectory()).toBe(true);
+  });
 
   test.skipIf(isWindows)(
     'replaces empty directory with symlink (ensureProjectStructure case)',

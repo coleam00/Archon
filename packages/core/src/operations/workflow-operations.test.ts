@@ -1,3 +1,10 @@
+// @archon-test-isolated
+import {
+  RUN_ACTIONS,
+  RunActionForbiddenError,
+  type RunAction,
+  type RunActor,
+} from './run-authorization';
 import {
   startNodeExecution,
   finishNodeExecution,
@@ -16,18 +23,19 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
-import type * as WorkflowDb from '../db/workflows';
-import type * as WorkflowEventDb from '../db/workflow-events';
-import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
-import type * as CleanupService from '../services/cleanup-service';
+import type { IWorkflowStore } from '@archon/workflows/store';
+import type { WorkflowOperationsDeps, WorkflowOperations } from './workflow-operations';
+import type { IIsolationStore } from '@archon/isolation';
 import { createServer } from 'node:net';
 import { runLiveOwnerPath, startRunLiveOwner } from '../services/run-live-owner';
 
 // ---------------------------------------------------------------------------
-// Mock DB modules before importing the module under test
+// Supplied persistence and host effects
 // ---------------------------------------------------------------------------
 
-const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(() => Promise.resolve(null));
+const operator: RunActor = { kind: 'operator' };
+
+const mockGetWorkflowRun = mock<IWorkflowStore['getWorkflowRun']>(() => Promise.resolve(null));
 const EMPTY_COUNTS = {
   all: 0,
   running: 0,
@@ -37,79 +45,43 @@ const EMPTY_COUNTS = {
   pending: 0,
   paused: 0,
 };
-const mockListDashboardRuns = mock<typeof WorkflowDb.listDashboardRuns>(() =>
+const mockListWorkflowRuns = mock<IWorkflowStore['listWorkflowRuns']>(() =>
   Promise.resolve({ runs: [], total: 0, counts: EMPTY_COUNTS })
 );
-const mockUpdateWorkflowRun = mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve());
-const mockCancelWorkflowRun = mock<typeof WorkflowDb.cancelWorkflowRun>(() =>
+const mockCancelWorkflowRun = mock<IWorkflowStore['cancelWorkflowRun']>(() =>
   Promise.resolve({ cancelled: true })
 );
 const mockCancelResumableRunsForConversation = mock<
-  typeof WorkflowDb.cancelResumableRunsForConversation
+  IWorkflowStore['cancelResumableRunsForConversation']
 >(() => Promise.resolve([]));
-const mockFindChildRuns = mock<typeof WorkflowDb.findChildRuns>(() => Promise.resolve([]));
-const mockGetRunAncestry = mock<typeof WorkflowDb.getRunAncestry>(() => Promise.resolve([]));
+const mockFindChildRuns = mock<IWorkflowStore['findChildRuns']>(() => Promise.resolve([]));
+const mockGetRunAncestry = mock<IWorkflowStore['getRunAncestry']>(() => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
 // resolveAndCancelApprovalGate = atomic resolve + cancel (reject terminal paths).
-const mockResolveApprovalGate = mock<typeof WorkflowDb.resolveApprovalGate>(() =>
+const mockResolveApprovalGate = mock<IWorkflowStore['resolveApprovalGate']>(() =>
   Promise.resolve({ resolved: true })
 );
-const mockResolveAndCancelApprovalGate = mock<typeof WorkflowDb.resolveAndCancelApprovalGate>(() =>
+const mockResolveAndCancelApprovalGate = mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() =>
   Promise.resolve({ resolved: true })
 );
 
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: mockGetWorkflowRun,
-  listDashboardRuns: mockListDashboardRuns,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
-  findChildRuns: mockFindChildRuns,
-  getRunAncestry: mockGetRunAncestry,
-  resolveApprovalGate: mockResolveApprovalGate,
-  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
-}));
+const mockDeleteWorkflowNodeSessions = mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() =>
+  Promise.resolve({ deleted: 0 })
+);
 
-const mockCreateWorkflowEvent = mock<typeof WorkflowEventDb.createWorkflowEvent>(() =>
+const mockReclaimContainerEnv = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(() =>
   Promise.resolve()
 );
 
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
-
-const mockDeleteWorkflowNodeSessions = mock<
-  typeof WorkflowNodeSessionDb.deleteWorkflowNodeSessions
->(() => Promise.resolve({ deleted: 0 }));
-
-mock.module('../db/workflow-node-sessions', () => ({
-  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
-}));
-
-// abandonWorkflow lazily imports cleanup-service to reclaim a container run's
-// resources (M2). Mock it so the dynamic import doesn't pull the docker chain.
-const mockReclaimContainerEnv = mock<typeof CleanupService.reclaimContainerEnv>(() =>
-  Promise.resolve()
-);
-mock.module('../services/cleanup-service', () => ({
-  reclaimContainerEnv: mockReclaimContainerEnv,
-}));
-
-// Capture the real class before mock.module replaces the module, so the mock
-// can re-export it without a hand-declared copy that would silently drift.
-import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
+import { DetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
 /** What the stop path reports when nothing listens at the run's endpoint. */
 function noOwnerAnswers(): Promise<never> {
-  return Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
+  return Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
 }
 const mockRequestDetachedRunStop =
   mock<typeof import('../services/run-owner-stop').requestDetachedRunStop>(noOwnerAnswers);
-mock.module('../services/run-owner-stop', () => ({
-  requestDetachedRunStop: mockRequestDetachedRunStop,
-  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
-}));
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -125,7 +97,63 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Import AFTER mocks
+const {
+  createWorkflowOperations,
+  AbandonOwnerNotStoppedError,
+  CancelRefusedError,
+  describeAbandonOwner,
+  assertAnswerable,
+  assertApprovable,
+  assertRejectable,
+  ChildRunRedirectError,
+  expectedGateForOccurrence,
+  StaleGateAnswerError,
+} = await import('./workflow-operations');
+const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
+const isolationStore: IIsolationStore = {
+  listActive: () => {
+    throw new Error('Unexpected isolation lookup');
+  },
+  getById: mock(async () => null),
+  findActiveByWorkflow: () => {
+    throw new Error('Unexpected isolation lookup');
+  },
+  create: () => {
+    throw new Error('Unexpected isolation creation');
+  },
+  updateStatus: () => {
+    throw new Error('Unexpected isolation update');
+  },
+  markWorktreeDestroyed: () => {
+    throw new Error('Unexpected isolation update');
+  },
+  updateMetadata: () => {
+    throw new Error('unused');
+  },
+  countActiveByCodebase: () => {
+    throw new Error('Unexpected isolation count');
+  },
+};
+const store: WorkflowOperationsDeps['store'] = {
+  signalWorkflowWait: mock(async () => ({ signaled: true })),
+  deleteWorkflowRun: mock(async () => {}),
+  getWorkflowRun: mockGetWorkflowRun,
+  listWorkflowRuns: mockListWorkflowRuns,
+  findWorkflowRunsByIdPrefix: async () => [],
+  cancelWorkflowRun: mockCancelWorkflowRun,
+  cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
+  findChildRuns: mockFindChildRuns,
+  getRunAncestry: mockGetRunAncestry,
+  resolveApprovalGate: mockResolveApprovalGate,
+  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  answerAttentionWait: async () => {
+    throw new Error('Unexpected answerAttentionWait');
+  },
+  labelAttentionWait: async () => {
+    throw new Error('Unexpected labelAttentionWait');
+  },
+  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
+};
 const {
   approveWorkflow,
   rejectWorkflow,
@@ -133,16 +161,19 @@ const {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
-  AbandonOwnerNotStoppedError,
   cancelWorkflow,
-  CancelRefusedError,
-  describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
-  assertApprovable,
-  assertRejectable,
-  ChildRunRedirectError,
-} = await import('./workflow-operations');
+} = createWorkflowOperations({
+  getUserRole: async () => undefined,
+  store,
+  hostStore: { isolation: isolationStore },
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  isRunOwnedByThisProcess,
+  isRunOwnerAnswering,
+  reclaimRunWorktree: async () => ({ warnings: [] }),
+  reclaimContainerEnv: mockReclaimContainerEnv,
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -150,6 +181,7 @@ const {
 
 function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -204,8 +236,6 @@ describe('approveWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
-    mockCreateWorkflowEvent.mockClear();
-    mockUpdateWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
@@ -221,7 +251,7 @@ describe('approveWorkflow', () => {
     // (R1 review finding): empty output, no structured_output field.
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
 
-    const result = await approveWorkflow('run-1', 'Looks good');
+    const result = await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     expect(result.type).toBe('approval_gate');
     expect(result.workflowName).toBe('test-workflow');
@@ -229,7 +259,6 @@ describe('approveWorkflow', () => {
 
     // Operations no longer writes events directly — node_completed + approval_received
     // ride the CAS transaction as its 3rd argument (#2146).
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
@@ -239,6 +268,8 @@ describe('approveWorkflow', () => {
           message: 'Please review',
           type: 'approval',
           resolved: 'approved',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         approval_response: 'approved',
         rejection_reason: '',
@@ -253,9 +284,15 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { decision: 'approved', comment: 'Looks good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Looks good',
+          },
         },
-      ]
+      ],
+      undefined
     );
 
     // Anonymous telemetry: binary resolution captured exactly once
@@ -297,10 +334,15 @@ describe('approveWorkflow', () => {
     try {
       mockGetWorkflowRun.mockResolvedValueOnce(run);
       mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
-      await expect(approveWorkflow('run-1')).rejects.toThrow('already resolved');
+      await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
+        'already resolved'
+      );
       expect(observed).toHaveLength(0);
       mockGetWorkflowRun.mockResolvedValueOnce(run);
-      await approveWorkflow('run-1');
+      // A completion carrying execution metadata must not take the metadata-less
+      // path, so clear the file-wide logger and prove the warning stays off it.
+      mockLogger.warn.mockClear();
+      await approveWorkflow('run-1', undefined, operator, { via: 'cli' });
       const row = mockResolveApprovalGate.mock.calls.at(-1)?.[2][0];
       expect(row).toMatchObject({
         step_name: 'outer.review',
@@ -319,6 +361,10 @@ describe('approveWorkflow', () => {
           path: 'outer.review',
         },
       });
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'workflow.gate_transcript_metadata_missing'
+      );
     } finally {
       unsubscribe();
     }
@@ -339,7 +385,7 @@ describe('approveWorkflow', () => {
       })
     );
 
-    await approveWorkflow('run-1', 'Looks good');
+    await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -372,7 +418,7 @@ describe('approveWorkflow', () => {
       })
     );
 
-    await approveWorkflow('run-1', 'looks good');
+    await approveWorkflow('run-1', 'looks good', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -397,7 +443,7 @@ describe('approveWorkflow', () => {
       })
     );
 
-    await approveWorkflow('run-1', 'Looks good');
+    await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -420,12 +466,11 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await approveWorkflow('run-1', 'fix the tests');
+    const result = await approveWorkflow('run-1', 'fix the tests', operator, { via: 'cli' });
 
     expect(result.type).toBe('interactive_loop');
 
     // Operations no longer writes events directly.
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // Only approval_received rides the CAS — NOT node_completed (the executor
     // writes that on the real completion signal / at resume).
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -443,6 +488,8 @@ describe('approveWorkflow', () => {
           type: 'interactive_loop',
           iteration: 2,
           resolved: 'approved',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         loop_user_input: 'fix the tests',
         // Real feedback ⇒ the resumed loop iterates (#2074)
@@ -452,9 +499,16 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'iterate',
-          data: { decision: 'approved', comment: 'fix the tests', iteration: 2 },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'fix the tests',
+            iteration: 2,
+          },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -473,7 +527,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await approveWorkflow('run-1');
+    await approveWorkflow('run-1', undefined, operator, { via: 'cli' });
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
@@ -486,6 +540,8 @@ describe('approveWorkflow', () => {
           completionSignaled: true,
           signaledOutput: 'REPORT',
           resolved: 'approved',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         // The recorded comment still defaults to 'Approved' (events/$LOOP_USER_INPUT
         // for non-signaled iterate paths) — only the boolean sees the raw undefined.
@@ -496,9 +552,16 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'iterate',
-          data: { decision: 'approved', comment: 'Approved', iteration: 1 },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Approved',
+            iteration: 1,
+          },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -515,7 +578,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await approveWorkflow('run-1', '   ');
+    await approveWorkflow('run-1', '   ', operator, { via: 'cli' });
 
     const casMetadata = mockResolveApprovalGate.mock.calls[0][1] as Record<string, unknown>;
     expect(casMetadata.loop_feedback_given).toBe(false);
@@ -537,14 +600,12 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow(
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
       'already approved and is awaiting resume'
     );
     // Fast-path: the in-memory read blocks before any CAS / events / telemetry
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
-    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('concurrent loser (CAS miss) writes NO events or telemetry (#2113)', async () => {
@@ -553,20 +614,18 @@ describe('approveWorkflow', () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
 
-    await expect(approveWorkflow('run-1', 'ship it')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+    await expect(approveWorkflow('run-1', 'ship it', operator, { via: 'cli' })).rejects.toThrow(
+      'already resolved or is no longer paused at the expected gate'
     );
 
     // The CAS was attempted (unlike the fast-path guard) but lost — no side effects.
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
   test('bare gate with captureResponse but no decisionsAuthored keeps plain-text output (R2 fix — #2707)', async () => {
     // captureResponse with no `decisionsAuthored` (the shape every gate using
-    // capture_response before #2707 step 1 has — e.g. the bundled
-    // archon-interactive-prd workflow) must keep functioning exactly as
+    // capture_response before #2707 step 1 has) must keep functioning exactly as
     // before this PR: it is NOT a new-mode gate just because on_reject is
     // also absent. Reviewed regression (R2): this used to wrongly emit JSON.
     const run = makePausedRun({
@@ -581,7 +640,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await approveWorkflow('run-1', 'My review notes');
+    await approveWorkflow('run-1', 'My review notes', operator, { via: 'cli' });
 
     // The node_output rides the CAS events (#2146), not a separate event write.
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -607,7 +666,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await approveWorkflow('run-1', 'My review notes');
+    await approveWorkflow('run-1', 'My review notes', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -630,7 +689,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await approveWorkflow('run-1', 'My review notes');
+    await approveWorkflow('run-1', 'My review notes', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -641,7 +700,7 @@ describe('approveWorkflow', () => {
   test('throws on non-paused run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow(
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
       "Cannot approve run with status 'running'"
     );
   });
@@ -649,13 +708,17 @@ describe('approveWorkflow', () => {
   test('throws on missing approval context', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: {} }));
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow('missing approval context');
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
+      'missing approval context'
+    );
   });
 
   test('throws on run not found', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(null);
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow('Workflow run not found: run-1');
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
+      'Workflow run not found: run-1'
+    );
   });
 
   test('approves container write-back gate — records approval_response, NO node_completed', async () => {
@@ -666,7 +729,7 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await approveWorkflow('run-1');
+    const result = await approveWorkflow('run-1', undefined, operator, { via: 'cli' });
 
     expect(result.type).toBe('approval_gate');
     // The resumed executor's write-back gate reads approval_response to APPLY.
@@ -678,6 +741,8 @@ describe('approveWorkflow', () => {
           message: '7 files changed',
           type: 'writeback',
           resolved: 'approved',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         approval_response: 'approved',
       },
@@ -685,9 +750,16 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: '__writeback__',
-          data: { decision: 'approved', comment: 'Approved', gate: 'writeback' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Approved',
+            gate: 'writeback',
+          },
         },
-      ]
+      ],
+      undefined
     );
     // No node_completed — there is no DAG node behind the write-back gate.
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -707,13 +779,12 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow(
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
       /waiting on sub-run child-run-9.*approve or reject the child run instead/i
     );
     // Nothing resolved, nothing stamped — a fall-through here would write a bogus
     // node_completed for the workflow node and orphan the paused child.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 
   test('an unrecognized gate type fails loudly instead of resolving as a plain approval (#2489)', async () => {
@@ -732,7 +803,9 @@ describe('approveWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(approveWorkflow('run-1')).rejects.toThrow(/unrecognized gate type 'bogus-reason'/);
+    await expect(approveWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
+      /unrecognized gate type 'bogus-reason'/
+    );
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 });
@@ -741,8 +814,6 @@ describe('rejectWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
-    mockCreateWorkflowEvent.mockClear();
-    mockUpdateWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveAndCancelApprovalGate.mockClear();
@@ -762,7 +833,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1', 'needs more tests');
+    const result = await rejectWorkflow('run-1', 'needs more tests', operator, { via: 'cli' });
 
     expect(result.cancelled).toBe(false);
     expect(result.workflowName).toBe('test-workflow');
@@ -779,6 +850,8 @@ describe('rejectWorkflow', () => {
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         rejection_reason: 'needs more tests',
         rejection_count: 1,
@@ -787,9 +860,15 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { decision: 'rejected', reason: 'needs more tests' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs more tests',
+          },
         },
-      ]
+      ],
+      undefined
     );
 
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
@@ -810,14 +889,12 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(rejectWorkflow('run-1', 'again')).rejects.toThrow(
+    await expect(rejectWorkflow('run-1', 'again', operator, { via: 'cli' })).rejects.toThrow(
       'already rejected and is awaiting resume'
     );
     // Fast-path: the in-memory read blocks before any CAS / events / cancel
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
-    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -836,12 +913,11 @@ describe('rejectWorkflow', () => {
     // Fast-path passes (gate reads unresolved) but the atomic CAS is lost.
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
 
-    await expect(rejectWorkflow('run-1', 'needs work')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+    await expect(rejectWorkflow('run-1', 'needs work', operator, { via: 'cli' })).rejects.toThrow(
+      'already resolved or is no longer paused at the expected gate'
     );
 
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -860,7 +936,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1', 'still broken');
+    const result = await rejectWorkflow('run-1', 'still broken', operator, { via: 'cli' });
 
     expect(result.cancelled).toBe(true);
     expect(result.maxAttemptsReached).toBe(true);
@@ -874,10 +950,16 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { decision: 'rejected', reason: 'still broken' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still broken',
+          },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -888,7 +970,7 @@ describe('rejectWorkflow', () => {
     // pre-#2707 cancel-on-reject-without-on_reject behavior.
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
 
-    const result = await rejectWorkflow('run-1', 'no good');
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
 
     expect(result.cancelled).toBe(true);
     expect(result.maxAttemptsReached).toBe(false);
@@ -898,10 +980,16 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { decision: 'rejected', reason: 'no good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'no good',
+          },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -926,7 +1014,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1', 'needs changes');
+    const result = await rejectWorkflow('run-1', 'needs changes', operator, { via: 'cli' });
 
     expect(result.cancelled).toBe(true);
     expect(result.newMode).toBe(false);
@@ -948,7 +1036,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1', 'needs changes');
+    const result = await rejectWorkflow('run-1', 'needs changes', operator, { via: 'cli' });
 
     // Unlike the legacy on_reject path, there is no staging or attempt cap —
     // this is an ordinary node completion, so the run stays paused/resumable
@@ -967,6 +1055,8 @@ describe('rejectWorkflow', () => {
           decisions: [{ id: 'approve' }, { id: 'reject' }],
           decisionsAuthored: true,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
       },
       [
@@ -982,9 +1072,15 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { decision: 'rejected', reason: 'needs changes' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs changes',
+          },
         },
-      ]
+      ],
+      undefined
     );
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
@@ -1003,7 +1099,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1', '');
+    const result = await rejectWorkflow('run-1', '', operator, { via: 'cli' });
 
     expect(result.newMode).toBe(true);
     expect(result.cancelled).toBe(false);
@@ -1034,7 +1130,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await rejectWorkflow('run-1', 'needs changes');
+    await rejectWorkflow('run-1', 'needs changes', operator, { via: 'cli' });
 
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -1043,38 +1139,16 @@ describe('rejectWorkflow', () => {
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
   });
 
-  test('new-mode approve-only gate rejects — no reject decision declared, cancels (no unreachable decision)', async () => {
-    const run = makePausedRun({
-      metadata: {
-        approval: {
-          nodeId: 'review',
-          message: 'Please review',
-          type: 'approval',
-          decisions: [{ id: 'approve' }],
-          decisionsAuthored: true,
-        },
-      },
-    });
-    mockGetWorkflowRun.mockResolvedValueOnce(run);
-
-    const result = await rejectWorkflow('run-1', 'no good');
-
-    expect(result.cancelled).toBe(true);
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-  });
-
   test('terminal reject concurrent loser (CAS miss) writes NO event or telemetry (#2113)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
     // No onRejectPrompt ⇒ the atomic resolve-and-cancel CAS is the guard.
     mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
 
-    await expect(rejectWorkflow('run-1', 'no good')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+    await expect(rejectWorkflow('run-1', 'no good', operator, { via: 'cli' })).rejects.toThrow(
+      'already resolved or is no longer paused at the expected gate'
     );
 
     expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
@@ -1086,7 +1160,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    const result = await rejectWorkflow('run-1');
+    const result = await rejectWorkflow('run-1', undefined, operator, { via: 'cli' });
 
     // The run stays resumable so the resume DISCARDS the overlay + completes.
     expect(result.cancelled).toBe(false);
@@ -1100,6 +1174,8 @@ describe('rejectWorkflow', () => {
           message: '3 files changed',
           type: 'writeback',
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         approval_response: 'rejected',
       },
@@ -1107,16 +1183,22 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: '__writeback__',
-          data: { decision: 'rejected', gate: 'writeback' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            gate: 'writeback',
+          },
         },
-      ]
+      ],
+      undefined
     );
   });
 
   test('throws on non-paused run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
-    await expect(rejectWorkflow('run-1')).rejects.toThrow(
+    await expect(rejectWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
       "Cannot reject run with status 'completed'"
     );
   });
@@ -1134,7 +1216,7 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(rejectWorkflow('run-1')).rejects.toThrow(
+    await expect(rejectWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
       /waiting on sub-run child-run-9.*reject the child run instead/i
     );
     // A fall-through would cancel the parent and silently orphan the paused child.
@@ -1160,7 +1242,9 @@ describe('rejectWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await expect(rejectWorkflow('run-1')).rejects.toThrow(/unrecognized gate type 'bogus-reason'/);
+    await expect(rejectWorkflow('run-1', undefined, operator, { via: 'cli' })).rejects.toThrow(
+      /unrecognized gate type 'bogus-reason'/
+    );
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
@@ -1189,20 +1273,29 @@ describe('gate decisions in the run transcript', () => {
     await removeTempTree(home);
   });
 
-  async function decisionRows(): Promise<Record<string, unknown>[]> {
+  async function transcriptRows(): Promise<Record<string, unknown>[]> {
     const path = join(root, 'logs', 'run-1.jsonl');
     if (!existsSync(path)) return [];
     return (await readFile(path, 'utf-8'))
       .trim()
       .split('\n')
-      .map(line => JSON.parse(line) as Record<string, unknown>)
-      .filter(row => row.type === 'gate_decision');
+      .map((line): Record<string, unknown> => {
+        const row: unknown = JSON.parse(line);
+        if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+          throw new Error(`transcript line is not a JSON object: ${line}`);
+        }
+        return Object.fromEntries(Object.entries(row));
+      });
+  }
+
+  async function decisionRows(): Promise<Record<string, unknown>[]> {
+    return (await transcriptRows()).filter(row => row.type === 'gate_decision');
   }
 
   test('an approval writes one decision row with the comment the DB event stores', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
 
-    await approveWorkflow('run-1', 'Looks good');
+    await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     const rows = await decisionRows();
     expect(rows).toHaveLength(1);
@@ -1220,7 +1313,7 @@ describe('gate decisions in the run transcript', () => {
     // transcript record of why it stopped.
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
 
-    await rejectWorkflow('run-1', 'wrong approach');
+    await rejectWorkflow('run-1', 'wrong approach', operator, { via: 'cli' });
 
     const rows = await decisionRows();
     expect(rows).toHaveLength(1);
@@ -1241,7 +1334,7 @@ describe('gate decisions in the run transcript', () => {
       })
     );
 
-    await rejectWorkflow('run-1');
+    await rejectWorkflow('run-1', undefined, operator, { via: 'cli' });
 
     const rows = await decisionRows();
     expect(rows).toHaveLength(1);
@@ -1265,7 +1358,7 @@ describe('gate decisions in the run transcript', () => {
       })
     );
 
-    await respondToWorkflow('run-1', 'revise', 'tighten the tests');
+    await respondToWorkflow('run-1', 'revise', 'tighten the tests', operator, { via: 'cli' });
 
     const rows = await decisionRows();
     expect(rows).toHaveLength(1);
@@ -1282,7 +1375,7 @@ describe('gate decisions in the run transcript', () => {
     mockLogger.warn.mockClear();
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: null }));
 
-    await approveWorkflow('run-1', 'Looks good');
+    await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
 
     expect(await decisionRows()).toEqual([]);
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -1295,11 +1388,32 @@ describe('gate decisions in the run transcript', () => {
     );
   });
 
+  test('a gate paused before execution metadata existed skips its completion row and says so', async () => {
+    // The gate decision still reaches the transcript, so a missing completion row with
+    // no log would leave an operator no way to know the approval was never completed.
+    mockLogger.warn.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+
+    await approveWorkflow('run-1', 'Looks good', operator, { via: 'cli' });
+
+    // Unfiltered: the decision row is the only thing this resolution may write, so
+    // "the completion row was skipped" is a claim about the whole transcript.
+    const rows = await transcriptRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ type: 'gate_decision', step: 'review' });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { runId: 'run-1', step: 'review' },
+      'workflow.gate_transcript_metadata_missing'
+    );
+  });
+
   test('a resolution that loses the race writes no decision row', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
 
-    await expect(approveWorkflow('run-1', 'late')).rejects.toThrow(/already resolved/);
+    await expect(approveWorkflow('run-1', 'late', operator, { via: 'cli' })).rejects.toThrow(
+      /already resolved/
+    );
 
     expect(await decisionRows()).toEqual([]);
   });
@@ -1311,6 +1425,100 @@ describe('respondToWorkflow', () => {
     mockGetWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveApprovalGate.mockResolvedValue({ resolved: true });
+  });
+
+  test.each(['approve', 'reject'])(
+    'refuses undeclared %s through both response and dedicated operations without writes',
+    async decision => {
+      const run = makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Choose',
+            type: 'approval',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      });
+      mockGetWorkflowRun.mockResolvedValue(run);
+      mockResolveAndCancelApprovalGate.mockClear();
+      const before = structuredClone(run);
+      const dedicated = decision === 'approve' ? approveWorkflow : rejectWorkflow;
+      for (const respond of [
+        () => dedicated(run.id, 'feedback', operator, { via: 'cli' }),
+        () => respondToWorkflow(run.id, decision, 'feedback', operator, { via: 'cli' }),
+      ]) {
+        await expect(respond()).rejects.toThrow(
+          `does not declare decision '${decision}'. Declared decisions: accept, revise.`
+        );
+        expect(run).toEqual(before);
+        expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+        expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+        expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  test.each([{ decisions: undefined }, { decisions: [] }])(
+    'malformed authored vocabularies cannot fall through to legacy cancellation (%j)',
+    async ({ decisions }) => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              nodeId: 'review',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions,
+            },
+          },
+        })
+      );
+      mockResolveAndCancelApprovalGate.mockClear();
+      await expect(rejectWorkflow('run-1', 'Stop', operator, { via: 'cli' })).rejects.toThrow(
+        'malformed authored decisions'
+      );
+      await expect(
+        respondToWorkflow('run-1', 'reject', 'Stop', operator, { via: 'cli' })
+      ).rejects.toThrow('malformed authored decisions');
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    }
+  );
+
+  test('resolves a declared custom decision without approve in the vocabulary', async () => {
+    mockResolveAndCancelApprovalGate.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Choose',
+            type: 'approval',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      })
+    );
+    await respondToWorkflow('run-1', 'accept', 'Use this plan', operator, { via: 'cli' });
+    expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
+    const call = mockResolveApprovalGate.mock.calls[0];
+    if (!call) throw new Error('Expected gate resolution');
+    expect(call[2]).toContainEqual(
+      expect.objectContaining({
+        event_type: 'node_completed',
+        step_name: 'review',
+        data: expect.objectContaining({
+          structured_output: { decision: 'accept', text: 'Use this plan' },
+          node_output: JSON.stringify({ decision: 'accept', text: 'Use this plan' }),
+        }),
+      })
+    );
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 
   test('resolves a custom decision on an escalated body-terminal-gate pause — node_completed lands under the namespaced <nodeId>.<bodyGateId> step_name (#2707 step 3)', async () => {
@@ -1329,7 +1537,7 @@ describe('respondToWorkflow', () => {
       })
     );
 
-    await respondToWorkflow('run-1', 'revise', 'please improve X');
+    await respondToWorkflow('run-1', 'revise', 'please improve X', operator, { via: 'cli' });
 
     const call = mockResolveApprovalGate.mock.calls[0];
     expect(call).toBeDefined();
@@ -1350,16 +1558,231 @@ describe('respondToWorkflow', () => {
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
   });
 
+  const declaredGate = (pauseId: string): WorkflowRun =>
+    makePausedRun({
+      user_id: 'user-who-answered',
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          pauseId,
+          message: 'Choose',
+          type: 'approval',
+          decisionsAuthored: true,
+          decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+        },
+      },
+    });
+
+  test.each(['approve', 'reject', 'revise'])(
+    'a %s answer records the surface it came through and when, never who answered',
+    async decision => {
+      mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-one'));
+      await respondToWorkflow(
+        'run-1',
+        decision,
+        'because',
+        { kind: 'user', userId: 'user-who-answered' },
+        { via: 'slack' }
+      );
+      const [, metadata, events] = mockResolveApprovalGate.mock.calls[0] ?? [];
+      const approval = (metadata as { approval: Record<string, unknown> }).approval;
+      expect(approval).toMatchObject({ answeredVia: 'slack' });
+      expect(Date.parse(String(approval.answeredAt))).not.toBeNaN();
+      expect(events?.find(e => e.event_type === 'approval_received')?.data).toMatchObject({
+        via: 'slack',
+        occurrence: 'pause-one',
+      });
+      expect(JSON.stringify([metadata, events])).not.toContain('user-who-answered');
+    }
+  );
+
+  test('a malformed surface id is refused before anything is written', async () => {
+    mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-one'));
+    await expect(
+      respondToWorkflow('run-1', 'revise', undefined, operator, { via: 'Not A Surface' })
+    ).rejects.toThrow();
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('a race lost after the occurrence check still names the occurrence the run is at now', async () => {
+    const stale = declaredGate('pause-one');
+    // The operation reads the run at pause-one; by the time the CAS runs it has moved on.
+    mockGetWorkflowRun.mockResolvedValueOnce(stale);
+    mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-two'));
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+    const expectedGate = expectedGateForOccurrence(stale, 'pause-one');
+    expect(expectedGate).toEqual({ nodeId: 'review', pauseId: 'pause-one' });
+    await expect(
+      respondToWorkflow('run-1', 'revise', undefined, operator, { via: 'cli', expectedGate })
+    ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
+    expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+  });
+
+  test('a stale occurrence is reported before the current gate validates the decision', async () => {
+    // The run moved on from a gate declaring 'revise' to one that does not. The answer
+    // was meant for the old pause, so the caller must hear that, not "undeclared decision".
+    const current = makePausedRun({
+      user_id: 'user-who-answered',
+      metadata: {
+        approval: {
+          nodeId: 'later',
+          pauseId: 'pause-two',
+          message: 'Choose',
+          type: 'approval',
+          decisionsAuthored: true,
+          decisions: [{ id: 'approve' }, { id: 'accept' }],
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValue(current);
+    const expectedGate = { nodeId: 'review', pauseId: 'pause-one' };
+    for (const decision of ['revise', 'approve', 'reject']) {
+      await expect(
+        respondToWorkflow('run-1', decision, undefined, operator, { via: 'cli', expectedGate })
+      ).rejects.toThrow("It is now awaiting occurrence 'pause-two'.");
+    }
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('a malformed surface is refused before a terminal reject cancels the run', async () => {
+    mockGetWorkflowRun.mockResolvedValue(makePausedRun());
+    await expect(
+      rejectWorkflow('run-1', 'no', operator, { via: 'Not A Surface' })
+    ).rejects.toThrow();
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('a legacy occurrence names the gate by node, as run-attention reports it', () => {
+    expect(expectedGateForOccurrence(makePausedRun(), 'legacy:review')).toBe('review');
+  });
+
+  test.each(['approve', 'reject', 'revise'])(
+    'passes the expected node to the atomic resolver for a %s button',
+    async decision => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              // Matches the expected gate when read, so the CAS is what loses the race.
+              nodeId: 'earlier',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            },
+          },
+        })
+      );
+      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      await expect(
+        respondToWorkflow('run-1', decision, undefined, operator, {
+          via: 'cli',
+          expectedGate: 'earlier',
+        })
+      ).rejects.toThrow('no longer paused at the expected gate');
+      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toBe('earlier');
+    }
+  );
+
+  test('a lost race stays a stale answer when the run cannot be re-read', async () => {
+    mockGetWorkflowRun
+      .mockResolvedValueOnce(makePausedRun())
+      .mockRejectedValueOnce(new Error('connection reset'));
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+    await expect(
+      approveWorkflow('run-1', undefined, operator, { via: 'cli', expectedGate: 'review' })
+    ).rejects.toBeInstanceOf(StaleGateAnswerError);
+  });
+
   test('delegates approve/reject to the dedicated functions unchanged', async () => {
     mockGetWorkflowRun.mockResolvedValue(makePausedRun());
-    await respondToWorkflow('run-1', 'approve', 'looks good');
+    await respondToWorkflow('run-1', 'approve', 'looks good', operator, { via: 'cli' });
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 });
 
+describe('answer text defaults', () => {
+  const newModeGate = (): WorkflowRun =>
+    makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Choose',
+          type: 'approval',
+          decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+
+  async function answerWith(
+    decision: 'approve' | 'reject' | 'revise',
+    text = '   '
+  ): Promise<Array<Record<string, unknown>>> {
+    mockGetWorkflowRun.mockResolvedValueOnce(newModeGate());
+    await respondToWorkflow('run-1', decision, text, operator, { via: 'cli' });
+    const call = mockResolveApprovalGate.mock.calls.at(-1);
+    if (!call) throw new Error('Expected resolveApprovalGate to be called');
+    return call[2] as unknown[] as Array<Record<string, unknown>>;
+  }
+
+  const recorded = (events: Array<Record<string, unknown>>, type: string) =>
+    events.find(e => e.event_type === type)?.data as Record<string, unknown> | undefined;
+
+  test('counts as no text on approve, reject and respond alike', async () => {
+    const approve = await answerWith('approve');
+    expect(recorded(approve, 'node_completed')?.structured_output).toEqual({
+      decision: 'approve',
+      text: '',
+    });
+    expect(recorded(approve, 'approval_received')?.comment).toBe('Approved');
+
+    const reject = await answerWith('reject');
+    expect(recorded(reject, 'node_completed')?.structured_output).toEqual({
+      decision: 'reject',
+      text: 'Rejected',
+    });
+    expect(recorded(reject, 'approval_received')?.reason).toBe('Rejected');
+
+    const revise = await answerWith('revise');
+    expect(recorded(revise, 'node_completed')?.structured_output).toEqual({
+      decision: 'revise',
+      text: '',
+    });
+    expect(recorded(revise, 'approval_received')?.comment).toBe('revise');
+  });
+
+  test('keeps explicit text verbatim on approve, reject and respond', async () => {
+    const text = '  too risky\n';
+
+    const approve = await answerWith('approve', text);
+    expect(recorded(approve, 'node_completed')?.structured_output).toEqual({
+      decision: 'approve',
+      text,
+    });
+    expect(recorded(approve, 'approval_received')?.comment).toBe(text);
+
+    const reject = await answerWith('reject', text);
+    expect(recorded(reject, 'node_completed')?.structured_output).toEqual({
+      decision: 'reject',
+      text,
+    });
+    expect(recorded(reject, 'approval_received')?.reason).toBe(text);
+
+    const revise = await answerWith('revise', text);
+    expect(recorded(revise, 'node_completed')?.structured_output).toEqual({
+      decision: 'revise',
+      text,
+    });
+    expect(recorded(revise, 'approval_received')?.comment).toBe(text);
+  });
+});
+
 describe('assertApprovable / assertRejectable — shared precondition gate', () => {
   const baseRun = {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     status: 'paused',
     workflow_name: 'assist',
@@ -1470,12 +1893,12 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       const error = thrown(verb);
       expect({
         parentRunId: error.parentRunId,
-        childRunId: error.childRunId,
+        childRunIds: error.childRunIds,
         nodeId: error.nodeId,
         action: error.action,
       }).toEqual({
         parentRunId: 'run-1',
-        childRunId: 'child-9',
+        childRunIds: ['child-9'],
         nodeId: 'sub',
         action: verb,
       });
@@ -1489,6 +1912,32 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       expect(onSlack).not.toContain('archon workflow ');
       // A surface with no spelling of its own still goes through the one mechanism.
       expect(error.messageFor({})).toContain(`/workflow ${verb} child-9`);
+    }
+  });
+
+  test('a fan-out parent redirects approve, reject and answer to every child it waits on', () => {
+    const fanOut = withMeta({
+      approval: {
+        nodeId: 'work',
+        message: 'waiting',
+        type: 'fan_out',
+        childRunIds: ['kid-0', 'kid-2'],
+        unspawnedItems: 0,
+      },
+    });
+    for (const assertFn of [assertApprovable, assertRejectable, assertAnswerable]) {
+      let error: unknown;
+      try {
+        assertFn(fanOut);
+      } catch (thrown) {
+        error = thrown;
+      }
+      if (!(error instanceof ChildRunRedirectError)) throw new Error('expected a redirect');
+      expect(error.childRunIds).toEqual(['kid-0', 'kid-2']);
+      expect(error.message).toContain("waiting on sub-runs kid-0, kid-2 ('fan_out' node 'work')");
+      const spelled = error.messageFor({});
+      expect(spelled).toContain(`/workflow ${error.action} kid-0`);
+      expect(spelled).toContain(`/workflow ${error.action} kid-2`);
     }
   });
 
@@ -1532,7 +1981,27 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
-  test('an action-required wait is neither approvable nor rejectable', () => {
+  test('a usage-limit wait is refused by both verbs', () => {
+    // Rejecting it would cancel the run under an approval audit trail for a gate
+    // that never existed; cancel and abandon are the ways to stop it.
+    const waiting = {
+      wait: {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince: '2026-08-28T10:00:00.000Z',
+        resumeAt: '2026-08-28T15:00:00.000Z',
+      },
+    };
+    for (const assertFn of [assertApprovable, assertRejectable]) {
+      expect(() => assertFn(withMeta(waiting))).toThrow(
+        'Run run-1 is not at a gate: it hit a provider usage or rate limit and tries again by itself at 2026-08-28T15:00:00.000Z'
+      );
+    }
+  });
+
+  test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {
         owner: 'node',
@@ -1543,15 +2012,14 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       },
     };
     for (const assertFn of [assertApprovable, assertRejectable]) {
-      expect(() => assertFn(withMeta(waiting))).toThrow('Complete it, then resume the run');
-      expect(() => assertFn(withMeta(waiting))).toThrow('abandon it');
+      expect(() => assertFn(withMeta(waiting))).toThrow('paused at an attention wait');
     }
   });
 });
 
 describe('getWorkflowStatus', () => {
   beforeEach(() => {
-    mockListDashboardRuns.mockClear();
+    mockListWorkflowRuns.mockClear();
   });
 
   test('returns running and paused runs', async () => {
@@ -1559,7 +2027,7 @@ describe('getWorkflowStatus', () => {
       makeDashboardRun({ status: 'running', active_nodes: ['plan', 'implement'] }),
       makeDashboardRun({ id: 'run-2', status: 'paused' }),
     ];
-    mockListDashboardRuns.mockResolvedValueOnce({
+    mockListWorkflowRuns.mockResolvedValueOnce({
       runs,
       total: 2,
       counts: { ...EMPTY_COUNTS, all: 2, running: 1, paused: 1 },
@@ -1569,14 +2037,14 @@ describe('getWorkflowStatus', () => {
 
     expect(result.runs).toHaveLength(2);
     expect(result.runs[0]?.active_nodes).toEqual(['plan', 'implement']);
-    expect(mockListDashboardRuns).toHaveBeenCalledWith({
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
       status: ['running', 'paused'],
       limit: 50,
     });
   });
 
   test('passes an explicit codebase scope to the active-run query', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce({
+    mockListWorkflowRuns.mockResolvedValueOnce({
       runs: [],
       total: 0,
       counts: EMPTY_COUNTS,
@@ -1584,7 +2052,7 @@ describe('getWorkflowStatus', () => {
 
     await getWorkflowStatus({ codebaseId: 'cb-project-a' });
 
-    expect(mockListDashboardRuns).toHaveBeenCalledWith({
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
       status: ['running', 'paused'],
       limit: 50,
       codebaseId: 'cb-project-a',
@@ -1600,14 +2068,14 @@ describe('resumeWorkflow', () => {
   test('returns run when status is resumable', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
 
-    const run = await resumeWorkflow('run-1');
+    const run = await resumeWorkflow('run-1', operator);
     expect(run.id).toBe('run-1');
   });
 
   test('throws on non-resumable status', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
-    await expect(resumeWorkflow('run-1')).rejects.toThrow(
+    await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
       "Cannot resume run with status 'completed'"
     );
   });
@@ -1615,7 +2083,7 @@ describe('resumeWorkflow', () => {
   test('throws wrapped message and logs when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 
-    await expect(resumeWorkflow('run-1')).rejects.toThrow(
+    await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
       'Failed to look up workflow run run-1: connection reset'
     );
     expect(mockLogger.error).toHaveBeenCalledWith(
@@ -1641,7 +2109,10 @@ describe('abandonWorkflow', () => {
   test('cancels a non-terminal run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
 
-    const { run, cancelled, cascadeFailures, blockedParentRunId } = await abandonWorkflow('run-1');
+    const { run, cancelled, cascadeFailures, blockedParentRunId } = await abandonWorkflow(
+      'run-1',
+      operator
+    );
     expect(run.id).toBe('run-1');
     expect(cancelled).toBe(true);
     expect(cascadeFailures).toBe(0);
@@ -1667,7 +2138,7 @@ describe('abandonWorkflow', () => {
       return Promise.resolve([]);
     });
 
-    await abandonWorkflow('run-1');
+    await abandonWorkflow('run-1', operator);
 
     const cancelled = mockCancelWorkflowRun.mock.calls.map(c => c[0]);
     expect(cancelled).toContain('run-1'); // the parent itself
@@ -1694,7 +2165,7 @@ describe('abandonWorkflow', () => {
       id === 'child-b' ? Promise.reject(new Error('db blip')) : Promise.resolve({ cancelled: true })
     );
 
-    const { cascadeFailures } = await abandonWorkflow('run-1');
+    const { cascadeFailures } = await abandonWorkflow('run-1', operator);
 
     expect(cascadeFailures).toBe(1);
     const cancelled = mockCancelWorkflowRun.mock.calls.map(c => c[0]);
@@ -1713,13 +2184,13 @@ describe('abandonWorkflow', () => {
       Promise.resolve([makePausedRun({ id: `${parentId}::c`, status: 'running' })])
     );
 
-    const { cascadeFailures } = await abandonWorkflow('run-1');
+    const { cascadeFailures } = await abandonWorkflow('run-1', operator);
 
     // Unreached descendants surface via the failures channel.
     expect(cascadeFailures).toBeGreaterThan(0);
     // The walk was bounded (never looped forever) — findChildRuns was called a
     // finite number of times despite the infinite chain.
-    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(501);
+    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(1001);
     expect(mockFindChildRuns.mock.calls.length).toBeGreaterThan(1);
   });
 
@@ -1747,13 +2218,38 @@ describe('abandonWorkflow', () => {
       Promise.resolve(id === 'child-1' ? child : id === 'parent-1' ? parent : null)
     );
 
-    const { blockedParentRunId } = await abandonWorkflow('child-1');
+    const { blockedParentRunId } = await abandonWorkflow('child-1', operator);
     expect(blockedParentRunId).toBe('parent-1');
 
     // Parent paused on a DIFFERENT child → not blocked on us → null.
     (parent.metadata as { approval: { childRunId: string } }).approval.childRunId = 'other-child';
-    const second = await abandonWorkflow('child-1');
+    const second = await abandonWorkflow('child-1', operator);
     expect(second.blockedParentRunId).toBeNull();
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
+  });
+
+  test('surfaces the parent run id when abandoning one of the children a fan-out waits on', async () => {
+    const child = makePausedRun({ id: 'child-2', status: 'paused', parent_run_id: 'parent-1' });
+    const parent = makePausedRun({
+      id: 'parent-1',
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'work',
+          message: 'Waiting on sub-runs',
+          type: 'fan_out',
+          childRunIds: ['child-1', 'child-2'],
+          unspawnedItems: 0,
+        },
+      },
+    });
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(id === 'child-2' ? child : id === 'parent-1' ? parent : null)
+    );
+
+    const { blockedParentRunId } = await abandonWorkflow('child-2', operator);
+    expect(blockedParentRunId).toBe('parent-1');
     mockGetWorkflowRun.mockReset();
     mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
   });
@@ -1762,10 +2258,8 @@ describe('abandonWorkflow', () => {
   test('does not cascade when the parent cancel loses the race', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
     mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
-    const result = await abandonWorkflow('run-1');
-    // findChildRuns is never consulted (no cascade) when the CAS was lost.
-    expect(result.cancelled).toBe(false);
-    expect(mockFindChildRuns).not.toHaveBeenCalled();
+    await expect(abandonWorkflow('run-1', operator)).rejects.toThrow('changed before abandonment');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
   // M2 — abandoning a CONTAINER run reclaims its container + volume in the SHARED op
@@ -1777,13 +2271,13 @@ describe('abandonWorkflow', () => {
         metadata: { isolation: 'container', isolation_env_id: 'env-9' },
       })
     );
-    await abandonWorkflow('run-1');
-    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9');
+    await abandonWorkflow('run-1', operator);
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9', isolationStore);
   });
 
   test('does not reclaim for a non-container run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
-    await abandonWorkflow('run-1');
+    await abandonWorkflow('run-1', operator);
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
@@ -1797,11 +2291,11 @@ describe('abandonWorkflow', () => {
       })
     );
     mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
-    await abandonWorkflow('run-1');
+    await expect(abandonWorkflow('run-1', operator)).rejects.toThrow('changed before abandonment');
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
-  test('a reclaim failure does not fail the abandon (best-effort)', async () => {
+  test('reports a reclaim failure after committing abandonment', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
       makePausedRun({
         status: 'paused',
@@ -1809,7 +2303,10 @@ describe('abandonWorkflow', () => {
       })
     );
     mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
-    const { run } = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
+    const { run, cleanupWarnings } = await abandonWorkflow('run-1', operator);
+    expect(cleanupWarnings).toHaveLength(1);
+    expect(cleanupWarnings?.[0]).toContain('env-9');
+    expect(cleanupWarnings?.[0]).toContain('resources may remain allocated');
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
@@ -1817,7 +2314,7 @@ describe('abandonWorkflow', () => {
   test('cancels a failed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
 
-    const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow('run-1');
+    const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow('run-1', operator);
     expect(run.id).toBe('run-1');
     expect(cascadeFailures).toBe(0);
     expect(blockedParentRunId).toBeNull();
@@ -1827,7 +2324,7 @@ describe('abandonWorkflow', () => {
   test('throws on completed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
-    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+    await expect(abandonWorkflow('run-1', operator)).rejects.toThrow(
       "Cannot abandon run with status 'completed'"
     );
   });
@@ -1835,7 +2332,7 @@ describe('abandonWorkflow', () => {
   test('throws on cancelled run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'cancelled' }));
 
-    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+    await expect(abandonWorkflow('run-1', operator)).rejects.toThrow(
       "Cannot abandon run with status 'cancelled'"
     );
   });
@@ -1862,7 +2359,7 @@ describe('abandonWorkflow', () => {
       return Promise.resolve({ cancelled: true });
     });
 
-    const { cancelled, owner } = await abandonWorkflow('run-1');
+    const { cancelled, owner } = await abandonWorkflow('run-1', operator);
 
     expect(order).toEqual(['stop', 'cancel']);
     expect(cancelled).toBe(true);
@@ -1879,7 +2376,7 @@ describe('abandonWorkflow', () => {
       })
     );
 
-    const { cancelled, owner } = await abandonWorkflow('run-1');
+    const { cancelled, owner } = await abandonWorkflow('run-1', operator);
 
     expect(cancelled).toBe(true);
     expect(owner).toEqual({
@@ -1896,10 +2393,10 @@ describe('abandonWorkflow', () => {
     test(`an owner endpoint that answered (${String(reason)}) leaves the run unchanged`, async () => {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
       mockRequestDetachedRunStop.mockImplementationOnce(() =>
-        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+        Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', reason))
       );
 
-      const error = await abandonWorkflow('run-1').then(
+      const error = await abandonWorkflow('run-1', operator).then(
         () => undefined,
         (rejection: unknown) => rejection
       );
@@ -1921,7 +2418,7 @@ describe('abandonWorkflow', () => {
       })
     );
 
-    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+    await expect(abandonWorkflow('run-1', operator)).rejects.toThrow(
       'Could not stop the live owner of run run-1 (pid 42): Detached workflow process group 42 is still running. The run was not changed.'
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
@@ -1940,11 +2437,99 @@ describe('abandonWorkflow', () => {
       })
     );
 
-    const { cancelled, owner } = await abandonWorkflow('run-1');
+    const { cancelled, owner } = await abandonWorkflow('run-1', operator);
 
     expect(cancelled).toBe(true);
     expect(owner.kind).toBe('no_owner_answered');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+  });
+});
+
+describe('supplied stores', () => {
+  test('two operation instances keep their run stores separate', async () => {
+    const firstRun = makePausedRun({ id: 'first' });
+    const secondRun = makePausedRun({ id: 'second' });
+    const makeOperations = (run: WorkflowRun): WorkflowOperations =>
+      createWorkflowOperations({
+        getUserRole: async () => undefined,
+        store: {
+          ...store,
+          getWorkflowRun: async () => run,
+          findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
+            prefix === run.id && codebaseId === run.codebase_id ? [run] : [],
+          listWorkflowRuns: async () => ({
+            runs: [],
+            total: run.id === 'first' ? 1 : 2,
+            counts: EMPTY_COUNTS,
+          }),
+        },
+        hostStore: { isolation: isolationStore },
+        requestDetachedRunStop: mockRequestDetachedRunStop,
+        isRunOwnedByThisProcess,
+        isRunOwnerAnswering,
+        reclaimRunWorktree: async () => ({ warnings: [] }),
+        reclaimContainerEnv: mockReclaimContainerEnv,
+      });
+    const first = makeOperations(firstRun);
+    const second = makeOperations(secondRun);
+    expect(await first.resumeWorkflow('first', operator)).toBe(firstRun);
+    expect(await second.resumeWorkflow('second', operator)).toBe(secondRun);
+    expect(await first.resumeWorkflow('first', operator)).toBe(firstRun);
+    expect(await first.findWorkflowRunsByIdPrefix('first', 'cb-1')).toEqual([firstRun]);
+    expect(await second.findWorkflowRunsByIdPrefix('first', 'cb-1')).toEqual([]);
+    expect((await first.listWorkflowRuns()).total).toBe(1);
+    expect((await second.listWorkflowRuns()).total).toBe(2);
+  });
+
+  test('container cancellation reads and reclaims through the same supplied isolation store', async () => {
+    const run = makePausedRun({
+      status: 'running',
+      metadata: { isolation: 'container', isolation_env_id: 'supplied-env' },
+    });
+    const getById = mock<IIsolationStore['getById']>(async () => ({
+      id: 'supplied-env',
+      codebase_id: 'codebase',
+      workflow_type: 'task',
+      workflow_id: run.id,
+      provider: 'container',
+      working_path: '/workspace',
+      branch_name: 'task',
+      status: 'active',
+      created_at: new Date(),
+      created_by_platform: 'test',
+      created_by_user_id: null,
+      metadata: {},
+    }));
+    const isolation = { ...isolationStore, getById };
+    const cleanup = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(async () => {});
+    const cancelled = mock<IWorkflowStore['cancelWorkflowRun']>(async () => ({ cancelled: true }));
+    const stop = mock(async () => {});
+    const operations = createWorkflowOperations({
+      getUserRole: async () => undefined,
+      store: {
+        ...store,
+        getWorkflowRun: async () => run,
+        findChildRuns: async () => [],
+        cancelWorkflowRun: cancelled,
+      },
+      hostStore: { isolation },
+      requestDetachedRunStop: async () => ({ pid: 42, stop, release: () => {} }),
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
+      reclaimContainerEnv: cleanup,
+    });
+    const result = await operations.cancelWorkflow(run.id, operator);
+    expect(result.kind).toBe('stopped');
+    expect(getById).toHaveBeenCalledWith('supplied-env');
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledWith('supplied-env', isolation);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+
+    cleanup.mockRejectedValueOnce(new Error('Docker unavailable'));
+    cancelled.mockClear();
+    await expect(operations.cancelWorkflow(run.id, operator)).rejects.toThrow('Docker unavailable');
+    expect(cancelled).not.toHaveBeenCalled();
   });
 });
 
@@ -1962,7 +2547,7 @@ describe('cancelWorkflow', () => {
   });
 
   async function refusal(runId = 'run-1'): Promise<InstanceType<typeof CancelRefusedError>> {
-    const error = await cancelWorkflow(runId).then(
+    const error = await cancelWorkflow(runId, operator).then(
       () => undefined,
       (rejection: unknown) => rejection
     );
@@ -1977,7 +2562,7 @@ describe('cancelWorkflow', () => {
     try {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id: runId, status: 'running' }));
 
-      const result = await cancelWorkflow(runId);
+      const result = await cancelWorkflow(runId, operator);
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
@@ -2008,7 +2593,7 @@ describe('cancelWorkflow', () => {
     try {
       mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
 
-      const result = await cancelWorkflow('run-1');
+      const result = await cancelWorkflow('run-1', operator);
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
@@ -2027,7 +2612,7 @@ describe('cancelWorkflow', () => {
     try {
       mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
 
-      const result = await cancelWorkflow('run-1');
+      const result = await cancelWorkflow('run-1', operator);
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
@@ -2071,7 +2656,7 @@ describe('cancelWorkflow', () => {
       makePausedRun({ status: 'running', parent_run_id: 'root-run' })
     );
     mockRequestDetachedRunStop.mockImplementationOnce(() =>
-      Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
+      Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
     );
 
     const error = await refusal();
@@ -2100,7 +2685,7 @@ describe('cancelWorkflow', () => {
       return Promise.resolve({ cancelled: true });
     });
 
-    const result = await cancelWorkflow('run-1');
+    const result = await cancelWorkflow('run-1', operator);
 
     expect(order).toEqual(['stop', 'cancel']);
     expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
@@ -2123,7 +2708,7 @@ describe('cancelWorkflow', () => {
       return Promise.resolve({ cancelled: true });
     });
 
-    const result = await cancelWorkflow('run-1');
+    const result = await cancelWorkflow('run-1', operator);
 
     expect(order).toEqual(['stop', 'cancel']);
     expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
@@ -2152,7 +2737,7 @@ describe('cancelWorkflow', () => {
     test(`an owner endpoint that answered (${String(reason)}) is refused unchanged`, async () => {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
       mockRequestDetachedRunStop.mockImplementationOnce(() =>
-        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+        Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', reason))
       );
 
       const error = await refusal();
@@ -2270,13 +2855,31 @@ describe('abandonResumableRunsForConversation', () => {
   });
 
   test('reports zero when the conversation has nothing resumable', async () => {
-    const result = await abandonResumableRunsForConversation('conv-1');
+    const result = await abandonResumableRunsForConversation('conv-1', operator);
 
     expect(result).toEqual({
       abandoned: 0,
       blockedParentRunId: null,
     });
-    expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith('conv-1');
+    expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(
+      'conv-1',
+      expect.any(Function)
+    );
+  });
+
+  test('authorizes only the runs it would abandon, so an unidentified reset of no runs proceeds', async () => {
+    const resetLocked = (locked: WorkflowRun[]) => {
+      mockCancelResumableRunsForConversation.mockImplementationOnce(async (_id, authorize) => {
+        authorize?.(locked);
+        return locked;
+      });
+      return abandonResumableRunsForConversation('conv-1', { kind: 'unidentified' });
+    };
+
+    expect((await resetLocked([])).abandoned).toBe(0);
+    await expect(resetLocked([makePausedRun({ user_id: 'starter' })])).rejects.toBeInstanceOf(
+      RunActionForbiddenError
+    );
   });
 
   test('counts the rows cancelled by the conversation-scoped mutation', async () => {
@@ -2285,7 +2888,7 @@ describe('abandonResumableRunsForConversation', () => {
       makePausedRun({ id: 'run-b' }),
     ]);
 
-    const result = await abandonResumableRunsForConversation('conv-1');
+    const result = await abandonResumableRunsForConversation('conv-1', operator);
 
     expect(result).toEqual({
       abandoned: 2,
@@ -2306,9 +2909,43 @@ describe('abandonResumableRunsForConversation', () => {
       }),
     ]);
 
-    await abandonResumableRunsForConversation('conv-1');
+    await abandonResumableRunsForConversation('conv-1', operator);
 
     expect(mockReclaimContainerEnv.mock.calls.map(call => call[0])).toEqual(['env-a', 'env-b']);
+  });
+
+  test('reset uses its supplied isolation store and reports each failed reclaim while continuing', async () => {
+    const sentinel: IIsolationStore = { ...isolationStore };
+    const reclaim = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(async () => {});
+    reclaim.mockRejectedValueOnce(new Error('docker down'));
+    const operations = createWorkflowOperations({
+      getUserRole: async () => undefined,
+      store,
+      hostStore: { isolation: sentinel },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
+      reclaimContainerEnv: reclaim,
+    });
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([
+      makePausedRun({
+        id: 'container-a',
+        metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+      }),
+      makePausedRun({
+        id: 'container-b',
+        metadata: { isolation: 'container', isolation_env_id: 'env-b' },
+      }),
+    ]);
+    const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
+    expect(reclaim).toHaveBeenNthCalledWith(1, 'env-a', sentinel);
+    expect(reclaim).toHaveBeenNthCalledWith(2, 'env-b', sentinel);
+    expect(reclaim.mock.calls[0]?.[1]).toBe(sentinel);
+    expect(reclaim.mock.calls[1]?.[1]).toBe(sentinel);
+    expect(result.abandoned).toBe(2);
+    expect(result.cleanupWarnings).toHaveLength(1);
+    expect(result.cleanupWarnings?.[0]).toContain('env-a');
   });
 
   test('reports the clean final state when selected roots overlap through a running parent (#2731 R4)', async () => {
@@ -2320,7 +2957,7 @@ describe('abandonResumableRunsForConversation', () => {
       makePausedRun({ id: 'run-b', parent_run_id: 'run-a', status: 'running' })
     );
 
-    const result = await abandonResumableRunsForConversation('conv-1');
+    const result = await abandonResumableRunsForConversation('conv-1', operator);
 
     expect(result).toEqual({
       abandoned: 2,
@@ -2356,7 +2993,7 @@ describe('abandonResumableRunsForConversation', () => {
       return Promise.resolve(null);
     });
 
-    const result = await abandonResumableRunsForConversation('conv-1');
+    const result = await abandonResumableRunsForConversation('conv-1', operator);
 
     expect(result.abandoned).toBe(1);
     expect(result.blockedParentRunId).toBe('parent-paused');
@@ -2365,7 +3002,7 @@ describe('abandonResumableRunsForConversation', () => {
   test('propagates an atomic cancellation failure rather than reporting a false all-clear', async () => {
     mockCancelResumableRunsForConversation.mockRejectedValueOnce(new Error('Connection refused'));
 
-    await expect(abandonResumableRunsForConversation('conv-1')).rejects.toThrow(
+    await expect(abandonResumableRunsForConversation('conv-1', operator)).rejects.toThrow(
       'Connection refused'
     );
   });
@@ -2405,4 +3042,381 @@ describe('resetWorkflowNodeSessions', () => {
       'Failed to reset workflow node sessions: connection refused'
     );
   });
+});
+
+describe('abandon owned worktrees', () => {
+  const reclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => ({
+    warnings: [],
+  }));
+  const operations = createWorkflowOperations({
+    getUserRole: async () => undefined,
+    store,
+    hostStore: { isolation: isolationStore },
+    requestDetachedRunStop: mockRequestDetachedRunStop,
+    isRunOwnedByThisProcess,
+    isRunOwnerAnswering,
+    reclaimContainerEnv: mockReclaimContainerEnv,
+    reclaimRunWorktree: reclaim,
+  });
+  const owned = (id = 'run-1', overrides: Partial<WorkflowRun> = {}): WorkflowRun =>
+    makePausedRun({
+      id,
+      metadata: {
+        owned_worktree: { envId: `env-${id}`, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+        execution_owner: { host: hostname(), pid: 4242, uid: process.getuid?.() },
+      },
+      ...overrides,
+    });
+  beforeEach(() => {
+    reclaim.mockReset();
+    reclaim.mockResolvedValue({ warnings: [] });
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockResolvedValue(owned());
+    mockFindChildRuns.mockReset();
+    mockFindChildRuns.mockResolvedValue([]);
+    mockCancelWorkflowRun.mockReset();
+    mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockRejectedValue(
+      new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+    );
+  });
+
+  test('cancels before release, releases children before root, and reports each removal', async () => {
+    const child = owned('child');
+    mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [child] : []));
+    const order: string[] = [];
+    mockCancelWorkflowRun.mockImplementation(async id => {
+      order.push(`cancel ${id}`);
+      return { cancelled: true };
+    });
+    reclaim.mockImplementation(async (run, store) => {
+      expect(store).toBe(isolationStore);
+      order.push(`release ${run.id}`);
+      return { released: { path: `/wt/${run.id}`, branch: `b-${run.id}` }, warnings: [] };
+    });
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(order).toEqual(['cancel run-1', 'cancel child', 'release child', 'release run-1']);
+    expect(result.releasedWorktrees).toEqual([
+      { path: '/wt/child', branch: 'b-child' },
+      { path: '/wt/run-1', branch: 'b-run-1' },
+    ]);
+  });
+
+  test('a release failure never blocks cancellation; it is a cancelled-run warning', async () => {
+    reclaim.mockRejectedValueOnce(new Error('git removal failed; retry abandon run-1'));
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cancelled).toBe(true);
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(result.cleanupWarnings).toEqual([
+      expect.stringContaining('git removal failed; retry abandon run-1 The run remains cancelled.'),
+    ]);
+  });
+
+  test('CAS loss never releases', async () => {
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    await expect(operations.abandonWorkflow('run-1', operator)).rejects.toThrow(
+      'changed before abandonment'
+    );
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  test('cancelled cleanup retry does not repeat cancellation and leaves active descendants untouched', async () => {
+    mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'cancelled' }));
+    mockFindChildRuns.mockImplementation(async id =>
+      id === 'run-1' ? [owned('child', { status: 'running' })] : []
+    );
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cancelled).toBe(false);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(['run-1']);
+  });
+
+  test.each(['foreign-host', 'missing'])('retains %s owner estate', async kind => {
+    const run = owned();
+    if (kind === 'missing') delete run.metadata.execution_owner;
+    else run.metadata.execution_owner = { host: 'another-host', pid: 4242 };
+    mockGetWorkflowRun.mockResolvedValue(run);
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings?.[0]).toContain('execution owner');
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  // POSIX owner endpoints live under a per-uid directory, so abandon cannot reach
+  // another user's owner and keeps its checkout. Windows records no uid (process.getuid
+  // is absent) and its owner pipe is machine-wide, so the endpoint decides there.
+  test('a same-host owner under another uid is retained on POSIX; on Windows uid is not an ownership signal', async () => {
+    const run = owned();
+    run.metadata.execution_owner = {
+      host: hostname(),
+      pid: 4242,
+      uid: (process.getuid?.() ?? 0) + 1,
+    };
+    mockGetWorkflowRun.mockResolvedValue(run);
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cancelled).toBe(true);
+    if (process.getuid) {
+      expect(result.cleanupWarnings?.[0]).toContain('execution owner belongs to uid');
+      expect(reclaim).not.toHaveBeenCalled();
+    } else {
+      expect(result.cleanupWarnings).toBeUndefined();
+      expect(reclaim).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test('an unaccounted inherited child prevents removing its root checkout', async () => {
+    mockFindChildRuns.mockImplementation(async id =>
+      id === 'run-1' ? [makePausedRun({ id: 'child', metadata: {} })] : []
+    );
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cleanupWarnings?.join(' ')).toContain(
+      'descendants could not all be accounted for'
+    );
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  test('unexpected descendant owner errors are warnings after cancellation, and protect the root', async () => {
+    mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [owned('child')] : []));
+    mockRequestDetachedRunStop.mockRejectedValueOnce(
+      new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+    );
+    mockRequestDetachedRunStop.mockRejectedValueOnce(new Error('endpoint inspection failed'));
+    const result = await operations.abandonWorkflow('run-1', operator);
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings?.join(' ')).toContain('endpoint inspection failed');
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  test('reset releases an owned worktree through its supplied store and reports a failure', async () => {
+    const sentinel: IIsolationStore = { ...isolationStore };
+    const resetReclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => ({
+      released: { path: '/wt/run-a', branch: 'b-a' },
+      warnings: [],
+    }));
+    resetReclaim.mockRejectedValueOnce(new Error('removal failed for run-b'));
+    const resetOperations = createWorkflowOperations({
+      getUserRole: async () => undefined,
+      store,
+      hostStore: { isolation: sentinel },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimContainerEnv: mockReclaimContainerEnv,
+      reclaimRunWorktree: resetReclaim,
+    });
+    const runB = owned('run-b');
+    const runA = owned('run-a');
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([runB, runA]);
+    const result = await resetOperations.abandonResumableRunsForConversation('conv-1', operator);
+    expect(resetReclaim.mock.calls).toEqual([
+      [runB, sentinel],
+      [runA, sentinel],
+    ]);
+    expect(result.cleanupWarnings).toEqual([
+      expect.stringContaining('removal failed for run-b The run remains cancelled.'),
+    ]);
+    expect(result.releasedWorktrees).toEqual([{ path: '/wt/run-a', branch: 'b-a' }]);
+  });
+
+  test('ordinary cancel retains worktrees', async () => {
+    mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'running' }));
+    mockRequestDetachedRunStop.mockResolvedValueOnce({
+      pid: 4242,
+      stop: async () => {},
+      release: () => {},
+    });
+    await operations.cancelWorkflow('run-1', operator);
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+});
+
+describe('run action authorization precedes effects and state validation', () => {
+  for (const action of RUN_ACTIONS) {
+    for (const actor of [
+      { kind: 'user', userId: 'other' },
+      { kind: 'unidentified' },
+    ] satisfies RunActor[]) {
+      test(`${action} refuses ${actor.kind} before all effects`, async () => {
+        const run = makePausedRun({
+          user_id: 'starter',
+          status: action === 'cancel' ? 'running' : action === 'delete' ? 'completed' : 'paused',
+        });
+        const write = mock(async () => ({ resolved: true, cancelled: true, signaled: true }));
+        const stop = mockRequestDetachedRunStop;
+        stop.mockClear();
+        const operations = createWorkflowOperations({
+          getUserRole: async () => 'member',
+          store: {
+            ...store,
+            getWorkflowRun: async () => run,
+            resolveApprovalGate: write,
+            resolveAndCancelApprovalGate: write,
+            cancelWorkflowRun: write,
+            signalWorkflowWait: write,
+            deleteWorkflowRun: async () => {
+              await write();
+            },
+          },
+          hostStore: { isolation: isolationStore },
+          requestDetachedRunStop: stop,
+          isRunOwnedByThisProcess,
+          isRunOwnerAnswering,
+          reclaimRunWorktree: async () => ({ warnings: [] }),
+          reclaimContainerEnv: mockReclaimContainerEnv,
+        });
+        const calls = {
+          approve: () =>
+            operations.approveWorkflow(run.id, 'secret comment', actor, { via: 'cli' }),
+          reject: () => operations.rejectWorkflow(run.id, 'secret comment', actor, { via: 'cli' }),
+          respond: () =>
+            operations.respondToWorkflow(run.id, 'custom', 'secret comment', actor, { via: 'cli' }),
+          resume: () => operations.resumeWorkflow(run.id, actor),
+          cancel: () => operations.cancelWorkflow(run.id, actor),
+          abandon: () => operations.abandonWorkflow(run.id, actor),
+          signal: () =>
+            operations.signalWorkflowWait(
+              run.id,
+              { event: 'event', resumeAt: 'now', payload: 'secret payload' },
+              actor
+            ),
+          delete: () => operations.deleteWorkflowRun(run.id, actor),
+        } satisfies Record<RunAction, () => Promise<unknown>>;
+        await expect(calls[action]()).rejects.toBeInstanceOf(RunActionForbiddenError);
+        expect(write).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+        expect(JSON.stringify(mockLogger.warn.mock.calls.at(-1))).not.toContain('secret');
+      });
+    }
+  }
+
+  test('reset authorizes the locked snapshot before mutation or cleanup', async () => {
+    const write = mock(async () => {});
+    const cleanup = mock(async () => ({ warnings: [] }));
+    const runs = [
+      makePausedRun({ user_id: 'starter' }),
+      makePausedRun({ id: 'other-run', user_id: 'other' }),
+    ];
+    const operations = createWorkflowOperations({
+      getUserRole: async () => 'member',
+      store: {
+        ...store,
+        cancelResumableRunsForConversation: async (_id, authorize) => {
+          authorize?.(runs);
+          await write();
+          return runs;
+        },
+      },
+      hostStore: { isolation: isolationStore },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimRunWorktree: cleanup,
+      reclaimContainerEnv: mockReclaimContainerEnv,
+    });
+    await expect(
+      operations.abandonResumableRunsForConversation('conv-1', { kind: 'user', userId: 'starter' })
+    ).rejects.toBeInstanceOf(RunActionForbiddenError);
+    expect(write).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  test('role changes apply on the next action; null starters admit only admin or operator', async () => {
+    let role: 'member' | 'admin' = 'member';
+    const run = makePausedRun({ status: 'failed', user_id: null });
+    const operations = createWorkflowOperations({
+      getUserRole: async () => role,
+      store: { ...store, getWorkflowRun: async () => run },
+      hostStore: { isolation: isolationStore },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
+      reclaimContainerEnv: mockReclaimContainerEnv,
+    });
+    const actor: RunActor = { kind: 'user', userId: 'starter' };
+    await expect(operations.resumeWorkflow(run.id, actor)).rejects.toBeInstanceOf(
+      RunActionForbiddenError
+    );
+    role = 'admin';
+    expect(await operations.resumeWorkflow(run.id, actor)).toBe(run);
+    role = 'member';
+    expect(await operations.resumeWorkflow(run.id, operator)).toBe(run);
+    run.user_id = actor.userId;
+    expect(await operations.resumeWorkflow(run.id, actor)).toBe(run);
+  });
+});
+
+describe('starter, admin and operator can act through core', () => {
+  for (const actor of [
+    operator,
+    { kind: 'user', userId: 'starter' },
+    { kind: 'user', userId: 'admin' },
+  ] satisfies RunActor[]) {
+    for (const action of RUN_ACTIONS) {
+      test(`${action} allows ${JSON.stringify(actor)}`, async () => {
+        const run = makePausedRun({
+          user_id: 'starter',
+          status: action === 'cancel' ? 'running' : action === 'delete' ? 'completed' : 'paused',
+          metadata: {
+            approval: {
+              nodeId: 'review',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'custom' }],
+            },
+            wait: {
+              owner: 'node',
+              waitingSince: '2026-10-05T00:00:00.000Z',
+              kind: 'event',
+              nodeId: 'wait',
+              event: 'ready',
+              resumeAt: '2026-10-06T00:00:00.000Z',
+            },
+          },
+        });
+        const write = mock(async () => ({ resolved: true, cancelled: true, signaled: true }));
+        const operations = createWorkflowOperations({
+          getUserRole: async id => (id === 'admin' ? 'admin' : 'member'),
+          store: {
+            ...store,
+            getWorkflowRun: async () => run,
+            resolveApprovalGate: write,
+            resolveAndCancelApprovalGate: write,
+            cancelWorkflowRun: write,
+            signalWorkflowWait: write,
+            deleteWorkflowRun: async () => {
+              await write();
+            },
+          },
+          hostStore: { isolation: isolationStore },
+          requestDetachedRunStop: mockRequestDetachedRunStop,
+          isRunOwnedByThisProcess: () => true,
+          isRunOwnerAnswering: async () => false,
+          reclaimRunWorktree: async () => ({ warnings: [] }),
+          reclaimContainerEnv: mockReclaimContainerEnv,
+        });
+        const calls = {
+          approve: () => operations.approveWorkflow(run.id, undefined, actor, { via: 'cli' }),
+          reject: () => operations.rejectWorkflow(run.id, undefined, actor, { via: 'cli' }),
+          respond: () =>
+            operations.respondToWorkflow(run.id, 'custom', undefined, actor, { via: 'cli' }),
+          cancel: () => operations.cancelWorkflow(run.id, actor),
+          abandon: () => operations.abandonWorkflow(run.id, actor),
+          resume: () => operations.resumeWorkflow(run.id, actor),
+          signal: () =>
+            operations.signalWorkflowWait(
+              run.id,
+              { event: 'ready', resumeAt: '2026-10-06T00:00:00.000Z' },
+              actor
+            ),
+          delete: () => operations.deleteWorkflowRun(run.id, actor),
+        } satisfies Record<RunAction, () => Promise<unknown>>;
+        await calls[action]();
+        if (action === 'resume') expect(write).not.toHaveBeenCalled();
+        else expect(write).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
 });

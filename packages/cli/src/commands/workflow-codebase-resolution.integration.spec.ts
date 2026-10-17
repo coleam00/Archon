@@ -1,0 +1,482 @@
+import { afterEach, expect, test, mock } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { z } from '@hono/zod-openapi';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { workflowRunCommand, type WorkflowRunOptions } from './workflow';
+import { captureWorkflowCommand } from '../test-support/command';
+import { findRepoRoot } from '@archon/git';
+import { canonicalizeProjectPath } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
+
+mock.module('@archon/core/services/title-generator', () => ({
+  generateAndSetTitle: async (): Promise<void> => undefined,
+}));
+const roots: string[] = [];
+
+afterEach(async () => {
+  for (const root of roots.splice(0)) await removeTempTree(root);
+});
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function initRepo(repo: string, remote: string, file: string): void {
+  mkdirSync(join(repo, 'subdir'), { recursive: true });
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(join(repo, file), 'committed\n');
+  writeFileSync(join(repo, '.gitignore'), 'projects/\n');
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'probe.yaml'),
+    `name: probe\ndescription: Probe checkout\nnodes:\n  - id: probe\n    bash: cat ${file}\n`
+  );
+  // A completed run removes a clean worktree it created; the untracked file keeps it
+  // for the tests that inspect the checkout afterwards.
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'probe-keep.yaml'),
+    `name: probe-keep\ndescription: Probe checkout and keep it\nnodes:\n  - id: probe\n    bash: cat ${file} && echo kept > kept.txt\n`
+  );
+  git(repo, ['init', '-qb', 'main']);
+  // Windows runners default to core.autocrlf=true, which would check the file
+  // out as CRLF in the run's worktree.
+  git(repo, ['config', 'core.autocrlf', 'false']);
+  git(repo, ['add', '.']);
+  git(repo, [
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.test',
+    'commit',
+    '-qm',
+    'fixture',
+  ]);
+  git(repo, ['init', '--bare', '-q', '--initial-branch=main', remote]);
+  git(repo, ['remote', 'add', 'origin', remote]);
+  git(repo, ['push', '-qu', 'origin', 'main']);
+}
+
+interface CodebaseRow {
+  id: string;
+  default_cwd: string;
+}
+
+interface RunRow {
+  codebase_id: string;
+  working_path: string;
+  status: string;
+}
+
+test('nested repo registers independently and its worktree retains the child owner', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-codebase-resolution-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const parent = join(root, 'parent');
+  const child = join(parent, 'projects', 'apps', 'child');
+  initRepo(parent, join(root, 'parent.git'), 'parent-only.txt');
+  initRepo(child, join(root, 'child.git'), 'child-only.txt');
+
+  async function run(cwd: string, options: WorkflowRunOptions): Promise<string> {
+    const invocation = crypto.randomUUID();
+    const result = await captureWorkflowCommand(home, async host =>
+      workflowRunCommand(host, (await findRepoRoot(cwd)) ?? cwd, 'probe', invocation, {
+        ...options,
+        conversationId: invocation,
+      })
+    );
+    expect(result.status, result.output).toBe(0);
+    return invocation;
+  }
+
+  await run(parent, { noWorktree: true });
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  try {
+    const codebases = db.query<CodebaseRow, []>(
+      'SELECT id, default_cwd FROM remote_agent_codebases'
+    );
+    const parentRow = codebases.get();
+    if (!parentRow) throw new Error('Parent repository was not registered');
+    expect(parentRow.default_cwd).toBe(await canonicalizeProjectPath(parent));
+    const invocation = crypto.randomUUID();
+    const launched = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, '..', 'cli.ts'),
+        'workflow',
+        'run',
+        'probe-keep',
+        invocation,
+        '--conversation-id',
+        invocation,
+        '--branch',
+        'child-probe',
+        '--from',
+        'main',
+      ],
+      {
+        cwd: join(child, 'subdir'),
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    if (launched.error) throw launched.error;
+    expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+    const childPath = await canonicalizeProjectPath(child);
+    const childRow = codebases.all().find(row => row.default_cwd === childPath);
+    expect(childRow).toBeDefined();
+    if (!childRow) throw new Error('Child repository was not registered');
+    const runs = db.query<RunRow, [string]>(
+      'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs WHERE user_message = ?'
+    );
+    const isolated = runs.get(invocation);
+    expect(isolated?.codebase_id).toBe(childRow.id);
+    expect(isolated?.status).toBe('completed');
+    if (!isolated) throw new Error('Missing child run');
+    expect(isolated.working_path).not.toBe(childPath);
+    expect(git(isolated.working_path, ['branch', '--show-current'])).toBe('child-probe');
+    expect(readFileSync(join(isolated.working_path, 'child-only.txt'), 'utf8')).toBe('committed\n');
+    expect(
+      git(isolated.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+    ).toBe(git(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+    mkdirSync(join(isolated.working_path, 'subdir'));
+    const worktreeInvocation = await run(join(isolated.working_path, 'subdir'), {
+      noWorktree: true,
+    });
+    expect(runs.get(worktreeInvocation)?.codebase_id).toBe(childRow.id);
+    const subdirInvocation = await run(join(child, 'subdir'), { noWorktree: true });
+    expect(runs.get(subdirInvocation)?.codebase_id).toBe(childRow.id);
+    expect(codebases.all()).toHaveLength(2);
+    expect(codebases.all().find(row => row.id === parentRow.id)).toEqual(parentRow);
+  } finally {
+    db.close();
+  }
+}, 120_000);
+
+test('legacy relative registration fails with recovery guidance', () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'legacy-project');
+  initRepo(repo, join(root, 'remote.git'), 'probe.txt');
+  const gitLog = join(root, 'git.jsonl');
+  const recordingEntry = join(import.meta.dir, 'fixtures', 'workflow-cli-with-git-recording.ts');
+  const run = (args: string[], cwd = repo): SpawnSyncReturns<string> =>
+    spawnSync(process.execPath, [recordingEntry, ...args], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        ARCHON_HOME: home,
+        DATABASE_URL: '',
+        ARCHON_TELEMETRY_DISABLED: '1',
+        ARCHON_TEST_GIT_LOG: gitLog,
+      },
+    });
+  const initial = run([
+    'workflow',
+    'run',
+    'probe-keep',
+    '--branch',
+    'legacy-probe',
+    '--from',
+    'main',
+  ]);
+  expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+  const db = new Database(join(home, 'archon.db'));
+  try {
+    const project = db
+      .query<{ id: string; name: string }, []>('SELECT id, name FROM remote_agent_codebases')
+      .get();
+    if (!project) throw new Error('Missing registration');
+    const env = db
+      .query<{ id: string; working_path: string; branch_name: string }, []>(
+        'SELECT id, working_path, branch_name FROM remote_agent_isolation_environments'
+      )
+      .get();
+    if (!env) throw new Error('Missing isolation environment');
+    const gitCallSchema = z.object({ command: z.string(), args: z.array(z.string()) });
+    const recorded = (): z.infer<typeof gitCallSchema>[] =>
+      readFileSync(gitLog, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => gitCallSchema.parse(JSON.parse(line)));
+    expect(recorded().some(call => call.command === 'git' && call.args.at(-1) === 'remote')).toBe(
+      true
+    );
+    db.run("UPDATE remote_agent_isolation_environments SET created_at = '2000-01-01 00:00:00'");
+    const missingPath = join(root, 'missing-worktree');
+    const ghostId = crypto.randomUUID();
+    db.run(
+      `INSERT INTO remote_agent_isolation_environments
+       (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name,
+        created_by_platform, created_at)
+       VALUES (?, ?, 'task', 'missing', 'worktree', ?, 'missing', 'cli', '2000-01-01 00:00:00')`,
+      [ghostId, project.id, missingPath]
+    );
+    db.run("UPDATE remote_agent_codebases SET default_cwd = 'projects/some-repo'");
+    writeFileSync(gitLog, '');
+    for (const args of [
+      ['workflow', 'run', 'probe'],
+      ['workflow', 'run', 'probe', '--no-worktree'],
+      ['workflow', 'run', 'probe', '--detach'],
+      ['isolation', 'cleanup', '7'],
+    ]) {
+      const legacy = run(args);
+      expect(legacy.status, legacy.stdout + legacy.stderr).not.toBe(0);
+      expect(legacy.stdout + legacy.stderr).toContain(project.name);
+      expect(legacy.stdout + legacy.stderr).toContain('/register-project');
+    }
+    expect(
+      recorded().filter(
+        call =>
+          call.command === 'git' &&
+          call.args.some(
+            (arg, index) => arg === '-C' && call.args[index + 1] === 'projects/some-repo'
+          )
+      )
+    ).toEqual([]);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(git(repo, ['branch', '--list', env.branch_name])).toContain(env.branch_name);
+    expect(
+      db
+        .query<{ status: string }, []>('SELECT status FROM remote_agent_isolation_environments')
+        .all()
+        .every(row => row.status === 'active')
+    ).toBe(true);
+    expect(
+      db.query<{ default_cwd: string }, []>('SELECT default_cwd FROM remote_agent_codebases').get()
+        ?.default_cwd
+    ).toBe('projects/some-repo');
+  } finally {
+    db.close();
+  }
+}, 60_000);
+
+test('git-root folder runs in place, retains identity, and leaves nested repos independent', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-git-folder-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const folder = join(root, 'platform');
+  const child = join(folder, 'projects', 'service');
+  initRepo(folder, join(root, 'platform.git'), 'platform.txt');
+  initRepo(child, join(root, 'service.git'), 'service.txt');
+  const canonicalFolder = await canonicalizeProjectPath(folder);
+  const refs = git(folder, ['show-ref']);
+  const worktrees = git(folder, ['worktree', 'list', '--porcelain']);
+  const run = (cwd: string, flags: string[] = []): SpawnSyncReturns<string> =>
+    spawnSync(
+      process.execPath,
+      [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'probe', ...flags],
+      {
+        cwd,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+
+  const first = run(folder, ['--folder']);
+  expect(first.status, first.stdout + first.stderr).toBe(0);
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  try {
+    const projects = db.query<CodebaseRow & { kind: string }, []>(
+      'SELECT id, default_cwd, kind FROM remote_agent_codebases'
+    );
+    const project = projects.get();
+    expect(project).toMatchObject({ kind: 'folder', default_cwd: canonicalFolder });
+    for (const cwd of [folder, join(folder, 'subdir')]) {
+      const again = run(cwd);
+      expect(again.status, again.stdout + again.stderr).toBe(0);
+    }
+    expect(projects.all()).toHaveLength(1);
+    const runs = db.query<RunRow, []>(
+      'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs'
+    );
+    expect(runs.all()).toHaveLength(3);
+    for (const completed of runs.all()) {
+      expect(completed).toMatchObject({
+        codebase_id: project?.id,
+        working_path: canonicalFolder,
+        status: 'completed',
+      });
+    }
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toEqual([]);
+    expect(git(folder, ['show-ref'])).toBe(refs);
+    expect(git(folder, ['worktree', 'list', '--porcelain'])).toBe(worktrees);
+
+    const nested = run(join(child, 'subdir'), ['--branch', 'service-probe', '--from', 'main']);
+    expect(nested.status, nested.stdout + nested.stderr).toBe(0);
+    const childProject = projects.all().find(row => row.default_cwd !== canonicalFolder);
+    expect(childProject?.kind).toBe('repo');
+    const childRun = runs.all().find(row => row.codebase_id === childProject?.id);
+    expect(childRun?.working_path).not.toBe(await canonicalizeProjectPath(child));
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toHaveLength(1);
+    const count = runs.all().length;
+    for (const flags of [['--folder'], ['--folder', '--detach']]) {
+      const conflict = run(child, flags);
+      expect(conflict.status).not.toBe(0);
+      expect(conflict.stdout + conflict.stderr).toContain('already registered as a repo');
+    }
+    expect(runs.all()).toHaveLength(count);
+    expect(projects.all().find(row => row.id === childProject?.id)).toEqual(childProject);
+
+    const subdirectory = join(folder, 'subdir');
+    mkdirSync(join(subdirectory, '.archon', 'workflows'), { recursive: true });
+    writeFileSync(
+      join(subdirectory, '.archon', 'workflows', 'probe.yaml'),
+      'name: probe\ndescription: Probe folder directory\nnodes:\n  - id: probe\n    bash: pwd\n'
+    );
+    const explicitSubdirectory = run(subdirectory, ['--folder']);
+    expect(
+      explicitSubdirectory.status,
+      explicitSubdirectory.stdout + explicitSubdirectory.stderr
+    ).toBe(0);
+    const canonicalSubdirectory = await canonicalizeProjectPath(subdirectory);
+    const subdirectoryProject = projects
+      .all()
+      .find(row => row.default_cwd === canonicalSubdirectory);
+    expect(subdirectoryProject?.kind).toBe('folder');
+    expect(runs.all().find(row => row.codebase_id === subdirectoryProject?.id)).toMatchObject({
+      status: 'completed',
+      working_path: canonicalSubdirectory,
+    });
+    const descendant = join(subdirectory, 'ordinary');
+    mkdirSync(descendant);
+    const descendantRun = run(descendant);
+    expect(descendantRun.status, descendantRun.stdout + descendantRun.stderr).toBe(0);
+    expect(runs.all().filter(row => row.codebase_id === subdirectoryProject?.id)).toHaveLength(2);
+    expect(runs.all().at(-1)).toMatchObject({
+      codebase_id: subdirectoryProject?.id,
+      status: 'completed',
+      working_path: canonicalSubdirectory,
+    });
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toHaveLength(1);
+    expect(git(folder, ['show-ref'])).toBe(refs);
+    expect(git(folder, ['worktree', 'list', '--porcelain'])).toBe(worktrees);
+  } finally {
+    db.close();
+  }
+}, 120_000);
+
+test('first detached git-root folder registration completes in place without Git changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-detached-folder-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const folder = join(root, 'platform');
+  initRepo(folder, join(root, 'remote.git'), 'platform.txt');
+  const refs = git(folder, ['show-ref']);
+  const worktrees = git(folder, ['worktree', 'list', '--porcelain']);
+  const launched = spawnSync(
+    process.execPath,
+    [
+      join(import.meta.dir, '..', 'cli.ts'),
+      'workflow',
+      'run',
+      'probe',
+      '--folder',
+      '--detach',
+      '--json',
+    ],
+    {
+      cwd: folder,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    }
+  );
+  expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+  const receipt = z.object({ runId: z.string() }).parse(JSON.parse(launched.stdout));
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  try {
+    const runs = db.query<RunRow, [string]>(
+      'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs WHERE id = ?'
+    );
+    const deadline = Date.now() + 30_000;
+    while (runs.get(receipt.runId)?.status !== 'completed' && Date.now() < deadline) {
+      await Bun.sleep(100);
+    }
+    const project = db
+      .query<CodebaseRow & { kind: string }, []>(
+        'SELECT id, default_cwd, kind FROM remote_agent_codebases'
+      )
+      .get();
+    const canonicalFolder = await canonicalizeProjectPath(folder);
+    expect(project).toMatchObject({ kind: 'folder', default_cwd: canonicalFolder });
+    expect(runs.get(receipt.runId)).toMatchObject({
+      codebase_id: project?.id,
+      working_path: canonicalFolder,
+      status: 'completed',
+    });
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toEqual([]);
+    expect(git(folder, ['show-ref'])).toBe(refs);
+    expect(git(folder, ['worktree', 'list', '--porcelain'])).toBe(worktrees);
+  } finally {
+    db.close();
+  }
+}, 60_000);
+
+test('list and fixture testing discover only a registered inner folder from its descendant', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-folder-discovery-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  const folder = join(repo, 'ops');
+  const descendant = join(folder, 'deep');
+  mkdirSync(descendant, { recursive: true });
+  git(repo, ['init', '-q']);
+  for (const [directory, name] of [
+    [repo, 'outer-only'],
+    [folder, 'inner-only'],
+  ] as const) {
+    const workflows = join(directory, '.archon', 'workflows', name);
+    mkdirSync(join(workflows, 'fixtures'), { recursive: true });
+    writeFileSync(
+      join(directory, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+    writeFileSync(
+      join(workflows, 'workflow.yaml'),
+      `name: ${name}\ndescription: Discovery proof\nnodes:\n  - id: probe\n    bash: echo probe\n`
+    );
+    writeFileSync(
+      join(workflows, 'fixtures', 'probe.stubs.yaml'),
+      'fixture:\n  expect: completed\nprobe: stub\n'
+    );
+  }
+  const registered = await captureWorkflowCommand(home, async host => {
+    const { registerFolder } = await import('@archon/core/handlers/clone');
+    await registerFolder(host.records.codebases, folder);
+  });
+  expect(registered.status, registered.output).toBe(0);
+  for (const args of [
+    ['workflow', 'list'],
+    ['workflow', 'test', 'inner-only'],
+  ]) {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, '..', 'cli.ts'), ...args], {
+      cwd: descendant,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain('inner-only');
+    expect(result.stdout).not.toContain('outer-only');
+  }
+}, 30_000);

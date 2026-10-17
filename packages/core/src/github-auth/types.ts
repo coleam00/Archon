@@ -7,7 +7,7 @@
 import type { Octokit } from '@octokit/rest';
 
 /**
- * Configuration for the GitHub App auth provider, sourced from env at server
+ * Configuration for the GitHub App auth provider, sourced from env at host
  * bootstrap. `privateKey` is the PEM contents (not a filesystem path) — the
  * resolution from env (inline PEM vs. file path) happens in `private-key.ts`
  * before this config reaches the factory.
@@ -16,9 +16,8 @@ export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
   /**
-   * Optional: skip the per-(owner, repo) installation lookup when set. Useful
-   * for single-installation deployments to avoid one HTTP round trip per repo
-   * on first sight after a restart.
+   * Optional fixed installation for adapter API clients. Repository-token
+   * requests still resolve the repository installation to verify App access.
    */
   defaultInstallationId?: number;
   /** App slug (e.g. "archon"); used to derive the bot login `<slug>[bot]` for self-filter. */
@@ -74,11 +73,8 @@ export interface IGitHubAppAuthProvider {
   invalidateToken(installationId: number): void;
 
   /**
-   * Force-evict the cached install + token for (owner, repo). Used on 401
-   * from a per-installation Octokit so the next call re-resolves the
-   * installation id (App uninstall + reinstall assigns a NEW id; the stale
-   * lookupCache entry would otherwise serve the dead id for up to 1h).
-   * Synchronous because the lookup entry is the one we just populated.
+   * Evict the repository lookup and token/client caches after a 401, including
+   * the configured fixed installation when it differs from the repository's.
    */
   invalidateRepo(owner: string, repo: string): void;
 }

@@ -49,7 +49,7 @@ Following the "Proposed Fix" section of the RCA:
 #### b. Make the fix
 - Implement the change as described
 - Follow the fix strategy exactly
-- Maintain Archon coding conventions (see CLAUDE.md)
+- Maintain Archon coding conventions (see AGENTS.md)
 - Respect package boundaries
 - Use proper import patterns (`import type` for type-only)
 
@@ -68,19 +68,14 @@ Following the "Testing Requirements" from RCA:
 - Place tests alongside source files or in existing test directories
 - Follow existing test patterns in the affected package
 
-### 5. Run Validation
+### 5. Check Your Changes
 
-```bash
-bun run type-check
-bun run lint
-bun run test
-bun run validate
-```
+Run the tests that cover what you changed, and lint and type-check the packages you touched. CI is the full validation; don't run `bun run validate`.
 
-**If validation fails:**
-- Fix the issues
-- Re-run validation
-- Don't proceed until all pass
+**If a check fails because of your change:**
+- Fix it
+- Re-run that check
+- Don't proceed until it passes
 
 ### 6. Verify Fix Manually
 
@@ -150,4 +145,4 @@ gh issue comment $ARGUMENTS --body "Fix implemented. Ready for review."
 - If the RCA document is missing, request it with `/rca $ARGUMENTS`
 - If you discover the RCA analysis was incorrect, document findings and update the RCA
 - If additional issues are found during implementation, note them for separate issues
-- Follow Archon coding standards exactly (CLAUDE.md + relevant .claude/rules/)
+- Follow Archon coding standards exactly (AGENTS.md + relevant .claude/rules/)

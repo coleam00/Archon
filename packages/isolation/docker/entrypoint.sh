@@ -18,10 +18,12 @@
 #              in-container root remount the /mnt/lower bind read-write, so native
 #              mode is isolation-hardening, NOT a sandbox against a hostile agent.
 #
-# On mount failure we exit 1 immediately (fail fast) so the backend's ready-poll
-# sees the container exit and falls back / surfaces the error without waiting out
-# the full timeout. All real work arrives later via `docker exec`.
+# A failed FUSE mount exits 78, permitting the backend to try native overlay.
+# Other startup failures exit without permitting a privilege escalation.
+# All real work arrives later via `docker exec`.
 set -euo pipefail
+# Reserve 78 for the explicit FUSE failure below, regardless of command exit codes.
+trap 'exit 1' ERR
 
 WS="${ARCHON_WORKSPACE_PATH:?ARCHON_WORKSPACE_PATH must be set}"
 MODE="${ARCHON_OVERLAY_MODE:-native}"
@@ -52,7 +54,7 @@ case "$MODE" in
       echo "archon-runner: FATAL — fuse-overlayfs mount failed at ${WS}" >&2
       cat /tmp/overlay-fuse.err >&2 2>/dev/null || true
       echo "archon-runner: (unprivileged FUSE mount needs a rootless/userns daemon)" >&2
-      exit 1
+      exit 78
     fi
     ;;
   native)

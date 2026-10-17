@@ -41,6 +41,7 @@ import type {
   WorkflowRequirement,
   ResolvedWorkflow,
 } from './schemas';
+import { findWorkflowLoadError } from './schemas/workflow';
 import {
   isIncludeDirective,
   isAgentNode,
@@ -53,32 +54,44 @@ import {
   isNodeContextResume,
   isComposeFanOutNode,
   INPUT_NAME_SOURCE,
+  inputEnvKey,
 } from './schemas';
 import {
   canonicalValueText,
+  OUTPUT_REF_SOURCE,
   LOOP_PREV_OUTPUT_REF_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
   parseWholeInputsRef,
   type JsonValue,
 } from './output-ref';
 import { createLogger } from '@archon/paths';
-import { validateDagStructure, validateWorkflowOutcomeDeclaration } from './loader';
+import {
+  validateDagStructure,
+  validateLoopGroupProseCompletion,
+  validateRunBudgetShape,
+  validateWorkflowOutcomeDeclaration,
+} from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { parseWhenExpression } from './when-atom';
 import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
 import { resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
   attachComposedBindings,
+  cloneNodeWithEngineMetadata,
   isIncludeCommandReadError,
   readComposedBindings,
   readComposedMeta,
+  readIncludeOutputAliases,
+  resolveIncludeOutputAliases,
+  setIncludeOutputAliases,
   type ComposedBlockBoundary,
   type ComposedNodeMeta,
   type CompiledLoopCommand,
   type IncludeCommandContent,
+  type IncludeOutputAliases,
   type LoopWithCompiledCommand,
   type NodeWithComposedMeta,
 } from './compiled-command';
@@ -107,7 +120,7 @@ export interface ComposedSuspensionPath {
   reason: string;
 }
 
-type SuspensionWorkflow = Pick<WorkflowDefinition, 'name' | 'interactive'> & {
+type SuspensionWorkflow = Pick<WorkflowDefinition, 'name'> & {
   readonly nodes: readonly (DagNode | IncludeDirective)[];
 };
 
@@ -128,9 +141,6 @@ export function collectComposedSuspensionPaths(
   const visitDefinition = (definition: SuspensionWorkflow): void => {
     if (visited.has(definition.name)) return;
     visited.add(definition.name);
-    if (definition.interactive === true) {
-      found.push({ id: definition.name, reason: 'interactive workflow' });
-    }
     visitNodes(definition.nodes);
   };
 
@@ -189,14 +199,8 @@ export function collectComposedSuspensionPaths(
  */
 export const INCLUDE_MAX_DEPTH = 3;
 
-/**
- * Output-ref pattern — mirrors the loader's `outputRefPattern` and the executor's
- * substitution regex. Matches `$<id>.output`; any `.field` suffix that follows is
- * left untouched (only the node-id segment is rewritten). Used for the eight text
- * surfaces that go through substituteNodeOutputRefs (prompt/bash/script/... ), which
- * only accept the canonical `.output[.field]` form.
- */
-const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+/** Matches the canonical current-output prefix; only the node-id segment is rewritten. */
+const OUTPUT_REF_PATTERN = new RegExp(OUTPUT_REF_SOURCE, 'g');
 
 /**
  * Cross-iteration body refs use the same executable node ids, under a distinct prefix.
@@ -252,8 +256,36 @@ function applyWhenRefRename(text: string, rename: (id: string) => string): strin
   });
 }
 
+/**
+ * Give every command-sourced node in `node`'s scope the include aliases its body may read
+ * (#3972) — the same aliases `rewriteNodeOutputRefs` applies to an inline prompt there,
+ * including inside loop_group bodies. A body list's own includes were attached first and
+ * shadow the enclosing list's, matching the order the inline rewrite runs in.
+ */
+function attachIncludeOutputAliases(node: DagNode, aliases: IncludeOutputAliases): void {
+  if (
+    (isAgentNode(node) && node.source.kind === 'command') ||
+    (isLoopNode(node) && node.loop.command !== undefined)
+  ) {
+    setIncludeOutputAliases(node, { ...aliases, ...readIncludeOutputAliases(node) });
+  }
+  if (isLoopGroupNode(node)) {
+    for (const body of node.loop_group.nodes) {
+      if (!isIncludeDirective(body)) attachIncludeOutputAliases(body, aliases);
+    }
+  }
+}
+
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
-class IncludeExpansionError extends Error {}
+class IncludeExpansionError extends Error {
+  constructor(
+    message: string,
+    readonly errorType: WorkflowLoadError['errorType'] = 'validation_error',
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Composed-node metadata (#1764)
@@ -324,7 +356,7 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
  * workflow-level layer be REMOVED afterwards (see `collapseWorkflowScope`).
  *
  * Absent on purpose:
- *   - Run-owned fields (`interactive`, `worktree`, `container`, `evidence_policy`,
+ *   - Run-owned fields (`worktree`, `container`, `evidence_policy`, `budget`,
  *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
  *     file that happens to hold a node. These stay workflow-level and are warned about
  *     when a composed workflow declares them.
@@ -424,7 +456,7 @@ function pushWorkflowScopeOntoNodes(
  * The removal is the load-bearing half, not a tidy-up. Push-down alone leaves a node
  * that declares nothing free to fall back to `workflowLevelOptions`, which after
  * inlining belongs to whichever file composed it — so a block declaring no provider at
- * all (the `archon-review-block` shape) still runs on the parent's. With the layer gone
+ * all still runs on the parent's. With the layer gone
  * such a node resolves from config, tier presets and user prefs at run time, exactly as
  * it would standalone.
  *
@@ -433,7 +465,10 @@ function pushWorkflowScopeOntoNodes(
  * byte-for-byte fast path for include-free workflows had to go.
  */
 function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
-  const collapsed: WorkflowDefinition = { ...raw, nodes: raw.nodes.map(cloneNodeForInclude) };
+  const collapsed: WorkflowDefinition = {
+    ...raw,
+    nodes: raw.nodes.map(cloneNodeWithEngineMetadata),
+  };
   const scope = collapsed as unknown as Record<string, unknown>;
   pushWorkflowScopeOntoNodes(scope, collapsed.nodes);
   // Deleted rather than set to `undefined` so the collapsed definition has the shape a
@@ -442,7 +477,6 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
   // (The drop-warning is indifferent: it already filters `!== undefined`.) The key set is
   // this module's own const tuple list, never caller input.
   for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete scope[wfKey];
   }
   return collapsed;
@@ -490,9 +524,6 @@ function rewriteNodeOutputRefs(
   const whenExpr = (text: string): string => applyWhenRefRename(text, renameOutputRef);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
-  if (isNodeContextResume(node.context)) {
-    node.context.resume = renameOutputRef(node.context.resume);
-  }
 
   // A loop_group body node carries the enclosing include's boundary too (markComposedNode
   // stamps it on every body node), and that boundary names outer-graph ids. When the
@@ -501,7 +532,10 @@ function rewriteNodeOutputRefs(
   // no longer exists in the flat graph and is skipped as "upstream failed" on the first
   // iteration, which is how a two-level composition (lifecycle → ship → deliver's
   // corrections loop) failed at runtime while each level worked on its own.
-  const rewriteBoundaries = (target: DagNode): void => {
+  const rewriteStructuralRefs = (target: DagNode): void => {
+    if (isNodeContextResume(target.context)) {
+      target.context.resume = renameOutputRef(target.context.resume);
+    }
     for (const boundary of readComposedMeta(target)?.boundaries ?? []) {
       boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
       if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
@@ -511,11 +545,11 @@ function rewriteNodeOutputRefs(
       // no composed metadata of their own, so only real nodes are rewritten (the same
       // guard markComposedNode applies when it stamps the boundary in the first place).
       for (const body of target.loop_group.nodes) {
-        if (!isIncludeDirective(body)) rewriteBoundaries(body);
+        if (!isIncludeDirective(body)) rewriteStructuralRefs(body);
       }
     }
   };
-  rewriteBoundaries(node);
+  rewriteStructuralRefs(node);
 
   const rewritten = mapNodeTemplateSlots(node, slot =>
     slot.surface === 'binding_default'
@@ -558,14 +592,13 @@ function applyInputsMacro(
   missing: Set<string>,
   includeNode: IncludeDirective
 ): void {
-  // Names the node supplies itself. Only the compiled command body reads them: the
-  // executor merges a command node's resolved bindings OVER the run inputs into the
-  // `$INPUTS` bag it builds for the prompt, and nothing else (dag-executor.ts). So the
-  // shield is scoped to that one surface — a `when:` or `systemPrompt:` naming the same
-  // input still reads the run's bag, and a caller who never supplied it still gets the
-  // load error.
-  const boundLocally = new Set(Object.keys(readComposedBindings(node) ?? {}));
-  const substitute = (text: string, shielded?: ReadonlySet<string>): string =>
+  const substitute = (
+    text: string,
+    shielded?: ReadonlySet<string>,
+    // Canonical text (#2637): a typed input splices as its one deterministic
+    // representation (strings raw, everything else canonical JSON text).
+    render: (name: string) => string = name => canonicalValueText(args[name])
+  ): string =>
     text.replace(INPUTS_REF, (match, name: string) => {
       // A name the node's own `with:` binds is neither the caller's to supply nor the
       // caller's to override — it resolves at run time from the nearest source in the
@@ -580,9 +613,7 @@ function applyInputsMacro(
         missing.add(name);
         return match;
       }
-      // Canonical text (#2637): a typed input splices as its one deterministic
-      // representation (strings raw, everything else canonical JSON text).
-      return canonicalValueText(args[name]);
+      return render(name);
     });
 
   // Value-position substitution (#2637): in a `with:` map value, a string that is
@@ -602,8 +633,8 @@ function applyInputsMacro(
 
   const substituteWhen = (when: string): string => {
     const expanded = substitute(when);
-    const wasParseable = whenAtoms(when).every(atom => parseWhenAtom(atom) !== null);
-    const isParseable = whenAtoms(expanded).every(atom => parseWhenAtom(atom) !== null);
+    const wasParseable = parseWhenExpression(when) !== null;
+    const isParseable = parseWhenExpression(expanded) !== null;
     if (expanded !== when && wasParseable && !isParseable) {
       throw new IncludeExpansionError(
         `Node '${includeNode.id}': input substitution made included node '${node.id}' field 'when' unparseable: "${when}" became "${expanded}". Put '$INPUTS.<name>' on the right-hand side of a comparison whose left-hand side is a node-output reference.`
@@ -625,7 +656,33 @@ function applyInputsMacro(
     )
       return slot.value;
     if (slot.surface === 'condition') return substituteWhen(slot.value);
-    return substitute(slot.value, slot.name === 'agent.prompt' ? boundLocally : undefined);
+    // Executable source never receives an input value (#2115): the shell delivers each
+    // input as INPUTS_<UPPER_SNAKE>, so a bash body keeps the author's macro as a quoted
+    // reference to that variable. Inline script languages share no safe quoting form,
+    // so there the macro is refused and the author reads the env var directly.
+    if (slot.surface === 'shell')
+      return substitute(slot.value, undefined, name => `"\${${inputEnvKey(name)}}"`);
+    if (slot.surface === 'script') {
+      const name = slot.value.matchAll(INPUTS_REF).next().value?.[1];
+      if (name !== undefined)
+        throw new IncludeExpansionError(
+          `Node '${includeNode.id}': included node '${slot.owner.id}' script uses '$INPUTS.${name}', which would splice the input value into script source. Read it from the environment as ${inputEnvKey(name)} instead.`
+        );
+      return slot.value;
+    }
+    // Names a command node supplies itself. Only its compiled body reads them: the
+    // executor merges the node's resolved bindings OVER the run inputs into the `$INPUTS`
+    // bag it builds for the prompt, and nothing else (dag-executor.ts). So the shield is
+    // scoped to that one surface — a `when:` or `systemPrompt:` naming the same input
+    // still reads the run's bag, and a caller who never supplied it still gets the load
+    // error. The slot's owner, not `node`, holds the bindings: the walk also visits
+    // loop_group body nodes.
+    return substitute(
+      slot.value,
+      slot.name === 'agent.prompt'
+        ? new Set(Object.keys(readComposedBindings(slot.owner) ?? {}))
+        : undefined
+    );
   });
   const valueMapped = mapNodeTemplateValueSlots(textMapped, slot => {
     const value = substituteValue(slot.value);
@@ -680,43 +737,6 @@ function resolveIncludeInputs(
   }
 }
 
-/** structuredClone intentionally drops symbol keys; retain every engine-private
- * per-node payload (compiled loop commands, the composition record) while cloning a
- * reusable child for another include level. A payload missed here works at one nesting
- * level and silently vanishes at two. */
-function cloneNodeForInclude<T extends DagNode | IncludeDirective>(node: T): T {
-  const clone = structuredClone(node);
-  const preserveEngineMetadata = (
-    source: DagNode | IncludeDirective,
-    target: DagNode | IncludeDirective
-  ): void => {
-    if (isIncludeDirective(source) || isIncludeDirective(target)) return;
-    const meta = readComposedMeta(source);
-    if (meta !== undefined) {
-      (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
-    }
-    const bindings = readComposedBindings(source);
-    if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
-    if (isLoopNode(source) && isLoopNode(target)) {
-      const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
-        COMPILED_LOOP_COMMAND
-      ];
-      if (compiled !== undefined) {
-        (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
-          structuredClone(compiled);
-      }
-    }
-    if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
-      for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
-        const targetChild = target.loop_group.nodes[index];
-        if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
-      }
-    }
-  };
-  preserveEngineMetadata(node, clone);
-  return clone;
-}
-
 /**
  * Inline one include node's fully-expanded child into namespaced parent nodes.
  * Never mutates the child's nodes (each node is deep-cloned first), so a building block
@@ -759,7 +779,7 @@ function inlineInclude(
 
   const namespaced = childNodes.map(cn => {
     const clone = materializeBlockCommandPrompts(
-      cloneNodeForInclude(cn),
+      cloneNodeWithEngineMetadata(cn),
       includeNode,
       child,
       commandContents,
@@ -906,11 +926,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
 const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
-const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
- * RUN-owned: isolation, interactivity, evidence policy, concurrency safety. Those are
+ * RUN-owned: isolation, evidence policy, concurrency safety. Those are
  * decisions belonging to whoever started the run, so a composed workflow cannot carry
  * them — emit a one-line load-time WARN so the author who wrote them gets a signal.
  *
@@ -932,16 +951,10 @@ const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mu
  */
 function warnDroppedWorkflowLevelFields(
   includeNode: IncludeDirective,
-  child: ResolvedWorkflow,
-  consumedFields?: ReadonlySet<string>
+  child: ResolvedWorkflow
 ): void {
   const droppedFields = Object.entries(child)
-    .filter(
-      ([key, value]) =>
-        !NON_DROPPED_WORKFLOW_KEYS.has(key) &&
-        consumedFields?.has(key) !== true &&
-        value !== undefined
-    )
+    .filter(([key, value]) => !NON_DROPPED_WORKFLOW_KEYS.has(key) && value !== undefined)
     .map(([key]) => key)
     .sort();
   if (droppedFields.length === 0) return;
@@ -1012,9 +1025,10 @@ function materializeBlockCommandPrompts(
       };
     }
 
+    const prompt = resolveIncludeOutputAliases(node, content);
     const outputRefPattern = new RegExp(OUTPUT_REF_PATTERN.source, 'g');
     let match: RegExpExecArray | null;
-    while ((match = outputRefPattern.exec(content)) !== null) {
+    while ((match = outputRefPattern.exec(prompt)) !== null) {
       const referencedId = match[1];
       if (referencedId === 'INPUTS') continue;
       if (
@@ -1028,12 +1042,19 @@ function materializeBlockCommandPrompts(
         };
       }
     }
-    return { prompt: content };
+    return { prompt };
   };
 
   if (isAgentNode(node) && node.source.kind === 'command') {
     const compiled = compile(node.source.name);
-    if (compiled.error !== undefined) throw new IncludeExpansionError(compiled.error);
+    if (compiled.error !== undefined) {
+      const content = commandContents.get(node.source.name);
+      throw new IncludeExpansionError(
+        compiled.error,
+        isIncludeCommandReadError(content) ? 'read_error' : 'validation_error',
+        { cause: isIncludeCommandReadError(content) ? content.cause : undefined }
+      );
+    }
     // The node's own `with:` map has no home on the inline variant, so it moves to the
     // engine-private payload the executor resolves for a materialized node (#2964).
     // It cannot be resolved here: a binding reads a sibling's output mid-run, which is
@@ -1041,6 +1062,7 @@ function materializeBlockCommandPrompts(
     const bindings = node.source.with;
     const materialized: DagNode = { ...node, source: { kind: 'inline', prompt: compiled.prompt } };
     if (bindings !== undefined) attachComposedBindings(materialized, bindings);
+    setIncludeOutputAliases(materialized, undefined);
     return materialized;
   }
 
@@ -1051,7 +1073,9 @@ function materializeBlockCommandPrompts(
     if (existing !== undefined) return node;
     const loop = { ...node.loop } as typeof node.loop & LoopWithCompiledCommand;
     loop[COMPILED_LOOP_COMMAND] = compile(node.loop.command);
-    return { ...node, loop };
+    const materialized: DagNode = { ...node, loop };
+    setIncludeOutputAliases(materialized, undefined);
+    return materialized;
   }
 
   if (isLoopGroupNode(node)) {
@@ -1099,7 +1123,8 @@ function materializeBlockCommandPrompts(
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
-  commandContents?: ReadonlyMap<string, IncludeCommandContent>
+  commandContents?: ReadonlyMap<string, IncludeCommandContent>,
+  loadErrors: readonly WorkflowLoadError[] = []
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
@@ -1112,6 +1137,8 @@ export function expandWorkflowIncludes(
     nodes: DagNode[];
     includedRequirements: WorkflowRequirement[];
     renameIncludeRef: (id: string) => string;
+    /** Rewritten `$<alias>.output` producer id → the include alias the author wrote. */
+    includeAliases: Map<string, string>;
   }
 
   /**
@@ -1127,6 +1154,7 @@ export function expandWorkflowIncludes(
     const expandedNodes: DagNode[] = [];
     const includesById = new Map<string, ExpandedInclude>();
     const includedRequirements: WorkflowRequirement[] = [];
+    const includeAliases = new Map<string, string>();
 
     for (const node of nodes) {
       // Runtime width stays deferred, while the complete body contract is proven now.
@@ -1139,7 +1167,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1155,8 +1185,7 @@ export function expandWorkflowIncludes(
         }
         warnDroppedWorkflowLevelFields(
           { id: node.id, kind: 'include', include: node.include },
-          child,
-          COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS
+          child
         );
         // Exercise the exact ordinary-include instantiation once at load time. Width is
         // still deferred, but the block's input contract and packaged command resources
@@ -1186,7 +1215,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1194,6 +1225,7 @@ export function expandWorkflowIncludes(
         includedRequirements.push(...(child.requires ?? []));
         const inlined = instantiateResolvedInclude(node, child, commandContents ?? new Map());
         includesById.set(node.id, inlined);
+        includeAliases.set(inlined.primarySink, node.id);
         expandedNodes.push(...inlined.namespaced);
         continue;
       }
@@ -1201,6 +1233,7 @@ export function expandWorkflowIncludes(
       if (isLoopGroupNode(node)) {
         const body = expandNodeList(node.loop_group.nodes, workflowName, stack);
         includedRequirements.push(...body.includedRequirements);
+        for (const [sink, alias] of body.includeAliases) includeAliases.set(sink, alias);
         expandedNodes.push({
           ...node,
           loop_group: {
@@ -1242,8 +1275,14 @@ export function expandWorkflowIncludes(
       // continue to name only the executable body ids produced by `inlineInclude()`.
       rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
     }
+    if (includesById.size > 0) {
+      const aliases = Object.fromEntries(
+        [...includesById].map(([id, inlined]) => [id, inlined.primarySink])
+      );
+      for (const node of expandedNodes) attachIncludeOutputAliases(node, aliases);
+    }
 
-    return { nodes: expandedNodes, includedRequirements, renameIncludeRef };
+    return { nodes: expandedNodes, includedRequirements, renameIncludeRef, includeAliases };
   }
 
   function expandOne(name: string, stack: string[]): ResolvedWorkflow {
@@ -1265,7 +1304,26 @@ export function expandWorkflowIncludes(
     if (!raw) {
       // Top-level names always exist (they come from rawByName.keys()); this only
       // fires when the name was reached as an unresolvable include TARGET.
-      throw new IncludeExpansionError(`include target '${name}' not found`);
+      // An unreadable declaration has no known workflow name. Until every declaration
+      // is readable, a missing include cannot be distinguished from that read failure.
+      const named = findWorkflowLoadError(loadErrors, name);
+      const unreadable =
+        named ??
+        loadErrors.find(
+          error =>
+            error.workflowName === undefined &&
+            error.errorType === 'read_error' &&
+            error.cause !== undefined
+        );
+      const missing = `include target '${name}' not found`;
+      throw new IncludeExpansionError(
+        named?.error ??
+          (unreadable === undefined
+            ? missing
+            : `${missing}; it may be declared in an unreadable source (${unreadable.filename}: ${unreadable.error})`),
+        unreadable?.errorType,
+        { cause: unreadable?.cause }
+      );
     }
 
     // Collapse this workflow's own node-affecting scope onto its own nodes BEFORE
@@ -1288,22 +1346,13 @@ export function expandWorkflowIncludes(
     // Re-validate the fully-flattened DAG. Catches a namespaced id colliding with a
     // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
     // equivalent failures inside every recursively expanded loop_group body.
-    //
-    // Deliberately NOT re-running the workflow-class placement check here (#2707 step
-    // 2): a reusable block can legitimately author a native gate without declaring its
-    // own `interactive: true` — it is only ever a load error for the workflow ACTUALLY
-    // being loaded standalone (`parseWorkflow`'s own single-file check already covers
-    // that), not for every name `expandWorkflowIncludes` happens to also process as a
-    // `rawByName` entry. A composed gate's drivability stays exactly what it was before
-    // this PR — an invocation-time question `assertComposedGateDriveable` answers
-    // against the workflow actually being dispatched, because load time cannot tell
-    // which discovered workflow will own a given run (see that function's doc comment;
-    // `expandWorkflowIncludes — composed approval gates are stamped, not rejected
-    // (#1764)` pins this down with a "non-interactive INTERMEDIATE block still expands"
-    // case).
-    const structureError = validateDagStructure(expanded.nodes);
+    const structureError = validateDagStructure(expanded.nodes, undefined, expanded.includeAliases);
     if (structureError) {
       throw new IncludeExpansionError(structureError);
+    }
+    const proseCompletionError = validateLoopGroupProseCompletion(expanded.nodes);
+    if (proseCompletionError) {
+      throw new IncludeExpansionError(proseCompletionError);
     }
 
     const dedupedRequires = [...new Set(requires)];
@@ -1323,6 +1372,10 @@ export function expandWorkflowIncludes(
     if (outcomeDeclarationError !== null) {
       throw new IncludeExpansionError(outcomeDeclarationError);
     }
+    const runBudgetShapeError = validateRunBudgetShape(authoredResult);
+    if (runBudgetShapeError !== null) {
+      throw new IncludeExpansionError(runBudgetShapeError);
+    }
     const result = resolveWorkflow(authoredResult);
     memo.set(name, result);
     return result;
@@ -1335,7 +1388,12 @@ export function expandWorkflowIncludes(
     } catch (e) {
       if (e instanceof IncludeExpansionError) {
         failed.add(name);
-        errors.push({ filename: name, error: e.message, errorType: 'validation_error' });
+        errors.push({
+          filename: name,
+          error: e.message,
+          errorType: e.errorType,
+          ...(e.cause !== undefined ? { cause: e.cause } : {}),
+        });
       } else {
         throw e;
       }

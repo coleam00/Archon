@@ -1,2777 +1,2072 @@
-import { describe, test, expect, mock, beforeEach, type Mock } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { spyOn } from 'bun:test';
+import * as binaryResolver from './binary-resolver';
+import { overStreams } from '../test/plugin';
+import { createProvider, descriptor } from './index';
+import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
+import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { Codex as SdkCodex, Thread as SdkThread, Usage } from '@openai/codex-sdk';
-import type { MessageChunk } from '../types';
+import type { NativeTool, MessageChunk, SendQueryOptions } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
+  BUNDLED_IS_BINARY: false,
+  BUNDLED_VERSION: 'test',
+  getArchonHome: () => '/tmp/archon-home-unused',
 }));
 
-/** Default usage matching Codex SDK's Usage type (required on TurnCompletedEvent) */
-const defaultUsage = {
-  input_tokens: 10,
-  cached_input_tokens: 0,
-  cache_write_input_tokens: 0,
-  output_tokens: 5,
-  reasoning_output_tokens: 0,
-} satisfies Usage;
+import { TOOL_OUTPUT_MAX_CHARS, type ProviderFailureClass } from '@archon/provider-contract';
+import {
+  checkFailureClasses,
+  runProviderConformance,
+  type ProviderBackgroundCase,
+} from '@archon/provider-contract/conformance';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import {
+  THREAD_ID,
+  TURN_ID,
+  agentMessage,
+  command,
+  createFakeAppServer,
+  errorNotification,
+  fileChange,
+  itemCompleted,
+  itemStarted,
+  mcpToolCall,
+  plan,
+  rateLimits,
+  reasoning,
+  subAgentActivity,
+  tokenUsage,
+  turnCompleted,
+  turnError,
+  webSearch,
+  type FakeTurnScript,
+} from '../test/codex-app-server-fake';
+import { CodexProvider } from './provider';
+import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
+import type { ServerNotification } from './protocol/ServerNotification';
 
-type MockRunStreamed = (
-  ...args: Parameters<SdkThread['runStreamed']>
-) => Promise<{ events: AsyncGenerator<unknown, void, unknown> }>;
-type MockThread = { id: string | null; runStreamed: Mock<MockRunStreamed> };
-type MockStartThread = (...args: Parameters<SdkCodex['startThread']>) => MockThread;
-type MockResumeThread = (...args: Parameters<SdkCodex['resumeThread']>) => MockThread;
-type MockCodexConstructor = (...args: ConstructorParameters<typeof SdkCodex>) => {
-  startThread: Mock<MockStartThread>;
-  resumeThread: Mock<MockResumeThread>;
-};
+const trackTempRoot = trackTempRoots();
 
-// Create mock runStreamed first (before it's referenced)
-const mockRunStreamed = mock<MockRunStreamed>((_input, _options) =>
-  Promise.resolve({
-    events: (async function* () {
-      yield { type: 'turn.completed', usage: defaultUsage };
-    })(),
-  })
-);
+/** A provider on a fake app-server that plays `script` for every turn. */
+function providerWith(script: FakeTurnScript | (() => FakeTurnScript) = {}): {
+  provider: CodexProvider;
+  server: ReturnType<typeof createFakeAppServer>;
+} {
+  const server = createFakeAppServer(typeof script === 'function' ? script : () => script);
+  return { provider: createProvider(server), server };
+}
 
-// Create a mock thread object factory
-const createMockThread = (id: string | null): MockThread => ({
-  id,
-  runStreamed: mockRunStreamed,
+async function run(
+  provider: CodexProvider,
+  options?: SendQueryOptions,
+  resumeSessionId?: string,
+  prompt = 'test prompt'
+): Promise<MessageChunk[]> {
+  const chunks: MessageChunk[] = [];
+  for await (const chunk of provider.sendQuery(prompt, '/workspace', resumeSessionId, options)) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
+/** The chunks before `settled`, which has its own checks. */
+async function streamOf(
+  script: FakeTurnScript,
+  options?: SendQueryOptions
+): Promise<MessageChunk[]> {
+  const chunks = await run(providerWith(script).provider, options);
+  if (script.exitCode !== undefined || script.startupFailure || script.spawnError) {
+    expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    return chunks;
+  }
+  expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  return chunks.slice(0, -1);
+}
+
+function resultOf(chunks: MessageChunk[]): Extract<MessageChunk, { type: 'result' }> {
+  const results = chunks.filter(
+    (c): c is Extract<MessageChunk, { type: 'result' }> => c.type === 'result'
+  );
+  expect(results).toHaveLength(1);
+  return results[0];
+}
+
+function paramsOf(
+  server: ReturnType<typeof createFakeAppServer>,
+  method: string
+): Record<string, unknown> | undefined {
+  return server.processes.at(-1)?.requests.find(r => r.method === method)?.params;
+}
+
+async function fakeBinary(): Promise<string> {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-bin-')));
+  const path = join(dir, 'codex');
+  await writeFile(path, '');
+  return path;
+}
+
+// Notification ordering and item shapes from the 0.160.0 #3728 probe, with fixture IDs.
+function backgroundCase(agent: boolean, remote = false): ProviderBackgroundCase {
+  const bg = {
+    ...command('exec-1', 'sleep 20'),
+    source: 'unifiedExecStartup' as const,
+    processId: '94316',
+  };
+  const taskId = agent ? 'agent:child-thread' : `command:${THREAD_ID}:exec-1`;
+  const runtime = new Map<string, Extract<MessageChunk, { type: 'subtask' }>['status']>();
+  return {
+    name: agent ? 'subagent outlives its parent' : 'unified exec outlives its turn',
+    runtimeStatus: id => runtime.get(id),
+    run: async function* () {
+      runtime.clear();
+      runtime.set(taskId, 'started');
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(agent ? subAgentActivity('started') : bg),
+          ...(agent ? [itemCompleted(subAgentActivity('started'))] : []),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const client = remote ? overStreams(() => provider, descriptor) : provider;
+      for await (const chunk of client.sendQuery('p', '/workspace')) {
+        yield chunk;
+        if (chunk.type === 'result') {
+          expect(server.processes[0].stdinEnded).toBe(false);
+          runtime.set(taskId, 'completed');
+          if (agent) {
+            server.processes[0].send(itemStarted(subAgentActivity('completed')));
+            server.processes[0].send(itemCompleted(subAgentActivity('completed')));
+          } else
+            server.processes[0].send(itemCompleted({ ...bg, status: 'completed', exitCode: 0 }));
+        }
+      }
+    },
+  };
+}
+
+const originalCodexHome = process.env.CODEX_HOME;
+beforeAll(async () => {
+  process.env.CODEX_HOME = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-home-')));
+});
+afterAll(() => {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
 });
 
-// Create mock functions for Codex SDK that use createMockThread
-const mockStartThread = mock<MockStartThread>(() => createMockThread('new-thread-id'));
-const mockResumeThread = mock<MockResumeThread>(() => createMockThread('resumed-thread-id'));
-
-// Mock Codex class
-const MockCodex = mock<MockCodexConstructor>(() => ({
-  startThread: mockStartThread,
-  resumeThread: mockResumeThread,
-}));
-
-// Mock the Codex SDK
-mock.module('@openai/codex-sdk', () => ({
-  Codex: MockCodex,
-}));
-
-import { CodexProvider, classifyCodexError, resetCodexSingleton } from './provider';
+beforeEach(() => {
+  mockLogger.warn.mockClear();
+  mockLogger.info.mockClear();
+});
 
 describe('CodexProvider', () => {
-  let client: CodexProvider;
-
-  beforeEach(() => {
-    resetCodexSingleton();
-    client = new CodexProvider({ retryBaseDelayMs: 1 });
-    MockCodex.mockClear();
-    mockStartThread.mockClear();
-    mockResumeThread.mockClear();
-    mockRunStreamed.mockClear();
-    mockLogger.info.mockClear();
-    mockLogger.warn.mockClear();
-    mockLogger.error.mockClear();
-    mockLogger.debug.mockClear();
-
-    // Setup default mock thread
-    mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
-    mockResumeThread.mockReturnValue(createMockThread('resumed-thread-id'));
+  test('getType returns codex', () => {
+    expect(new CodexProvider().getType()).toBe('codex');
   });
 
-  describe('getType', () => {
-    test('returns codex', () => {
-      expect(client.getType()).toBe('codex');
+  test('getCapabilities returns the Codex capability set', () => {
+    expect(new CodexProvider().getCapabilities()).toEqual({
+      backgroundWork: 'reported' as const,
+      sessionResume: true,
+      sessionFork: true,
+      mcp: true,
+      hooks: false,
+      skills: false,
+      plugins: true,
+      agents: false,
+      toolRestrictions: false,
+      structuredOutput: 'enforced',
+      requiresAllPropertiesRequired: true,
+      envInjection: true,
+      costControl: false,
+      costReporting: false,
+      tokenReporting: true,
+      stopReasonReporting: false,
+      turnCountReporting: false,
+      resolvedModelReporting: false,
+      effortControl: true,
+      fallbackModel: false,
+      sandbox: false,
+      settingSources: false,
+      nativeTools: true,
+      containerExec: false,
     });
   });
 
-  describe('getCapabilities', () => {
-    test('returns limited capability set for Codex provider', () => {
-      const caps = client.getCapabilities();
-      expect(caps).toEqual({
-        sessionResume: true,
-        sessionFork: false,
-        mcp: true,
-        hooks: false,
-        skills: false,
-        agents: false,
-        toolRestrictions: false,
-        structuredOutput: 'enforced',
-        requiresAllPropertiesRequired: true,
-        envInjection: true,
-        costControl: false,
-        costReporting: false,
-        tokenReporting: true,
-        stopReasonReporting: false,
-        turnCountReporting: false,
-        resolvedModelReporting: false,
-        effortControl: true,
-        fallbackModel: false,
-        sandbox: false,
-        settingSources: false,
-        nativeTools: false,
-        containerExec: false,
-      });
+  test('a tool received after cancellation must not begin a new side effect', async () => {
+    const controller = new AbortController();
+    const handler = mock(async () => 'registered');
+    const { provider, server } = providerWith({
+      notifications: [itemStarted(command('ready', 'true'))],
+      completion: null,
+      ignoreInterrupt: true,
     });
-  });
-
-  describe('sendQuery', () => {
-    test.each([
-      ['omitted', undefined],
-      ['empty', []],
-      ['non-empty', ['prp-issue']],
-    ])(
-      'disables automatic skill instructions for workflow nodes when skills are %s',
-      async (_label, skills) => {
-        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-          nodeConfig: { nodeId: 'investigate', ...(skills === undefined ? {} : { skills }) },
-        })) {
-          // consume
-        }
-
-        expect(MockCodex).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: { skills: { include_instructions: false } },
-          })
-        );
-      }
-    );
-
-    test('leaves direct non-workflow Codex calls on the native skill setting', async () => {
-      for await (const _ of client.sendQuery('test prompt', '/workspace')) {
-        // consume
-      }
-
-      expect(MockCodex).toHaveBeenCalledTimes(1);
-      expect(MockCodex.mock.calls[0]?.[0]).not.toHaveProperty('config');
-    });
-
-    test('uses the workflow skill-catalog override when resuming a thread', async () => {
-      for await (const _ of client.sendQuery('test prompt', '/workspace', 'existing-thread', {
-        nodeConfig: { nodeId: 'investigate' },
+    const consume = async () => {
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        abortSignal: controller.signal,
+        nativeTools: [
+          {
+            name: 'register_project',
+            description: 'Register',
+            inputSchema: { properties: {}, required: [] },
+            handler,
+          },
+        ],
       })) {
-        // consume
-      }
-
-      expect(MockCodex).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: { skills: { include_instructions: false } },
-        })
-      );
-      expect(mockResumeThread).toHaveBeenCalledWith(
-        'existing-thread',
-        expect.objectContaining({ workingDirectory: '/workspace' })
-      );
-    });
-
-    test('warns and retries a resumed MCP thread without catalog suppression when the binary rejects the key', async () => {
-      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-skill-fallback-'));
-      await writeFile(
-        join(testDir, 'mcp.json'),
-        JSON.stringify({ figma: { type: 'http', url: 'http://127.0.0.1:3845/mcp' } })
-      );
-      let calls = 0;
-      mockRunStreamed.mockImplementation(() => {
-        calls++;
-        const call = calls;
-        return Promise.resolve({
-          events: (async function* () {
-            if (call === 1) {
-              throw new Error(
-                'Error loading config: unknown field `include_instructions` in `skills`'
-              );
-            }
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-      });
-
-      const chunks: MessageChunk[] = [];
-      try {
-        for await (const chunk of client.sendQuery('test prompt', testDir, 'existing-thread', {
-          nodeConfig: { nodeId: 'investigate', mcp: 'mcp.json' },
-        })) {
-          chunks.push(chunk);
+        if (chunk.type === 'tool_call') {
+          controller.abort();
+          server.processes[0].callTool({
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            callId: 'after-cancel',
+            namespace: null,
+            tool: 'register_project',
+            arguments: {},
+          });
         }
-      } finally {
-        await rm(testDir, { recursive: true, force: true });
       }
+    };
+    await expect(consume()).rejects.toThrow('Query aborted');
+    expect(handler).not.toHaveBeenCalled();
+  });
 
-      expect(MockCodex).toHaveBeenCalledTimes(2);
-      expect(MockCodex.mock.calls[0]?.[0]).toMatchObject({
-        config: {
-          skills: { include_instructions: false },
-          mcp_servers: { figma: expect.objectContaining({ url: 'http://127.0.0.1:3845/mcp' }) },
-        },
-      });
-      const initialConfig = MockCodex.mock.calls[0]?.[0]?.config;
-      const fallbackConfig = MockCodex.mock.calls[1]?.[0]?.config;
-      expect(initialConfig).toBeDefined();
-      const { skills: _skills, ...initialConfigWithoutSkills } = initialConfig ?? {};
-      expect(fallbackConfig).toEqual(initialConfigWithoutSkills);
-      expect(mockResumeThread).toHaveBeenCalledTimes(2);
-      expect(mockResumeThread).toHaveBeenNthCalledWith(
-        2,
-        'existing-thread',
-        expect.objectContaining({ workingDirectory: testDir })
-      );
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: expect.stringContaining('Continuing with native skill discovery enabled'),
-      });
-      expect(chunks.at(-1)).toMatchObject({
-        type: 'result',
-        sessionId: 'resumed-thread-id',
-        resumed: true,
-      });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ nodeId: 'investigate' }),
-        'codex.workflow_skill_catalog_suppression_unsupported'
-      );
+  describe('native tools', () => {
+    const input = { prompt: 'Fix the "login" bug in C:\\Users\\me' };
+    const call = {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      callId: 'call-1',
+      namespace: null,
+      tool: 'invoke_workflow',
+      arguments: input,
+    };
+    const tool = (handler: NativeTool['handler']): NativeTool => ({
+      name: 'invoke_workflow',
+      description: 'Launch a workflow',
+      inputSchema: { properties: { prompt: { kind: 'string' } }, required: ['prompt'] },
+      handler,
     });
 
-    test('does not replay a turn when a catalog config error arrives after provider output', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { id: 'message-1', type: 'agent_message', text: 'already emitted' },
-          };
-          throw new Error('Error loading config: unknown field `include_instructions` in `skills`');
-        })(),
+    test('registers tools, returns asynchronous results on the server request id and preserves user config', async () => {
+      const handler = mock<NativeTool['handler']>(async () => {
+        await Promise.resolve();
+        return 'Queued';
       });
-
-      const chunks: MessageChunk[] = [];
-      await expect(
-        (async (): Promise<void> => {
-          for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-            nodeConfig: { nodeId: 'investigate' },
-          })) {
-            chunks.push(chunk);
-          }
-        })()
-      ).rejects.toThrow('include_instructions');
-
-      expect(chunks).toContainEqual({ type: 'assistant', content: 'already emitted' });
-      expect(MockCodex).toHaveBeenCalledTimes(1);
-      expect(mockLogger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'codex.workflow_skill_catalog_suppression_unsupported'
-      );
-    });
-
-    test('does not treat unrelated Codex failures as catalog compatibility errors', async () => {
-      mockRunStreamed.mockRejectedValue(new Error('authentication failed'));
-
+      const { provider, server } = providerWith({ toolCalls: [call] });
       expect(
-        (async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-            nodeConfig: { nodeId: 'investigate' },
-          })) {
-            // consume
-          }
-        })()
-      ).rejects.toThrow('Codex auth error');
-      expect(mockLogger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'codex.workflow_skill_catalog_suppression_unsupported'
-      );
-    });
-
-    test('yields text events from agent_message items', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'Hello from Codex!' },
-          };
-          yield {
-            type: 'turn.completed',
-            usage: { ...defaultUsage, cached_input_tokens: 7, cache_write_input_tokens: 3 },
-          };
-        })(),
+        resultOf(
+          await run(provider, {
+            nativeTools: [tool(handler)],
+            assistantConfig: {
+              model: 'gpt-user',
+              webSearchMode: 'cached',
+              additionalDirectories: ['/extra'],
+            },
+          })
+        ).isError
+      ).not.toBe(true);
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(paramsOf(server, 'initialize')?.capabilities).toMatchObject({ experimentalApi: true });
+      expect(paramsOf(server, 'thread/start')).toMatchObject({
+        model: 'gpt-user',
+        config: {
+          web_search: 'cached',
+          sandbox_workspace_write: { network_access: true, writable_roots: ['/extra'] },
+        },
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'invoke_workflow',
+            inputSchema: { type: 'object', required: ['prompt'] },
+          },
+        ],
       });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello from Codex!' });
-      expect(chunks[1]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 7, cacheWrite: 3 },
-      });
-    });
-
-    test('omits tokens when turn.completed has no usage', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed' };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toEqual([{ type: 'result', sessionId: 'new-thread-id' }]);
-    });
-
-    test('preserves reported zero token usage', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'turn.completed',
-            usage: { ...defaultUsage, input_tokens: 0, output_tokens: 0 },
-          };
-        })(),
-      });
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-      expect(chunks).toEqual([
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('skills');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('mcp_servers');
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('developer_instructions');
+      expect(server.processes[0].env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+      expect(server.processes[0].toolResponses).toEqual([
         {
-          type: 'result',
-          sessionId: 'new-thread-id',
-          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          id: 'host-tool-0',
+          result: { contentItems: [{ type: 'inputText', text: 'Queued' }], success: true },
         },
       ]);
     });
 
-    test('captures the new-thread id from the thread.started event (resumable sessionId)', async () => {
-      // The real Codex SDK assigns a NEW thread's id during the run, via the
-      // thread.started event — not synchronously on startThread(). Simulate a
-      // thread whose .id is still null and assert the result carries the id from
-      // the event, so persist_session / suspend-resume have a resumable id.
-      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'stored' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('remember X', '/workspace')) {
-        chunks.push(chunk);
+    test('turn completion waits for an accepted tool effect and its response', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      let committed = false;
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      const chunks: MessageChunk[] = [];
+      const collecting = (async () => {
+        for await (const chunk of provider.sendQuery('go', '/repo', undefined, {
+          nativeTools: [
+            tool(async () => {
+              started.resolve();
+              await complete.promise;
+              committed = true;
+              return 'Queued';
+            }),
+          ],
+        }))
+          chunks.push(chunk);
+      })();
+      await started.promise;
+      server.processes[0].send(turnCompleted('completed'));
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(committed).toBe(false);
+        expect(chunks.some(chunk => chunk.type === 'result')).toBe(false);
+        expect(server.processes[0].toolResponses).toEqual([]);
+      } finally {
+        complete.resolve();
+        await collecting;
       }
-
-      expect(chunks[chunks.length - 1]).toEqual({
-        type: 'result',
-        sessionId: 'evt-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-      });
+      expect(committed).toBe(true);
+      expect(chunks.some(chunk => chunk.type === 'result')).toBe(true);
+      expect(server.processes[0].toolResponses[0].result.success).toBe(true);
     });
 
-    test('captured thread id flows through the turn.failed result', async () => {
-      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
-          yield { type: 'turn.failed', error: { message: 'boom' } };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({
-        type: 'result',
-        sessionId: 'evt-thread-id',
-        isError: true,
-      });
-    });
-
-    test('captured thread id flows through the stream_incomplete result', async () => {
-      mockStartThread.mockReturnValue({ id: null, runStreamed: mockRunStreamed });
-      mockRunStreamed.mockResolvedValue({
-        // Stream closes without turn.completed/turn.failed → fail-stop result.
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: 'evt-thread-id' };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({
-        type: 'result',
-        sessionId: 'evt-thread-id',
-        isError: true,
-        errorSubtype: 'codex_stream_incomplete',
-      });
-    });
-
-    test('an empty thread.started thread_id keeps the snapshot id (guard)', async () => {
-      // Default startThread snapshot id is 'new-thread-id'; an empty event id
-      // must not overwrite it (and would otherwise warn, not emit sessionId: '').
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: '' };
-          yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({
-        type: 'result',
-        sessionId: 'new-thread-id',
-      });
-    });
-
-    test('yields tool events from command_execution items', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'cmd-1', type: 'command_execution', command: 'npm test' },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'cmd-1',
-              type: 'command_execution',
-              command: 'npm test',
-              aggregated_output: 'tests passed\n',
-              exit_code: 0,
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: 'npm test', toolCallId: 'cmd-1' });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: 'npm test',
-        toolOutput: 'tests passed\n',
-        toolCallId: 'cmd-1',
-        toolOutcome: 'success',
-        exitCode: 0,
-      });
-    });
-
-    test('appends non-zero exit code to command_execution tool_result', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'cmd-2', type: 'command_execution', command: 'npm test' },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'cmd-2',
-              type: 'command_execution',
-              command: 'npm test',
-              aggregated_output: 'failure\n',
-              exit_code: 1,
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: 'npm test',
-        toolOutput: 'failure\n\n[exit code: 1]',
-        toolCallId: 'cmd-2',
-        toolOutcome: 'error',
-        exitCode: 1,
-      });
-    });
-
-    test('marks command execution with a missing exit code as unknown', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'cmd-unknown',
-              type: 'command_execution',
-              command: 'npm test',
-              aggregated_output: 'partial output',
-              exit_code: null,
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'tool_result',
-        toolName: 'npm test',
-        toolOutput: 'partial output',
-        toolCallId: 'cmd-unknown',
-        toolOutcome: 'unknown',
-      });
-    });
-
-    test('yields thinking events from reasoning items', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'reasoning', text: 'Let me think about this...' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({ type: 'thinking', content: 'Let me think about this...' });
-    });
-
-    test('yields tool events from web_search items', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'search-1', type: 'web_search', query: 'codex sdk' },
-          };
-          yield {
-            type: 'item.completed',
-            item: { id: 'search-1', type: 'web_search', query: 'codex sdk' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50D} Searching: codex sdk',
-        toolCallId: 'search-1',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50D} Searching: codex sdk',
-        toolOutput: '',
-        toolCallId: 'search-1',
-        toolOutcome: 'unknown',
-      });
-    });
-
-    test('yields system task list for todo_list items and deduplicates', async () => {
-      const todoItem = {
-        type: 'todo_list',
-        items: [
-          { text: 'Scan repo', completed: true },
-          { text: 'Add tests', completed: false },
+    test('connection failure discloses that an accepted action may have committed', async () => {
+      const started = Promise.withResolvers<void>();
+      const complete = Promise.withResolvers<void>();
+      const { provider, server } = providerWith({ toolCalls: [call], completion: null });
+      let committed = false;
+      const collecting = run(provider, {
+        nativeTools: [
+          tool(async () => {
+            started.resolve();
+            await complete.promise;
+            committed = true;
+            return 'Queued';
+          }),
         ],
-      };
-
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'item.completed', item: todoItem };
-          yield { type: 'item.completed', item: todoItem };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
       });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u{1F4CB} Tasks:\n\u2705 Scan repo\n\u2B1C Add tests',
-      });
-      expect(chunks).toHaveLength(2);
+      await started.promise;
+      server.processes[0].exit(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      complete.resolve();
+      const result = resultOf(await collecting);
+      expect(committed).toBe(true);
+      expect(server.processes[0].toolResponses).toEqual([]);
+      expect(result.isError).toBe(true);
+      expect(result.errors?.join(' ')).toContain('An accepted Archon action may have completed');
+      expect(result.errors?.join(' ')).toContain('Inspect run and project state before retrying');
     });
 
-    test('yields updated todo_list when items change', async () => {
-      const todoV1 = {
-        type: 'todo_list',
-        items: [
-          { text: 'Scan repo', completed: false },
-          { text: 'Add tests', completed: false },
-        ],
-      };
-      const todoV2 = {
-        type: 'todo_list',
-        items: [
-          { text: 'Scan repo', completed: true },
-          { text: 'Add tests', completed: false },
-        ],
-      };
-
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'item.completed', item: todoV1 };
-          yield { type: 'item.completed', item: todoV2 };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(3); // todoV1 + todoV2 + result
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u{1F4CB} Tasks:\n\u2B1C Scan repo\n\u2B1C Add tests',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'system',
-        content: '\u{1F4CB} Tasks:\n\u2705 Scan repo\n\u2B1C Add tests',
+    test('resumed tool-enabled threads use this turn’s handlers without registering a new catalog', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const oldHandler = mock(() => Promise.resolve('first'));
+      const currentHandler = mock(() => Promise.resolve('resumed'));
+      const first = resultOf(await run(provider, { nativeTools: [tool(oldHandler)] }));
+      await run(createProvider(server), { nativeTools: [tool(currentHandler)] }, first.sessionId);
+      expect(oldHandler).toHaveBeenCalledTimes(1);
+      expect(currentHandler).toHaveBeenCalledTimes(1);
+      expect(paramsOf(server, 'thread/resume')).not.toHaveProperty('dynamicTools');
+      expect(server.processes[1].toolResponses[0].result).toMatchObject({
+        success: true,
+        contentItems: [{ text: 'resumed' }],
       });
     });
 
-    test('yields file change summary for file_change items', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: {
-              type: 'file_change',
-              status: 'completed',
-              changes: [
-                { kind: 'add', path: 'src/new.ts' },
-                { kind: 'update', path: 'src/app.ts' },
-                { kind: 'delete', path: 'src/old.ts' },
-              ],
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u2705 File changes:\n\u2795 src/new.ts\n\u{1F4DD} src/app.ts\n\u2796 src/old.ts',
-      });
-    });
-
-    test('yields failed file change with error message', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: {
-              type: 'file_change',
-              status: 'failed',
-              error: { message: 'Permission denied' },
-              changes: [{ kind: 'update', path: 'src/locked.ts' }],
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u274C File changes:\n\u{1F4DD} src/locked.ts\nPermission denied',
-      });
-    });
-
-    test('yields failed file change without changes array', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: {
-              type: 'file_change',
-              status: 'failed',
-              error: { message: 'Disk full' },
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u274C File change failed: Disk full',
-      });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'failed' }),
-        'file_change_failed_no_changes'
+    test('a process exit preserves the tool catalog so a fresh provider can resume', async () => {
+      const failed = resultOf(
+        await streamOf({ exitCode: 1 }, { nativeTools: [tool(async () => 'unused')] })
       );
-    });
+      expect(failed.isError).toBe(true);
+      expect(failed.failure?.class).toBe('transient');
+      expect(failed.sessionId).toBeDefined();
 
-    test('yields failed file change without error message', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'file_change', status: 'failed' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: '\u274C File change failed',
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const resumed = resultOf(
+        await run(provider, { nativeTools: [tool(handler)] }, failed.sessionId)
+      );
+      expect(resumed.isError).not.toBe(true);
+      expect(resumed.sessionId).toBe(failed.sessionId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('thread/start');
+      expect(handler.mock.calls).toEqual([[input]]);
+      expect(server.processes[0].toolResponses[0].result).toEqual({
+        success: true,
+        contentItems: [{ type: 'inputText', text: 'resumed' }],
       });
     });
 
-    test('yields MCP tool call events and failures', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: {
-              id: 'mcp-1',
-              type: 'mcp_tool_call',
-              server: 'fs',
-              tool: 'readFile',
-              status: 'in_progress',
+    test('writes the persisted session format and resumes a fixed saved identifier', async () => {
+      const savedId =
+        'thread-1:archon-codex-tools:52e650d28c71262d384b8b25df7f242c4b99389e782c24f6db7711a2d4375b77';
+      const options = { nativeTools: [tool(async () => 'Queued')] };
+      expect(resultOf(await run(providerWith().provider, options)).sessionId).toBe(savedId);
+
+      const handler = mock<NativeTool['handler']>(() => Promise.resolve('resumed'));
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      const result = resultOf(await run(provider, { nativeTools: [tool(handler)] }, savedId));
+      expect(result.isError).not.toBe(true);
+      expect(result.sessionId).toBe(savedId);
+      expect(paramsOf(server, 'thread/resume')?.threadId).toBe('thread-1');
+      expect(handler.mock.calls).toEqual([[input]]);
+    });
+
+    test('legacy threads fail visibly before a model turn instead of silently lacking tools', async () => {
+      const { provider, server } = providerWith();
+      const result = resultOf(
+        await run(provider, { nativeTools: [tool(async () => 'unused')] }, THREAD_ID)
+      );
+      expect(result.isError).toBe(true);
+      expect(result.failure?.evidence).toContain('Start a new chat');
+      expect(server.processes).toHaveLength(0);
+    });
+
+    test.each(['name', 'schema', 'description', 'added', 'removed'] as const)(
+      'catalog changes require a new chat: %s',
+      async change => {
+        const { provider, server } = providerWith();
+        const original = tool(async () => 'unused');
+        const first = resultOf(await run(provider, { nativeTools: [original] }));
+        const changed = { ...original };
+        if (change === 'name') changed.name = 'manage_run';
+        if (change === 'description') changed.description = 'Changed meaning';
+        if (change === 'schema')
+          changed.inputSchema = { properties: { confirm: { kind: 'boolean' } }, required: [] };
+        const result = resultOf(
+          await run(
+            createProvider(server),
+            {
+              nativeTools:
+                change === 'removed'
+                  ? []
+                  : change === 'added'
+                    ? [original, { ...original, name: 'manage_run' }]
+                    : [changed],
             },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'mcp-1',
-              type: 'mcp_tool_call',
-              server: 'fs',
-              tool: 'readFile',
-              status: 'completed',
-            },
-          };
-          yield {
-            type: 'item.started',
-            item: {
-              id: 'mcp-2',
-              type: 'mcp_tool_call',
-              server: 'fs',
-              tool: 'readFile',
-              status: 'in_progress',
-            },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'mcp-2',
-              type: 'mcp_tool_call',
-              server: 'fs',
-              tool: 'readFile',
-              status: 'failed',
-              error: { message: 'Permission denied' },
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolCallId: 'mcp-1',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolOutput: '',
-        toolCallId: 'mcp-1',
-        toolOutcome: 'success',
-      });
-      expect(chunks[2]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolCallId: 'mcp-2',
-      });
-      expect(chunks[3]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolOutput: '\u274C Error: Permission denied',
-        toolCallId: 'mcp-2',
-        toolOutcome: 'error',
-      });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ server: 'fs', tool: 'readFile' }),
-        'mcp_tool_call_failed'
-      );
-    });
-
-    test('yields MCP tool call with partial identification', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'mcp-tool', type: 'mcp_tool_call', tool: 'readFile' },
-          };
-          yield {
-            type: 'item.completed',
-            item: { id: 'mcp-tool', type: 'mcp_tool_call', tool: 'readFile', status: 'completed' },
-          };
-          yield {
-            type: 'item.started',
-            item: { id: 'mcp-server', type: 'mcp_tool_call', server: 'fs' },
-          };
-          yield {
-            type: 'item.completed',
-            item: { id: 'mcp-server', type: 'mcp_tool_call', server: 'fs', status: 'completed' },
-          };
-          yield {
-            type: 'item.started',
-            item: { id: 'mcp-unknown', type: 'mcp_tool_call' },
-          };
-          yield {
-            type: 'item.completed',
-            item: { id: 'mcp-unknown', type: 'mcp_tool_call', status: 'completed' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: readFile',
-        toolCallId: 'mcp-tool',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: readFile',
-        toolOutput: '',
-        toolCallId: 'mcp-tool',
-        toolOutcome: 'success',
-      });
-      expect(chunks[2]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: fs',
-        toolCallId: 'mcp-server',
-      });
-      expect(chunks[3]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: fs',
-        toolOutput: '',
-        toolCallId: 'mcp-server',
-        toolOutcome: 'success',
-      });
-      expect(chunks[4]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: MCP tool',
-        toolCallId: 'mcp-unknown',
-      });
-      expect(chunks[5]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: MCP tool',
-        toolOutput: '',
-        toolCallId: 'mcp-unknown',
-        toolOutcome: 'success',
-      });
-    });
-
-    test('yields MCP failure without error message', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'mcp-failure', type: 'mcp_tool_call', server: 'db', tool: 'query' },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'mcp-failure',
-              type: 'mcp_tool_call',
-              server: 'db',
-              tool: 'query',
-              status: 'failed',
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: db/query',
-        toolCallId: 'mcp-failure',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: db/query',
-        toolOutput: '\u274C Error: MCP tool failed',
-        toolCallId: 'mcp-failure',
-        toolOutcome: 'error',
-      });
-    });
-
-    test('emits paired tool + tool_result for completed MCP tool call', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'mcp-completed', type: 'mcp_tool_call', server: 'fs', tool: 'readFile' },
-          };
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'mcp-completed',
-              type: 'mcp_tool_call',
-              server: 'fs',
-              tool: 'readFile',
-              status: 'completed',
-              result: { content: [{ type: 'text', text: 'file contents' }] },
-            },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(3);
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolCallId: 'mcp-completed',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: '\u{1F50C} MCP: fs/readFile',
-        toolOutput: JSON.stringify([{ type: 'text', text: 'file contents' }]),
-        toolCallId: 'mcp-completed',
-        toolOutcome: 'success',
-      });
-      expect(chunks[2]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-      });
-    });
-
-    test('creates new thread with sandbox/network settings', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('test prompt', '/my/workspace')) {
-        // consume
-      }
-
-      expect(mockStartThread).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workingDirectory: '/my/workspace',
-          skipGitRepoCheck: true,
-          sandboxMode: 'danger-full-access',
-          networkAccessEnabled: true,
-          approvalPolicy: 'never',
-        })
-      );
-    });
-
-    test('resumes existing thread with sandbox/network settings', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockResumeThread).toHaveBeenCalledWith(
-        'existing-thread',
-        expect.objectContaining({
-          workingDirectory: '/workspace',
-          skipGitRepoCheck: true,
-          sandboxMode: 'danger-full-access',
-          networkAccessEnabled: true,
-          approvalPolicy: 'never',
-        })
-      );
-      expect(mockStartThread).not.toHaveBeenCalled();
-      // No thread.started re-fires on resume → the snapshot (resumeThread's id) survives.
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({
-        sessionId: 'resumed-thread-id',
-      });
-    });
-
-    test('falls back to new thread when resume fails and notifies user', async () => {
-      const resumeError = new Error('Thread not found');
-      mockResumeThread.mockImplementation(() => {
-        throw resumeError;
-      });
-      mockStartThread.mockReturnValue(createMockThread('fallback-thread'));
-
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace', 'bad-thread-id')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockResumeThread).toHaveBeenCalled();
-      expect(mockStartThread).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workingDirectory: '/workspace',
-          skipGitRepoCheck: true,
-          sandboxMode: 'danger-full-access',
-          networkAccessEnabled: true,
-          approvalPolicy: 'never',
-        })
-      );
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { err: resumeError, sessionId: 'bad-thread-id' },
-        'resume_thread_failed'
-      );
-      // Verify user is notified about session loss
-      expect(chunks[0]).toEqual({
-        type: 'system',
-        content: expect.stringContaining('Could not resume previous session'),
-      });
-      expect(chunks[1]).toEqual({
-        type: 'result',
-        sessionId: 'fallback-thread',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-        // A requested resume that fell back to a fresh thread is reported as cold.
-        resumed: false,
-      });
-    });
-
-    test('reports resumed:true on the result when an existing thread resumes', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
-    });
-
-    test('reports resumed:false when a resumed thread retries cold after a transient crash', async () => {
-      // Attempt 0 resumes the thread, then the turn crashes. The retry re-runs on
-      // a fresh startThread (cold), so the produced result must report resumed:false
-      // rather than inheriting the initial resume's success (see CodeRabbit #1842).
-      let callCount = 0;
-      mockRunStreamed.mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          return Promise.reject(new Error('Codex Exec exited with code 1'));
-        }
-        return Promise.resolve({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockResumeThread).toHaveBeenCalled();
-      // The retry path created a fresh thread, dropping the resumed session context.
-      expect(mockStartThread).toHaveBeenCalled();
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: false });
-    });
-
-    test('passes model and codex options via assistantConfig to thread options', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-        model: 'gpt-5.6-sol',
-        assistantConfig: {
-          modelReasoningEffort: 'ultra',
-          webSearchMode: 'live',
-          additionalDirectories: ['/other/repo'],
-        },
-      })) {
-        // consume
-      }
-
-      expect(mockStartThread).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: 'gpt-5.6-sol',
-          modelReasoningEffort: 'ultra',
-          webSearchMode: 'live',
-          additionalDirectories: ['/other/repo'],
-        })
-      );
-    });
-
-    // #2556: `effort:` is Archon's one reasoning-depth spelling. Codex reads it
-    // off nodeConfig like every other effort-capable provider and translates it
-    // to the SDK's `modelReasoningEffort` here, instead of the engine having to
-    // know which field Codex wants.
-    test('applies nodeConfig.effort as modelReasoningEffort', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-        nodeConfig: { nodeId: 'n1', effort: 'high' },
-      })) {
-        // consume
-      }
-
-      expect(mockStartThread).toHaveBeenCalledWith(
-        expect.objectContaining({ modelReasoningEffort: 'high' })
-      );
-    });
-
-    test('nodeConfig.effort beats assistants.codex.modelReasoningEffort', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-        assistantConfig: { modelReasoningEffort: 'low' },
-        nodeConfig: { nodeId: 'n1', effort: 'minimal' },
-      })) {
-        // consume
-      }
-
-      expect(mockStartThread).toHaveBeenCalledWith(
-        expect.objectContaining({ modelReasoningEffort: 'minimal' })
-      );
-    });
-
-    test.each(['max', 'ultra', 'persistent'] as const)(
-      'passes `effort: %s` to the SDK natively',
-      async effort => {
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-          nodeConfig: { nodeId: 'n1', effort },
-        })) {
-          // consume
-        }
-        expect(mockStartThread).toHaveBeenCalledWith(
-          expect.objectContaining({ modelReasoningEffort: effort })
+            first.sessionId
+          )
         );
+        expect(result.isError).toBe(true);
+        expect(result.failure?.evidence).toContain('Start a new chat');
+        expect(server.processes).toHaveLength(1);
       }
     );
 
-    test('normalizes outputFormat schema (adds additionalProperties:false) before sending as outputSchema', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
+    test.each([
+      { status: 'completed' as const, success: false },
+      { status: 'failed' as const, success: null },
+    ])('failed dynamic tool items reach the stream: %j', async failure => {
+      const chunks = await run(
+        providerWith({
+          notifications: [
+            itemCompleted({
+              type: 'dynamicToolCall',
+              id: 'failed-call',
+              tool: 'invoke_workflow',
+              namespace: null,
+              arguments: input,
+              ...failure,
+              contentItems: [{ type: 'inputText', text: 'dispatch unavailable' }],
+              durationMs: 1,
+            }),
+          ],
+        }).provider
+      );
+      expect(chunks).toContainEqual({
+        type: 'tool_call_update',
+        toolCallId: 'failed-call',
+        status: 'failed',
+        output: 'dispatch unavailable',
+      });
+    });
+
+    test.each([
+      { ...call, tool: 'unknown' },
+      { ...call, arguments: {} },
+      { ...call, arguments: { prompt: false } },
+      { ...call, threadId: 'another-thread' },
+      { ...call, turnId: 'another-turn' },
+      { ...call, namespace: 'another-server' },
+    ])('rejects undeclared tools, invalid arguments and foreign calls: %j', async rejected => {
+      const handler = mock(() => Promise.resolve('should not run'));
+      const { provider, server } = providerWith({ toolCalls: [rejected] });
+      await run(provider, { nativeTools: [tool(handler)] });
+      expect(handler).not.toHaveBeenCalled();
+      expect(server.processes[0].toolResponses[0].result.success).toBe(false);
+    });
+
+    test('handler exceptions return a failed result with the original error', async () => {
+      const { provider, server } = providerWith({ toolCalls: [call] });
+      await run(provider, {
+        nativeTools: [tool(() => Promise.reject(new Error('dispatch unavailable')))],
+      });
+      expect(server.processes[0].toolResponses[0].result).toMatchObject({
+        success: false,
+        contentItems: [{ text: 'invoke_workflow failed: dispatch unavailable' }],
+      });
+    });
+
+    test('tools are absent and experimental API stays off for workflow nodes and titles without tools', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { nodeConfig: { nodeId: 'node' } });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+      await run(provider, {
+        purpose: 'title-generation',
+        nativeTools: [tool(() => Promise.resolve('no'))],
+      });
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'thread/start')).not.toHaveProperty('dynamicTools');
+    });
+  });
+
+  describe('background work', () => {
+    test('keeps the app-server alive after the result until both observed lifecycles end', async () => {
+      const bg = {
+        ...command('exec-1', 'sleep 20'),
+        source: 'unifiedExecStartup' as const,
+        processId: '94316',
+      };
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          itemStarted(bg),
+          agentMessage('parent answer'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        const process = server.processes[0];
+        if (chunk.type === 'result') {
+          expect(process.stdinEnded).toBe(false);
+          process.send(itemCompleted({ ...bg, status: 'completed', exitCode: 0 }));
+        } else if (
+          chunk.type === 'subtask' &&
+          chunk.status === 'completed' &&
+          chunk.taskType === 'command_execution'
+        ) {
+          expect(process.stdinEnded).toBe(false);
+          process.send(itemStarted(subAgentActivity('completed')));
+          process.send(itemCompleted(subAgentActivity('completed')));
+        }
+      }
+      expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+        'started',
+        'started',
+        'completed',
+        'completed',
+      ]);
+      expect(chunks.filter(c => c.type === 'tool_call_update')).toEqual([]);
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
+    test('tracks a child process started after the parent result without adopting child replies or unrelated work', async () => {
+      const bg = { ...command('exec-child', 'sleep 20'), source: 'unifiedExecStartup' as const };
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started', 'unrelated-child'), 'unrelated-thread'),
+          itemStarted(subAgentActivity('started')),
+          agentMessage('{"answer":"parent"}'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        nodeConfig: {
+          output_format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: { answer: { type: 'string' } },
+              required: ['answer'],
+              additionalProperties: false,
+            },
+          },
+        },
+      })) {
+        chunks.push(chunk);
+        const process = server.processes[0];
+        if (chunk.type === 'result') {
+          process.send(itemStarted(bg, 'child-thread', 'child-turn'));
+          process.send(
+            itemCompleted(
+              {
+                type: 'agentMessage',
+                id: 'child-reply',
+                text: 'child answer',
+                phase: null,
+                memoryCitation: null,
+                delivery: null,
+                questions: null,
+              },
+              'child-thread',
+              'child-turn'
+            )
+          );
+          process.send(turnCompleted('completed', null, TURN_ID, 'child-thread'));
+          process.send(itemStarted(subAgentActivity('completed')));
+        } else if (
+          chunk.type === 'subtask' &&
+          chunk.taskType === 'local_agent' &&
+          chunk.status === 'completed'
+        ) {
+          expect(process.stdinEnded).toBe(false);
+          process.send(
+            itemCompleted({ ...bg, status: 'completed', exitCode: 0 }, 'child-thread', 'child-turn')
+          );
+        }
+      }
+      expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+        'started',
+        'started',
+        'completed',
+        'completed',
+      ]);
+      expect(chunks.filter(c => c.type === 'agent_message_chunk')).toEqual([
+        { type: 'agent_message_chunk', text: '{"answer":"parent"}' },
+      ]);
+      expect(resultOf(chunks).structuredOutput).toEqual({ answer: 'parent' });
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test.each(['completed', 'failed', 'declined'] as const)(
+      'reports unified exec terminal status %s from the runtime',
+      async status => {
+        const bg = { ...command('exec-1', 'exit 1'), source: 'unifiedExecStartup' as const };
+        const { provider, server } = providerWith({
+          notifications: [
+            itemStarted(bg),
+            turnCompleted('failed', turnError('other', 'parent failed')),
+          ],
+          completion: null,
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of provider.sendQuery('p', '/workspace')) {
+          chunks.push(chunk);
+          if (chunk.type === 'subtask' && chunk.status === 'started') {
+            expect(server.processes[0].stdinEnded).toBe(false);
+            server.processes[0].send(itemCompleted({ ...bg, status, exitCode: 1 }));
+          }
+        }
+        expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+          'started',
+          status === 'declined' ? 'stopped' : status,
+        ]);
+        expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result', 'settled']);
+        expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      }
+    );
+
+    test('drains observed work before a failed result can make the executor stop reading', async () => {
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          turnCompleted('failed', turnError('other', 'parent failed')),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        if (chunk.type === 'result' && chunk.failure) break;
+      }
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result']);
+      expect(chunks[1]).toMatchObject({ status: 'completed' });
+      expect(resultOf(chunks).failure?.evidence).toContain('parent failed');
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
+    test('cancellation after a result leaves observed work live and does not settle', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(subAgentActivity('started')), turnCompleted('completed')],
+        completion: null,
+      });
+      const controller = new AbortController();
+      const chunks: MessageChunk[] = [];
+      const consume = async (): Promise<void> => {
+        for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+          abortSignal: controller.signal,
+        })) {
+          chunks.push(chunk);
+          if (chunk.type === 'result') {
+            server.processes[0].send(itemCompleted(subAgentActivity('interrupted')));
+            server.processes[0].send(itemCompleted(subAgentActivity('interacted')));
+            controller.abort();
+          }
+        }
+      };
+      await expect(consume()).rejects.toThrow('Query aborted');
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
+    test('an abnormal process exit after the final notification is not a settle', async () => {
+      const { provider, server } = providerWith({
+        notifications: [turnCompleted('completed')],
+        exitCode: 137,
+      });
+      const chunks = await run(provider);
+      expect(chunks.map(c => c.type)).toEqual(['result']);
+      expect(server.processes[0].signals).toEqual([]);
+    });
+
+    test('lost observation after the result never invents an end or settles', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(subAgentActivity('started')), turnCompleted('completed')],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        if (chunk.type === 'result') server.processes[0].exit(137);
+      }
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
+      expect(chunks[0]).toMatchObject({ status: 'started' });
+      expect(server.processes[0].stdinEnded).toBe(false);
+    });
+  });
+
+  describe('a turn', () => {
+    test('streams the reply and ends with the thread id and this turn’s usage', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          agentMessage('hello'),
+          tokenUsage({ input: 120, output: 7, cached: 100, cacheWrite: 3 }),
+        ],
+      });
+      expect(chunks).toEqual([
+        { type: 'agent_message_chunk', text: 'hello' },
+        {
+          type: 'result',
+          sessionId: THREAD_ID,
+          tokens: { input: 120, output: 7, cacheRead: 100, cacheWrite: 3 },
+        },
+      ]);
+    });
+
+    // Snapshots recorded from `codex app-server` 0.160.0: a turn of three requests on a new
+    // thread, then a resumed turn of two requests on the same thread.
+    test('a turn of several requests records all of them, once each', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          tokenUsage({ input: 26598, output: 37, cached: 7168 }),
+          tokenUsage(
+            { input: 53291, output: 59, cached: 33536 },
+            { input: 26693, output: 22, cached: 26368 }
+          ),
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+          // Codex re-sends its current snapshot without a new request.
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 80066,
+        output: 64,
+        cacheRead: 60032,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a resumed turn records only its own requests, not the thread’s earlier turns', async () => {
+      const { provider } = providerWith({
+        notifications: [
+          tokenUsage(
+            { input: 106866, output: 99, cached: 86656 },
+            { input: 26800, output: 35, cached: 26624 }
+          ),
+          tokenUsage(
+            { input: 133758, output: 105, cached: 113280 },
+            { input: 26892, output: 6, cached: 26624 }
+          ),
+        ],
+      });
+      const chunks = await run(provider, undefined, THREAD_ID);
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 26800 + 26892,
+        output: 35 + 6,
+        cacheRead: 26624 + 26624,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a turn that used no tokens does not report another turn’s usage', async () => {
+      const chunks = await streamOf({
+        notifications: [tokenUsage({ input: 999, output: 999 }, undefined, 'earlier-turn')],
+        completion: { status: 'failed', error: turnError('serverOverloaded', 'busy') },
+      });
+      expect(resultOf(chunks).tokens).toBeUndefined();
+    });
+
+    test('initializes, then starts a thread and a turn with Archon’s settings', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, {
+        model: 'gpt-request',
+        assistantConfig: {
+          model: 'gpt-config',
+          modelReasoningEffort: 'low',
+          webSearchMode: 'live',
+          additionalDirectories: ['/extra'],
+        },
+        nodeConfig: { effort: 'high' },
       });
 
-      const schema = {
+      expect(server.processes[0].methods).toEqual(['initialize', 'thread/start', 'turn/start']);
+      expect(paramsOf(server, 'thread/start')).toEqual({
+        cwd: '/workspace',
+        sandbox: 'danger-full-access',
+        approvalPolicy: 'never',
+        model: 'gpt-request',
+        config: {
+          sandbox_workspace_write: { network_access: true, writable_roots: ['/extra'] },
+          web_search: 'live',
+        },
+      });
+      expect(paramsOf(server, 'turn/start')).toEqual({
+        threadId: THREAD_ID,
+        input: [{ type: 'text', text: 'test prompt', text_elements: [] }],
+        effort: 'high',
+      });
+    });
+
+    test('a workflow node turns the automatic skill catalog off; direct chat does not', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { nodeConfig: { nodeId: 'implement' } });
+      expect(paramsOf(server, 'thread/start')?.config).toMatchObject({
+        skills: { include_instructions: false },
+      });
+
+      await run(provider);
+      expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('skills');
+    });
+
+    test('resumes an existing thread and reports resumed', async () => {
+      const { provider, server } = providerWith();
+      const chunks = await run(provider, undefined, 'existing-thread');
+      expect(paramsOf(server, 'thread/resume')).toMatchObject({
+        threadId: 'existing-thread',
+        cwd: '/workspace',
+        excludeTurns: true,
+      });
+      expect(resultOf(chunks)).toMatchObject({ sessionId: 'existing-thread', resumed: true });
+    });
+
+    test('a resumed thread gets the same settings a new one would', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-resume-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const options: SendQueryOptions = {
+        model: 'gpt-request',
+        assistantConfig: { webSearchMode: 'live', additionalDirectories: ['/extra'] },
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      };
+      const { provider, server } = providerWith();
+      for await (const _ of provider.sendQuery('p', dir, undefined, options)) {
+        // consume
+      }
+      const started = paramsOf(server, 'thread/start');
+      for await (const _ of provider.sendQuery('p', dir, 'existing-thread', options)) {
+        // consume
+      }
+      const { threadId, excludeTurns, ...resumed } = paramsOf(server, 'thread/resume') ?? {};
+      expect({ threadId, excludeTurns }).toEqual({
+        threadId: 'existing-thread',
+        excludeTurns: true,
+      });
+      expect(started).toBeDefined();
+      expect(resumed).toEqual(started ?? {});
+    });
+
+    test('a fork continues the thread in a new one with the settings a new thread gets', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-fork-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const options: SendQueryOptions = {
+        model: 'gpt-request',
+        assistantConfig: { webSearchMode: 'live', additionalDirectories: ['/extra'] },
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      };
+      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      for await (const _ of provider.sendQuery('p', dir, undefined, options)) {
+        // consume
+      }
+      const started = paramsOf(server, 'thread/start');
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, 'existing-thread', {
+        ...options,
+        forkSession: true,
+      })) {
+        chunks.push(chunk);
+      }
+      expect(server.processes.at(-1)?.methods).not.toContain('thread/resume');
+      const { threadId, excludeTurns, ...forked } = paramsOf(server, 'thread/fork') ?? {};
+      expect({ threadId, excludeTurns }).toEqual({
+        threadId: 'existing-thread',
+        excludeTurns: true,
+      });
+      // The scoped config is not stored with the source thread; without it the fork would
+      // load the user's MCP servers and plugins again.
+      expect(started?.config).toMatchObject({ mcp_servers: { posthog: { enabled: false } } });
+      expect(forked).toEqual(started ?? {});
+      expect(resultOf(chunks)).toMatchObject({
+        sessionId: 'existing-thread-fork-1',
+        resumed: true,
+      });
+    });
+
+    test('two runs continuing one thread at once each get their own fork', async () => {
+      const { provider } = providerWith();
+      const runs = await Promise.all(
+        [1, 2].map(() => run(provider, { forkSession: true }, 'existing-thread'))
+      );
+      const ids = runs.map(chunks => resultOf(chunks).sessionId);
+      expect(new Set(['existing-thread', ...ids]).size).toBe(3);
+    });
+
+    test('a thread that cannot be forked fails the turn without trying another way', async () => {
+      const { provider, server } = providerWith({
+        errors: { 'thread/fork': { code: -32600, message: 'no rollout found for thread id x' } },
+      });
+      const result = resultOf(await run(provider, { forkSession: true }, 'x'));
+      expect(result.failure).toEqual({
+        class: 'unknown',
+        evidence: 'thread/fork failed (JSON-RPC -32600): no rollout found for thread id x',
+      });
+      expect(server.processes[0].methods).toEqual(['initialize', 'thread/fork']);
+    });
+
+    test('a thread that cannot be resumed fails the turn with Codex’s words', async () => {
+      const { provider } = providerWith({
+        errors: { 'thread/resume': { code: -32600, message: 'no rollout found for thread id x' } },
+      });
+      const result = resultOf(await run(provider, undefined, 'x'));
+      expect(result.failure).toEqual({
+        class: 'unknown',
+        evidence: 'thread/resume failed (JSON-RPC -32600): no rollout found for thread id x',
+      });
+      expect(result.resumed).toBeUndefined();
+    });
+
+    test('the request env is laid over the process env, and CODEX_HOME is left as the user set it', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { env: { PATH: '/request/bin', ARCHON_TEST_ONLY: 'yes' } });
+      const env = server.processes[0].env;
+      expect(env.ARCHON_TEST_ONLY).toBe('yes');
+      expect(env.PATH.split(process.platform === 'win32' ? ';' : ':')).toContain('/request/bin');
+      expect(env.HOME).toBe(process.env.HOME as string);
+      expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+    });
+
+    test("a run's identity in the request env reaches the app-server the agent's shell runs in", async () => {
+      const { provider, server } = providerWith();
+      const identity = {
+        WORKFLOW_ID: 'run-1',
+        ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
+        ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
+      };
+      await run(provider, { env: identity });
+      expect(server.processes[0].env).toMatchObject(identity);
+      expect(server.processes[0].env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+    });
+
+    // #3562 renamed Archon's setup variables instead of stripping Codex's own names
+    // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
+    test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {
+      const original = process.env.CODEX_ACCESS_TOKEN;
+      process.env.CODEX_ACCESS_TOKEN = 'user-codex-token';
+      try {
+        const { provider, server } = providerWith();
+        await run(provider, { env: { ARCHON_CODEX_ACCESS_TOKEN: 'archon-setup-token' } });
+        expect(server.processes[0].env.CODEX_ACCESS_TOKEN).toBe('user-codex-token');
+      } finally {
+        if (original === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+        else process.env.CODEX_ACCESS_TOKEN = original;
+      }
+    });
+  });
+
+  describe('Archon-supplied credentials', () => {
+    const TOKEN_ENV = 'ARCHON_CODEX_CHATGPT_ACCESS_TOKEN';
+    const ACCOUNT_ENV = 'ARCHON_CODEX_CHATGPT_ACCOUNT_ID';
+
+    test('CODEX_API_KEY logs in with the key, held only by the process', async () => {
+      const { provider, server } = providerWith();
+      const chunks = await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } });
+      expect(resultOf(chunks).failure).toBeUndefined();
+      const process0 = server.processes[0];
+      expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
+      expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toBeNull();
+      expect(paramsOf(server, 'account/login/start')).toEqual({
+        type: 'apiKey',
+        apiKey: 'sk-test-key',
+      });
+    });
+
+    test('managed ChatGPT tokens log in in memory, held only by the process', async () => {
+      const { provider, server } = providerWith();
+      const chunks = await run(provider, {
+        env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' },
+      });
+      expect(resultOf(chunks).failure).toBeUndefined();
+      const process0 = server.processes[0];
+      expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
+      expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);
+      expect(paramsOf(server, 'initialize')?.capabilities).toEqual({
+        experimentalApi: true,
+        requestAttestation: false,
+      });
+      expect(paramsOf(server, 'account/login/start')).toEqual({
+        type: 'chatgptAuthTokens',
+        accessToken: 'chatgpt-access',
+        chatgptAccountId: 'acct-1',
+      });
+    });
+
+    test('a rejected managed ChatGPT token fails as auth and says Archon cannot refresh it', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'acct-1' } })
+      );
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).toContain('cannot refresh it during a turn');
+      expect(failure?.evidence).toContain('401 Unauthorized');
+      expect(failure?.evidence).not.toContain('chatgpt-access');
+    });
+
+    test('an auth failure on the user’s own login carries no managed-token advice', async () => {
+      const { provider } = providerWith({
+        completion: { status: 'failed', error: turnError('unauthorized', '401 Unauthorized') },
+      });
+      const { failure } = resultOf(await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } }));
+      expect(failure?.class).toBe('auth');
+      expect(failure?.evidence).not.toContain('cannot refresh');
+    });
+
+    test('managed ChatGPT tokens win over CODEX_API_KEY', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, {
+        env: { CODEX_API_KEY: 'sk-test-key', [TOKEN_ENV]: 'chatgpt-access', [ACCOUNT_ENV]: 'a' },
+      });
+      expect(paramsOf(server, 'account/login/start')?.type).toBe('chatgptAuthTokens');
+    });
+
+    test('half a managed ChatGPT token pair is misconfigured before any process starts', async () => {
+      const { provider, server } = providerWith();
+      const { failure } = resultOf(
+        await run(provider, { env: { [TOKEN_ENV]: 'chatgpt-access-secret' } })
+      );
+      expect(failure?.class).toBe('misconfigured');
+      expect(failure?.evidence).toContain(TOKEN_ENV);
+      expect(failure?.evidence).toContain(ACCOUNT_ENV);
+      expect(failure?.evidence).not.toContain('chatgpt-access-secret');
+      expect(server.processes).toHaveLength(0);
+    });
+
+    test('without CODEX_API_KEY Codex uses the user’s own login', async () => {
+      const original = process.env.CODEX_API_KEY;
+      delete process.env.CODEX_API_KEY;
+      try {
+        const { provider, server } = providerWith();
+        await run(provider, { env: { OPENAI_API_KEY: 'sk-not-for-codex' } });
+        expect(server.processes[0].args).toEqual(['app-server']);
+        expect(server.processes[0].methods).not.toContain('account/login/start');
+      } finally {
+        if (original !== undefined) process.env.CODEX_API_KEY = original;
+      }
+    });
+  });
+
+  describe('binary resolution', () => {
+    test('every turn spawns the binary the current pin names, and a missing pin is misconfigured (#3573)', async () => {
+      const { provider, server } = providerWith();
+      const first = await fakeBinary();
+      const second = await fakeBinary();
+
+      await run(provider, { assistantConfig: { codexBinaryPath: first } });
+      await run(provider, { assistantConfig: { codexBinaryPath: second } });
+      expect(server.processes.map(p => p.binary)).toEqual([first, second]);
+
+      const result = resultOf(
+        await run(provider, { assistantConfig: { codexBinaryPath: '/nonexistent/codex-bin' } })
+      );
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(server.processes).toHaveLength(2);
+    });
+
+    test.each([
+      ['ENOENT', 'misconfigured'],
+      ['EACCES', 'misconfigured'],
+      ['ENOEXEC', 'misconfigured'],
+      ['EPERM', 'misconfigured'],
+      ['E2BIG', 'misconfigured'],
+      ['ENAMETOOLONG', 'misconfigured'],
+      ['ELOOP', 'misconfigured'],
+      ['EMFILE', 'transient'],
+    ] satisfies [string, ProviderFailureClass][])(
+      'a spawn that fails with %s is %s',
+      async (errno, expected) => {
+        const { provider } = providerWith({ spawnError: errno });
+        const result = resultOf(await run(provider));
+        expect(result.failure?.class).toBe(expected);
+        expect(result.failure?.evidence).toContain(errno);
+      }
+    );
+  });
+
+  describe('tool calls', () => {
+    test('a command is a tool call titled with the command, closed with its exit code and output', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemStarted(command('cmd-1', 'ls')),
+          itemCompleted(command('cmd-1', 'ls', { exitCode: 0, output: 'a.ts\n' })),
+          itemStarted(command('cmd-2', 'false')),
+          itemCompleted(command('cmd-2', 'false', { exitCode: 1, output: '' })),
+        ],
+      });
+      expect(chunks.slice(0, 4)).toEqual([
+        {
+          type: 'tool_call',
+          toolCallId: 'cmd-1',
+          name: 'command_execution',
+          title: 'ls',
+          rawInput: { command: 'ls' },
+        },
+        {
+          type: 'tool_call_update',
+          toolCallId: 'cmd-1',
+          status: 'completed',
+          exitCode: 0,
+          output: 'a.ts\n',
+        },
+        {
+          type: 'tool_call',
+          toolCallId: 'cmd-2',
+          name: 'command_execution',
+          title: 'false',
+          rawInput: { command: 'false' },
+        },
+        {
+          type: 'tool_call_update',
+          toolCallId: 'cmd-2',
+          status: 'failed',
+          exitCode: 1,
+          output: '',
+        },
+      ]);
+    });
+
+    test('a declined command closes as failed', async () => {
+      const chunks = await streamOf({
+        notifications: [itemCompleted(command('cmd-1', 'rm -rf /', { status: 'declined' }))],
+      });
+      expect(chunks[1]).toMatchObject({ toolCallId: 'cmd-1', status: 'failed' });
+    });
+
+    test('command output past the contract cap is truncated and flagged', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemCompleted(
+            command('cmd-1', 'cat big', {
+              exitCode: 0,
+              output: 'x'.repeat(TOOL_OUTPUT_MAX_CHARS + 5),
+            })
+          ),
+        ],
+      });
+      expect(chunks[1]).toMatchObject({ outputTruncated: true });
+      expect((chunks[1] as { output: string }).output).toHaveLength(TOOL_OUTPUT_MAX_CHARS);
+    });
+
+    test('web search, MCP and file-change items are tool calls; a file change opens on completion', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemCompleted(webSearch('ws-1', 'bun docs')),
+          itemStarted(mcpToolCall('mcp-1', 'figma', 'get_file', 'inProgress', { key: 'abc' })),
+          itemCompleted(
+            mcpToolCall('mcp-1', 'figma', 'get_file', 'failed', { key: 'abc' }, 'not found')
+          ),
+          itemCompleted(fileChange('fc-1', [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }])),
+        ],
+      });
+      expect(chunks.slice(0, 6)).toEqual([
+        {
+          type: 'tool_call',
+          toolCallId: 'ws-1',
+          name: 'web_search',
+          title: 'bun docs',
+          rawInput: { query: 'bun docs' },
+        },
+        { type: 'tool_call_update', toolCallId: 'ws-1', status: 'completed' },
+        {
+          type: 'tool_call',
+          toolCallId: 'mcp-1',
+          name: 'get_file',
+          title: 'figma/get_file',
+          rawInput: { key: 'abc' },
+        },
+        { type: 'tool_call_update', toolCallId: 'mcp-1', status: 'failed', output: 'not found' },
+        {
+          type: 'tool_call',
+          toolCallId: 'fc-1',
+          name: 'file_change',
+          rawInput: { changes: [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }] },
+        },
+        { type: 'tool_call_update', toolCallId: 'fc-1', status: 'completed' },
+      ]);
+    });
+
+    test.each(['patch text', 0, false, null, ['a', 1]].map(value => [value] as const))(
+      'MCP tool calls preserve JSON arguments %j',
+      async args => {
+        const chunks = await streamOf({
+          notifications: [
+            itemStarted({
+              ...mcpToolCall('mcp-1', 'server', 'tool', 'inProgress', {}),
+              arguments: args,
+            }),
+          ],
+        });
+        expect(chunks[0]).toEqual({
+          type: 'tool_call',
+          toolCallId: 'mcp-1',
+          name: 'tool',
+          title: 'server/tool',
+          rawInput: args,
+        });
+      }
+    );
+
+    test('reasoning streams its summary as a thought; items with nothing to show stream nothing', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          itemCompleted(reasoning('r-1', ['first', 'second'])),
+          itemCompleted(reasoning('r-2', [], ['raw'])),
+          agentMessage('', 'm-empty'),
+          itemCompleted(plan('p-1', 'step')),
+        ],
+      });
+      expect(chunks).toEqual([
+        { type: 'agent_thought_chunk', text: 'first\n\nsecond' },
+        { type: 'result', sessionId: THREAD_ID },
+      ]);
+    });
+  });
+
+  describe('structured output', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        meta: { type: 'object', properties: { tag: { type: 'string' } } },
+      },
+      required: ['summary'],
+    };
+
+    test('sends the schema normalized for OpenAI strict mode', async () => {
+      const { provider, server } = providerWith();
+      await run(provider, { outputFormat: { type: 'json_schema', schema } });
+      expect(paramsOf(server, 'turn/start')?.outputSchema).toEqual({
         type: 'object',
         properties: {
           summary: { type: 'string' },
-          meta: { type: 'object', properties: { tag: { type: 'string' } } },
+          meta: {
+            type: 'object',
+            properties: { tag: { type: 'string' } },
+            additionalProperties: false,
+          },
         },
         required: ['summary'],
-      };
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-        outputFormat: { type: 'json_schema', schema },
-      })) {
-        chunks.push(chunk);
-      }
-
-      // OpenAI strict-mode requires additionalProperties:false on every object,
-      // including the nested `meta` object — verifies recursion through the
-      // real provider path. See issue #1843.
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({
-          outputSchema: {
-            type: 'object',
-            properties: {
-              summary: { type: 'string' },
-              meta: {
-                type: 'object',
-                properties: { tag: { type: 'string' } },
-                additionalProperties: false,
-              },
-            },
-            required: ['summary'],
-            additionalProperties: false,
-          },
-        })
-      );
+        additionalProperties: false,
+      });
     });
 
-    test('normalizes nodeConfig.output_format schema before sending as outputSchema', async () => {
-      // The DAG executor populates nodeConfig.output_format (not outputFormat),
-      // so this is the actual path from issue #1843. Pin the normalized schema
-      // at the SDK boundary, not just the downstream parse.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-        nodeConfig: {
-          output_format: {
-            type: 'object',
-            properties: {
-              verdict: { type: 'string' },
-              meta: { type: 'object', properties: { score: { type: 'number' } } },
-            },
-          },
+    test('parses the last message onto structuredOutput (workflow output_format path)', async () => {
+      const chunks = await streamOf(
+        {
+          notifications: [
+            agentMessage('thinking first', 'm-1'),
+            agentMessage('{"summary":"ok"}', 'm-2'),
+          ],
         },
-      })) {
-        chunks.push(chunk);
-      }
+        { nodeConfig: { output_format: schema } }
+      );
+      expect(resultOf(chunks).structuredOutput).toEqual({ summary: 'ok' });
+    });
 
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({
-          outputSchema: {
-            type: 'object',
-            properties: {
-              verdict: { type: 'string' },
-              meta: {
-                type: 'object',
-                properties: { score: { type: 'number' } },
-                additionalProperties: false,
-              },
-            },
-            additionalProperties: false,
+    test('warns when the final message is not JSON', async () => {
+      const chunks = await streamOf(
+        { notifications: [agentMessage('not json')] },
+        { outputFormat: { type: 'json_schema', schema } }
+      );
+      expect(chunks).toContainEqual(
+        expect.objectContaining({ type: 'warning', code: 'codex.structured_output_not_json' })
+      );
+      expect(resultOf(chunks).structuredOutput).toBeUndefined();
+    });
+
+    test('leaves structuredOutput unset when no format was requested', async () => {
+      const chunks = await streamOf({ notifications: [agentMessage('{"a":1}')] });
+      expect(resultOf(chunks).structuredOutput).toBeUndefined();
+    });
+  });
+
+  describe('systemPrompt delivery (issue #1837)', () => {
+    async function promptSent(options?: SendQueryOptions, resume?: string): Promise<unknown> {
+      const { provider, server } = providerWith();
+      await run(provider, options, resume);
+      const input = paramsOf(server, 'turn/start')?.input as { text: string }[];
+      return input[0].text;
+    }
+
+    test.each([
+      ['a string', { systemPrompt: 'AAA rules' }, 'AAA rules\n\n---\n\ntest prompt'],
+      [
+        'a string[] joined with blank lines',
+        { systemPrompt: ['one', 'two'] },
+        'one\n\ntwo\n\n---\n\ntest prompt',
+      ],
+      ['whitespace only', { systemPrompt: '   ' }, 'test prompt'],
+      ['none', {}, 'test prompt'],
+      [
+        'node-level',
+        { nodeConfig: { systemPrompt: 'node rules' } },
+        'node rules\n\n---\n\ntest prompt',
+      ],
+      [
+        'request-level over node-level',
+        { systemPrompt: 'request', nodeConfig: { systemPrompt: 'node' } },
+        'request\n\n---\n\ntest prompt',
+      ],
+    ])('%s', async (_label, options, expected) => {
+      expect(await promptSent(options as SendQueryOptions)).toBe(expected);
+    });
+
+    test('appended instructions are folded in when no system prompt replaces them', async () => {
+      expect(await promptSent({ appendSystemPrompt: 'extra' })).toBe('extra\n\n---\n\ntest prompt');
+      expect(
+        await promptSent({ appendSystemPrompt: 'extra', nodeConfig: { systemPrompt: 'node' } })
+      ).toBe('node\n\n---\n\ntest prompt');
+    });
+
+    test('a resumed thread gets the prepend too', async () => {
+      expect(await promptSent({ systemPrompt: 'AAA rules' }, 'existing')).toBe(
+        'AAA rules\n\n---\n\ntest prompt'
+      );
+    });
+  });
+
+  describe('MCP config', () => {
+    test('passes the node’s MCP file as mcp_servers, expanding env from the process and the request', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-mcp-')));
+      await writeFile(
+        join(dir, 'mcp.json'),
+        JSON.stringify({
+          figma: {
+            type: 'http',
+            url: 'http://127.0.0.1:3845/mcp',
+            headers: { Authorization: 'Bearer $ARCHON_CODEX_MCP_TOKEN' },
+            startup_timeout_sec: 20,
           },
+          local: { command: 'npx', args: ['-y', 'figma-mcp'], env: { TOKEN: '$FIGMA_TOKEN' } },
         })
       );
-    });
-
-    test('passes a per-attempt AbortSignal in TurnOptions when caller provides one', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const controller = new AbortController();
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-        abortSignal: controller.signal,
-      })) {
-        chunks.push(chunk);
-      }
-
-      // Signal passed to runStreamed is the per-attempt signal, not the
-      // caller's signal directly. Aborting the caller still propagates via
-      // the forwarding once-listener (covered by separate tests below).
-      const call = mockRunStreamed.mock.calls[0];
-      expect(call[0]).toBe('test prompt');
-      expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(call[1]?.signal).not.toBe(controller.signal);
-    });
-
-    test('passes a per-attempt AbortSignal in TurnOptions even when caller provides none', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
-      );
-    });
-
-    test('creates a per-call Codex instance when env is provided', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-        env: { MY_SECRET: 'abc123' },
-      })) {
-        // consume
-      }
-
-      expect(MockCodex).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: expect.objectContaining({ MY_SECRET: 'abc123' }),
-        })
-      );
-      expect(mockStartThread).toHaveBeenCalledTimes(1);
-    });
-
-    test('builds env by preserving process vars and letting request env win on collisions', async () => {
-      const originalPath = process.env.PATH;
-      const originalArchonEnv = process.env.ARCHON_CODEX_TEST_ENV;
-      process.env.PATH = 'from-process';
-      process.env.ARCHON_CODEX_TEST_ENV = 'kept-from-process';
-
-      try {
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-          env: { PATH: 'from-request', MY_SECRET: 'abc123' },
-        })) {
-          // consume
-        }
-
-        expect(MockCodex).toHaveBeenCalledWith(
-          expect.objectContaining({
-            env: expect.objectContaining({
-              PATH: 'from-request',
-              ARCHON_CODEX_TEST_ENV: 'kept-from-process',
-              MY_SECRET: 'abc123',
-            }),
-          })
-        );
-      } finally {
-        if (originalPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = originalPath;
-        }
-        if (originalArchonEnv === undefined) {
-          delete process.env.ARCHON_CODEX_TEST_ENV;
-        } else {
-          process.env.ARCHON_CODEX_TEST_ENV = originalArchonEnv;
-        }
-      }
-    });
-
-    test('passes workflow MCP config as Codex mcp_servers overrides', async () => {
-      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-'));
-      const originalToken = process.env.ARCHON_CODEX_MCP_TOKEN;
       process.env.ARCHON_CODEX_MCP_TOKEN = 'token-from-process';
-
       try {
-        await writeFile(
-          join(testDir, 'mcp.json'),
-          JSON.stringify({
-            figma: {
-              type: 'http',
-              url: 'http://127.0.0.1:3845/mcp',
-              headers: { Authorization: 'Bearer $ARCHON_CODEX_MCP_TOKEN' },
-              startup_timeout_sec: 20,
-            },
-            local: {
-              type: 'stdio',
-              command: 'npx',
-              args: ['-y', 'figma-mcp'],
-              env: { TOKEN: '$ARCHON_CODEX_MCP_TOKEN' },
-            },
-          })
-        );
-
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+        const { provider, server } = providerWith();
+        for await (const _ of provider.sendQuery('p', dir, undefined, {
+          env: { FIGMA_TOKEN: 'from-request' },
           nodeConfig: { nodeId: 'notify', mcp: 'mcp.json' },
         })) {
           // consume
         }
-
-        expect(MockCodex).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: expect.objectContaining({
-              skills: { include_instructions: false },
-              mcp_servers: expect.objectContaining({
-                figma: expect.objectContaining({
-                  url: 'http://127.0.0.1:3845/mcp',
-                  http_headers: { Authorization: 'Bearer token-from-process' },
-                  startup_timeout_sec: 20,
-                }),
-                local: expect.objectContaining({
-                  command: 'npx',
-                  args: ['-y', 'figma-mcp'],
-                  env: { TOKEN: 'token-from-process' },
-                }),
-              }),
-            }),
-          })
-        );
-        expect(mockLogger.info).toHaveBeenCalledWith(
-          { serverNames: ['figma', 'local'], mcpPath: 'mcp.json' },
-          'codex.mcp_config_loaded'
-        );
-      } finally {
-        if (originalToken === undefined) {
-          delete process.env.ARCHON_CODEX_MCP_TOKEN;
-        } else {
-          process.env.ARCHON_CODEX_MCP_TOKEN = originalToken;
-        }
-        await rm(testDir, { recursive: true, force: true });
-      }
-    });
-
-    test('uses request env when expanding workflow MCP config variables', async () => {
-      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-env-'));
-
-      try {
-        await writeFile(
-          join(testDir, 'mcp.json'),
-          JSON.stringify({
-            figma: {
-              command: 'figma-mcp',
-              env: { TOKEN: '$FIGMA_TOKEN' },
-            },
-          })
-        );
-
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
-          env: { FIGMA_TOKEN: 'from-codebase-env' },
-          nodeConfig: { mcp: 'mcp.json' },
-        })) {
-          // consume
-        }
-
-        expect(MockCodex).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: expect.objectContaining({
-              mcp_servers: expect.objectContaining({
-                figma: expect.objectContaining({
-                  command: 'figma-mcp',
-                  env: { TOKEN: 'from-codebase-env' },
-                }),
-              }),
-            }),
-          })
-        );
-      } finally {
-        await rm(testDir, { recursive: true, force: true });
-      }
-    });
-
-    test('prefixes workflow MCP warnings for workflow forwarding', async () => {
-      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-warning-'));
-      delete process.env.ARCHON_CODEX_MISSING_TOKEN;
-
-      try {
-        await writeFile(
-          join(testDir, 'mcp.json'),
-          JSON.stringify({
-            figma: {
-              command: 'figma-mcp',
-              env: { TOKEN: '$ARCHON_CODEX_MISSING_TOKEN' },
-            },
-          })
-        );
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test prompt', testDir, undefined, {
-          nodeConfig: { mcp: 'mcp.json' },
-        })) {
-          chunks.push(chunk);
-        }
-
-        expect(chunks[0]).toEqual({
-          type: 'system',
-          content:
-            '⚠️ MCP config references undefined env vars: ARCHON_CODEX_MISSING_TOKEN. These will be empty strings - MCP servers may fail to authenticate.',
+        expect(
+          (paramsOf(server, 'thread/start')?.config as Record<string, unknown>).mcp_servers
+        ).toEqual({
+          figma: {
+            url: 'http://127.0.0.1:3845/mcp',
+            startup_timeout_sec: 20,
+            http_headers: { Authorization: 'Bearer token-from-process' },
+          },
+          local: { command: 'npx', args: ['-y', 'figma-mcp'], env: { TOKEN: 'from-request' } },
         });
       } finally {
-        await rm(testDir, { recursive: true, force: true });
+        delete process.env.ARCHON_CODEX_MCP_TOKEN;
       }
     });
 
-    test('reuses the singleton Codex instance across sequential calls without env', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      for await (const _ of client.sendQuery('first prompt', '/workspace')) {
-        // consume
-      }
-      for await (const _ of client.sendQuery('second prompt', '/workspace')) {
-        // consume
-      }
-
-      expect(MockCodex).toHaveBeenCalledTimes(1);
-    });
-
-    test('wraps per-call Codex constructor failures with provider error context', async () => {
-      MockCodex.mockImplementationOnce(() => {
-        throw new Error('constructor failed');
-      });
-
-      const consumeGenerator = async (): Promise<void> => {
-        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-          env: { MY_SECRET: 'abc123' },
-        })) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow('Codex query failed: constructor failed');
-    });
-
-    test('breaks on turn.completed event', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'item.completed', item: { type: 'agent_message', text: 'Before turn' } };
-          yield { type: 'turn.completed', usage: defaultUsage };
-          // This should NOT be yielded due to break
-          yield { type: 'item.completed', item: { type: 'agent_message', text: 'After turn' } };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      // Only first message and result should be yielded
-      expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Before turn' });
-      expect(chunks[1]).toMatchObject({ type: 'result', sessionId: 'new-thread-id' });
-    });
-
-    test('logs progress for item.started and item.completed events', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.started',
-            item: { id: 'item-1', type: 'command_execution', command: 'npm test' },
-          };
-          yield {
-            type: 'item.completed',
-            item: { id: 'item-1', type: 'command_execution', command: 'npm test' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockLogger.debug).toHaveBeenCalledWith(
-        { eventType: 'item.started', itemType: 'command_execution', itemId: 'item-1' },
-        'item_started'
+    test('warns when the MCP config references undefined env vars', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-mcp-warning-')));
+      await writeFile(
+        join(dir, 'mcp.json'),
+        JSON.stringify({ figma: { command: 'figma-mcp', env: { TOKEN: '$ARCHON_CODEX_MISSING' } } })
       );
+      const { provider } = providerWith();
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, undefined, {
+        nodeConfig: { mcp: 'mcp.json' },
+      })) {
+        chunks.push(chunk);
+      }
+      expect(chunks[0]).toEqual({
+        type: 'warning',
+        code: 'codex.mcp_env_vars_missing',
+        message:
+          'MCP config references undefined env vars: ARCHON_CODEX_MISSING. These will be empty strings - MCP servers may fail to authenticate.',
+      });
+    });
 
-      expect(mockLogger.debug).toHaveBeenCalledWith(
+    test('reports this thread’s MCP server startup as mcp_server_status', async () => {
+      const startup = (
+        name: string,
+        status: 'starting' | 'ready' | 'failed' | 'cancelled',
+        extra: { threadId?: string | null; error?: string; reauth?: boolean } = {}
+      ): ServerNotification => ({
+        method: 'mcpServer/startupStatus/updated',
+        params: {
+          threadId: extra.threadId === undefined ? THREAD_ID : extra.threadId,
+          name,
+          status,
+          error: extra.error ?? null,
+          failureReason: extra.reauth ? 'reauthenticationRequired' : null,
+        },
+      });
+      const chunks = await streamOf({
+        notifications: [
+          startup('posthog', 'starting'),
+          startup('posthog', 'failed', { error: 'No such file or directory (os error 2)' }),
+          startup('linear', 'failed', { reauth: true }),
+          startup('global', 'ready', { threadId: null }),
+          startup('local', 'cancelled'),
+          startup('other-thread', 'failed', { threadId: 'thread-2' }),
+        ],
+      });
+      expect(chunks.filter(chunk => chunk.type === 'mcp_server_status')).toEqual([
+        { type: 'mcp_server_status', server: 'posthog', status: 'pending' },
         {
-          eventType: 'item.completed',
-          itemType: 'command_execution',
-          itemId: 'item-1',
-          command: 'npm test',
+          type: 'mcp_server_status',
+          server: 'posthog',
+          status: 'failed',
+          error: 'No such file or directory (os error 2)',
         },
-        'item_completed'
-      );
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: 'npm test',
-        toolCallId: 'item-1',
-      });
-      expect(chunks[1]).toEqual({
-        type: 'tool_result',
-        toolName: 'npm test',
-        toolOutput: '',
-        toolCallId: 'item-1',
-        toolOutcome: 'unknown',
-      });
+        { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
+        { type: 'mcp_server_status', server: 'global', status: 'connected' },
+        { type: 'mcp_server_status', server: 'local', status: 'failed' },
+      ]);
     });
+  });
 
-    test('deduplicates repeated tool lifecycle events by item id', async () => {
-      const started = {
-        type: 'item.started',
-        item: { id: 'cmd-duplicate', type: 'command_execution', command: 'npm test' },
-      };
-      const completed = {
-        type: 'item.completed',
-        item: {
-          id: 'cmd-duplicate',
-          type: 'command_execution',
-          command: 'npm test',
-          aggregated_output: 'done',
-          exit_code: 0,
-        },
-      };
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield started;
-          yield started;
-          yield completed;
-          yield completed;
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.filter(chunk => chunk.type === 'tool')).toHaveLength(1);
-      expect(chunks.filter(chunk => chunk.type === 'tool_result')).toHaveLength(1);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { itemId: 'cmd-duplicate', itemType: 'command_execution' },
-        'tool_item_duplicate_completion'
-      );
-    });
-
-    test('does not recreate a tool start when completion arrives alone', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: {
-              id: 'cmd-completed-only',
-              type: 'command_execution',
-              command: 'npm test',
-              aggregated_output: 'done',
-              exit_code: 0,
+  describe('title request scope', () => {
+    test('fresh and resumed titles use empty scope and read-only, overriding node declarations', async () => {
+      for (const nodeConfig of [
+        undefined,
+        { nodeId: 'implement', plugins: ['alpha@fixture'], mcp: 'nonexistent.json' },
+      ]) {
+        const options: SendQueryOptions = { purpose: 'title-generation', nodeConfig };
+        const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+        for (const resumeId of [undefined, 'existing-thread']) {
+          expect(resultOf(await run(provider, options, resumeId)).failure).toBeUndefined();
+          const method = resumeId ? 'thread/resume' : 'thread/start';
+          expect(server.processes.at(-1)?.methods).toEqual([
+            'initialize',
+            'config/read',
+            method,
+            'mcpServerStatus/list',
+            'turn/start',
+          ]);
+          expect(server.processes.at(-1)?.args).toEqual(['app-server']);
+          expect(paramsOf(server, method)).toMatchObject({
+            sandbox: 'read-only',
+            approvalPolicy: 'never',
+            config: {
+              skills: { include_instructions: false },
+              features: { apps: false, plugins: false },
+              mcp_servers: { posthog: { enabled: false } },
             },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks.some(chunk => chunk.type === 'tool')).toBe(false);
-      expect(chunks[0]).toEqual({
-        type: 'tool_result',
-        toolName: 'npm test',
-        toolOutput: 'done',
-        toolCallId: 'cmd-completed-only',
-        toolOutcome: 'success',
-        exitCode: 0,
-      });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { itemId: 'cmd-completed-only', itemType: 'command_execution' },
-        'tool_item_completed_without_start'
-      );
-    });
-
-    test('error events followed by turn.completed yield a clean result (recoverable)', async () => {
-      // SDK error events that are followed by turn.completed indicate the SDK
-      // recovered internally. The dropped error message is logged but not
-      // surfaced \u2014 only one terminal result chunk is yielded.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'error', message: 'Transient blip' };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith({ message: 'Transient blip' }, 'stream_error');
-    });
-
-    test('error event followed by stream close yields fail-stop result.isError', async () => {
-      // The SDK sends an error event (e.g. "model not supported") and the
-      // iterator closes without turn.completed or turn.failed. The provider
-      // synthesizes a fail-stop result so the dag-executor's msg.isError
-      // branch catches the failure \u2014 same chunk shape as Claude.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'error', message: "'opus[1m]' model is not supported" };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        isError: true,
-        errorSubtype: 'codex_stream_incomplete',
-        errors: ["'opus[1m]' model is not supported"],
-      });
-    });
-
-    test('MCP client errors followed by turn.completed yield clean result', async () => {
-      // MCP client errors are non-fatal \u2014 Codex retries internally.
-      // Only after turn.completed do we know the SDK recovered.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'error', message: 'mcp client connection timeout' };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-      });
-      // Logged but not surfaced as failure
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { message: 'mcp client connection timeout' },
-        'stream_error'
-      );
-    });
-
-    test('MCP-only error followed by stream close still fails (no terminal = failure)', async () => {
-      // The stream-incomplete fail-stop fires whenever the iterator closes
-      // without a terminal event \u2014 that's an SDK contract violation
-      // regardless of cause. But the captured error message does NOT carry
-      // the MCP-client text, since MCP errors are filtered from capture.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'error', message: 'MCP client transport closed' };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toMatchObject({
-        type: 'result',
-        isError: true,
-        errorSubtype: 'codex_stream_incomplete',
-      });
-      const errors = (chunks[0] as { errors?: string[] }).errors;
-      expect(errors?.[0]).not.toContain('MCP client');
-    });
-
-    test('surfaces MCP client errors when workflow MCP is configured', async () => {
-      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-error-'));
-
-      try {
-        await writeFile(
-          join(testDir, 'mcp.json'),
-          JSON.stringify({ figma: { command: 'figma-mcp' } })
-        );
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'error', message: 'MCP client connection timeout' };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', testDir, undefined, {
-          nodeConfig: { mcp: 'mcp.json' },
-        })) {
-          chunks.push(chunk);
+          });
         }
+      }
+    });
 
-        expect(chunks[0]).toEqual({
-          type: 'system',
-          content: '\u26A0\uFE0F MCP client connection timeout',
+    test('titles fail closed when inventory rejects or an undeclared server is live', async () => {
+      for (const script of [
+        {
+          errors: { 'config/read': { code: -32600, message: 'Invalid request: unknown variant' } },
+        },
+        { mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]] },
+      ] satisfies FakeTurnScript[]) {
+        const { provider, server } = providerWith(script);
+        const options: SendQueryOptions = { purpose: 'title-generation' };
+        expect(resultOf(await run(provider, options)).failure?.class).toBe('misconfigured');
+        expect(server.processes[0].methods).not.toContain('turn/start');
+      }
+    });
+  });
+
+  describe('workflow node scope', () => {
+    const node = { nodeConfig: { nodeId: 'implement' } } satisfies SendQueryOptions;
+
+    test('a fresh, resumed or forked thread loads no ambient plugin, app or server, and is checked before its turn', async () => {
+      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      for (const [resumeId, forkSession, threadMethod] of [
+        [undefined, false, 'thread/start'],
+        ['existing-thread', false, 'thread/resume'],
+        ['existing-thread', true, 'thread/fork'],
+      ] as const) {
+        const result = resultOf(await run(provider, { ...node, forkSession }, resumeId));
+        expect(result.failure).toBeUndefined();
+        expect(server.processes.at(-1)?.methods).toEqual([
+          'initialize',
+          'config/read',
+          threadMethod,
+          'mcpServerStatus/list',
+          'turn/start',
+        ]);
+        expect(paramsOf(server, threadMethod)?.config).toMatchObject({
+          features: { apps: false, plugins: false },
+          mcp_servers: { posthog: { enabled: false } },
         });
-        expect(chunks[1]).toEqual({
-          type: 'result',
-          sessionId: 'new-thread-id',
-          tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-        });
-      } finally {
-        await rm(testDir, { recursive: true, force: true });
       }
     });
 
-    test('turn.failed yields result.isError with codex_turn_failed subtype', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.failed', error: { message: 'Rate limit exceeded' } };
-        })(),
+    test('a named plugin stays on without its MCP servers; other installed plugins are off', async () => {
+      const { provider, server } = providerWith({
+        installedPlugins: { 'alpha@fixture': ['alpha_srv'], 'beta@fixture': ['beta_srv'] },
       });
+      await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['alpha@fixture'] } });
+      expect(paramsOf(server, 'plugin/read')).toMatchObject({ pluginName: 'alpha' });
+      // Plugins on for the process, so a user's global plugins-off still lists them.
+      expect(server.processes[0].args).toEqual(['app-server', '-c', 'features.plugins=true']);
+      expect(paramsOf(server, 'thread/start')?.config).toMatchObject({
+        features: { apps: false, plugins: true },
+        plugins: {
+          'alpha@fixture': { enabled: true, mcp_servers: { alpha_srv: { enabled: false } } },
+          'beta@fixture': { enabled: false },
+        },
+      });
+    });
 
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
+    test('a live server the node did not declare fails misconfigured before the turn, across pages', async () => {
+      const { provider, server } = providerWith({
+        mcpStatusPages: [
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'disabled' }],
+          [
+            {
+              name: 'cua_repl',
+              pluginId: 'computer-use@openai-bundled',
+              runtimeStatus: 'starting',
+            },
+          ],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain(
+        'Codex loaded MCP servers this node does not declare: cua_repl (plugin computer-use@openai-bundled)'
+      );
+      expect(result.sessionId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('turn/start');
+    });
+
+    test('a configured server Codex still reports live fails, though the thread config named it', async () => {
+      const { provider } = providerWith({
+        configuredServers: ['posthog'],
+        mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a status this Codex version does not list counts as live', async () => {
+      const { provider } = providerWith({
+        mcpStatusPages: [
+          // A status a newer Codex might add; the generated union does not have it.
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'suspended' as 'disabled' }],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a declared live server passes the check', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-scope-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const { provider, server } = providerWith({
+        mcpStatusPages: [[{ name: 'local', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, undefined, {
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      })) {
         chunks.push(chunk);
       }
+      expect(resultOf(chunks).failure).toBeUndefined();
+      expect(server.processes[0].methods).toContain('turn/start');
+    });
 
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        isError: true,
-        errorSubtype: 'codex_turn_failed',
-        errors: ['Rate limit exceeded'],
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { errorMessage: 'Rate limit exceeded' },
-        'turn_failed'
+    test('a named plugin that is not installed fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({ installedPlugins: { 'alpha@fixture': [] } });
+      const result = resultOf(
+        await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['ghost@fixture'] } })
       );
+      expect(result.failure).toEqual({
+        class: 'misconfigured',
+        evidence:
+          'Codex plugin not installed in /home/user/.codex: ghost@fixture. Installed: alpha@fixture. ' +
+          'Name plugins by their exact `name@marketplace` id from `codex plugin list`.',
+      });
+      expect(server.processes[0].methods).not.toContain('thread/start');
     });
 
-    test('turn.failed without error message yields fail-stop with Unknown error', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.failed', error: null };
-        })(),
+    test('an inventory request Codex rejects fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({
+        errors: { 'config/read': { code: -32600, message: 'Invalid request: unknown variant' } },
       });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('config/read failed');
+      expect(server.processes[0].methods).not.toContain('thread/start');
+    });
+  });
 
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        isError: true,
-        errorSubtype: 'codex_turn_failed',
-        errors: ['Unknown error'],
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { errorMessage: 'Unknown error' },
-        'turn_failed'
+  describe('failures', () => {
+    test('a usage limit is quota_exhausted and resets when the full window does', async () => {
+      const resetsAt = 1_791_143_381;
+      const result = resultOf(
+        await streamOf({
+          notifications: [rateLimits({ usedPercent: 100, resetsAt })],
+          completion: {
+            status: 'failed',
+            error: turnError('usageLimitExceeded', "You've hit your usage limit."),
+          },
+        })
       );
-    });
-
-    test('iterator that closes with zero events yields codex_stream_incomplete with default message', async () => {
-      // Bare-stream-close fallback: no error event, no terminal event,
-      // iterator just ends. Locks in the default message used when there is
-      // no captured non-MCP error to attribute the failure to.
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          // no events
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
+      expect(result).toMatchObject({
         isError: true,
-        errorSubtype: 'codex_stream_incomplete',
-        errors: ['Codex stream closed without turn.completed or turn.failed'],
+        sessionId: THREAD_ID,
+        failure: {
+          class: 'quota_exhausted',
+          resetAt: new Date(resetsAt * 1000).toISOString(),
+          evidence: "You've hit your usage limit.",
+        },
       });
     });
 
-    test('throws on runStreamed error', async () => {
-      const networkError = new Error('Network failure');
-      mockRunStreamed.mockRejectedValue(networkError);
-
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace')) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow('Codex unknown: Network failure');
-
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: networkError }),
-        'query_error'
+    test('an unavailable model gets model-access advice before Codex’s own words', async () => {
+      const result = resultOf(
+        await streamOf(
+          {
+            completion: {
+              status: 'failed',
+              error: turnError('other', '403 Forbidden: model not available'),
+            },
+          },
+          { model: 'gpt-5.3-codex' }
+        )
       );
-    });
-
-    test('throws actionable model-access message for unavailable configured model', async () => {
-      mockRunStreamed.mockRejectedValue(new Error('403 Forbidden: model not available'));
-
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-          model: 'gpt-5.3-codex',
-        })) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow(
+      expect(result.failure?.class).toBe('unknown');
+      expect(result.failure?.evidence).toContain(
         'Model "gpt-5.3-codex" is not available for your account'
       );
-      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.6-sol');
+      expect(result.failure?.evidence).toContain('model: gpt-5.6-sol');
+      expect(result.failure?.evidence).toContain('403 Forbidden: model not available');
     });
 
-    test('uses generic dashboard guidance when fallback mapping is unknown', async () => {
-      mockRunStreamed.mockRejectedValue(new Error('model not available'));
-
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-          model: 'o5-pro',
-        })) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow(
-        'Model "o5-pro" is not available for your account'
+    test('a process that exits mid-turn is transient, with Codex’s errors as evidence', async () => {
+      const result = resultOf(
+        await streamOf({
+          notifications: [errorNotification('Reconnecting... 1/5', true)],
+          exitCode: 1,
+        })
       );
-      await expect(consumeGenerator()).rejects.toThrow(
-        'update your model in ~/.archon/config.yaml'
-      );
+      expect(result.failure?.class).toBe('transient');
+      expect(result.failure?.evidence).toContain('exited (code 1)');
+      expect(result.failure?.evidence).toContain('Reconnecting... 1/5');
     });
 
-    test('ignores items without text or command', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'item.completed', item: { type: 'agent_message', text: '' } };
-          yield { type: 'item.completed', item: { type: 'agent_message' } }; // no text
-          yield { type: 'item.completed', item: { type: 'command_execution' } }; // no command
-          yield { type: 'item.completed', item: { type: 'reasoning' } }; // no text
-          yield { type: 'item.completed', item: { type: 'file_edit' } }; // ignored type
-          yield { type: 'item.completed', item: { type: 'web_search' } }; // no query
-          yield { type: 'item.completed', item: { type: 'todo_list', items: [] } }; // empty items
-          yield { type: 'item.completed', item: { type: 'todo_list' } }; // no items
-          yield {
-            type: 'item.completed',
-            item: { type: 'file_change', status: 'completed', changes: [] },
-          }; // empty changes
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      // Only the result should be yielded
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
-      });
-    });
-
-    describe('systemPrompt delivery (issue #1837)', () => {
-      // The Codex SDK has no instructions/system-prompt channel, so the
-      // provider must fold systemPrompt into the prompt string it hands to
-      // thread.runStreamed. These tests assert on that SDK boundary.
-      const seedRun = (): void => {
-        mockRunStreamed.mockResolvedValue({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-      };
-
-      const drain = async (gen: AsyncGenerator<unknown>): Promise<void> => {
-        for await (const _ of gen) {
-          // consume
-        }
-      };
-
-      test('prepends a string systemPrompt to the prompt with a --- delimiter', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            systemPrompt: 'AAA routing rules',
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith(
-          'AAA routing rules\n\n---\n\ntest prompt',
-          expect.anything()
-        );
-      });
-
-      test('joins a string[] systemPrompt with blank lines before prepending', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            systemPrompt: ['part one', 'part two'],
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith(
-          'part one\n\npart two\n\n---\n\ntest prompt',
-          expect.anything()
-        );
-      });
-
-      test('drops a Claude-specific preset object with a WARN and keeps the prompt unchanged', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ systemPromptType: 'object' }),
-          'codex.system_prompt_dropped_preset'
-        );
-      });
-
-      test('passes the prompt unchanged when no systemPrompt is set', async () => {
-        seedRun();
-
-        await drain(client.sendQuery('test prompt', '/workspace'));
-
-        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
-      });
-
-      test('passes the prompt unchanged when systemPrompt is whitespace-only', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            systemPrompt: '   ',
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
-      });
-
-      test('honors node-level nodeConfig.systemPrompt (workflow path)', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            nodeConfig: { systemPrompt: 'node-level instructions' },
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith(
-          'node-level instructions\n\n---\n\ntest prompt',
-          expect.anything()
-        );
-      });
-
-      test('request-level systemPrompt wins over nodeConfig.systemPrompt', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('test prompt', '/workspace', undefined, {
-            systemPrompt: 'request-level',
-            nodeConfig: { systemPrompt: 'node-level' },
-          })
-        );
-
-        expect(mockRunStreamed).toHaveBeenCalledWith(
-          'request-level\n\n---\n\ntest prompt',
-          expect.anything()
-        );
-      });
-
-      test('prepends on resumed threads too (every turn, not first turn only)', async () => {
-        seedRun();
-
-        await drain(
-          client.sendQuery('follow-up prompt', '/workspace', 'existing-session-id', {
-            systemPrompt: 'AAA routing rules',
-          })
-        );
-
-        expect(mockResumeThread).toHaveBeenCalledWith('existing-session-id', expect.anything());
-        expect(mockRunStreamed).toHaveBeenCalledWith(
-          'AAA routing rules\n\n---\n\nfollow-up prompt',
-          expect.anything()
-        );
-      });
-    });
-
-    describe('retry behavior', () => {
-      test('classifies exit code errors as crash and retries up to 3 times', async () => {
-        mockRunStreamed.mockRejectedValue(
-          new Error('Codex Exec exited with code 1: stderr output')
-        );
-
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
-
-        await expect(consumeGenerator()).rejects.toThrow(/Codex crash/);
-        // Initial attempt + 3 retries = 4 runStreamed calls
-        expect(mockRunStreamed).toHaveBeenCalledTimes(4);
-      }, 5_000);
-
-      test('recovers from transient crash on retry', async () => {
-        let callCount = 0;
-        mockRunStreamed.mockImplementation(() => {
-          callCount++;
-          if (callCount <= 2) {
-            return Promise.reject(new Error('Codex Exec exited with code 1'));
-          }
-          return Promise.resolve({
-            events: (async function* () {
-              yield {
-                type: 'item.completed',
-                item: { type: 'agent_message', text: 'Recovered!' },
-              };
-              yield { type: 'turn.completed', usage: defaultUsage };
-            })(),
-          });
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/workspace')) {
-          chunks.push(chunk);
-        }
-
-        expect(callCount).toBe(3);
-        expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
-      }, 5_000);
-
-      test('retry backoff runs inside the admission release, never while the slot is held', async () => {
-        const events: string[] = [];
-        mockRunStreamed.mockImplementation(() => {
-          events.push('attempt');
-          if (events.filter(e => e === 'attempt').length === 1) {
-            return Promise.reject(new Error('Codex Exec exited with code 1'));
-          }
-          return Promise.resolve({
-            events: (async function* () {
-              yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
-              yield { type: 'turn.completed', usage: defaultUsage };
-            })(),
-          });
-        });
-        const admission = {
-          releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
-            events.push('released');
-            await wait();
-            events.push('reacquired');
+    test('a process that exits before answering anything is misconfigured, with its stderr as evidence', async () => {
+      const result = resultOf(
+        await streamOf({
+          startupFailure: {
+            code: 2,
+            stderr: "error: unexpected argument '--bogus' found\n",
           },
-        };
-
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
-          // consume
-        }
-
-        expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
-      }, 5_000);
-
-      test('classifies auth errors as fatal (no retry)', async () => {
-        mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
-
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
-
-        await expect(consumeGenerator()).rejects.toThrow(/Codex auth error/);
-        expect(mockRunStreamed).toHaveBeenCalledTimes(1);
-      });
-
-      test('does not retry unknown errors', async () => {
-        mockRunStreamed.mockRejectedValue(new Error('something unexpected and unclassified'));
-
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
-
-        await expect(consumeGenerator()).rejects.toThrow(/Codex unknown/);
-        expect(mockRunStreamed).toHaveBeenCalledTimes(1);
-      });
+        })
+      );
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('exited (code 2)');
+      expect(result.failure?.evidence).toContain("unexpected argument '--bogus'");
     });
 
-    describe('structured output normalization', () => {
-      test('populates structuredOutput on result when outputFormat is set and text is valid JSON', async () => {
-        const jsonPayload = { status: 'ok', count: 42 };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(jsonPayload) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
+    test('a process that exits mid-turn still reports the thread, so the next attempt can resume it', async () => {
+      const result = resultOf(await streamOf({ exitCode: 1 }));
+      expect(result.sessionId).toBe(THREAD_ID);
+    });
 
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
-          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    test('errors Codex recovered from leave a completed turn clean', async () => {
+      const chunks = await streamOf({
+        notifications: [errorNotification('Reconnecting... 1/5', true), agentMessage('done')],
+      });
+      expect(resultOf(chunks)).toEqual({ type: 'result', sessionId: THREAD_ID });
+    });
+
+    test('each retry Codex announces is a warning with its cause and no vendor text', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          errorNotification('Reconnecting... 1/5 (secret vendor body)', true, {
+            responseStreamDisconnected: { httpStatusCode: 503 },
+          }),
+          errorNotification('Reconnecting... 2/5', true, 'serverOverloaded'),
+          errorNotification('stream ended', false, 'other'),
+          agentMessage('done'),
+        ],
+      });
+      const warnings = chunks.filter(chunk => chunk.type === 'warning');
+      expect(warnings).toEqual([
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message:
+            'Codex is retrying the model call (retry 1 this turn, responseStreamDisconnected, HTTP 503)',
+        },
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message: 'Codex is retrying the model call (retry 2 this turn, serverOverloaded)',
+        },
+      ]);
+    });
+
+    test('a replayed completion of an earlier turn does not end this one', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          turnCompleted('failed', turnError('other', 'earlier failure'), 'earlier-turn'),
+          agentMessage('done'),
+        ],
+      });
+      expect(chunks).toEqual([
+        { type: 'agent_message_chunk', text: 'done' },
+        { type: 'result', sessionId: THREAD_ID },
+      ]);
+    });
+
+    test('a process killed by a signal before it answers is transient', async () => {
+      const result = resultOf(
+        await streamOf({ startupFailure: { signal: 'SIGKILL', stderr: '' } })
+      );
+      expect(result.failure?.class).toBe('transient');
+      expect(result.failure?.evidence).toContain('signal SIGKILL');
+    });
+
+    test('stderr that mentions a model does not earn model-access advice', async () => {
+      const result = resultOf(
+        await streamOf({
+          startupFailure: { code: 1, stderr: 'error: model catalog file not found\n' },
+        })
+      );
+      expect(result.failure?.evidence).toContain('model catalog file not found');
+      expect(result.failure?.evidence).not.toContain('is not available for your account');
+    });
+
+    test('a credential Codex echoes to stderr never reaches the failure evidence', async () => {
+      const result = resultOf(
+        await streamOf(
+          {
+            startupFailure: {
+              code: 1,
+              stderr: 'error: login failed for key sk-echoed-secret-1234\n',
+            },
+          },
+          { env: { CODEX_API_KEY: 'sk-echoed-secret-1234' } }
+        )
+      );
+      expect(result.failure?.evidence).toContain('login failed for key [REDACTED]');
+      expect(JSON.stringify(result)).not.toContain('sk-echoed-secret-1234');
+    });
+
+    test('protected commit author values never reach startup failure evidence', async () => {
+      const env = {
+        GIT_AUTHOR_NAME: 'connected-author',
+        GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
+      };
+      const chunks = await streamOf(
+        {
+          startupFailure: {
+            code: 1,
+            stderr: `bad config for ${env.GIT_AUTHOR_NAME} <${env.GIT_AUTHOR_EMAIL}>`,
+          },
+        },
+        { env, protectedEnvKeys: Object.keys(env) }
+      );
+      expect(resultOf(chunks).failure?.evidence).toContain(
+        'bad config for [REDACTED] <[REDACTED]>'
+      );
+      expect(JSON.stringify(chunks)).not.toContain(env.GIT_AUTHOR_NAME);
+      expect(JSON.stringify(chunks)).not.toContain(env.GIT_AUTHOR_EMAIL);
+    });
+
+    test('a turn interrupted by someone other than Archon is unknown', async () => {
+      const result = resultOf(await streamOf({ completion: { status: 'interrupted' } }));
+      expect(result.failure?.class).toBe('unknown');
+    });
+
+    test.each([false, true])('conforms to the provider contract (streams: %s)', async remote => {
+      const turn =
+        (script: FakeTurnScript, options?: SendQueryOptions) => (): AsyncIterable<MessageChunk> =>
+          (remote
+            ? overStreams(() => providerWith(script).provider, descriptor)
+            : providerWith(script).provider
+          ).sendQuery('p', '/workspace', undefined, options);
+      const failed = (info: CodexErrorInfo, message: string): FakeTurnScript => ({
+        completion: { status: 'failed', error: turnError(info, message) },
+      });
+      const violations = await runProviderConformance({
+        capabilities: new CodexProvider().getCapabilities(),
+        backgroundCases: [backgroundCase(true, remote), backgroundCase(false, remote)],
+        turns: [
+          { name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) },
+          {
+            name: 'turn Codex retried',
+            run: turn({
+              notifications: [
+                errorNotification('Reconnecting... 1/5', true, 'serverOverloaded'),
+                agentMessage('hi'),
+              ],
+            }),
+          },
+        ],
+        failureCases: [
+          {
+            name: 'missing credentials',
+            expected: 'auth',
+            evidence: 'Missing bearer',
+            run: turn(
+              failed({ httpConnectionFailed: { httpStatusCode: 401 } }, '401 Missing bearer')
+            ),
+          },
+          {
+            name: 'rate limit',
+            expected: 'rate_limited',
+            evidence: 'slow down',
+            run: turn(failed('rateLimitExceeded', 'slow down')),
+          },
+          {
+            name: 'capacity',
+            expected: 'overloaded',
+            evidence: 'opaque failure',
+            run: turn(failed('serverOverloaded', 'opaque failure')),
+          },
+          {
+            name: 'internal error with capacity prose',
+            expected: 'transient',
+            evidence: 'at capacity',
+            run: turn(failed('internalServerError', 'Selected model is at capacity')),
+          },
+          {
+            name: 'session budget',
+            expected: 'budget_exceeded',
+            evidence: 'budget',
+            run: turn(failed('sessionBudgetExceeded', 'session budget reached')),
+          },
+          {
+            name: 'unsupported model',
+            expected: 'unknown',
+            evidence: 'not supported',
+            run: turn(failed('other', "The 'x' model is not supported")),
+          },
+          {
+            name: 'binary pin that does not exist',
+            expected: 'misconfigured',
+            evidence: 'does not exist',
+            run: turn({}, { assistantConfig: { codexBinaryPath: '/nonexistent/codex-bin' } }),
+          },
+        ],
+        forkTurn: {
+          name: 'forked thread',
+          source: 'existing-thread',
+          run: () =>
+            (remote
+              ? overStreams(() => providerWith().provider, descriptor)
+              : providerWith().provider
+            ).sendQuery('p', '/workspace', 'existing-thread', {
+              forkSession: true,
+            }),
+        },
+        toolTurn: {
+          name: 'tool turn',
+          // The turn completes while a second command still runs: the provider closes it.
+          run: turn({
+            notifications: [
+              itemStarted(command('cmd-1', 'ls')),
+              itemStarted(command('cmd-2', 'sleep 60')),
+              itemCompleted(command('cmd-1', 'ls', { exitCode: 0, output: 'a.ts' })),
+            ],
+          }),
+        },
+      });
+      expect(
+        await checkFailureClasses([
+          {
+            name: 'process exits mid-turn',
+            expected: 'transient',
+            evidence: 'exited',
+            run: () =>
+              providerWith({
+                notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+                exitCode: 137,
+              }).provider.sendQuery('p', '/workspace'),
+          },
+          {
+            name: 'binary that exits before answering',
+            expected: 'misconfigured',
+            evidence: 'stdin is not a terminal',
+            run: () =>
+              providerWith({
+                startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' },
+              }).provider.sendQuery('p', '/workspace'),
+          },
+          {
+            name: 'binary missing at spawn',
+            expected: 'misconfigured',
+            evidence: 'ENOENT',
+            run: () => providerWith({ spawnError: 'ENOENT' }).provider.sendQuery('p', '/workspace'),
+          },
+        ])
+      ).toEqual([]);
+      expect(violations).toEqual([]);
+    });
+  });
+
+  describe('cancel', () => {
+    test('interrupts the turn, closes the running command as cancelled, shuts down, and throws', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+        completion: null,
+      });
+      const controller = new AbortController();
+      const chunks: MessageChunk[] = [];
+      let error: Error | undefined;
+      try {
+        for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+          abortSignal: controller.signal,
         })) {
           chunks.push(chunk);
+          if (chunk.type === 'tool_call') controller.abort();
         }
+      } catch (e) {
+        error = e as Error;
+      }
 
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
-          jsonPayload
-        );
-      });
+      expect(error?.message).toBe('Query aborted');
+      expect(chunks.map(c => c.type)).toEqual(['tool_call', 'tool_call_update']);
+      expect(chunks[1]).toMatchObject({ toolCallId: 'cmd-1', status: 'cancelled' });
+      const process0 = server.processes[0];
+      expect(paramsOf(server, 'turn/interrupt')).toEqual({ threadId: THREAD_ID, turnId: TURN_ID });
+      expect(process0.stdinEnded).toBe(true);
+      expect(process0.signals).toEqual([]);
+    });
 
-      test('yields system warning when outputFormat is set but text is not valid JSON', async () => {
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: 'not json at all' },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
-          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    test('a Codex that answers neither the interrupt nor stdin close is stopped with SIGTERM', async () => {
+      const server = createFakeAppServer(() => ({
+        notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+        completion: null,
+        ignoreInterrupt: true,
+        ignoreStdinClose: true,
+      }));
+      const provider = new CodexProvider(server, 20);
+      const controller = new AbortController();
+      let error: Error | undefined;
+      try {
+        for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+          abortSignal: controller.signal,
         })) {
-          chunks.push(chunk);
+          if (chunk.type === 'tool_call') controller.abort();
         }
+      } catch (e) {
+        error = e as Error;
+      }
 
-        const systemChunk = chunks.find(c => c.type === 'system');
-        expect(systemChunk).toBeDefined();
-        expect(systemChunk!.type === 'system' && systemChunk!.content).toContain(
-          'Structured output requested but Codex returned non-JSON'
-        );
+      expect(error?.message).toBe('Query aborted');
+      expect(server.processes[0].methods).toContain('turn/interrupt');
+      expect(server.processes[0].stdinEnded).toBe(true);
+      expect(server.processes[0].signals).toEqual(['SIGTERM']);
+    });
 
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toBeUndefined();
-      });
+    test('an abort while the turn is being set up stops the process before any turn starts', async () => {
+      const controller = new AbortController();
+      const server = createFakeAppServer();
+      const spawner = ((...args: Parameters<typeof server>) => {
+        controller.abort();
+        return server(...args);
+      }) as typeof server;
+      await expect(
+        run(new CodexProvider(spawner), { abortSignal: controller.signal })
+      ).rejects.toThrow('Query aborted');
+      expect(server.processes[0].methods).not.toContain('turn/start');
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
 
-      test('does not populate structuredOutput when outputFormat is not set', async () => {
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: '{"valid":"json"}' },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp')) {
-          chunks.push(chunk);
-        }
-
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toBeUndefined();
-      });
-
-      test('handles nodeConfig.output_format path', async () => {
-        const jsonPayload = { key: 'value' };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(jsonPayload) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
-          nodeConfig: { output_format: { type: 'object' } },
-        })) {
-          chunks.push(chunk);
-        }
-
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
-          jsonPayload
-        );
-      });
-
-      test('uses last agent_message when multiple messages are emitted with output_format', async () => {
-        const preamble = { claims_accurate: 'false', reasoning: "I'll verify first" };
-        const finalAnswer = {
-          claims_accurate: 'true',
-          reasoning: 'Checked — claims are correct',
-        };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
-            };
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
-          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
-        })) {
-          chunks.push(chunk);
-        }
-
-        const assistantChunks = chunks.filter(c => c.type === 'assistant');
-        expect(assistantChunks).toHaveLength(2);
-
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
-          finalAnswer
-        );
-
-        const systemChunk = chunks.find(c => c.type === 'system');
-        expect(systemChunk).toBeUndefined();
-      });
-
-      test('uses last agent_message when multiple messages are emitted via nodeConfig.output_format', async () => {
-        // Workflow path: dag-executor sets nodeConfig.output_format from YAML
-        // output_format. Locks the same last-wins fix on this entry point.
-        const preamble = { claims_accurate: 'false', reasoning: 'draft' };
-        const finalAnswer = { claims_accurate: 'true', reasoning: 'verified' };
-        mockRunStreamed.mockResolvedValueOnce({
-          events: (async function* () {
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(preamble) },
-            };
-            yield {
-              type: 'item.completed',
-              item: { type: 'agent_message', id: 'msg-2', text: JSON.stringify(finalAnswer) },
-            };
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
-          nodeConfig: { output_format: { type: 'object' } },
-        })) {
-          chunks.push(chunk);
-        }
-
-        const resultChunk = chunks.find(c => c.type === 'result');
-        expect(resultChunk).toBeDefined();
-        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
-          finalAnswer
-        );
-      });
+    test('an abort before the turn starts throws without spawning', async () => {
+      const { provider, server } = providerWith();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(run(provider, { abortSignal: controller.signal })).rejects.toThrow(
+        'Query aborted'
+      );
+      expect(server.processes).toHaveLength(0);
     });
   });
 });
 
-// ─── Behavioral regression tests (black-box via sendQuery) ───────────────
-
-describe('sendQuery decomposition behaviors', () => {
-  let client: CodexProvider;
-
-  beforeEach(() => {
-    client = new CodexProvider({ retryBaseDelayMs: 1 });
-    mockStartThread.mockClear();
-    mockResumeThread.mockClear();
-    mockRunStreamed.mockClear();
-    mockLogger.info.mockClear();
-    mockLogger.warn.mockClear();
-    mockLogger.error.mockClear();
-    mockLogger.debug.mockClear();
-
-    mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
-    mockResumeThread.mockReturnValue(createMockThread('resumed-thread-id'));
-  });
-
-  test('abort signal throws instead of silently truncating stream', async () => {
-    const abortController = new AbortController();
-
-    mockRunStreamed.mockResolvedValue({
-      events: (async function* () {
-        yield {
-          type: 'item.completed',
-          item: { type: 'agent_message', text: 'partial', id: '1' },
-        };
-        // Abort mid-stream
-        abortController.abort();
-        yield {
-          type: 'item.completed',
-          item: { type: 'agent_message', text: 'should not appear', id: '2' },
-        };
-        yield { type: 'turn.completed', usage: defaultUsage };
-      })(),
-    });
-
-    const consumeGenerator = async (): Promise<void> => {
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        abortSignal: abortController.signal,
-      })) {
-        // consume
-      }
-    };
-
-    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
-  });
-
-  test('enriched error thrown at retry exhaustion, not raw error', async () => {
-    mockRunStreamed.mockRejectedValue(new Error('codex exec crashed'));
-
-    const consumeGenerator = async (): Promise<void> => {
-      for await (const _ of client.sendQuery('test', '/workspace')) {
-        // consume
-      }
-    };
-
-    const thrown = await consumeGenerator().catch((error: unknown) => error);
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) throw new Error('Expected consumeGenerator to throw');
-    // Must contain the enriched classification prefix
-    expect(thrown.message).toContain('Codex crash');
-  }, 5_000);
-
-  test('todo_list dedup state resets between retry attempts', async () => {
-    const todoItem = {
-      type: 'todo_list',
-      items: [{ text: 'Task 1', completed: false }],
-      id: 'todo-1',
-    };
-
-    let callCount = 0;
-    mockRunStreamed.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.resolve({
-          events: (async function* () {
-            yield { type: 'item.completed', item: todoItem };
-            throw new Error('codex exec crashed');
-          })(),
-        });
-      }
-      // On retry, same todo should appear again (fresh state)
-      return Promise.resolve({
-        events: (async function* () {
-          yield { type: 'item.completed', item: todoItem };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace')) {
-      chunks.push(chunk);
-    }
-
-    // The todo should appear on the retry attempt (not suppressed by dedup from attempt 1)
-    const systemChunks = chunks.filter(c => c.type === 'system');
-    expect(systemChunks.length).toBeGreaterThanOrEqual(1);
-    expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
-  }, 5_000);
-
-  // Regression for issue #1266 (crash class A).
-  // Before the fix, buildTurnOptions captured the caller's abortSignal once
-  // before the retry loop, and the same signal object was passed to every
-  // runStreamed attempt. Node.js aborts the spawn-linked signal when a
-  // subprocess crashes, so attempt N's crash left `turnOptions.signal`
-  // already aborted, and attempt N+1 was SIGTERM'd before it could read the
-  // prompt. The fix creates a fresh AbortController per attempt and chains
-  // the caller's signal through a once-listener.
-  test('retry after crash receives a fresh (non-aborted) AbortSignal', async () => {
-    // Capture signals at call-time. Inspecting mockRunStreamed.mock.calls
-    // after the fact reads from a shared turnOptions reference whose .signal
-    // has since been rewritten; that's fine for the implementation (each
-    // spawn() captures the signal at its own call) but misleading here.
-    const signalsAtCallTime: Array<{ signal: AbortSignal; aborted: boolean }> = [];
-    let callCount = 0;
-    mockRunStreamed.mockImplementation((_prompt, opts) => {
-      if (!opts) throw new Error('Expected per-attempt options');
-      const s = opts.signal!;
-      signalsAtCallTime.push({ signal: s, aborted: s.aborted });
-      callCount++;
-      if (callCount === 1) {
-        return Promise.reject(new Error('codex exec crashed'));
-      }
-      return Promise.resolve({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'recovered', id: 'r' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    const callerController = new AbortController();
-
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
-      abortSignal: callerController.signal,
-    })) {
-      chunks.push(chunk);
-    }
-
-    expect(mockRunStreamed).toHaveBeenCalledTimes(2);
-    expect(signalsAtCallTime).toHaveLength(2);
-    // Distinct signal objects per attempt.
-    expect(signalsAtCallTime[1].signal).not.toBe(signalsAtCallTime[0].signal);
-    // Attempt 1's signal was NOT aborted at the moment of spawn, even
-    // though attempt 0 crashed. This is the exact property that was
-    // broken in the old implementation.
-    expect(signalsAtCallTime[1].aborted).toBe(false);
-    // Caller signal was never aborted.
-    expect(callerController.signal.aborted).toBe(false);
-  }, 5_000);
-
-  test('caller abort forwards into the active per-attempt signal', async () => {
-    const callerController = new AbortController();
-
-    let capturedSignal: AbortSignal | undefined;
-    mockRunStreamed.mockImplementation((_prompt, opts) => {
-      if (!opts) throw new Error('Expected per-attempt options');
-      capturedSignal = opts.signal;
-      return Promise.resolve({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'partial', id: '1' },
-          };
-          // Caller aborts mid-stream; this must surface on the per-attempt signal.
-          callerController.abort();
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'should not appear', id: '2' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    const consumeGenerator = async (): Promise<void> => {
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        abortSignal: callerController.signal,
-      })) {
-        // consume
-      }
-    };
-
-    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
-    // The signal observed by runStreamed is the per-attempt one, and it
-    // reflects the caller's abort via the forwarding listener.
-    expect(capturedSignal).toBeDefined();
-    expect(capturedSignal).not.toBe(callerController.signal);
-    expect(capturedSignal?.aborted).toBe(true);
-  }, 5_000);
-
-  // Regression for issue #1735.
-  // After the codex-sdk's finally calls child.removeAllListeners() + child.kill(),
-  // calling attemptController.abort() would fire Node's internal spawn-signal
-  // abort listener on the now-listenerless child, surfacing an uncaught AbortError.
-  // The fix removes the explicit abort() — the per-attempt controller is short-lived
-  // and goes out of scope naturally.
-  test('successful attempt does not throw from stale abort cleanup (#1735)', async () => {
-    mockRunStreamed.mockImplementation((_prompt, _opts) => {
-      return Promise.resolve({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'done', id: '1' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    // Listen for uncaught errors that would surface from the stale abort.
-    const uncaughtErrors: Error[] = [];
-    const handler = (err: Error): void => {
-      uncaughtErrors.push(err);
-    };
-    process.on('uncaughtException', handler);
-
-    try {
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      // Give the event loop a tick for any deferred error events.
-      await new Promise(resolve => setTimeout(resolve, 50));
-
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(uncaughtErrors).toHaveLength(0);
-    } finally {
-      process.removeListener('uncaughtException', handler);
-    }
-  }, 5_000);
+test('Codex streams carry identical chunks from the in-process factory', async () => {
+  const create = () =>
+    createProvider(createFakeAppServer(() => ({ notifications: [agentMessage('same answer')] })));
+  const direct = await Array.fromAsync(create().sendQuery('parity', '/workspace'));
+  const remote = await Array.fromAsync(
+    overStreams(create, descriptor).sendQuery('parity', '/workspace')
+  );
+  expect(remote).toEqual(direct);
+  expect(direct).toContainEqual(
+    expect.objectContaining({ type: 'agent_message_chunk', text: 'same answer' })
+  );
 });
 
-describe('classifyCodexError (#2509 R7)', () => {
-  // AUTH_PATTERNS is this classifier's sole gate to 'auth', and 'auth' is what
-  // makes classifyAndEnrichCodexError wrap a message as `Codex auth error:` —
-  // the prefix error-formatter.ts trusts unconditionally. A bare "401"/"403"
-  // used to be enough to classify as 'auth', so any mid-turn error whose text
-  // merely contained those digits (a port, a timeout in ms) was misrouted to
-  // "run codex login" and had its retry disabled.
-  test('does not classify a bare "401"/"403" substring as auth', () => {
-    expect(classifyCodexError('connect ECONNREFUSED 127.0.0.1:401')).not.toBe('auth');
-    expect(classifyCodexError('timeout after 401ms')).not.toBe('auth');
-    expect(classifyCodexError('proxy responded with 403')).not.toBe('auth');
+test('Codex diagnostics carry binary resolution and legacy setup posture without token values', async () => {
+  const resolver = spyOn(binaryResolver, 'resolveCodexBinaryWithSource').mockResolvedValue({
+    path: process.execPath,
+    source: 'config',
   });
-
-  test('still classifies genuine auth signals as auth', () => {
-    expect(classifyCodexError('Unauthorized')).toBe('auth');
-    expect(classifyCodexError('authentication failed')).toBe('auth');
-    expect(classifyCodexError('invalid token provided')).toBe('auth');
-    expect(classifyCodexError('Your credit balance is too low to access the API')).toBe('auth');
-    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
-    // the word carries the signal, not the digits.
-    expect(classifyCodexError('exceeded retry limit, last status: 401 Unauthorized')).toBe('auth');
-  });
-
-  test('resolves a crash-pattern message carrying a stray digit to the retryable "crash" class, not silently to "unknown" (#2509 R13)', () => {
-    // Not classifying as 'auth' isn't sufficient on its own — shouldRetry =
-    // errorClass === 'rate_limit' || errorClass === 'crash', so a crash-shaped
-    // message must specifically land on 'crash' (retryable), not fall through
-    // to 'unknown' (also non-retryable), or a future reordering of
-    // SUBPROCESS_CRASH_PATTERNS/AUTH_PATTERNS could silently regress retry
-    // eligibility without any test catching it.
-    expect(classifyCodexError('exited with code 401')).toBe('crash');
-  });
-
-  test('does not classify a bare "429" substring as rate_limit (#2509 R11)', () => {
-    expect(classifyCodexError('connect ECONNREFUSED 127.0.0.1:4291')).not.toBe('rate_limit');
-    expect(
-      classifyCodexError('operation timed out after 4293ms while establishing connection')
-    ).not.toBe('rate_limit');
-  });
-
-  test('still classifies genuine rate-limit signals as rate_limit', () => {
-    expect(classifyCodexError('rate limit exceeded')).toBe('rate_limit');
-    expect(classifyCodexError('too many requests, please slow down')).toBe('rate_limit');
-    expect(classifyCodexError('server overloaded')).toBe('rate_limit');
-  });
+  const previous = process.env.CODEX_ID_TOKEN;
+  process.env.CODEX_ID_TOKEN = 'p4-legacy-token-secret';
+  try {
+    const request = {
+      signal: new AbortController().signal,
+      assistantConfig: { codexBinaryPath: process.execPath },
+    };
+    const direct = await createProvider().diagnose(request);
+    expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
+    expect(direct.checks.map(check => check.status)).toEqual(['ok', 'warn']);
+    expect(direct.checks[1].message).toContain('CODEX_ID_TOKEN -> ARCHON_CODEX_ID_TOKEN');
+    expect(JSON.stringify(direct)).not.toContain(process.env.CODEX_ID_TOKEN);
+    expect(resolver).toHaveBeenCalledWith(process.execPath);
+  } finally {
+    resolver.mockRestore();
+    if (previous === undefined) delete process.env.CODEX_ID_TOKEN;
+    else process.env.CODEX_ID_TOKEN = previous;
+  }
 });

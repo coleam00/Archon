@@ -16,7 +16,7 @@ This is the recommended GitHub auth mode for teams sharing one Archon instance. 
 - Webhooks centralise — one URL per App covers every installation.
 - A team's repos can span multiple GitHub orgs (or a mix of orgs and personal accounts) — Archon routes per-(owner, repo) to the right installation transparently.
 
-Solo installs that only need the PAT model can ignore this page; see [GitHub](./github.md) for the legacy setup.
+Solo installs that only need the PAT model can ignore this page; see [GitHub](/adapters/github/) for the legacy setup.
 
 ## When to use App mode vs. PAT mode
 
@@ -38,6 +38,8 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
    - **Homepage URL** — your team's Archon URL, e.g. `https://archon.example.com/`.
    - **Webhook URL** — `https://archon.example.com/webhooks/github`.
    - **Webhook secret** — same value as your `WEBHOOK_SECRET` env var.
+
+   Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before the signature is checked; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes.
 3. Uncheck **Active** on the user authorisation callback URL — Archon doesn't use OAuth in PR-B.
 
 ## Step 2: Permissions (fine-grained)
@@ -46,11 +48,15 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 
 | Permission       | Access       | Used for                                          |
 | ---------------- | ------------ | ------------------------------------------------- |
+| Actions          | Read & Write | Observing GitHub Actions workflow runs and rerunning failed CI |
 | Checks           | Read         | Waking workflow CI waits when a check concludes   |
-| Contents         | Read         | Cloning + reading repo metadata                   |
+| Contents         | Read & Write | Cloning, reading repo metadata, pushing branches, and merging pull requests |
+| Workflows        | Read & Write | Required only when runs create or change files under `.github/workflows/` |
 | Issues           | Read & Write | `createComment` + `listComments`                  |
 | Pull requests    | Read & Write | `pulls.get` + comment posting                     |
 | Metadata         | Read         | Mandatory (auto-included)                         |
+
+GitHub refuses pushes that create or change files under `.github/workflows/` unless the App has **Workflows: Read & Write**, even when **Contents: Read & Write** is granted. See [GitHub's Git access permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app#choosing-permissions-for-git-access).
 
 **Account permissions:** none.
 
@@ -79,11 +85,11 @@ Install the App on every org or personal account that holds repos your team oper
 2. Pick the org → grant access to all repos (or selected repos).
 3. Repeat for every org/account.
 
-> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config needed unless you're a single-install team — see `GITHUB_APP_INSTALLATION_ID` below.
+> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config is needed. `GITHUB_APP_INSTALLATION_ID` only pins the installation used for adapter API operations — see below.
 
 ## Step 6: Configure Archon
 
-Add the following to your `.env` (or `~/.archon/.env`):
+Add the following to `~/.archon/.env` for the install or `<cwd>/.archon/.env` for the project:
 
 ```dotenv
 GITHUB_APP_ID=123456                 # numeric App ID, visible on the App settings page
@@ -93,10 +99,15 @@ WEBHOOK_SECRET=<same value as on the GitHub side>
 # Optional:
 # GITHUB_APP_SLUG=archon-bot         # defaults to 'archon'; set this if you named your App
 #                                    # differently. The bot's posted-comment login is `<slug>[bot]`.
-# GITHUB_APP_INSTALLATION_ID=98765   # skip the per-(owner, repo) installation lookup when you only
-#                                    # have one installation. Saves one HTTP round trip per new
-#                                    # repo after a restart.
+# GITHUB_APP_INSTALLATION_ID=98765   # use a fixed installation for adapter API operations.
+#                                    # Repository tokens still verify the repository installation.
 ```
+
+CLI workflow run, `--detach`, resume, wake, and signal use `GITHUB_APP_ID` plus either private-key setting. They do not require `WEBHOOK_SECRET`; that setting is required for the server's webhook adapter. Each detached child initializes its own provider from the inherited configuration.
+
+Incomplete App settings, malformed App or installation IDs, an unusable RSA private key, and a malformed per-user encryption key fail before workflow execution. App/key correspondence and installation access are checked remotely when resolving the repository token. A resolution failure fails the run before any node executes; it cannot fall back to another credential. With no App settings, CLI behavior is unchanged. CLI runs follow the same per-user policy as server runs: connected user credentials override the bot, and unconnected users have GitHub credentials scrubbed unless org fallback is explicitly enabled.
+
+Each workflow execution, including a resumed segment, resolves the codebase repository's installation token. The provider caches fresh tokens in memory and refreshes them near expiry; tokens are not cached on disk. A node's environment stays fixed during one execution, so this does not rotate tokens inside a workflow that runs longer than the token lifetime.
 
 ### Inline private key (alternative)
 
@@ -121,7 +132,7 @@ Archon refuses to start if both modes are configured. Remove `GITHUB_TOKEN` from
 
 ## Step 8 (optional): Enable per-user GitHub identity
 
-By default every comment, commit, and push goes through the **bot** (`<slug>[bot]`). On a multi-user install you can let each teammate connect their own GitHub identity so those actions attribute to the human instead.
+By default GitHub API requests and pushes authenticate as the **bot** (`<slug>[bot]`), while commit authorship uses the checkout's ambient git identity. On a multi-user install teammates can connect their own GitHub identity for authentication and commit authorship.
 
 Enable the feature by adding two env vars on top of App mode:
 
@@ -143,8 +154,9 @@ Teammates connect once via any surface:
 
 Once enabled:
 
+- Run commits use the initiating connected user's GitHub login as author name and `<numeric_id>+<login>@users.noreply.github.com` as author email. The committer remains the ambient git identity. This applies to new and adopted worktrees, in-place runs, and folder projects without changing repository git config. Unconnected users and runs without an initiating user keep ambient authorship.
 - Workflows declaring `requires: [github]` **hard-block** unconnected users before any worktree/clone/AI cost.
-- An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
+- An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). The host's `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` are cleared for every per-user run. The scrub also hides the host's stored logins: `gh` gets an empty config directory, so a `gh auth login` on the server is not used, and git's credential helpers (keychain, credential store, `gh auth git-credential`) are cleared. GitHub commands in such a run fail with an authentication error until the user connects. SSH remotes still use the host's SSH keys. Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates all stored user tokens — everyone must reconnect.
 
 This is fully backward compatible: leave the two vars unset and the App keeps working as the bot only. See the [configuration reference](/reference/configuration/#per-user-github-identity-app-mode-optional) for the full env var table.
@@ -165,9 +177,21 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 ### Long-running workflow `git push`
 
-Workflows that span >1h need a fresh token to push from the cloned worktree. Archon installs a git credential helper at clone time (App mode only): the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation.
+Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling and adding a codebase by URL: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. Git skips credential helpers when a remote URL carries credentials, so the same setup removes any token embedded in the repository's `https://github.com` remote URLs, such as one left by an older PAT-mode clone. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
 
-The helper is embedded in compiled binaries. App-mode repository setup fails if Archon cannot install or register it, rather than leaving later fetches and pushes without a refreshable credential source.
+The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If helper installation or registration fails, repository setup stops before URL registration, sync, or workflow dispatch; a later setup retries registration and repairs partial config.
+
+### Long-running workflow `gh`
+
+A run's `GH_TOKEN` and `GITHUB_TOKEN` hold the installation token resolved when the run, or a resumed segment, starts. That token can have as little as 5 minutes left. When the run's process has `ARCHON_PORT` (every run the server dispatches, and a CLI run that exports the server's port), Archon also puts `~/.archon/bin/gh-shim` first on the run's `PATH`. On each call the shim asks the same internal endpoint for a current token for the run's repository and runs the real `gh` with it in the environment. If it gets no token, it exits 1 with a `gh (archon shim):` error instead of running `gh` with a stale token. A `GH_TOKEN` that is not an installation token, such as one a step sets itself, passes through unchanged. A per-user token or scrubbed token from [per-user GitHub identity](#step-8-optional-enable-per-user-github-identity) turns the shim off for that run.
+
+`gh` keeps the start-time token, and fails once it expires, in these cases:
+
+- **A CLI run without `ARCHON_PORT`.** No endpoint is reachable, so Archon logs `workflow.gh_token_refresh_unavailable` each time it resolves the run's GitHub environment. That happens when the run starts, when it runs worktree setup commands, and when it resumes, so one run can log it several times. The CLI mints its token at start, so it lasts about an hour. Export `ARCHON_PORT` with an App-mode server's port to cover longer runs.
+- **`gh` called by a Codex agent.** Codex's shell snapshot restores a fixed `PATH`, so its shell never finds the shim. Archon does not change that Codex setting. Bash, script and loop nodes, and Claude and Pi agents, use the shim.
+- **Windows.** The shim is a POSIX shell script, so a run on Windows logs the same warning and keeps the start-time token.
+
+Run output redacts the start-time token only. A token the shim fetches later lives in the `gh` process's environment, so it is not redacted if a step prints it, for example with `gh auth token`.
 
 ### Internal endpoint security — REQUIRED
 
@@ -205,7 +229,7 @@ The `!override` tag (compose-spec) replaces the base file's `ports` list instead
 
 **2. In `Caddyfile` — drop `/internal/*` requests.**
 
-Insert this `handle` block before the fallthrough `handle { }` block:
+The maintained `Caddyfile.example` includes this denial. Keep it in your deployed `Caddyfile`; if you use an older or custom configuration, insert it before the fallthrough `handle { }` block:
 
 ```txt
 handle /internal/* {
@@ -253,10 +277,15 @@ If the external POST probe returns anything other than `404` or `403` from the p
 ## Migration from PAT mode
 
 1. Register the App and install on your orgs (Steps 1–5 above).
-2. Add `GITHUB_APP_*` env vars (Step 6).
+2. Add `GITHUB_APP_*` env vars (Step 6). In Docker, put them in the container environment (the compose `.env`), not `/.archon/.env`; see [GitHub CLI authentication](/deployment/docker/#github-cli-authentication).
 3. **Remove** `GITHUB_TOKEN` from your env (or comment it out). Archon refuses to start if both are set.
-4. Restart Archon.
-5. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
+4. **Remove** `GH_TOKEN` if you set it to the same PAT. Archon starts with it set, but the GitHub CLI in the container keeps using the old PAT.
+5. Restart Archon.
+6. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
+
+In App mode, adding a private GitHub codebase by URL and inspecting its base branch use the repository's installation token; no PAT is needed. The clone keeps a credential-free remote URL and receives the credential helper before registration completes. If the App is not installed, Archon reports installation guidance. Adding an already-registered URL refreshes the helper without cloning again when the checkout exists. A missing Archon-managed checkout is cloned again at its registered path. A missing operator-owned checkout must be restored or repaired with `/update-project`.
+
+Run `archon doctor` to validate local App configuration after migration. A passing App check confirms the ID and RSA key are valid locally; it does not confirm GitHub accepts them or that the App has repository access.
 
 ## Troubleshooting
 
@@ -274,9 +303,14 @@ If the external POST probe returns anything other than `404` or `403` from the p
 Repeated 401s on outbound API calls (`createComment`, `listComments`, `repos.get`, `pulls.get`) point at installation / token issues, not webhook config. Walk through:
 
 - Verify the App is installed on the target `owner` and has not been suspended or uninstalled. Visit `https://github.com/settings/installations` (or the org equivalent) to confirm.
-- Verify the App's permissions still include the scopes the operation needs (Contents:Read for clone; Issues:RW + Pull requests:RW for comments and reactions). Permission scope changes require operators to **review and accept** the new permissions on every installation; Archon will 401 until that's done.
 - Verify the private key in your env (`GITHUB_APP_PRIVATE_KEY` or `_PATH`) matches the same App that `GITHUB_APP_ID` points at. Mismatched key+ID is a common cause of "401 from JWT" errors at token-issuance time.
 - Verify `GITHUB_APP_INSTALLATION_ID` (if set) still corresponds to a live installation — uninstall + reinstall assigns a new ID.
+
+### GitHub refuses a branch push
+
+An installation token needs Contents write access to push branches. If the branch creates or changes files under `.github/workflows/`, GitHub also requires Workflows write access. Check the App and installation permissions:
+
+Verify the App's permissions against the [permissions table](#step-2-permissions-fine-grained). Permission changes require operators to **review and accept** the new permissions on every installation; until accepted, that installation keeps its old permissions.
 
 ### Webhook deliveries fail signature verification
 

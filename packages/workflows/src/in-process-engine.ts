@@ -3,11 +3,22 @@ import type { ExecuteWorkflowOptions } from './executor';
 import {
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,
+  type AttentionWatch,
+  type AttentionWatchOptions,
   type IWorkflowEngine,
   type WorkflowEngineSubmitInput,
   type WorkflowResumeInput,
   type WorkflowResumeAdmission,
+  type WorkflowRunDelivery,
+  type WorkflowRunSubscription,
+  type WorkflowRunSubscriptionOptions,
 } from './engine-port';
+import { subscribeToRunTree } from './run-subscription';
+import {
+  watchAttentionQueue,
+  type AttentionStreamLine,
+  type AttentionWatchHost,
+} from './attention-watch';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -25,7 +36,11 @@ function rejectOptions(
 }
 
 export class InProcessWorkflowEngine implements IWorkflowEngine {
-  constructor(private readonly deps: WorkflowDeps) {}
+  /** `attention` is the host's side of `watchAttention`; engines built without it refuse to watch. */
+  constructor(
+    private readonly deps: WorkflowDeps,
+    private readonly attention?: AttentionWatchHost
+  ) {}
 
   async submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult> {
     rejectOptions(input.options, FRESH_RUN_FORBIDDEN_OPTIONS, 'submit');
@@ -39,7 +54,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.cwd,
       input.workflow,
       input.userMessage,
-      input.conversationDbId,
+      input.origin,
       input.options
     );
   }
@@ -71,7 +86,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.cwd,
       workflow,
       input.userMessage,
-      input.conversationDbId,
+      hydrated.preCreatedRun.origin ?? undefined,
       { ...input.options, ...hydrated }
     ).catch(async (error: unknown) => {
       // Hydration already claimed the row. The executor's early setup can throw
@@ -91,5 +106,22 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       throw error;
     });
     return { accepted: true, runId: hydrated.preCreatedRun.id, settled };
+  }
+
+  subscribe(
+    runId: string,
+    listener: (delivery: WorkflowRunDelivery) => void,
+    options?: WorkflowRunSubscriptionOptions
+  ): Promise<WorkflowRunSubscription> {
+    return subscribeToRunTree(this.deps.store, runId, listener, options);
+  }
+
+  watchAttention(
+    listener: (line: AttentionStreamLine) => void | Promise<void>,
+    options: AttentionWatchOptions
+  ): Promise<AttentionWatch> {
+    if (this.attention === undefined)
+      return Promise.reject(new Error('This engine was built without an attention-watch host.'));
+    return watchAttentionQueue(this.deps.store, this.attention, listener, options);
   }
 }

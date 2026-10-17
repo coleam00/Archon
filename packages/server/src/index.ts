@@ -8,6 +8,10 @@
 // when `bun run dev:server` is run from inside a target repo those keys leak
 // into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
 import '@archon/paths/strip-cwd-env-boot';
+// ESM dependencies evaluate before this module's body reads configuration.
+import { envPath } from './boot/load-env';
+import { existsSync } from 'fs';
+import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
 // Pure env→bool boot helper (zero deps) — safe to import before the heavier
 // application imports below. Decides the Claude global-auth sentinel posture.
 import {
@@ -15,36 +19,10 @@ import {
   hasClaudeBootAuthPosture,
 } from './boot/claude-auth-posture';
 
-// Load environment variables — after CWD stripping, before application imports.
-import { config } from 'dotenv';
-import { resolve } from 'path';
-import { existsSync } from 'fs';
-import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
-
-// In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
-// import.meta.dir is frozen at build time, so skip in compiled binaries.
-const envPath = BUNDLED_IS_BINARY ? undefined : resolve(import.meta.dir, '..', '..', '..', '.env');
-
-if (envPath) {
-  const dotenvResult = config({ path: envPath });
-  if (dotenvResult.error) {
-    // Use console.error since logger depends on env vars (LOG_LEVEL)
-    console.error(`Failed to load .env from ${envPath}: ${dotenvResult.error.message}`);
-    console.error('Hint: Copy .env.example to .env and configure your credentials.');
-  }
-}
-
-// Load archon-owned env from ~/.archon/.env (user scope) and <cwd>/.archon/.env
-// (repo scope, wins over user) with override: true. Keeps the server in sync
-// with the CLI — see packages/paths/src/env-loader.ts and the three-path model
-// (#1302 / #1303).
-import { loadArchonEnv } from '@archon/paths/env-loader';
-loadArchonEnv(process.cwd());
-
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
-publishArchonCliCommand();
+if (!BUNDLED_IS_BINARY) publishArchonCliCommand();
 
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
@@ -54,16 +32,13 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-import { getVendorCatalog } from '@archon/core';
+import { getPluginsPath } from '@archon/paths';
+import { registerHostProviders } from '@archon/core/providers/register-host-providers';
+import { claimPiExtensionProcessError } from '@archon/providers/pi/extension-error-broker';
+import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
+import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
-// Bootstrap provider registry before any provider lookups
-registerBuiltinProviders();
-registerCommunityProviders();
-// Fail fast at boot (not on first API request) if any registration declares a
-// credential vendor the delivery map can't deliver — that's a provider bug
-// that must block startup, not surface as a runtime 500 (#1955).
-getVendorCatalog();
+await registerHostProviders();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { serveWebUi } from './static-cache';
@@ -75,6 +50,13 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
+import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { loadPlatformPolicies, loadChatPlugins } from '@archon/core/platforms/chat-plugins';
+import { createChatHost } from './chat-host/runtime';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
+import { slackPolicy } from '@archon/adapters/chat/slack/policy';
+import { discordPolicy } from '@archon/adapters/community/chat/discord/policy';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -84,43 +66,46 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
-import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import { AttentionRouter } from './services/attention-router';
+import { WebPushDestination } from './services/web-push';
+import {
+  registerGiteaWebhookRoute,
+  registerGitlabWebhookRoute,
+  registerGithubWebhookRoute,
+  registerWebhookSourceRoutes,
+} from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
+  resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
-  workflowResumeConversationId,
-  workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
   handleMessage,
   pool,
   ConversationLockManager,
-  classifyAndFormatError,
   startCleanupScheduler,
   stopCleanupScheduler,
   getDbNotificationListener,
   loadConfig,
   logConfig,
   getPort,
-  createGitHubAppAuthProvider,
-  loadAppPrivateKey,
-  registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
-  assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
-import type { IPlatformAdapter } from '@archon/core';
-import type { IdentityPlatform } from '@archon/core';
-import * as userDb from '@archon/core/db/users';
-import * as conversationDb from '@archon/core/db/conversations';
+import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
+import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import {
   createLogger,
   logArchonPaths,
@@ -130,7 +115,9 @@ import {
   captureArchonActive,
   getSourceWebDistDir,
 } from '@archon/paths';
-import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
+import { resolveGitHubTokenFromEnv } from '@archon/core/github-auth/config';
+import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,
@@ -140,6 +127,8 @@ import {
   getSignupMode,
   isArchonOwnedAuthPath,
 } from './auth';
+// From the pure config module: tests mock './auth', and the header name must stay real.
+import { webAuthHeaderName } from './auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -148,82 +137,19 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Resolve a platform-native user identifier (Slack U-id, Telegram chat id,
- * Discord snowflake) to an Archon user UUID via auto-create-on-first-sight.
- *
- * Contract: NEVER THROWS. On any failure, warn-log and return undefined so
- * message handling proceeds (writes user_id = NULL on the conversation/run
- * row). This invariant is load-bearing — message processing across three
- * adapters depends on it. Covered by resolve-user-id.test.ts.
- *
- * Exported for testability.
- */
-export async function resolveUserId(
-  platform: IdentityPlatform,
-  platformUserId: string | number | undefined,
-  displayName: string | undefined
-): Promise<string | undefined> {
-  if (platformUserId === undefined || platformUserId === '') {
-    return undefined;
-  }
-  try {
-    const user = await userDb.findOrCreateUserByPlatformIdentity(
-      platform,
-      String(platformUserId),
-      displayName
-    );
-    return user.id;
-  } catch (err) {
-    getLog().warn(
-      { err: err as Error, platform, platformUserId: String(platformUserId) },
-      'server.user_resolve_failed'
-    );
-    return undefined;
-  }
-}
-
-/**
- * Creates an error handler for message processing failures.
- * Logs the error and attempts to send a user-friendly message to the platform.
- */
-function createMessageErrorHandler(
-  platform: string,
-  adapter: IPlatformAdapter,
-  conversationId: string
-): (error: unknown) => Promise<void> {
-  return async (error: unknown): Promise<void> => {
-    getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
-    try {
-      const userMessage = classifyAndFormatError(error as Error, adapter);
-      await adapter.sendMessage(conversationId, userMessage);
-    } catch (sendError) {
-      getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
-    }
-  };
-}
-
-/**
- * Handles unhandled promise rejections from the process.
- *
- * Exported for testability. Filters specifically for SDK cleanup races
- * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
- * a DAG node abort). Those are logged at error level but do not exit the process.
- * All other unhandled rejections are unexpected bugs — they are logged at fatal
- * level and the process exits as soon as queued telemetry flushes (bounded, so
- * still Fail Fast).
- */
+import { resolveUserId, createMessageErrorHandler } from './chat-host/inbound';
 export function handleUnhandledRejection(reason: unknown): void {
-  const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
-  // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
-  // abort. Safe to absorb — these are transient artifacts, not application bugs.
-  if (message.includes('operation aborted')) {
-    getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
-    return;
-  }
-  // All other unhandled rejections are unexpected — crash loudly so they are
-  // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(reason)) return;
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
+  void exitAfterTelemetryFlush(1);
+}
+
+export function handleUncaughtException(
+  error: Error,
+  origin?: NodeJS.UncaughtExceptionOrigin
+): void {
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(error)) return;
+  getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }
 
@@ -249,6 +175,18 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  if ((await loadStoreSelection()) === 'files') {
+    const { FileStoreUnsupportedError: fileStoreUnsupportedError } = await import(
+      '@archon/workflows/file-store'
+    );
+    throw new fileStoreUnsupportedError('the server (server routes read SQL)');
+  }
+  // Every host bash and script node leads its own process group, so a run's cancel ends
+  // that run's node trees, and each node's watcher ends its tree if the server dies.
+  // The server never ends every tree at once, so the handle is not kept.
+  recordNodeProcessTrees();
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
@@ -297,19 +235,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // shared Claude key — auth is delivered per request from the encrypted store,
   // so it must NOT trip the no-credentials exit (#1983).
   const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const codexAuth = readCodexBootAuth(process.env);
+  if (codexAuth.deprecated.length > 0) {
+    getLog().warn(
+      { hint: formatCodexSetupDeprecation(codexAuth.deprecated) },
+      'codex_setup_env_deprecated'
+    );
+  }
+  const hasCodexCredentials = codexAuth.hasCredentials;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'],
+          codex: CODEX_BOOT_CHECKED,
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
-          'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
+          `Or set ${CODEX_BOOT_CHECKED.join(' + ')} in .env`,
           'See .env.example for all options',
         ],
         envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
@@ -326,10 +271,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
   if (!hasCodexCredentials) {
-    getLog().warn(
-      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
-      'codex_credentials_missing'
-    );
+    getLog().warn({ checked: CODEX_BOOT_CHECKED }, 'codex_credentials_missing');
   }
 
   // Test database connection
@@ -351,7 +293,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Running it here killed parallel workflow runs from other processes
   // (CLI, adapters) by flipping their `running` rows to `failed` mid-flight.
   // Same lesson the CLI already learned — see packages/cli/src/cli.ts:256-258.
-  // Per CLAUDE.md "No Autonomous Lifecycle Mutation Across Process Boundaries":
+  // Per AGENTS.md "Do not guess lifecycle ownership":
   // surface ambiguous state to users and provide a one-click action instead.
   // Users transition a stuck `running` row via the per-row Cancel/Abandon
   // buttons in the Web UI dashboard, or `archon workflow abandon <run-id>`.
@@ -366,7 +308,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   await validateAppDefaultsPaths();
 
   // Initialize conversation lock manager
-  const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10');
+  const maxConcurrent = config.concurrency.maxConversations;
   const lockManager = new ConversationLockManager(maxConcurrent);
   getLog().info({ maxConcurrent }, 'lock_manager_initialized');
 
@@ -389,28 +331,61 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const workflowBridge = new WorkflowEventBridge(transport);
   const webAdapter = new WebAdapter(transport, persistence, workflowBridge);
   await webAdapter.start();
+  const workflowPlatforms = new Map<string, IWorkflowPlatform>([
+    [webAdapter.getPlatformType(), webAdapter],
+  ]);
   persistence.startPeriodicFlush();
 
   // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
   // to the console dashboard. The in-process WorkflowEventBridge only sees runs
-  // executed inside the server; this poller tails the events table. On Postgres,
-  // LISTEN/NOTIFY wakes it for near-instant push (poll becomes a slow backstop);
-  // on SQLite it polls fast.
-  const dashboardPoller = new DashboardEventPoller();
+  // executed inside the server; this poller follows the store's event feed. On
+  // Postgres, LISTEN/NOTIFY wakes it for near-instant push (poll becomes a slow
+  // backstop); on SQLite it polls fast.
+  const dashboardPoller = new DashboardEventPoller(createWorkflowStore());
   const dbNotifier = getDbNotificationListener();
   let pgNotifyListener: PgNotifyListener | undefined;
   if (dbNotifier) {
-    dashboardPoller.start(transport, 10_000);
+    await dashboardPoller.start(transport, 10_000);
     pgNotifyListener = new PgNotifyListener(dbNotifier, dashboardPoller);
     await pgNotifyListener.start();
   } else {
-    dashboardPoller.start(transport, 1_500);
+    await dashboardPoller.start(transport, 1_500);
   }
 
   // Mutable — pushed to as each adapter starts, read by the /api/health endpoint.
   // Must be a live reference because Telegram starts after the HTTP listener begins
   // accepting requests, so a snapshot taken at registration time would miss it.
   const activePlatforms: string[] = ['Web'];
+  const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
+  const installedChatIds = new Set(chatPlugins.map(plugin => plugin.descriptor.id));
+  const inlinePlatforms = new Set(
+    chatPlugins
+      .filter(plugin => plugin.descriptor.capabilities.runEvents)
+      .map(plugin => plugin.descriptor.id)
+  );
+  const chatHost = createChatHost(
+    chatPlugins,
+    config.streaming,
+    lockManager,
+    workflowPlatforms,
+    activePlatforms,
+    { routes: config.attentionNotices, inlinePlatforms }
+  );
+  // Each route's activation baseline commits before the router's first scan.
+  await Promise.all(chatHost.attentionDestinations.map(destination => destination.activate()));
+  const webPush = new WebPushDestination(inlinePlatforms);
+  const attentionRouter = new AttentionRouter(
+    [webPush, ...chatHost.attentionDestinations],
+    inlinePlatforms
+  );
+  for (const plugin of chatPlugins) {
+    getLog().info(
+      { plugin: plugin.descriptor.id },
+      defaultPlatformPolicies.some(policy => policy.id === plugin.descriptor.id)
+        ? 'chat.plugin.registered_superseding_bundled_adapter'
+        : 'chat.plugin.registered'
+    );
+  }
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
@@ -444,35 +419,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     if (ghAuthMode.kind === 'app') {
-      // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
-      // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
-      const appId = process.env.GITHUB_APP_ID;
       const webhookSecret = process.env.WEBHOOK_SECRET;
-      if (!appId || !webhookSecret) {
-        throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
+      githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
+      if (!githubAppAuthProvider || !webhookSecret) {
+        throw new Error(
+          'GitHub App mode misconfigured: App credentials and WEBHOOK_SECRET required'
+        );
       }
-      const privateKey = loadAppPrivateKey();
-      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
-      // so we never store unencryptable tokens at runtime. If the key is absent,
-      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
-      assertEncryptionKeyAtBoot();
       if (!isPerUserGitHubEnabled()) {
         getLog().warn(
           'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
         );
       }
-      const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
-        ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
-        : undefined;
-      githubAppAuthProvider = createGitHubAppAuthProvider({
-        appId,
-        privateKey,
-        slug: process.env.GITHUB_APP_SLUG ?? 'archon',
-        defaultInstallationId,
-      });
-      // Register on the module-level singleton consumed by createWorkflowDeps()
-      // so bash/script subprocess env injection picks up the provider.
-      registerGitHubAppAuthProvider(githubAppAuthProvider);
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
@@ -487,13 +445,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getUserToken,
       });
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
-      getLog().info(
-        { slug: githubAppAuthProvider.slug, defaultInstallationId },
-        'github.adapter_mode_app'
-      );
+      getLog().info({ slug: githubAppAuthProvider.slug }, 'github.adapter_mode_app');
     } else if (ghAuthMode.kind === 'pat') {
-      const patToken = process.env.GITHUB_TOKEN;
+      const patToken = resolveGitHubTokenFromEnv();
       const webhookSecret = process.env.WEBHOOK_SECRET;
       if (!patToken || !webhookSecret) {
         throw new Error('GitHub PAT mode misconfigured: GITHUB_TOKEN and WEBHOOK_SECRET required');
@@ -503,6 +459,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
       github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');
     } else {
@@ -521,6 +478,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      workflowPlatforms.set(gitea.getPlatformType(), gitea);
       activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
@@ -538,16 +496,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      workflowPlatforms.set(gitlab.getPlatformType(), gitlab);
       activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
     }
 
     // Initialize Discord adapter (conditional)
-    if (process.env.DISCORD_BOT_TOKEN) {
-      const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+    if (!installedChatIds.has(discordPolicy.id) && process.env.DISCORD_BOT_TOKEN) {
+      const discordStreamingMode = (process.env[discordPolicy.streaming.envVar] ??
+        discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
       const discordRequireMention = isDiscordMentionRequired();
@@ -601,7 +559,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -613,6 +571,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // unrelated bot misconfiguration. See #1365.
       try {
         await discord.start();
+        workflowPlatforms.set(discord.getPlatformType(), discord);
         activePlatforms.push('Discord');
       } catch (error) {
         const err = error as Error;
@@ -630,10 +589,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     // Initialize Slack adapter (conditional)
-    if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
-      const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+    if (
+      !installedChatIds.has(slackPolicy.id) &&
+      process.env.SLACK_BOT_TOKEN &&
+      process.env.SLACK_APP_TOKEN
+    ) {
+      const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
+        slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
       slack = new SlackAdapter(
         process.env.SLACK_BOT_TOKEN,
         process.env.SLACK_APP_TOKEN,
@@ -678,7 +640,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -687,7 +649,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
       // refuses new event-handler registrations once the connection is open,
       // so `app.action(...)` calls inside the bridge must run first.
-      slackBridge = new SlackWorkflowBridge(slack);
+      workflowPlatforms.set(slack.getPlatformType(), slack);
+      slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
+        const run = await workflowDb.getWorkflowRun(runId);
+        if (!run) return 'not_resumed';
+        const actorUserId = await resolveUserId('slack', slackUserId, undefined);
+        const target = await workflowResumeTargetForRun(run, workflowPlatforms);
+        const outcome = await resumeWorkflowRunFromServer(
+          createSqlWorkflowHost(),
+          run,
+          actorUserId,
+          target
+        );
+        return outcome.kind === 'resource_busy' ? 'not_resumed' : outcome.kind;
+      });
       slackBridge.attach();
 
       await slack.start();
@@ -708,14 +683,24 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const resourceStartWorkflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
-    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
+        acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
+        isKnownUser: async id =>
+          (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
+          resourceStartWorkflowHost.deps.store.hasStartReceiptForDelivery(
+            sourceInstanceId,
+            deliveryId
+          ),
+      })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
   const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
   const resourceStartHost = resourceStartHostId
-    ? createServerResourceStartHost(resourceStartHostId)
+    ? createServerResourceStartHost(resourceStartHostId, resourceStartWorkflowHost)
     : undefined;
   const requestResourceStartDrain = resourceStartHost
     ? (): void => void resourceStartHost.requestDrain()
@@ -765,7 +750,17 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
+  registerApiRoutes(
+    app,
+    webAdapter,
+    lockManager,
+    activePlatforms,
+    {
+      webPush,
+      router: attentionRouter,
+    },
+    { githubAppAuth: githubAppAuthProvider ?? undefined }
+  );
 
   // GitHub webhook endpoint
   if (github) {
@@ -820,55 +815,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Gitea webhook endpoint
   if (gitea) {
-    app.post('/webhooks/gitea', async c => {
-      const eventType = c.req.header('x-gitea-event');
-
-      try {
-        const signature = c.req.header('x-gitea-signature');
-        if (!signature) {
-          return c.json({ error: 'Missing signature header' }, 400);
-        }
-
-        // CRITICAL: Use c.req.text() for raw body (signature verification)
-        const payload = await c.req.text();
-
-        // Process async (fire-and-forget for fast webhook response)
-        gitea.handleWebhook(payload, signature).catch((error: unknown) => {
-          getLog().error({ err: error, eventType }, 'gitea_webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType }, 'gitea_webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGiteaWebhookRoute(app, gitea);
     getLog().info('gitea_webhook_registered');
   }
 
   // GitLab webhook endpoint
   if (gitlab) {
-    app.post('/webhooks/gitlab', async c => {
-      const eventType = c.req.header('x-gitlab-event');
-
-      try {
-        const token = c.req.header('x-gitlab-token');
-        if (!token) {
-          return c.json({ error: 'Missing token header' }, 400);
-        }
-
-        const payload = await c.req.text();
-
-        gitlab.handleWebhook(payload, token).catch((error: unknown) => {
-          getLog().error({ err: error, eventType }, 'gitlab.webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType }, 'gitlab.webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGitlabWebhookRoute(app, gitlab);
     getLog().info('gitlab_webhook_registered');
   }
 
@@ -935,7 +888,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Security guardrail (advisory): the web identity header (ARCHON_WEB_AUTH_HEADER,
-  // default X-Archon-User) is trusted as-is — Archon attributes web requests to
+  // see webAuthHeaderName) is trusted as-is — Archon attributes web requests to
   // whoever the header names. That is only sound when Archon is reachable SOLELY
   // through a reverse proxy that authenticates and sets the header (loopback bind).
   // On a non-loopback bind any client that can reach the port can forge it:
@@ -952,7 +905,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     Boolean(process.env.ARCHON_WEB_AUTH_HEADER) || isPerUserGitHubEnabled() || isWebAuthEnabled();
   if (webAuthHeaderTrustActive && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     getLog().warn(
-      { hostname, headerName: process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User' },
+      { hostname, headerName: webAuthHeaderName() },
       'web_auth.header_trust_on_public_bind'
     );
   }
@@ -963,12 +916,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     port,
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
   });
+  // Children must use the bound socket, including explicit overrides and worktree ports.
+  process.env.ARCHON_PORT = String(server.port);
   getLog().info({ port: server.port, hostname }, 'server_listening');
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
-  if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
-    const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ?? 'stream') as 'stream' | 'batch';
+  if (
+    !opts.skipPlatformAdapters &&
+    !installedChatIds.has(telegramPolicy.id) &&
+    process.env.TELEGRAM_BOT_TOKEN
+  ) {
+    const streamingMode = (process.env[telegramPolicy.streaming.envVar] ??
+      telegramPolicy.streaming.defaultMode) as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
     const telegramAdapter = telegram; // Capture for use in callback
 
@@ -983,7 +943,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .acquireLock(conversationId, async () => {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
@@ -992,6 +952,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      workflowPlatforms.set(telegramAdapter.getPlatformType(), telegramAdapter);
       activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1002,38 +963,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('telegram_adapter_skipped');
   }
 
-  // Continuations can execute only after every credential provider and platform
-  // adapter is initialized. Web background runs execute against a hidden worker
-  // conversation but deliver to their visible parent; other runs use their owning
-  // conversation directly.
-  const workflowPlatforms = new Map<string, IWorkflowPlatform>();
-  for (const platform of [webAdapter, github, gitea, gitlab, discord, slack, telegram]) {
-    if (platform !== null) workflowPlatforms.set(platform.getPlatformType(), platform);
-  }
-  startWorkflowContinuationScheduler(async run => {
-    const conversation = await conversationDb.getConversationById(
-      workflowResumeConversationId(run)
-    );
-    if (!conversation) {
-      return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
-    }
-    if (run.parent_conversation_id !== null) {
-      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
-      if (!parent?.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
-      }
-      if (!conversation.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
-      }
-      return workflowResumeTargetForConversation(
-        parent,
-        workflowPlatforms,
-        conversation.platform_conversation_id,
-        parent.platform_conversation_id
-      );
-    }
-    return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  }, requestResourceStartDrain);
+  // Web background runs execute against a hidden worker conversation but deliver
+  // to their visible parent; other runs use their owning conversation directly.
+  startWorkflowContinuationScheduler(
+    createSqlWorkflowHost(),
+    run => workflowResumeTargetForRun(run, workflowPlatforms),
+    requestResourceStartDrain
+  );
   if (resourceStartHostId)
     getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
@@ -1051,6 +987,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
       .then(async () => {
+        try {
+          await attentionRouter.stop();
+          await chatHost.stop();
+        } catch (error) {
+          getLog().error({ err: error }, 'chat_host_stop_error');
+        }
         // Stop adapters (these should not throw, but be defensive)
         try {
           telegram?.stop();
@@ -1088,15 +1030,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  chatHost.start();
+  attentionRouter.start();
 
-  // Guard against SDK cleanup races: when a DAG node is aborted mid-execution,
-  // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
-  // returns { continue: true }, handleControlRequest() tries to write() back to
-  // the subprocess pipe — but the pipe is already closed (abort fired). The
-  // write() throws "Operation aborted", which becomes an unhandled rejection
-  // because it occurs AFTER the for-await generator loop exits (and thus outside
-  // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
+  // Every unhandled rejection or exception exits: vendor error text (such as the Claude
+  // SDK's "Operation aborted") must not decide what gets suppressed. The one exception is
+  // a stack-attested Pi extension failure, which goes back to the Pi turn that loaded it.
   process.on('unhandledRejection', handleUnhandledRejection);
+  process.on('uncaughtException', handleUncaughtException);
 
   getLog().info({ activePlatforms, port }, 'server_ready');
 

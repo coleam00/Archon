@@ -21,8 +21,8 @@ Show workspace scripts:
 
 ### 2. Read Core Documentation
 
-Read `CLAUDE.md` in full — it contains the authoritative architecture reference, engineering
-principles, import patterns, and development guidelines for this project.
+Read `AGENTS.md` in full for project rules and development guidelines. Follow its links to
+`.archon/direction.md`, `.archon/engineering.md`, and the docs for focused project context.
 
 ### 3. Identify Key Entry Points
 
@@ -31,16 +31,13 @@ Read these files to understand the primary message and execution flow:
 - `packages/core/src/orchestrator/orchestrator-agent.ts` — single entry point for all platforms
 - `packages/core/src/handlers/command-handler.ts` — slash command routing (no AI)
 - `packages/server/src/index.ts` — server startup, adapter wiring, port allocation
-- `packages/workflows/src/executor.ts` — sequential/parallel/loop/DAG workflow execution
+- `packages/workflows/src/executor.ts` — run setup; every workflow executes as a DAG in `dag-executor.ts`
 
 ### 4. Understand Package Dependency Layers
 
-Read the dependency chain (no @archon/* deps → most isolated):
-
-- `packages/paths/src/index.ts` — path resolution + Pino logger (zero deps)
-- `packages/git/src/index.ts` — git ops (depends only on @archon/paths)
-- `packages/isolation/src/index.ts` — worktree isolation (depends on @archon/git + @archon/paths)
-- `packages/workflows/src/index.ts` — workflow engine (depends on @archon/git + @archon/paths)
+Inspect the relevant `packages/*/package.json` manifests for workspace dependencies
+before reporting dependency order. Read each package's entry points to understand
+its responsibility.
 
 ### 5. Understand Current State
 
@@ -58,15 +55,15 @@ List any active worktrees:
 Provide a concise summary (under 300 words) covering:
 
 ### Project Overview
-- Archon: Remote agentic coding platform (Slack, Telegram, GitHub, Discord, Web)
-- Bun + TypeScript monorepo with 8 packages: paths, git, isolation, workflows, core, adapters, server, web
+- Archon: Self-hostable, governed agentic automation engine
+- Bun + TypeScript monorepo; use `packages/` and the root `package.json` for the current workspace structure
 - SQLite (default, zero-setup) or PostgreSQL (optional via DATABASE_URL)
 
 ### Architecture
 - Package dependency order and each package's responsibility
 - Key interfaces: `IPlatformAdapter`, `IAgentProvider`, `IDatabase`, `IWorkflowStore`
 - Message flow: platform adapter → orchestrator-agent → command handler OR AI provider
-- Workflow execution: `discoverWorkflows` → router → `executeWorkflow` (steps / loop / DAG)
+- Workflow execution: `discoverWorkflows` → router → `executeWorkflow` → `executeDagWorkflow`
 
 ### Current State
 - Active branch, recent changes, any uncommitted work

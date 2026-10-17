@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "provider",
+  "name": "provider-codex",
+  "description": "Archon maintained Codex provider.",
+  "executable": "archon-provider-codex"
+}

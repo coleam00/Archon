@@ -24,14 +24,19 @@ import { removeTempTree } from '@archon/paths/test-utils';
 const actual = await import('./defaults/bundled-defaults');
 mock.module('./defaults/bundled-defaults', () => ({ ...actual, isBinaryBuild: () => true }));
 
-const { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } =
-  await import('./workflow-source');
+const { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } = await import(
+  './workflow-source'
+);
 const { loadCommandPrompt } = await import('./executor-shared');
 const { discoverScriptsForCwd } = await import('./script-discovery');
 
 let root: string;
 let target: string;
 let capture: Awaited<ReturnType<typeof captureWorkflowSource>>;
+
+// A shipped pack command, and where the capture writes it.
+const COMMAND = '__archon_pack__bundled:sdlc:implement::implement';
+const COMMAND_PATH = ['bundled', 'workflows', 'sdlc', 'implement', 'commands', 'implement.md'];
 
 const deps = {
   loadConfig: () => Promise.resolve({} as unknown as Awaited<ReturnType<() => Promise<never>>>),
@@ -62,10 +67,7 @@ describe('a binary freezes its embedded bundled source', () => {
   });
 
   test('a bundled command exists as a file and resolves from the capture', async () => {
-    const onDisk = await readFile(
-      join(capture.anchor.root, 'bundled', 'commands', 'defaults', 'archon-assist.md'),
-      'utf-8'
-    );
+    const onDisk = await readFile(join(capture.anchor.root, ...COMMAND_PATH), 'utf-8');
     expect(onDisk.length).toBeGreaterThan(0);
 
     // Resolved against the TARGET's cwd: the only way this succeeds is by reading the
@@ -73,7 +75,7 @@ describe('a binary freezes its embedded bundled source', () => {
     const result = await loadCommandPrompt(
       deps as never,
       target,
-      'archon-assist',
+      COMMAND,
       undefined,
       capturedSourceRoots(capture.anchor)
     );
@@ -83,10 +85,10 @@ describe('a binary freezes its embedded bundled source', () => {
   test('bundled workflows are written where discovery expects them', async () => {
     const roots = capturedSourceRoots(capture.anchor);
     const yaml = await readFile(
-      join(roots.bundledWorkflows, 'defaults', 'archon-assist.yaml'),
+      join(roots.bundledWorkflows, 'sdlc', 'review', 'archon-review-block.yaml'),
       'utf-8'
     );
-    expect(yaml).toContain('name: archon-assist');
+    expect(yaml).toContain('name: archon-review-block');
   });
 
   test('script discovery reads the capture rather than re-materializing constants', async () => {
@@ -105,10 +107,7 @@ describe('a binary freezes its embedded bundled source', () => {
     const tamperedRoot = join(root, 'tampered-capture');
     await cp(capture.anchor.root, tamperedRoot, { recursive: true });
     const { writeFile } = await import('fs/promises');
-    await writeFile(
-      join(tamperedRoot, 'bundled', 'commands', 'defaults', 'archon-assist.md'),
-      'swapped by a different Archon build'
-    );
+    await writeFile(join(tamperedRoot, ...COMMAND_PATH), 'swapped by a different Archon build');
     await expect(loadWorkflowSource(tamperedRoot, capture.manifest.digest)).rejects.toThrow();
   });
 });

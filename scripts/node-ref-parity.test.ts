@@ -37,14 +37,13 @@
  *     and — unlike any regex over source text — it cannot be fooled by a
  *     commented-out copy either, because a comment does not execute.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   WHEN_ATOM_PATTERN,
-  parseWhenAtom,
-  splitOutsideQuotes,
-  whenAtoms,
+  parseWhenExpression,
   type WhenAtom,
 } from '../packages/workflows/src/when-atom';
 import { parseWorkflow } from '../packages/workflows/src/loader';
@@ -54,7 +53,11 @@ import {
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
 import { dagNodeSchema } from '../packages/workflows/src/schemas';
-import { validateStructural } from '../packages/web/src/experiments/console/builder/validation/structural';
+import {
+  MAX_DURABLE_WAIT_MS as BUILDER_MAX_DURABLE_WAIT_MS,
+  validateStructural,
+} from '../packages/web/src/experiments/console/builder/validation/structural';
+import { MAX_DURABLE_WAIT_MS } from '../packages/workflows/src/schemas/durable-wait';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 // OUTPUT_REF_SOURCE moved from loader.ts to output-ref.ts (#2637) so the loader
@@ -166,7 +169,8 @@ nodes:
   - id: use
     prompt: "${text}"
 `,
-      'output-input-parity.yaml'
+      'output-input-parity.yaml',
+      providerRegistry
     );
     expect(engine.error).toBeNull();
     expect(engine.workflow).not.toBeNull();
@@ -203,11 +207,9 @@ nodes:
  * identical, so no `.toString()` trick applies — is pinned only for the strings
  * enumerated below, plus their grouping.
  *
- * The ordering itself — `||` outer, `&&` inner — is written here rather than read
- * from the engine, so this pins the BUILDER against that contract, not the engine
- * against it. An engine-side precedence change is caught instead by
- * `condition-evaluator.test.ts` ("&& has higher precedence than ||"), behaviourally,
- * on a truth table.
+ * The engine side is `parseWhenExpression`, the entry point the loader and the
+ * evaluator both use, so the comparison covers every rule they apply, including the
+ * ones that run after the regex matches (the numeric-RHS rule is one).
  */
 describe('when-atom parity: the builder parses what the engine parses', () => {
   test("the builder's atom pattern is byte-identical to the engine's", () => {
@@ -225,6 +227,12 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     "$classify.output.type != 'FEATURE'",
     '$build.exit_code == 0',
     "$a.field.sub == 'x'",
+    "$review.output.proposal.action == 'add'",
+    '$review.output.proposal.details.count >= 0',
+    "$review.output.proposal.action == '$review.output.proposal.typo'",
+    "$review.output.proposal.action[0] == 'add'",
+    "$review.output.proposal.* == 'add'",
+
     // #2567: hyphenated ids, which the builder's legacy `\w` copy rejected.
     "$check-reproduction.output == 'done'",
     "$classify-testability.output.testable == 'e2e_testable'",
@@ -295,6 +303,21 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     '$a.output ==',
     '$1bad.output == 1',
     "$a.output == 'X' &&",
+    // Grouping parentheses, which neither side supports.
+    "($a.output == 'X')",
+    "$a.output == 'X' && ($b.output == 'Y' || $c.output == 'Z')",
+    "$a.output == '(X)'",
+    // A numeric operator needs a numeric RHS; both sides use the `parseFloat` rule, so
+    // a quoted number and a numeric prefix both pass, while text, '' and booleans fail.
+    '$n.output > 80',
+    "$n.output >= '-0.5'",
+    "$n.output < '80abc'",
+    "$n.output > 'high'",
+    "$n.output > ''",
+    '$n.output <= true',
+    "$INPUTS.limit >= 'many'",
+    "$a.output == 'X' || $n.output < 'low'",
+    "$n.output == 'high'",
   ];
 
   /**
@@ -310,15 +333,16 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
       : `$${atom.ref.nodeId}.output.${atom.ref.field}`;
   }
 
-  /** `null` means "rejected"; an array means "accepted, and here is what it means". */
+  /**
+   * `null` means "rejected"; an array means "accepted, and here is what it means".
+   * Uses `parseWhenExpression`, the same entry point the loader and the evaluator use.
+   */
   function engineParse(expr: string): string[] | null {
-    const atoms = whenAtoms(expr).map(parseWhenAtom);
-    if (atoms.some(atom => atom === null)) return null;
-    return atoms.map(atom => {
-      // Narrowed by the `some` guard above; `flatMap` would lose that.
-      if (atom === null) throw new Error('unreachable');
-      return `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`;
-    });
+    return (
+      parseWhenExpression(expr)
+        ?.flat()
+        .map(atom => `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`) ?? null
+    );
   }
 
   function webParse(expr: string): string[] | null {
@@ -340,19 +364,14 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
   /**
    * The AND/OR shape as a list of group sizes — `[2, 1]` for `a && b || c`.
    *
-   * The engine has no grouped parse to compare against (`whenAtoms` flattens on
-   * purpose, because its callers want every atom, not the boolean structure), so
-   * the expected shape is derived from the engine's OWN exported splitter. That
-   * keeps this a cross-package comparison rather than the web checking itself.
+   * Both shapes come from each side's grouped parse, so a one-sided precedence swap
+   * shows up here even though the flattened atom lists agree.
    *
    * `null` for a rejected expression, so the two sides stay comparable on the
    * malformed entries as well.
    */
   function engineGroupShape(expr: string): number[] | null {
-    if (engineParse(expr) === null) return null;
-    return splitOutsideQuotes(expr.trim(), '||').map(
-      clause => splitOutsideQuotes(clause, '&&').length
-    );
+    return parseWhenExpression(expr)?.map(group => group.length) ?? null;
   }
 
   function webGroupShape(expr: string): number[] | null {
@@ -393,14 +412,6 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
  * meaningfully shared. That is exactly the axis that broke in #2591.
  */
 describe('loop completion-channel parity', () => {
-  /**
-   * `until_field` names a property in the node's `output_format`, and the engine
-   * additionally checks that it is declared, required and boolean — rules the
-   * builder deliberately does not mirror (it has no schema editor). Supplying a
-   * valid schema for those cases keeps this a comparison of the CHANNEL rule, so a
-   * disagreement here means the channel rules drifted, not that the two sides
-   * validate different things.
-   */
   const OUTPUT_FORMAT = {
     type: 'object',
     properties: { done: { type: 'boolean' } },
@@ -458,7 +469,7 @@ describe('loop completion-channel parity', () => {
         {
           id: 'l',
           variant: 'loop',
-          base: {},
+          base: { output_format: channels.until_field !== undefined ? OUTPUT_FORMAT : undefined },
           data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
         },
       ],
@@ -473,4 +484,100 @@ describe('loop completion-channel parity', () => {
       expect(builderAccepts(channels)).toBe(engineAccepts(channels));
     });
   }
+});
+
+describe('loop until_field schema parity', () => {
+  const cases: Array<[string, Record<string, unknown> | undefined, boolean, string?]> = [
+    ['requires output_format', undefined, false],
+    [
+      'requires a declared property',
+      { properties: { other: { type: 'boolean' } }, required: ['done'] },
+      false,
+    ],
+    ['requires membership in required', { properties: { done: { type: 'boolean' } } }, false],
+    [
+      'requires a boolean string type',
+      { properties: { done: { type: 'string' } }, required: ['done'] },
+      false,
+    ],
+    [
+      'accepts a required boolean',
+      { properties: { done: { type: 'boolean' } }, required: ['done'] },
+      true,
+    ],
+    ['accepts an untyped property', { properties: { done: {} }, required: ['done'] }, true],
+    [
+      'accepts a type union',
+      { properties: { done: { type: ['boolean', 'null'] } }, required: ['done'] },
+      true,
+    ],
+    ['accepts a boolean schema property', { properties: { done: true }, required: ['done'] }, true],
+    [
+      'matches the trimmed field name',
+      { properties: { done: {} }, required: ['done'] },
+      true,
+      ' done ',
+    ],
+    [
+      'rejects an inherited property name',
+      { properties: {}, required: ['toString'] },
+      false,
+      'toString',
+    ],
+    ['rejects absent properties', {}, false],
+    ['rejects null properties', { properties: null }, false],
+    ['rejects array properties', { properties: ['done'] }, false],
+    ['rejects an empty required list', { properties: { done: {} }, required: [] }, false],
+    [
+      'rejects a required list naming another field',
+      { properties: { done: {} }, required: ['other'] },
+      false,
+    ],
+    ['rejects non-array required', { properties: { done: {} }, required: 'done' }, false],
+  ];
+
+  for (const [name, output_format, accepted, until_field = 'done'] of cases) {
+    test(name, () => {
+      const engine = dagNodeSchema.safeParse({
+        id: 'l',
+        output_format,
+        loop: { prompt: 'iterate', max_iterations: 5, until_field },
+      });
+      expect(engine.success).toBe(accepted);
+      const issues = validateStructural({
+        name: 'w',
+        description: 'd',
+        meta: {},
+        nodes: [
+          {
+            id: 'l',
+            variant: 'loop',
+            base: { output_format },
+            data: {
+              prompt: 'iterate',
+              max_iterations: 5,
+              fresh_context: false,
+              until_field,
+            },
+          },
+        ],
+      });
+      expect(issues.length === 0).toBe(engine.success);
+      if (!accepted) {
+        expect(issues).toContainEqual(
+          expect.objectContaining({
+            severity: 'error',
+            source: 'client-instant',
+            path: { nodeId: 'l', field: 'loop.until_field' },
+          })
+        );
+      }
+    });
+  }
+});
+
+describe('durable wait bound parity', () => {
+  test("the builder's wait bound is the engine's", () => {
+    expect(BUILDER_MAX_DURABLE_WAIT_MS).toBe(MAX_DURABLE_WAIT_MS);
+  });
 });

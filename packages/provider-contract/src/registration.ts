@@ -1,0 +1,303 @@
+import { z } from 'zod';
+import type { IAgentProvider } from './agent-provider';
+import type { ProviderCapabilities } from './capabilities';
+import type { SkillDiscovery } from './skills';
+
+export const MAINTAINED_PROVIDER_IDS = ['claude', 'codex', 'pi'] as const;
+
+export function isMaintainedProvider(id: string): id is (typeof MAINTAINED_PROVIDER_IDS)[number] {
+  return MAINTAINED_PROVIDER_IDS.some(provider => provider === id);
+}
+
+function unknownProviderMessage(id: string, registered: readonly string[]): string {
+  return isMaintainedProvider(id)
+    ? `Provider '${id}' is not installed. Add it with: archon provider add ${id}`
+    : `Unknown provider: '${id}'. Available: ${registered.join(', ')}`;
+}
+
+export function missingProviderMessage(registry: ProviderRegistry, id: string): string {
+  return (
+    registry.unavailable?.(id) ??
+    unknownProviderMessage(
+      id,
+      registry.list().map(provider => provider.id)
+    )
+  );
+}
+
+export const NO_DEFAULT_PROVIDER_MESSAGE =
+  "No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup";
+
+/** Deprecated providers stay bundled in release binaries (#3684); they are not an installed selection. */
+export function installedProviders(registry: ProviderRegistry): ProviderDescriptor[] {
+  return registry.list().filter(provider => provider.deprecationNotice === undefined);
+}
+
+export function hasInstalledProvider(registry: ProviderRegistry): boolean {
+  return installedProviders(registry).length > 0;
+}
+
+export function noDefaultProviderMessage(registry: ProviderRegistry): string {
+  return !hasInstalledProvider(registry)
+    ? `No providers installed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    : NO_DEFAULT_PROVIDER_MESSAGE;
+}
+
+export class NoDefaultProviderError extends Error {
+  constructor(registry?: ProviderRegistry) {
+    super(registry ? noDefaultProviderMessage(registry) : NO_DEFAULT_PROVIDER_MESSAGE);
+    this.name = 'NoDefaultProviderError';
+  }
+}
+
+export function providerVersionMismatchMessage(
+  id: string,
+  installed: string,
+  current: string
+): string {
+  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider add ${id}`;
+}
+
+/** Generic per-provider defaults bag used by config surfaces and UI. */
+export type ProviderDefaults = Record<string, unknown>;
+
+/**
+ * `install` validates global/repository defaults; `run` validates a per-run layer.
+ * `snapshot` projects JSON-compatible run defaults without credentials or
+ * provider-native and process-owned settings. Providers own which settings have
+ * run-lifetime meaning.
+ */
+export type ProviderConfigScope = 'install' | 'run' | 'snapshot';
+
+/** Validate, normalize, and project defaults according to their owning scope. */
+export type ProviderConfigParser = (
+  raw: ProviderDefaults,
+  scope: ProviderConfigScope
+) => ProviderDefaults;
+
+/** Provider-keyed defaults map. Built-ins may refine individual entries. */
+export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
+
+/**
+ * How a credential of a given vendor can be connected / detected.
+ *  - `api_key`      — a pasteable bearer string, stored encrypted per user.
+ *  - `subscription` — an OAuth login (Claude Pro/Max, GitHub Copilot, ChatGPT).
+ *  - `ambient`      — cloud credential chains detected from the environment
+ *    (AWS for Bedrock, gcloud ADC for Vertex). Never stored, status-only.
+ *
+ * Exported as a const tuple so API schemas can derive `z.enum(CREDENTIAL_KINDS)`
+ * instead of re-listing the literals.
+ */
+export const CREDENTIAL_KINDS = ['api_key', 'subscription', 'ambient'] as const;
+
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+/**
+ * One upstream-vendor credential an agent provider can consume. `vendor` is the
+ * canonical credential id (e.g. 'anthropic', 'openrouter', 'github-copilot') —
+ * deliberately NOT the agent provider id: one credential can serve multiple
+ * agents (an 'anthropic' key powers Claude Code, Pi's anthropic backend, and
+ * OpenCode). Delivery (vendor → env vars / files) is owned by
+ * @archon/core/credentials — this spec is only the consumption matrix.
+ */
+export const credentialSpecSchema = z.object({
+  vendor: z.string().min(1),
+  displayName: z.string().min(1),
+  // Zod needs the explicit length check to emit minItems for a tuple with rest.
+  kinds: z
+    .tuple([z.enum(CREDENTIAL_KINDS)])
+    .rest(z.enum(CREDENTIAL_KINDS))
+    .check(z.minLength(1)),
+});
+export type CredentialSpec = z.infer<typeof credentialSpecSchema>;
+
+/**
+ * An agent's credential catalog. `static` lists the vendors up front
+ * (Claude/Codex/Copilot/Pi); `dynamic` means the set is only knowable at
+ * runtime (OpenCode resolves its models.dev catalog via the embedded server's
+ * introspection API and exposes it through a dedicated endpoint).
+ */
+export type ProviderCredentialCatalog =
+  | {
+      kind: 'static';
+      specs: CredentialSpec[];
+      vendorFor(model: string | undefined): string | undefined;
+    }
+  | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
+
+/** How a user's stored credential was connected: a pasted key, or a subscription login. */
+export const STORED_CREDENTIAL_KINDS = ['api_key', 'oauth'] as const;
+
+export type StoredCredentialKind = (typeof STORED_CREDENTIAL_KINDS)[number];
+
+const CONSUMED_KIND: Record<StoredCredentialKind, CredentialKind> = {
+  api_key: 'api_key',
+  oauth: 'subscription',
+};
+
+/**
+ * Whether a provider can use a stored `vendor` credential connected as `kind`. A dynamic
+ * catalog declares no vendors, so it consumes no stored credential.
+ */
+export function consumesStoredCredential(
+  catalog: { kind: 'static'; specs: readonly CredentialSpec[] } | { kind: 'dynamic' },
+  vendor: string,
+  kind: StoredCredentialKind
+): boolean {
+  return (
+    catalog.kind === 'static' &&
+    catalog.specs.some(spec => spec.vendor === vendor && spec.kinds.includes(CONSUMED_KIND[kind]))
+  );
+}
+
+/**
+ * Registration entry for a provider in the provider registry.
+ * Each entry carries metadata, a factory, and model-compatibility logic.
+ * The registry is the source of truth for provider identity, capabilities, and display.
+ */
+export interface ProviderRegistration {
+  /** Unique provider identifier — used in YAML, config, DB */
+  id: string;
+
+  /** Human-readable name for UI display */
+  displayName: string;
+
+  /** Instantiate a provider */
+  factory: () => IAgentProvider;
+
+  /** Static capability declaration — owns engine capability decisions */
+  capabilities: ProviderCapabilities;
+
+  /** Whether this is a built-in (maintained by core team) or community provider */
+  builtIn: boolean;
+
+  /**
+   * Set when the provider is deprecated. The registry reports it once per process when a
+   * run first uses the provider; `archon doctor` and `archon ai default` show it too.
+   */
+  deprecationNotice?: string;
+
+  /**
+   * Credentials this agent can consume. Required: registering an agent without
+   * declaring its credential surface is a bug, not a default (#1955) — the
+   * connectable-vendor catalog and the agent→credential matrix in
+   * GET /api/auth/providers are derived from these declarations.
+   */
+  credentials: ProviderCredentialCatalog;
+
+  /**
+   * Validate and normalize authored provider defaults, for `.archon/config.yaml`
+   * and for a per-run config layer alike. Execution-time parsing stays defensive
+   * and tolerant; an authored setting must reject values the provider would
+   * otherwise silently discard.
+   */
+  parseConfig: ProviderConfigParser;
+
+  /** Accepts vendor/model refs without an agent prefix; at most one registry entry owns them. */
+  ownsUnprefixedModelRefs?: true;
+
+  /** Where this provider loads named skills from; see {@link SkillDiscovery}. */
+  skillDiscovery?: SkillDiscovery;
+}
+
+export function hasValidProviderCapabilities(capabilities: ProviderCapabilities): boolean {
+  return capabilities.sessionFork !== true || capabilities.sessionResume;
+}
+
+function assertValidCapabilities(entry: ProviderRegistration): void {
+  if (!hasValidProviderCapabilities(entry.capabilities)) {
+    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
+  }
+}
+
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
+    throw new Error(`Provider '${entry.id}' is already registered`);
+  }
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
+  if (entry.ownsUnprefixedModelRefs && owner) {
+    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
+  }
+  assertValidCapabilities(entry);
+}
+
+/**
+ * Standardized error for unknown provider types.
+ * Thrown by getAgentProvider() — all surfaces (CLI, server, orchestrator, workflows)
+ * get the same error shape and message format.
+ */
+export class UnknownProviderError extends Error {
+  constructor(
+    public readonly requestedProvider: string,
+    public readonly registeredProviders: string[],
+    reason?: string
+  ) {
+    super(reason ?? unknownProviderMessage(requestedProvider, registeredProviders));
+    this.name = 'UnknownProviderError';
+  }
+}
+
+/** A provider-owned strict run-config parser rejected one field. */
+export class InvalidProviderRunConfigError extends Error {
+  constructor(
+    public readonly fieldPath: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'InvalidProviderRunConfigError';
+  }
+}
+
+/** No factory: engine instances must pass through the host's provider admission. */
+export type ProviderDescriptor = Omit<ProviderRegistration, 'factory'>;
+
+export interface ProviderRegistry {
+  unavailable?(id: string): string | undefined;
+  get(id: string): ProviderDescriptor | undefined;
+  list(): readonly ProviderDescriptor[];
+}
+
+export function requireProvider(registry: ProviderRegistry, id: string): ProviderDescriptor {
+  const provider = registry.get(id);
+  if (!provider)
+    throw new UnknownProviderError(
+      id,
+      registry.list().map(entry => entry.id),
+      missingProviderMessage(registry, id)
+    );
+  return provider;
+}
+
+/**
+ * Why `providerId` cannot use the user's stored `vendor` credential, naming the providers
+ * that can. Preflight and `doctor` both report it, so the advice cannot drift apart.
+ */
+export function unconsumedStoredCredentialReason(
+  registry: ProviderRegistry,
+  providerId: string,
+  vendor: string,
+  kind: StoredCredentialKind
+): string {
+  const consumers = registry
+    .list()
+    .filter(p => consumesStoredCredential(p.credentials, vendor, kind))
+    .map(p => `\`provider: ${p.id}\``)
+    .join(' or ');
+  const stored = `the ${vendor} ${kind === 'oauth' ? 'subscription' : 'API key'} connected in Archon`;
+  const fix = `give ${providerId} its own ${vendor} API key`;
+  return consumers
+    ? `${stored} runs on ${consumers}, not on ${providerId}. Use ${consumers}, or ${fix}.`
+    : `${stored} cannot be used by ${providerId}. To use ${providerId}, ${fix}.`;
+}
+
+export function parseProviderRunModel(provider: ProviderDescriptor, model: string): string {
+  const parsed = provider.parseConfig({ model }, 'run');
+  if (typeof parsed.model !== 'string' || parsed.model.trim().length === 0) {
+    throw new InvalidProviderRunConfigError('model', 'provider did not accept the model');
+  }
+  return parsed.model;
+}

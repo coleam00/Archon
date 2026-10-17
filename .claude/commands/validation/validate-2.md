@@ -49,13 +49,13 @@ bun run type-check
 ```bash
 bun run lint
 ```
-**Expected:** Zero ESLint errors (warnings acceptable)
+**Expected:** Zero lint diagnostics (warnings fail too)
 
 ### 1.3 Code Formatting
 ```bash
 bun run format:check
 ```
-**Expected:** All files pass Prettier checks
+**Expected:** All files included by the formatter configuration in `biome.jsonc` pass Biome checks
 
 ### 1.4 Unit Tests
 ```bash

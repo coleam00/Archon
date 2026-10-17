@@ -1,0 +1,57 @@
+diff --git a/packages/providers/src/community/pi/extension-error-broker.ts b/packages/providers/src/community/pi/extension-error-broker.ts
+index 21c941d40..328ebce4f 100644
+--- a/packages/providers/src/community/pi/extension-error-broker.ts
++++ b/packages/providers/src/community/pi/extension-error-broker.ts
+@@ -19,14 +19,10 @@ export interface PiExtensionTurn {
+   close(): void;
+ }
+ 
+-interface ActiveTurn {
+-  readonly extensionPaths: readonly string[];
+-  readonly turn: PiExtensionTurn;
+-}
+-
+ const gate = new Semaphore(1);
+ const failureEvidence = new WeakMap<Error, string>();
+-let activeTurn: ActiveTurn | undefined;
++const loadedExtensionPaths = new Set<string>();
++let activeTurn: PiExtensionTurn | undefined;
+ 
+ function matchingExtensionPath(
+   error: Error,
+@@ -84,7 +80,7 @@ export async function beginPiExtensionTurn(
+       if (failed) throw failed;
+     },
+     stopAccepting() {
+-      if (activeTurn?.turn === turn) activeTurn = undefined;
++      if (activeTurn === turn) activeTurn = undefined;
+     },
+     close() {
+       if (closed) return;
+@@ -95,10 +91,10 @@ export async function beginPiExtensionTurn(
+     },
+   };
+ 
+-  activeTurn = {
+-    extensionPaths: [...new Set(extensionPaths.filter(path => path.length > 0))],
+-    turn,
+-  };
++  for (const path of extensionPaths) {
++    if (path.length > 0) loadedExtensionPaths.add(path);
++  }
++  activeTurn = turn;
+   return turn;
+ }
+ 
+@@ -108,9 +104,9 @@ export async function beginPiExtensionTurn(
+  */
+ export function claimPiExtensionProcessError(reason: unknown): boolean {
+   if (!(reason instanceof Error) || !activeTurn) return false;
+-  const extensionPath = matchingExtensionPath(reason, activeTurn.extensionPaths);
++  const extensionPath = matchingExtensionPath(reason, [...loadedExtensionPaths]);
+   if (!extensionPath) return false;
+-  activeTurn.turn.report(reason, extensionPath);
++  activeTurn.report(reason, extensionPath);
+   return true;
+ }
+ 

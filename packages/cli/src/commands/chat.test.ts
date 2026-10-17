@@ -50,7 +50,7 @@ describe('chatCommand', () => {
     const [adapter, conversationId, message] = mockHandleMessage.mock.calls[0];
 
     expect(adapter).toBeInstanceOf(CLIAdapter);
-    expect(conversationId).toMatch(/^cli-chat-\d+-[a-z0-9]+$/);
+    expect(conversationId).toMatch(/^cli-chat-\d+-[a-f0-9]{32}$/);
     expect(message).toBe('Hello, agent!');
   });
 

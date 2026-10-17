@@ -13,6 +13,7 @@ import type {
 import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
+import type { WorkflowEventInput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
 
@@ -124,4 +125,10 @@ export async function executeTestDagWorkflow(
 ): ReturnType<typeof import('./dag-executor').executeDagWorkflow> {
   const { executeDagWorkflow } = await import('./dag-executor');
   return executeDagWorkflow(options);
+}
+
+/** A persisted workflow event as an in-memory test store records it. */
+export interface InMemoryStoreEvent
+  extends Pick<WorkflowEventInput, 'workflow_run_id' | 'step_name' | 'data'> {
+  event_type: string;
 }

@@ -152,6 +152,21 @@ interface OpenAiTokenResponse {
   id_token?: unknown;
 }
 
+/**
+ * A failed call to OpenAI's token endpoint. `status` is the HTTP status when the
+ * endpoint answered; it is absent for a network failure, timeout or cancellation.
+ * Callers decide from `status`, never from the message.
+ */
+export class OpenAiTokenError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message);
+    this.name = 'OpenAiTokenError';
+  }
+}
+
 async function postTokenRequest(
   body: URLSearchParams,
   operation: 'exchange' | 'refresh',
@@ -172,12 +187,12 @@ async function postTokenRequest(
     });
   } catch (error) {
     if (signal?.aborted) {
-      throw new Error('Login cancelled');
+      throw new OpenAiTokenError('Login cancelled');
     }
     if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error(`OpenAI token ${operation} request timed out.`);
+      throw new OpenAiTokenError(`OpenAI token ${operation} request timed out.`);
     }
-    throw new Error(
+    throw new OpenAiTokenError(
       `OpenAI token ${operation} request failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
@@ -198,8 +213,9 @@ async function postTokenRequest(
     } catch {
       // Non-JSON error body — drop it entirely; the status code must suffice.
     }
-    throw new Error(
-      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`
+    throw new OpenAiTokenError(
+      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`,
+      response.status
     );
   }
   let raw: unknown;
@@ -309,9 +325,12 @@ export async function refreshOpenAiOAuthCredentials(
   return credentialsFromTokenResponse(json, 'refresh', creds);
 }
 
+/** A minted token must stay valid at least this long; Pi uses the same window. */
+const OPENAI_MIN_TOKEN_VALIDITY_MS = 5 * 60 * 1000;
+
 /**
  * Mint a usable bearer from a stored OpenAI credential blob, refreshing first
- * when expired. Same contract as Pi's `getOAuthApiKey` (`{ newCredentials,
+ * when expired or about to expire. Same contract as Pi's `getOAuthApiKey` (`{ newCredentials,
  * apiKey } | null`) so the store's shared rotation/resave logic applies
  * unchanged. Throws when a needed refresh fails.
  *
@@ -324,7 +343,12 @@ export async function mintOpenAiOAuthApiKey(
   creds: OpenAiOAuthCredentials
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   let current: OAuthCredentials = creds;
-  if (typeof creds.expires === 'number' && Date.now() >= creds.expires) {
+  // Refresh a token that is about to expire too: Codex gets only the access token, and
+  // Archon cannot refresh it once the turn has started.
+  if (
+    typeof creds.expires === 'number' &&
+    Date.now() + OPENAI_MIN_TOKEN_VALIDITY_MS >= creds.expires
+  ) {
     current = await refreshOpenAiOAuthCredentials(creds);
   }
   const access = typeof current.access === 'string' ? current.access : '';

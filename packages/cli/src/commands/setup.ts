@@ -2,7 +2,7 @@
  * Setup command - Interactive CLI wizard for Archon credential configuration
  *
  * Guides users through configuring:
- * - AI assistants (Claude and/or Codex)
+ * - Selected maintained AI providers and their native authentication
  * - Platform connections (GitHub, Telegram, Slack — all skippable)
  *
  * SQLite is the implicit default; no database prompt. PostgreSQL users set
@@ -18,7 +18,8 @@
  *
  * Writes are merge-only by default: existing non-empty values are preserved,
  * user-added custom keys survive, and a timestamped backup is written before
- * every rewrite. `--force` skips the merge (proposed wins) but still backs up.
+ * every rewrite. A confirmed GitHub authentication replacement affects only its auth keys.
+ * `--force` skips the merge (proposed wins) but still backs up.
  */
 import {
   intro,
@@ -36,20 +37,39 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
+import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import { copyArchonSkill } from './skill';
 import { setInstallDefault } from './ai';
 import { homedir } from 'os';
-import { randomBytes } from 'crypto';
+import { randomBytes, createPrivateKey } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
-import { getRegisteredProviders } from '@archon/providers';
+import {
+  GITHUB_APP_CREDENTIAL_KEYS,
+  GITHUB_APP_PRIVATE_KEY_KEYS,
+  GITHUB_PAT_KEYS,
+  selectGitHubAuthMode,
+} from '@archon/core/utils/github-auth-mode';
+import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
+import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
+import { providerCommand } from './provider';
+import { checkProviderDiagnostics, type CheckResult } from './doctor';
+import {
+  CODEX_SETUP_ENV,
+  migrateCodexSetupEnv,
+  readCodexSetupEnv,
+} from '@archon/providers/codex/setup-env';
 import { TIER_NAMES, buildAiProfile } from '@archon/workflows/model-validation';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
   getArchonHome as pathsGetArchonHome,
   createLogger,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  getPluginsPath,
+  expandTilde,
 } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -62,9 +82,7 @@ function getLog(): ReturnType<typeof createLogger> {
 // Types
 // =============================================================================
 
-// Pi backends offered by the setup wizard. Keep `envVar` names in sync with
-// `PI_API_KEY_VARS` in doctor.ts — the doctor check uses them to detect
-// configured Pi auth.
+// Pi backends offered by the setup wizard.
 const PI_BACKENDS = [
   {
     id: 'anthropic',
@@ -159,12 +177,8 @@ interface SetupConfig {
     piApiKey?: string;
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
-    defaultAssistant: string;
-    /** True when defaultAssistant came from an actual user selection — gates
-     *  the config.yaml write in writeInstallDefaults. Left unset on the
-     *  no-assistant early return and in 'add' mode, where defaultAssistant is
-     *  a registry fallback that must never clobber an existing config.yaml
-     *  defaultAssistant. */
+    defaultAssistant: string | undefined;
+    /** Gates the config.yaml write so an empty selection preserves the saved default. */
     defaultAssistantSelected?: boolean;
     /** Default CHAT model for the default assistant — written to
      *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
@@ -183,11 +197,32 @@ interface SetupConfig {
   botDisplayName: string;
 }
 
-interface GitHubConfig {
-  token: string;
+type GitHubConfig = {
   webhookSecret: string;
   allowedUsers: string;
   botMention?: string;
+} & (
+  | { mode: 'pat'; token: string }
+  | {
+      mode: 'app';
+      appId: string;
+      slug?: string;
+      privateKey: { source: 'path' | 'inline'; value: string };
+    }
+);
+
+export const GITHUB_APP_KEYS = [
+  ...GITHUB_APP_CREDENTIAL_KEYS,
+  'GITHUB_APP_CLIENT_ID',
+  'GITHUB_APP_SLUG',
+  'GITHUB_APP_INSTALLATION_ID',
+] as const;
+
+function hasCompleteAppCredential(env: Record<string, string | undefined>): boolean {
+  return (
+    Boolean(env.GITHUB_APP_ID?.trim()) &&
+    GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key]?.trim()))
+  );
 }
 
 interface TelegramConfig {
@@ -220,7 +255,10 @@ interface ExistingConfig {
 }
 
 interface SetupOptions {
+  /** Environment before CLI startup overlays the Archon env files. */
+  inheritedEnv?: NodeJS.ProcessEnv;
   spawn?: boolean;
+  providers?: readonly string[];
   repoPath: string;
   /** Which archon-owned file to target. Default: 'home'. */
   scope?: 'home' | 'project';
@@ -265,19 +303,6 @@ function hasEnvValue(content: string, key: string): boolean {
   const regex = new RegExp(`^${key}=(.+)$`, 'm');
   const match = content.match(regex);
   return match !== null && match[1].trim().length > 0;
-}
-
-/**
- * Check if a CLI command is available in PATH
- */
-function isCommandAvailable(command: string): boolean {
-  try {
-    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
-    execSync(`${checkCmd} ${command}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -360,72 +385,6 @@ export function detectClaudeExecutablePath(): string | null {
 }
 
 /**
- * Get Node.js version if installed, or null if not
- */
-function getNodeVersion(): { major: number; minor: number; patch: number } | null {
-  try {
-    const output = execSync('node --version', { encoding: 'utf-8' }).trim();
-    // Output is like "v18.17.0" or "v22.1.0"
-    const match = /^v(\d+)\.(\d+)\.(\d+)/.exec(output);
-    if (match) {
-      return {
-        major: parseInt(match[1], 10),
-        minor: parseInt(match[2], 10),
-        patch: parseInt(match[3], 10),
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * CLI installation instructions
- */
-const CLI_INSTALL_INSTRUCTIONS = {
-  claude: {
-    name: 'Claude Code',
-    checkCommand: 'claude',
-    instructions: `Claude Code CLI is not installed.
-
-Install using one of these methods:
-
-  Recommended (native installer):
-    curl -fsSL https://claude.ai/install.sh | bash
-
-  Or via npm:
-    npm install -g @anthropic-ai/claude-code
-
-After installation, run: claude /login`,
-  },
-  codex: {
-    name: 'Codex CLI',
-    checkCommand: 'codex',
-    instructions:
-      process.platform === 'darwin'
-        ? `Codex CLI is not installed.
-
-Install using one of these methods:
-
-  Recommended for macOS (no Node.js required):
-    brew install codex
-
-  Or via npm (requires Node.js 18+):
-    npm install -g @openai/codex
-
-After installation, run 'codex' to authenticate.`
-        : `Codex CLI is not installed.
-
-Install via npm:
-    npm install -g @openai/codex
-
-Requires Node.js 18 or later.
-After installation, run 'codex' to authenticate.`,
-  },
-};
-
-/**
  * Check for existing configuration at the selected scope's archon-owned env
  * file. Defaults to home scope for backward compatibility — callers writing to
  * project scope must pass a path so the Add/Update/Fresh decision reflects the
@@ -439,24 +398,27 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
   }
 
   const content = readFileSync(path, 'utf-8');
+  // Counts the deprecated unprefixed names too: the server still reads them this release.
+  const env = parseDotenv(content);
+  const codex = readCodexSetupEnv(env).values;
+  const githubMode = selectGitHubAuthMode(env).kind;
+  const nonblankGitHubMode = selectGitHubAuthMode(
+    Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value.trim()]))
+  ).kind;
 
   return {
     hasClaude:
       hasEnvValue(content, 'CLAUDE_API_KEY') ||
       hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
       hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH'),
-    hasCodex:
-      hasEnvValue(content, 'CODEX_ID_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
-      hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasCodex: Boolean(codex.idToken && codex.accessToken && codex.refreshToken && codex.accountId),
     // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
-    // so that re-runs after partial configs still surface Pi. Doctor's checkPi
-    // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
-    // Claude users who share the same key env vars.
+    // so that re-runs after partial configs still surface Pi. Doctor checks only
+    // the configured default assistant, so Claude users who share the same key
+    // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
-      github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
+      github: (githubMode === 'app' || githubMode === 'pat') && githubMode === nonblankGitHubMode,
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -736,19 +698,17 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
  * so a stale config.yaml defaultAssistant from an earlier `archon ai default`
  * would otherwise silently override the wizard's fresh selection.
  *
- * Gated on `defaultAssistantSelected`: the 'add'-mode / no-assistant registry
- * fallback must never clobber an existing config.yaml value. Non-fatal on
- * failure — the env write has already succeeded, so warn + log instead of
+ * An empty selection preserves the existing config.yaml default. Non-fatal
+ * on failure: the env write has already succeeded, so warn and log instead of
  * aborting setup. Returns true when the config was written.
  *
- * The `write` parameter is injected in tests (same convention as
- * checkPiModule's loader) so this path is testable without `mock.module()`.
+ * The `write` parameter keeps config writes testable without module mocks.
  */
 export async function writeInstallDefaults(
   ai: SetupConfig['ai'],
   write: (provider: string, model?: string) => Promise<void> = setInstallDefault
 ): Promise<boolean> {
-  if (!ai.defaultAssistantSelected) return false;
+  if (!ai.defaultAssistantSelected || ai.defaultAssistant === undefined) return false;
   try {
     await write(ai.defaultAssistant, ai.defaultModel);
     return true;
@@ -760,27 +720,6 @@ export async function writeInstallDefaults(
     log.warning(`Could not write default assistant config: ${e.message}${code}`);
     getLog().warn({ err: e }, 'setup.default_assistant_config_write_failed');
     return false;
-  }
-}
-
-/**
- * Verify the Pi npm module is loadable. Pi is bundled as a transitive dep of
- * `@archon/providers` so this should always pass, but catching broken compiled
- * builds at setup time is preferable to a silent runtime failure.
- *
- * The `loader` parameter is injected in tests so we don't need
- * `mock.module()` on `@archon/providers` (which would pollute other tests).
- */
-export async function checkPiModule(
-  loader: () => Promise<unknown> = () => import('@archon/providers')
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    await loader();
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    getLog().warn({ err }, 'setup.pi_module_load_failed');
-    return { ok: false, error: message };
   }
 }
 
@@ -988,7 +927,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const idToken = await password({
-    message: 'Enter CODEX_ID_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.idToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1001,7 +940,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accessToken = await password({
-    message: 'Enter CODEX_ACCESS_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.accessToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1014,7 +953,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const refreshToken = await password({
-    message: 'Enter CODEX_REFRESH_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.refreshToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1027,7 +966,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accountId = await text({
-    message: 'Enter CODEX_ACCOUNT_ID:',
+    message: `Enter ${CODEX_SETUP_ENV.accountId.name}:`,
     validate: value => {
       if (!value) return 'Account ID is required';
       return undefined;
@@ -1047,140 +986,78 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   };
 }
 
-/**
- * Collect AI assistant configuration
- */
-async function collectAIConfig(): Promise<SetupConfig['ai']> {
-  const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
-      { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
-      {
-        value: 'pi',
-        label: 'Pi (community)',
-        hint: '~20 LLM backends via provider/model refs',
-      },
-    ],
-    required: false,
+async function installSetupProviders(ids: readonly string[], repoPath: string): Promise<void> {
+  if (!BUNDLED_IS_BINARY) return;
+  const pluginsDir = getPluginsPath();
+  const result = await providerCommand('add', ids, {
+    pluginsDir,
+    archonVersion: BUNDLED_VERSION,
+    projectDir: repoPath,
   });
+  if (result !== 0)
+    throw new Error(
+      `Provider installation failed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    );
+  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
+  for (const registration of await loadProviderPlugins(pluginsDir, { maintained: 'installed' })) {
+    if (!providerRegistry.get(registration.id)) registerProvider(registration);
+  }
+}
 
-  if (isCancel(assistants)) {
+export async function selectSetupProviders(
+  providers: readonly string[] | undefined,
+  install: (ids: readonly string[]) => Promise<void>,
+  ask: () => Promise<string[] | symbol> = () =>
+    multiselect({
+      message: 'Which AI provider(s) should Archon add?',
+      options: MAINTAINED_PROVIDER_IDS.map(id => ({
+        value: id,
+        label: providerRegistry.get(id)?.displayName ?? id,
+      })),
+      required: false,
+    })
+): Promise<string[]> {
+  const selection = providers ?? (await ask());
+  if (isCancel(selection)) {
     cancel('Setup cancelled.');
     exitSetup(0);
   }
-
-  let hasClaude = assistants.includes('claude');
-  let hasCodex = assistants.includes('codex');
-  let hasPi = assistants.includes('pi');
-
-  // Check if selected CLI tools are installed
-  if (hasClaude && !isCommandAvailable('claude')) {
-    note(CLI_INSTALL_INSTRUCTIONS.claude.instructions, 'Claude Code Not Found');
-    const continueWithoutClaude = await confirm({
-      message: 'Continue setup without Claude?',
-      initialValue: false,
-    });
-    if (isCancel(continueWithoutClaude)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-    if (!continueWithoutClaude) {
-      cancel('Please install Claude Code and run setup again.');
-      exitSetup(0);
-    }
-    hasClaude = false;
-  }
-
-  if (hasCodex && !isCommandAvailable('codex')) {
-    // On non-macOS platforms, npm is the only install method and requires Node.js 18+
-    if (process.platform !== 'darwin') {
-      const nodeVersion = getNodeVersion();
-      if (!nodeVersion) {
-        note(
-          `Node.js is required to install Codex CLI via npm.
-
-Install Node.js 18 or later from:
-    https://nodejs.org/
-
-Or use a version manager like nvm:
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
-    nvm install 18
-
-After installing Node.js, run 'archon setup' again.`,
-          'Node.js Not Found'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          exitSetup(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please install Node.js 18+ and run setup again.');
-          exitSetup(0);
-        }
-        hasCodex = false;
-      } else if (nodeVersion.major < 18) {
-        note(
-          `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch} is installed, but Codex CLI requires Node.js 18 or later.
-
-Upgrade Node.js from:
-    https://nodejs.org/
-
-Or use a version manager like nvm:
-    nvm install 18
-    nvm use 18
-
-After upgrading, run 'archon setup' again.`,
-          'Node.js Version Too Old'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          exitSetup(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please upgrade Node.js to 18+ and run setup again.');
-          exitSetup(0);
-        }
-        hasCodex = false;
-      }
-    }
-
-    // If we still want Codex (Node check passed or on macOS), show install instructions
-    if (hasCodex) {
-      note(CLI_INSTALL_INSTRUCTIONS.codex.instructions, 'Codex CLI Not Found');
-      const continueWithoutCodex = await confirm({
-        message: 'Continue setup without Codex?',
-        initialValue: false,
-      });
-      if (isCancel(continueWithoutCodex)) {
-        cancel('Setup cancelled.');
-        exitSetup(0);
-      }
-      if (!continueWithoutCodex) {
-        cancel('Please install Codex CLI and run setup again.');
-        exitSetup(0);
-      }
-      hasCodex = false;
+  if (typeof selection === 'symbol') throw new Error('Invalid provider selection');
+  const ids = [...new Set(selection)];
+  for (const id of ids) {
+    if (!isMaintainedProvider(id)) {
+      throw new Error(
+        `Unknown maintained provider '${id}'. Choose: ${MAINTAINED_PROVIDER_IDS.join(', ')}`
+      );
     }
   }
-
-  if (!hasClaude && !hasCodex && !hasPi) {
-    log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
-    return {
-      claude: false,
-      codex: false,
-      pi: false,
-      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
-    };
+  if (ids.length === 0) {
+    log.warning(
+      `No providers selected. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    );
+  } else {
+    await install(ids);
   }
+  return ids;
+}
+
+export async function collectAIConfig(
+  options: Pick<SetupOptions, 'providers' | 'repoPath'>,
+  install: (ids: readonly string[]) => Promise<void> = ids =>
+    installSetupProviders(ids, options.repoPath),
+  diagnose: (id: string) => Promise<CheckResult[]> = id => checkProviderDiagnostics(id)
+): Promise<SetupConfig['ai']> {
+  const selectedProviders = await selectSetupProviders(options.providers, install);
+  for (const id of selectedProviders) {
+    for (const check of await diagnose(id)) {
+      const message = `${check.label}: ${check.message}`;
+      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
+      else log.info(message);
+    }
+  }
+  const hasClaude = selectedProviders.includes('claude');
+  const hasCodex = selectedProviders.includes('codex');
+  const hasPi = selectedProviders.includes('pi');
 
   let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
   let claudeApiKey: string | undefined;
@@ -1206,52 +1083,14 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Collect Pi config if selected. Pi is bundled, so there's no PATH check —
-  // instead we module-load test it to catch broken compiled builds.
   if (hasPi) {
     const piConfig = await collectPiConfig();
     piModel = piConfig.model;
     piApiKey = piConfig.apiKey;
     piApiKeyEnvVar = piConfig.apiKeyEnvVar;
-
-    const piSpin = spinner();
-    piSpin.start('Verifying Pi provider...');
-    const piCheck = await checkPiModule();
-    if (!piCheck.ok) {
-      piSpin.stop('Pi provider check failed (non-fatal)');
-      log.warning(`Pi: ${piCheck.error ?? 'module load failed'}`);
-      const continueWithoutPi = await confirm({
-        message: 'Continue setup without Pi?',
-        initialValue: true,
-      });
-      if (isCancel(continueWithoutPi)) {
-        cancel('Setup cancelled.');
-        exitSetup(0);
-      }
-      if (!continueWithoutPi) {
-        cancel('Please check your Archon installation and run setup again.');
-        exitSetup(0);
-      }
-      hasPi = false;
-      piModel = undefined;
-      piApiKey = undefined;
-      piApiKeyEnvVar = undefined;
-    } else {
-      piSpin.stop('Pi provider available');
-    }
   }
 
-  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
-  // Default to first registered built-in provider rather than hardcoding 'claude'.
-  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
-
-  // `hasPi` may have been cleared above by a failed module check, so build the
-  // selectedProviders list AFTER the Pi block.
-  const selectedProviders = [
-    ...(hasClaude ? ['claude'] : []),
-    ...(hasCodex ? ['codex'] : []),
-    ...(hasPi ? ['pi'] : []),
-  ];
+  let defaultAssistant: string | undefined;
 
   if (selectedProviders.length > 1) {
     const providerChoices = selectedProviders.map(id => {
@@ -1259,7 +1098,7 @@ After upgrading, run 'archon setup' again.`,
       const displayName = reg?.displayName ?? id;
       return {
         value: id,
-        label: id === 'claude' ? `${displayName} (Recommended)` : displayName,
+        label: displayName,
       };
     });
 
@@ -1282,7 +1121,7 @@ After upgrading, run 'archon setup' again.`,
   // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
   // and is written by writeHomePiModelConfig.
   let defaultModel: string | undefined;
-  if (selectedProviders.length > 0 && defaultAssistant !== 'pi') {
+  if (defaultAssistant !== undefined && defaultAssistant !== 'pi') {
     defaultModel = await collectDefaultChatModel(defaultAssistant);
   }
 
@@ -1335,6 +1174,112 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
  * Collect GitHub credentials
  */
 async function collectGitHubConfig(): Promise<GitHubConfig> {
+  const mode = await select({
+    message: 'GitHub authentication mode?',
+    initialValue: 'pat',
+    options: [
+      { value: 'pat', label: 'Personal access token', hint: 'Default for solo use' },
+      { value: 'app', label: 'GitHub App', hint: 'Recommended for teams' },
+    ],
+  });
+  if (isCancel(mode)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return mode === 'app' ? collectGitHubAppConfig() : collectGitHubPatConfig();
+}
+
+async function collectGitHubAppConfig(): Promise<GitHubConfig> {
+  note(
+    'Follow the GitHub App guide for registration, permissions, webhook events, and installation:\n' +
+      'https://archon.diy/adapters/github-app-setup/',
+    'GitHub App Setup'
+  );
+  const appId = await text({
+    message: 'GitHub App ID:',
+    validate: value =>
+      value && /^[0-9]+$/.test(value.trim()) && /[1-9]/.test(value)
+        ? undefined
+        : 'Enter a positive decimal App ID',
+  });
+  if (isCancel(appId)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const source = await select({
+    message: 'GitHub App private key source?',
+    options: [
+      { value: 'path', label: 'Path to a PEM file' },
+      { value: 'inline', label: 'Inline PEM', hint: 'Use literal \\n for line breaks' },
+    ],
+  });
+  if (isCancel(source)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const resolveKeyPath = (value: string): string => resolve(expandTilde(value.trim()));
+  const validateKey = (value: string | undefined): string | undefined => {
+    if (!value?.trim()) return 'A private key is required';
+    try {
+      const pem =
+        source === 'path'
+          ? readFileSync(resolveKeyPath(value), 'utf8')
+          : value.replace(/\\r\\n|\\n/g, '\n');
+      if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') return 'Use an RSA PEM private key';
+    } catch {
+      return 'Enter a readable RSA PEM private key';
+    }
+    return undefined;
+  };
+  const key =
+    source === 'path'
+      ? await text({ message: 'GitHub App private key path:', validate: validateKey })
+      : await password({ message: 'GitHub App private key (PEM):', validate: validateKey });
+  if (isCancel(key)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const webhookSecret = await password({
+    message: 'GitHub webhook secret:',
+    validate: value =>
+      value?.trim() ? undefined : 'Enter the secret configured on your GitHub App',
+  });
+  if (isCancel(webhookSecret)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const slug = await text({ message: 'GitHub App slug (optional):' });
+  if (isCancel(slug)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return {
+    mode: 'app',
+    appId: appId.trim(),
+    privateKey:
+      source === 'path'
+        ? { source: 'path', value: resolveKeyPath(key) }
+        : { source: 'inline', value: key.replace(/\\r\\n|\\n/g, '\n') },
+    webhookSecret,
+    slug: slug.trim() || undefined,
+    allowedUsers: await collectGitHubAllowedUsers(),
+  };
+}
+
+async function collectGitHubAllowedUsers(): Promise<string> {
+  const allowedUsers = await text({
+    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
+    placeholder: 'username1,username2',
+  });
+
+  if (isCancel(allowedUsers)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return allowedUsers;
+}
+
+async function collectGitHubPatConfig(): Promise<GitHubConfig> {
   note(
     'GitHub Personal Access Token Setup\n\n' +
       '1. Go to github.com/settings/tokens\n' +
@@ -1418,15 +1363,7 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
     }
   }
 
-  const allowedUsers = await text({
-    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
-    placeholder: 'username1,username2',
-  });
-
-  if (isCancel(allowedUsers)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
+  const allowedUsers = await collectGitHubAllowedUsers();
 
   const customMention = await confirm({
     message: 'Do you want to set a custom @mention name? (Default: archon)',
@@ -1459,9 +1396,10 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 
   // Auto-generate webhook secret
   const webhookSecret = generateWebhookSecret();
-  log.success('Generated webhook secret (save this for GitHub webhook config)');
+  log.success('Generated webhook secret (will be saved as WEBHOOK_SECRET in the env file)');
 
   return {
+    mode: 'pat',
     token,
     webhookSecret,
     allowedUsers: allowedUsers || '',
@@ -1646,7 +1584,7 @@ async function collectBotDisplayName(): Promise<string> {
  * Generate .env file content from collected configuration
  */
 export function generateEnvContent(config: SetupConfig): string {
-  const lines: string[] = [];
+  const lines: EnvLine[] = [];
 
   // Header
   lines.push('# Archon Configuration');
@@ -1664,16 +1602,16 @@ export function generateEnvContent(config: SetupConfig): string {
 
   if (config.ai.claude) {
     if (config.ai.claudeAuthType === 'global') {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=true');
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
     } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_API_KEY=${config.ai.claudeApiKey}`);
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
     } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
     }
     if (config.ai.claudeBinaryPath) {
-      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
+      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
     }
   } else {
     lines.push('# Claude not configured');
@@ -1682,16 +1620,17 @@ export function generateEnvContent(config: SetupConfig): string {
 
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
-    lines.push(`CODEX_ID_TOKEN=${config.ai.codexTokens.idToken}`);
-    lines.push(`CODEX_ACCESS_TOKEN=${config.ai.codexTokens.accessToken}`);
-    lines.push(`CODEX_REFRESH_TOKEN=${config.ai.codexTokens.refreshToken}`);
-    lines.push(`CODEX_ACCOUNT_ID=${config.ai.codexTokens.accountId}`);
+    const tokens = config.ai.codexTokens;
+    lines.push([CODEX_SETUP_ENV.idToken.name, tokens.idToken]);
+    lines.push([CODEX_SETUP_ENV.accessToken.name, tokens.accessToken]);
+    lines.push([CODEX_SETUP_ENV.refreshToken.name, tokens.refreshToken]);
+    lines.push([CODEX_SETUP_ENV.accountId.name, tokens.accountId]);
     lines.push('');
   }
 
   if (config.ai.pi && config.ai.piApiKey && config.ai.piApiKeyEnvVar) {
     lines.push('# Pi Authentication');
-    lines.push(`${config.ai.piApiKeyEnvVar}=${config.ai.piApiKey}`);
+    lines.push([config.ai.piApiKeyEnvVar, config.ai.piApiKey]);
     lines.push('');
   } else if (config.ai.pi) {
     lines.push('# Pi configured — set the backend API key manually');
@@ -1704,20 +1643,34 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Default AI Assistant
   lines.push('# Default AI Assistant');
-  lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
+  if (config.ai.defaultAssistant !== undefined)
+    lines.push(['DEFAULT_AI_ASSISTANT', config.ai.defaultAssistant]);
   lines.push('');
 
   // GitHub
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
-    lines.push(`GH_TOKEN=${config.github.token}`);
-    lines.push(`GITHUB_TOKEN=${config.github.token}`);
-    lines.push(`WEBHOOK_SECRET=${config.github.webhookSecret}`);
+    if (config.github.mode === 'pat') {
+      for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
+    } else {
+      const app = config.github;
+      lines.push(
+        ['GITHUB_APP_ID', app.appId],
+        [
+          app.privateKey.source === 'path'
+            ? 'GITHUB_APP_PRIVATE_KEY_PATH'
+            : 'GITHUB_APP_PRIVATE_KEY',
+          app.privateKey.value,
+        ]
+      );
+      if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
+    }
+    lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
     if (config.github.allowedUsers) {
-      lines.push(`GITHUB_ALLOWED_USERS=${config.github.allowedUsers}`);
+      lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
     }
     if (config.github.botMention) {
-      lines.push(`GITHUB_BOT_MENTION=${config.github.botMention}`);
+      lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
     }
     lines.push('');
   }
@@ -1725,30 +1678,30 @@ export function generateEnvContent(config: SetupConfig): string {
   // Telegram
   if (config.platforms.telegram && config.telegram) {
     lines.push('# Telegram');
-    lines.push(`TELEGRAM_BOT_TOKEN=${config.telegram.botToken}`);
+    lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
     if (config.telegram.allowedUserIds) {
-      lines.push(`TELEGRAM_ALLOWED_USER_IDS=${config.telegram.allowedUserIds}`);
+      lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
     }
-    lines.push('TELEGRAM_STREAMING_MODE=stream');
+    lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
     lines.push('');
   }
 
   // Slack
   if (config.platforms.slack && config.slack) {
     lines.push('# Slack');
-    lines.push(`SLACK_BOT_TOKEN=${config.slack.botToken}`);
-    lines.push(`SLACK_APP_TOKEN=${config.slack.appToken}`);
+    lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
+    lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
     if (config.slack.allowedUserIds) {
-      lines.push(`SLACK_ALLOWED_USER_IDS=${config.slack.allowedUserIds}`);
+      lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
     }
-    lines.push('SLACK_STREAMING_MODE=batch');
+    lines.push(['SLACK_STREAMING_MODE', 'batch']);
     lines.push('');
   }
 
   // Bot Display Name
   if (config.botDisplayName !== 'Archon') {
     lines.push('# Bot Display Name');
-    lines.push(`BOT_DISPLAY_NAME=${config.botDisplayName}`);
+    lines.push(['BOT_DISPLAY_NAME', config.botDisplayName]);
     lines.push('');
   }
 
@@ -1763,9 +1716,9 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Concurrency
   lines.push('# Concurrency');
-  lines.push('MAX_CONCURRENT_CONVERSATIONS=10');
+  lines.push(['MAX_CONCURRENT_CONVERSATIONS', '10']);
 
-  return lines.join('\n');
+  return serializeEnvDocument(lines);
 }
 
 /**
@@ -1878,26 +1831,58 @@ export function writeHomePiModelConfig(model: string): void {
 }
 
 /**
- * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
- * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
- * escaped so round-tripping through dotenv.parse is stable.
+ * dotenv does not unescape quotes or backslashes. Choose a representation its
+ * parser can round-trip rather than applying JavaScript string escaping.
  */
 export function serializeEnv(entries: Record<string, string>): string {
+  return serializeEnvDocument(Object.entries(entries));
+}
+
+type EnvLine = string | [key: string, value: string];
+
+function serializeEnvDocument(document: EnvLine[]): string {
+  const entries: Record<string, string> = {};
   const lines: string[] = [];
-  for (const [key, value] of Object.entries(entries)) {
-    const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
-    if (needsQuoting) {
-      const escaped = value
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n')
-        .replace(/\r/g, '\\r');
-      lines.push(`${key}="${escaped}"`);
-    } else {
-      lines.push(`${key}=${value}`);
+  const trailing: string[] = [];
+  for (const entry of document) {
+    if (typeof entry === 'string') {
+      lines.push(entry);
+      continue;
     }
+    const [key, value] = entry;
+    entries[key] = value;
+    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    const candidates: string[] = [];
+    // Prefer quoted forms for leading quotes, which can consume later entries.
+    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
+    for (const [quote, contents] of [
+      ['"', encodedLineBreaks],
+      ["'", value],
+      ['`', value],
+    ]) {
+      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
+        candidates.push(`${key}=${quote}${contents}${quote}`);
+      }
+    }
+    candidates.push(`${key}=${value}`);
+    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
+    if (line === undefined)
+      throw new Error(`Cannot serialize env key ${key} without changing its value`);
+    // An unmatched opening quote can close in a later entry, even in a comment.
+    // Put values requiring this bare representation after the rest of the document.
+    if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
+    else lines.push(line);
   }
-  return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+  const content =
+    [...lines, ...trailing].join('\n') + (lines.length + trailing.length > 0 ? '\n' : '');
+  const parsed = parseDotenv(content);
+  if (
+    Object.keys(parsed).length !== Object.keys(entries).length ||
+    Object.entries(entries).some(([key, value]) => parsed[key] !== value)
+  ) {
+    throw new Error('Cannot serialize env without changing its values');
+  }
+  return content;
 }
 
 /**
@@ -1916,15 +1901,68 @@ interface WriteScopedEnvResult {
   forced: boolean;
 }
 
+function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
+  const preservedKeys: string[] = [];
+  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
+  const proposed = parseDotenv(content);
+  if (replaceGitHubAuth) {
+    for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+    // An App's webhook secret is the one typed from the App's settings, so it must win.
+    // PAT mode generates a fresh secret, so an existing one stays for its repo webhooks.
+    if (proposed.GITHUB_APP_ID) delete existing.WEBHOOK_SECRET;
+  } else if (
+    proposed.GITHUB_APP_ID ||
+    (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
+  ) {
+    for (const key of GITHUB_APP_KEYS) {
+      if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
+    }
+    for (const key of GITHUB_PAT_KEYS) {
+      if (!existing[key]) delete existing[key];
+    }
+  } else if (proposed.GITHUB_TOKEN) {
+    for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
+      if (!existing[key]) delete existing[key];
+    }
+  }
+  const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
+  if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
+    // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
+    preservedKeys.push(existingPrivateKey);
+    for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
+  }
+  const merged: Record<string, string> = { ...existing };
+  for (const [key, value] of Object.entries(proposed)) {
+    const prior = existing[key];
+    // Treat whitespace-only existing values as empty — otherwise a
+    // copy-paste stray `   ` would silently defeat the wizard's update for
+    // that key forever.
+    const priorIsEmpty = prior === undefined || prior.trim() === '';
+    if (!(key in existing) || priorIsEmpty) {
+      merged[key] = value;
+    } else {
+      preservedKeys.push(key);
+    }
+  }
+  return { content: serializeEnv(merged), preservedKeys };
+}
+
 /**
  * Write env content to exactly one archon-owned file, selected by scope.
  * Merge-only by default (existing non-empty values win, user-added keys
  * survive). Backs up the existing file (if any) before every rewrite, even
- * when `--force` is set.
+ * when `--force` is set. Without force, a confirmed GitHub authentication change
+ * replaces auth keys, and the webhook secret when switching to App mode, while
+ * keeping other values.
  */
 export function writeScopedEnv(
   content: string,
-  options: { scope: 'home' | 'project'; repoPath: string; force: boolean }
+  options: {
+    scope: 'home' | 'project';
+    repoPath: string;
+    force: boolean;
+    replaceGitHubAuth?: boolean;
+  }
 ): WriteScopedEnvResult {
   const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
   const parentDir = dirname(targetPath);
@@ -1953,24 +1991,12 @@ export function writeScopedEnv(
     }
   } else {
     // Merge: existing non-empty values win; proposed-only keys are added;
-    // existing-only keys (user customizations) are preserved verbatim.
+    // existing-only keys (user customizations) are preserved verbatim, except
+    // an old Archon Codex setup, which moves to its new names (#3562).
     const existingRaw = readFileSync(targetPath, 'utf-8');
-    const existing = parseDotenv(existingRaw);
-    const proposed = parseDotenv(content);
-    const merged: Record<string, string> = { ...existing };
-    for (const [key, value] of Object.entries(proposed)) {
-      const prior = existing[key];
-      // Treat whitespace-only existing values as empty — otherwise a
-      // copy-paste stray `   ` would silently defeat the wizard's update for
-      // that key forever.
-      const priorIsEmpty = prior === undefined || prior.trim() === '';
-      if (!(key in existing) || priorIsEmpty) {
-        merged[key] = value;
-      } else {
-        preservedKeys.push(key);
-      }
-    }
-    finalContent = serializeEnv(merged);
+    const merged = mergeScopedEnv(content, existingRaw, options.replaceGitHubAuth ?? false);
+    preservedKeys.push(...merged.preservedKeys);
+    finalContent = merged.content;
   }
 
   // 0o600 — env files hold secrets. Prevents group/world-readable writes on a
@@ -2012,10 +2038,10 @@ function trySpawn(
  * Spawn a new terminal window with the setup command on Windows
  * Tries: Windows Terminal -> cmd.exe with start
  */
-function spawnWindowsTerminal(repoPath: string): SpawnResult {
+function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
   // Try Windows Terminal first (modern Windows 10/11)
   if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -2025,7 +2051,7 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
 
   // Fallback to cmd.exe with start command (works on all Windows)
   if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -2040,10 +2066,10 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
  * Spawn terminal on macOS
  * Uses osascript to open Terminal.app (works with default terminal)
  */
-function spawnMacTerminal(repoPath: string): SpawnResult {
+function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
   // Escape single quotes in path for AppleScript
   const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && archon setup"`;
+  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
 
   if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
     return { success: true };
@@ -2056,8 +2082,8 @@ function spawnMacTerminal(repoPath: string): SpawnResult {
  * Spawn terminal on Linux
  * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
  */
-function spawnLinuxTerminal(repoPath: string): SpawnResult {
-  const setupCmd = 'archon setup; exec bash';
+function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
+  const setupCmd = `${command}; exec bash`;
 
   // Try x-terminal-emulator first (Debian/Ubuntu default)
   if (
@@ -2112,15 +2138,21 @@ function spawnLinuxTerminal(repoPath: string): SpawnResult {
 /**
  * Spawn a new terminal window with archon setup
  */
-export function spawnTerminalWithSetup(repoPath: string): SpawnResult {
+export function spawnTerminalWithSetup(
+  repoPath: string,
+  providers?: readonly string[]
+): SpawnResult {
+  if (providers?.some(id => !isMaintainedProvider(id)))
+    throw new Error('Invalid setup provider selection');
+  const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
   const platform = process.platform;
 
   if (platform === 'win32') {
-    return spawnWindowsTerminal(repoPath);
+    return spawnWindowsTerminal(repoPath, command);
   } else if (platform === 'darwin') {
-    return spawnMacTerminal(repoPath);
+    return spawnMacTerminal(repoPath, command);
   } else {
-    return spawnLinuxTerminal(repoPath);
+    return spawnLinuxTerminal(repoPath, command);
   }
 }
 
@@ -2159,7 +2191,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
   // Handle --spawn flag
   if (options.spawn) {
     console.log('Opening setup wizard in a new terminal window...');
-    const result = spawnTerminalWithSetup(options.repoPath);
+    const result = spawnTerminalWithSetup(options.repoPath, options.providers);
 
     if (result.success) {
       console.log('Setup wizard opened. Complete the setup in the new terminal window.');
@@ -2167,7 +2199,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
       console.log('');
       console.log('Next step: run the setup wizard in a separate terminal.');
       console.log('');
-      console.log(`    cd ${options.repoPath} && archon setup`);
+      console.log(
+        `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
+      );
       console.log('');
       console.log(
         'Come back here and let me know when you finish so I can verify your configuration.'
@@ -2223,7 +2257,13 @@ async function runSetup(options: SetupOptions): Promise<void> {
     const modeChoice = await select({
       message: 'What would you like to do?',
       options: [
-        { value: 'add', label: 'Add platforms', hint: 'Keep existing config, add new platforms' },
+        {
+          value: 'add',
+          label: 'Add providers or platforms',
+          hint: force
+            ? 'Re-enter existing platform credentials and configure additions before replacing the file'
+            : 'Keep existing credentials, configure selected providers and new platforms',
+        },
         { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
         { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
       ],
@@ -2239,21 +2279,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   // Collect configuration based on mode
   const s = spinner();
+  const ai = await collectAIConfig(options);
 
   let config: SetupConfig;
 
   if (mode === 'add') {
-    // For 'add' mode, we keep existing and only collect new platforms
     s.start('Loading existing configuration...');
 
-    // Read existing config values - for simplicity, start with defaults and merge
     config = {
-      ai: {
-        claude: existing?.hasClaude ?? false,
-        codex: existing?.hasCodex ?? false,
-        pi: existing?.hasPi ?? false,
-        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
-      },
+      ai,
       platforms: {
         github: existing?.platforms.github ?? false,
         telegram: existing?.platforms.telegram ?? false,
@@ -2275,18 +2309,20 @@ async function runSetup(options: SetupOptions): Promise<void> {
       slack: config.platforms.slack || newPlatforms.slack,
     };
 
-    // Collect credentials for new platforms only
-    if (newPlatforms.github && !existing?.platforms.github) {
+    if (force) {
+      log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
+    }
+
+    if (config.platforms.github && (force || !existing?.platforms.github)) {
       config.github = await collectGitHubConfig();
     }
-    if (newPlatforms.telegram && !existing?.platforms.telegram) {
+    if (config.platforms.telegram && (force || !existing?.platforms.telegram)) {
       config.telegram = await collectTelegramConfig();
     }
-    if (newPlatforms.slack && !existing?.platforms.slack) {
+    if (config.platforms.slack && (force || !existing?.platforms.slack)) {
       config.slack = await collectSlackConfig();
     }
   } else {
-    const ai = await collectAIConfig();
     const platforms = await collectPlatforms();
 
     config = {
@@ -2310,19 +2346,104 @@ async function runSetup(options: SetupOptions): Promise<void> {
     config.botDisplayName = await collectBotDisplayName();
   }
 
+  let replaceGitHubAuth = false;
+  const otherEnvPath = resolveScopedEnvPath(
+    scope === 'home' ? 'project' : 'home',
+    options.repoPath
+  );
+  const otherGitHubEnv =
+    otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)
+      ? parseDotenv(readFileSync(otherEnvPath, 'utf8'))
+      : {};
+  const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
+  if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
+    cancel(
+      `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
+    );
+    exitSetup(1);
+  }
+  if (config.platforms.github) {
+    const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
+    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
+      const other = otherGitHubEnv;
+      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+      if (conflictingKeys.some(key => other[key])) {
+        cancel(
+          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
+        );
+        exitSetup(1);
+      }
+    }
+    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+    const replacePartialApp =
+      config.github?.mode === 'app' &&
+      !hasCompleteAppCredential(saved) &&
+      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
+    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
+      const approved = await confirm({
+        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+        initialValue: false,
+      });
+      if (isCancel(approved) || !approved) {
+        cancel('Setup cancelled. Existing configuration was not changed.');
+        exitSetup(0);
+      }
+      replaceGitHubAuth = true;
+    }
+  }
+
   // Generate and write configuration. Wrap in try/catch so any fs exception
   // (permission denied, read-only FS, backup copy failure, etc.) stops the
   // spinner cleanly and surfaces an actionable error instead of a raw stack
   // trace after the user has filled out the entire wizard.
   s.start('Writing configuration...');
 
-  const envContent = generateEnvContent(config);
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
+    const envContent = generateEnvContent(config);
+    const selected = parseDotenv(
+      !force && existsSync(targetEnvPath)
+        ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth).content
+        : envContent
+    );
+    const inheritedEnv = options.inheritedEnv ?? process.env;
+    const effective = {
+      ...inheritedEnv,
+      ...(scope === 'project' ? otherGitHubEnv : selected),
+      ...(scope === 'project' ? selected : otherGitHubEnv),
+    };
+    const mode = selectGitHubAuthMode(effective);
+    if (config.github?.mode === 'pat' && mode.kind !== 'pat') {
+      throw new Error(
+        mode.kind === 'conflict'
+          ? mode.message
+          : 'Effective GitHub configuration does not activate PAT mode. Check GITHUB_TOKEN and WEBHOOK_SECRET in the environment and both Archon env files.'
+      );
+    }
+    if (
+      config.github?.mode === 'app' ||
+      (!config.github &&
+        mode.kind !== 'pat' &&
+        [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
+          GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
+        ))
+    ) {
+      if (mode.kind !== 'app') {
+        throw new Error(
+          mode.kind === 'conflict'
+            ? mode.message
+            : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
+        );
+      }
+      if (!loadGitHubAppConfig(effective)) {
+        throw new Error('Effective GitHub App configuration could not be loaded.');
+      }
+    }
     writeResult = writeScopedEnv(envContent, {
       scope,
       repoPath: options.repoPath,
       force,
+      replaceGitHubAuth,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -2359,7 +2480,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   // Model tiers: confirm built-in defaults (claude/codex) or point providers
   // without built-ins at the owning config surfaces before anything runs.
-  await confirmModelTiers(config.ai.defaultAssistant);
+  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
 
   // Tell the operator exactly what happened — especially that <repo>/.env was
   // NOT touched, because prior versions wrote there and this is the biggest
@@ -2482,7 +2603,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   const summaryLines = [
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
-    `Default: ${config.ai.defaultAssistant}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
+    `Default: ${config.ai.defaultAssistant ?? 'unset'}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
     `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,
@@ -2492,8 +2613,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   if (config.platforms.github && config.github) {
     summaryLines.push('');
     summaryLines.push('GitHub Webhook Setup:');
-    summaryLines.push(`  Secret: ${config.github.webhookSecret}`);
-    summaryLines.push('  Add this secret to your GitHub webhook configuration');
+    summaryLines.push(
+      `  Use WEBHOOK_SECRET from ${writeResult.targetPath} in your GitHub webhook configuration.`
+    );
   }
 
   if (skillInstalledPath && skillInstalledBase) {
@@ -2535,6 +2657,8 @@ async function runSetup(options: SetupOptions): Promise<void> {
   });
   if (!isCancel(runDoctor) && runDoctor) {
     const { doctorCommand } = await import('./doctor');
+    const { loadCliEnv } = await import('../load-cli-env');
+    await loadCliEnv(process.cwd());
     await doctorCommand();
   }
 

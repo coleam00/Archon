@@ -11,6 +11,8 @@ sidebar:
 
 Connect Archon to Slack so you can interact with your AI coding assistant from any Slack workspace.
 
+New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it. See [Who can act on a run](/reference/security/#who-can-act-on-a-run).
+
 ## Prerequisites
 
 - Archon server running (see [Getting Started](/getting-started/overview/))
@@ -80,7 +82,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
 
 ## Step 4b: Enable Interactivity
 
-Interactive buttons (Approve / Reject / Cancel on workflow runs) ride the same
+Interactive buttons (gate decisions and Cancel on workflow runs) ride the same
 Socket Mode connection -- no public URL needed.
 
 1. In the left sidebar, click **Interactivity & Shortcuts**
@@ -95,7 +97,7 @@ Two slash commands give the team an alternative to @mention:
 | Command | What it does |
 | --- | --- |
 | `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
-| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `abandon <id>`, `resume <id>`. |
+| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `respond <id> <decision> [text]`, `abandon <id>`, `resume <id>`. |
 
 For each command:
 
@@ -193,8 +195,16 @@ When a workflow runs in a Slack thread, Archon now:
   authored outcome disagrees, it also adds the outcome reaction, so both facts remain visible
 - Posts a single status message in the thread that's edited in place as DAG
   nodes start, complete, fail, or get skipped
-- Renders approval gates as interactive **Approve** / **Reject** buttons
-  in-thread -- no need to leave Slack to resume a paused run
+- When approval details are available, renders the gate's declared decisions as
+  buttons, using labels when supplied and sending the exact decision ID.
+  Legacy gates keep **Approve** / **Reject**.
+  The fallback text lists `/archon-workflow respond <id> <decision> [text]` commands;
+  use these to include optional text with a decision. For a parent blocked on a
+  child run, these parent controls redirect to the child instead of recording a
+  parent decision. Answer the child run using the displayed child command
+- If approval details cannot be loaded, posts an **Approval details unavailable**
+  notice naming the run instead of decision buttons or response commands. Check
+  the run status before responding
 - Adds a **Cancel** button on the status message while the run is
   non-terminal, so anyone on the allowed user list can abandon a runaway run
   with a click
@@ -206,7 +216,7 @@ When a workflow runs in a Slack thread, Archon now:
 - Annotates long responses split across multiple Slack messages with
   `_part i/n_` footers so it's clear they belong together
 
-All clicks on Approve / Reject / Cancel run through the same
+All gate-decision and Cancel clicks run through the same
 `SLACK_ALLOWED_USER_IDS` whitelist as inbound messages -- unauthorized
 clicks are silently dropped and logged.
 

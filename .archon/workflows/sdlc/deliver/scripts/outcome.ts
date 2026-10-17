@@ -1,29 +1,46 @@
 /**
- * The delivery tail's terminal report.
+ * The delivery tail's result when the rounds ran to an ending: ready, or not ready
+ * and why. The `report` node relays it as the workflow's return.
  *
- * flip-ready owns the one irreversible public action and certifies the ready pull
- * request's URL as its declared result. This composes what the run's reader — usually
- * an orchestrating agent — actually receives, which is that URL plus whatever the
- * review recorded in the run's discovery sidecar.
+ * The last round's typed ending is the result: ready when its review converged and
+ * the CI agent saw green and marked the pull request ready, otherwise the reason the
+ * rounds stopped, in the deciding node's words. Either way it lists the contract
+ * items the latest review left open, says when the pull request's review threads were
+ * not checked because the forge source cannot read them, then lists the discoveries
+ * the run recorded for the operator.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_PR_URL: `$flip-ready.output.pr_url`, certified non-empty at the producer.
+ * - INPUTS_ROUNDS: the rounds loop's final `round` output.
+ * - INPUTS_SOURCE: the forge source the run selected.
  */
 
-import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
-const artifacts = artifactsDir();
-const listingFile = process.env.TYPED_ARTIFACTS_FILE;
-const url = trimmed(process.env.INPUTS_PR_URL);
+const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
+  ready: boolean;
+  reason: string;
+  pr_url: string;
+  ci_rerun: string;
+  contract_left: string[] | null;
+  threads_checked: boolean;
+  summary: string;
+};
+const unchecked =
+  text(process.env.INPUTS_SOURCE) === 'forge' && rounds.pr_url !== ''
+    ? '\n\nReview threads on the pull request were not checked: delivery reads them through gh, and this run selected the forge source.'
+    : '';
+const notes = caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE });
+const where = rounds.pr_url === '' ? '' : `\n${rounds.pr_url}`;
+const left = rounds.contract_left?.length
+  ? `\n\nLeft open, so the pull request does not close its issue:\n${rounds.contract_left.map(item => `- ${item}`).join('\n')}`
+  : '';
 
-if (url === '') {
-  refuse(
-    `outcome: flip-ready reported no pull request URL.${caveats(artifacts, { failed: true, listingFile })}`
-  );
-} else {
-  emit({
-    pr_url: url,
-    summary: `${url}${caveats(artifacts, { failed: false, listingFile })}`,
-  });
-}
+emit({
+  ready: rounds.ready,
+  reason: rounds.reason,
+  pr_url: rounds.pr_url,
+  ci_rerun: rounds.ci_rerun,
+  threads_checked: rounds.threads_checked,
+  summary: `${rounds.ready ? 'Ready' : 'Not ready'}: ${rounds.summary}${where}${left}${unchecked}${notes}`,
+});

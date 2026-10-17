@@ -18,7 +18,7 @@
  */
 
 /* Geist & Geist Mono — loaded only when a console route mounts. */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap");
 
 .console-root {
   /* Surfaces — cool charcoal (hue 265) */
@@ -86,6 +86,9 @@
      shared :root in index.css; script and cancel exist only here. */
   --node-script: oklch(0.7 0.14 140);
   --node-cancel: oklch(0.62 0.19 10);
+  /* Read-only nodes (loop_group / workflow / include): deliberately desaturated
+     so they read as "not editable here" next to the eight editable variants. */
+  --node-opaque: oklch(0.6 0.02 265);
 
   /* Console values for semantic utility names defined by the global theme. */
   --background: oklch(0.145 0.006 265);
@@ -96,14 +99,8 @@
   --ring: var(--brand-magenta);
 
   /* Typography — Geist, with the SS01/CV11 alternates the brand uses. */
-  font-family:
-    'Geist',
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
-  font-feature-settings: 'ss01', 'cv11';
+  font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01", "cv11";
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -116,8 +113,8 @@
 .console-root pre,
 .console-root kbd,
 .console-root samp {
-  font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  font-feature-settings: 'ss01', 'ss02';
+  font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-feature-settings: "ss01", "ss02";
 }
 
 /* Heading tightening — brand uses -0.028em for big titles. */

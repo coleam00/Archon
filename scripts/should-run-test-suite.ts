@@ -4,30 +4,25 @@ const DOCS_DIRECTORY = 'packages/docs-web/';
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
 
 /**
- * Paths that read as documentation but are build inputs, so changing one must run the suite.
- * Most Markdown in this repository is executable prompt or skill content rather than prose, and
- * the checks that guard it all live inside the job this decision can skip — so a bare `.md` test
- * would let a bundled-prompt edit skip the very check built to catch that drift.
+ * Paths that read as documentation but are build inputs, so changing one must run
+ * the auxiliary build and service jobs. Markdown in bundled prompts and skills is
+ * executable content rather than ordinary prose.
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
  * because a named check reads it:
- *   - `.archon/commands/`, `.archon/workflows/` are compiled into
- *     `packages/workflows/src/defaults/bundled-defaults.generated.ts` (`check:bundled`).
+ *   - Pack prompts (`commands/`) and `.shared/` documents under `.archon/workflows/` are read
+ *     by the bundle tests and embedded into the binary by `scripts/build-binaries.sh`
+ *     (`serve-binary`); `isPackPrompt` matches them. Pack READMEs and design notes are prose.
+ *     Every other file under `.archon/workflows/` is not Markdown, so it runs the suite anyway.
  *   - `.claude/skills/` is imported as text by `packages/cli/src/bundled-skill.ts`, so it is
- *     compiled into the CLI itself (`check:bundled-skill`).
+ *     compiled into the CLI itself (CLI skill tests).
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
- *   - `adding-a-community-provider.mdx` is read by
- *     `packages/providers/src/community/_template/capabilities.test.ts`, which asserts the page
- *     renders the capabilities template by reference instead of a hand-copied snapshot.
  *   - The docs manifest is copied by the Docker dependency layer.
  */
 const BUILD_INPUTS = [
-  '.archon/commands/',
-  '.archon/workflows/',
   '.claude/skills/',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',
-  'packages/docs-web/src/content/docs/contributing/adding-a-community-provider.mdx',
   'packages/docs-web/package.json',
 ];
 
@@ -38,19 +33,18 @@ const BUILD_INPUTS = [
  * found when this list was written was prose in a comment or a fixture string literal.
  *
  * Deliberately absent, each because a named check reads it: `Dockerfile` and friends plus
- * `.dockerignore` (the `docker-build` job), `.prettierrc`/`.prettierignore` (`format:check`),
- * `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1` (`test:install`), the web
- * assets that feed the Docker image, and anything under `.github/workflows/` — changing the
- * gate must run the gate.
+ * `.dockerignore` (the `docker-build` job), `biome.jsonc` (`lint` and `format:check`),
+ * `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1` (`test:install`), the web assets that feed the Docker image, and anything under
+ * `.github/workflows/` — changing the gate must run the gate. `Caddyfile.example` is read by
+ * `reverse-proxy.test.ts` and `caddy-recipe.test.ts`, and git applies `.gitattributes` to every
+ * file a test reads from the checkout.
  *
  * An entry ending in `/` matches a directory, anything else matches one file.
  */
 const INERT_PATHS = [
   '.gitignore',
-  '.gitattributes',
   'LICENSE',
   '.env.example',
-  'Caddyfile.example',
   '.archon/config.example.yaml',
   'assets/',
 ];
@@ -58,7 +52,12 @@ const INERT_PATHS = [
 const isInert = (file: string): boolean =>
   INERT_PATHS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
 
+const isPackPrompt = (file: string): boolean =>
+  file.startsWith('.archon/workflows/') &&
+  file.split('/').some(segment => segment === 'commands' || segment === '.shared');
+
 const isBuildInput = (file: string): boolean =>
+  isPackPrompt(file) ||
   BUILD_INPUTS.some(input => (input.endsWith('/') ? file.startsWith(input) : file === input));
 
 export function shouldRunTestSuite(files: Iterable<string>): boolean {
@@ -66,6 +65,19 @@ export function shouldRunTestSuite(files: Iterable<string>): boolean {
     if (isBuildInput(file)) return true;
     if (isInert(file) || file.endsWith('.md') || file.startsWith(DOCS_DIRECTORY)) continue;
     return true;
+  }
+  return false;
+}
+
+export function shouldRunWorkflowFixtures(files: Iterable<string>): boolean {
+  for (const path of files) {
+    const file = path.replaceAll('\\', '/');
+    if (
+      file.startsWith('.archon/workflows/sdlc/') ||
+      file.startsWith('packages/workflows/src/') ||
+      file === 'packages/cli/src/commands/workflow.ts'
+    )
+      return true;
   }
   return false;
 }
@@ -88,7 +100,7 @@ export function shouldRunTestSuite(files: Iterable<string>): boolean {
  */
 export function changedFilesBetween(base: string, head: string, repo = process.cwd()): string[] {
   const result = Bun.spawnSync(
-    ['git', 'diff', '--name-only', '--no-renames', `${base}...${head}`],
+    ['git', 'diff', '--name-only', '-z', '--no-renames', `${base}...${head}`],
     {
       cwd: repo,
       stdout: 'pipe',
@@ -98,7 +110,7 @@ export function changedFilesBetween(base: string, head: string, repo = process.c
   if (result.exitCode !== 0) {
     throw new Error(`Could not read changed files: ${result.stderr.toString().trim()}`);
   }
-  return result.stdout.toString().split('\n').filter(Boolean);
+  return result.stdout.toString().split('\0').filter(Boolean);
 }
 
 /**
@@ -110,12 +122,16 @@ export function changedFilesBetween(base: string, head: string, repo = process.c
  * Only the scan is caught. A bad event is a wiring bug with no safe answer, so it stays a
  * throw and takes the step down with it.
  */
-function decideFromDiff(base: string, head: string): boolean {
+function decideFromDiff(
+  base: string,
+  head: string,
+  predicate: (files: Iterable<string>) => boolean
+): boolean {
   try {
-    return shouldRunTestSuite(changedFilesBetween(base, head));
+    return predicate(changedFilesBetween(base, head));
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
-    console.error(`Could not compare ${base}..${head}, so the test suite runs: ${cause}`);
+    console.error(`Could not compare ${base}..${head}, so the selected checks run: ${cause}`);
     return true;
   }
 }
@@ -146,7 +162,8 @@ function requireSha(value: unknown, field: string): string {
  * docs-only push cancel the run a code push had started (the workflow's concurrency group
  * cancels the older run) and then skip the suite, leaving the PR head untested.
  *
- * A push is judged on what it added, `before` to `after`. A push that creates a branch has an
+ * A push spans `before` to `after`. Its suite decision comes from `proofFromPullRequestRun`, and
+ * only the fixture decision still reads the push diff. A push that creates a branch has an
  * all-zero `before`, so there is nothing to compare.
  */
 export function diffRange(eventName: string, event: EventPayload): DiffRange {
@@ -165,8 +182,189 @@ export function diffRange(eventName: string, event: EventPayload): DiffRange {
   throw new Error(`Unsupported GitHub event: ${eventName}`);
 }
 
+/** A GitHub REST GET; `path` is relative to `repos/{owner}/{repo}/`. */
+export type GitHubGet = (path: string) => Promise<unknown>;
+
+export type PushProof = { proven: true; evidence: string } | { proven: false; reason: string };
+
+/** The workflow that runs this script, whose pull request runs can prove a push. */
+const TEST_WORKFLOW = 'test.yml';
+
+function field(value: unknown, key: string, what: string): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${what} is not an object`);
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+function list(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${what} is not a list`);
+  return value;
+}
+
+function text(value: unknown, what: string): string {
+  if (typeof value !== 'string' || value === '') throw new Error(`${what} is not a string`);
+  return value;
+}
+
+/**
+ * Whether a pull request run already passed every job on exactly the tree this push lands, so
+ * running the suite again would retest it. All four must hold:
+ *   1. a pull request was merged as `head`, the pushed commit;
+ *   2. that pull request's head contains its recorded `base.sha`. A `pull_request` run tests the
+ *      merge ref, not the head, and GitHub records the base it merged with as the pull request's
+ *      `base.sha` when the head is pushed. A head that contains that base makes the merge ref's
+ *      tree the head's tree. The branch's previous tip is no substitute: after a reset of the
+ *      branch it can lack commits the run's merge ref contained. Retargeting the base rewrites
+ *      `base.sha` without starting a run, so a pull request whose base ever changed proves
+ *      nothing: its `base.sha` may not be the base any run merged with;
+ *   3. the pushed commit and the pull request head have the same tree;
+ *   4. a successful `pull_request` run of `test.yml` at that head concluded `success` in every
+ *      job of its latest attempt. A prose-only run skipped its gated jobs, so it proves nothing
+ *      and its push runs the suite: that is where the tests that read prose run.
+ *
+ * Any failure to read the evidence is "not proven": an unnecessary run costs minutes, a wrong
+ * skip merges unchecked code.
+ */
+export async function proofFromPullRequestRun(
+  push: { head: string },
+  get: GitHubGet
+): Promise<PushProof> {
+  try {
+    const pulls = list(await get(`commits/${push.head}/pulls`), 'the commit pull list');
+    const pull = pulls.find(
+      candidate => field(candidate, 'merge_commit_sha', 'a pull request') === push.head
+    );
+    if (pull === undefined) {
+      return { proven: false, reason: `no pull request was merged as ${push.head}` };
+    }
+    const number = field(pull, 'number', 'the pull request');
+    const prHead = text(
+      field(field(pull, 'head', 'the pull request'), 'sha', 'its head'),
+      'head.sha'
+    );
+
+    if (await baseEverChanged(number, get)) {
+      return {
+        proven: false,
+        reason: `pull request #${String(number)}'s base was changed, so its base.sha may not be the base its run merged with`,
+      };
+    }
+    const prBase = text(
+      field(field(pull, 'base', 'the pull request'), 'sha', 'its base'),
+      'base.sha'
+    );
+
+    const status = field(await get(`compare/${prBase}...${prHead}`), 'status', 'the comparison');
+    if (status !== 'ahead' && status !== 'identical') {
+      return {
+        proven: false,
+        reason: `pull request #${String(number)}'s head does not contain its base ${prBase} (${String(status)})`,
+      };
+    }
+
+    const treeOf = async (sha: string): Promise<string> =>
+      text(
+        field(field(await get(`git/commits/${sha}`), 'tree', sha), 'sha', `${sha}'s tree`),
+        'tree.sha'
+      );
+    const tree = await treeOf(push.head);
+    if (tree !== (await treeOf(prHead))) {
+      return {
+        proven: false,
+        reason: `the trees of ${push.head} and pull request #${String(number)}'s head ${prHead} differ`,
+      };
+    }
+
+    const runs = list(
+      field(
+        await get(
+          `actions/workflows/${TEST_WORKFLOW}/runs?head_sha=${prHead}&event=pull_request&status=success`
+        ),
+        'workflow_runs',
+        'the run list'
+      ),
+      'workflow_runs'
+    );
+    if (runs.length === 0) {
+      return {
+        proven: false,
+        reason: `no successful pull_request run of ${TEST_WORKFLOW} at ${prHead}`,
+      };
+    }
+    const shortfalls: string[] = [];
+    for (const run of runs) {
+      const url = text(field(run, 'html_url', 'a run'), 'html_url');
+      const page = await get(
+        `actions/runs/${String(field(run, 'id', 'a run'))}/jobs?filter=latest&per_page=100`
+      );
+      const jobs = list(field(page, 'jobs', 'the job list'), 'jobs');
+      const unpassed = jobs
+        .map(job => ({
+          name: String(field(job, 'name', 'a job')),
+          conclusion: String(field(job, 'conclusion', 'a job')),
+        }))
+        .filter(job => job.conclusion !== 'success')
+        .map(job => `${job.name}=${job.conclusion}`);
+      if (field(page, 'total_count', 'the job list') !== jobs.length) {
+        unpassed.push(
+          `${String(field(page, 'total_count', 'the job list'))} jobs, ${jobs.length} read`
+        );
+      }
+      if (unpassed.length === 0) {
+        return {
+          proven: true,
+          evidence: `Pull request #${String(number)} run ${url} passed every job on tree ${tree}, so this push skips the suite.`,
+        };
+      }
+      shortfalls.push(`run ${url} did not pass every job: ${unpassed.join(', ')}`);
+    }
+    return { proven: false, reason: shortfalls.join('; ') };
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    return { proven: false, reason: `could not check pull request runs: ${cause}` };
+  }
+}
+
+const EVENTS_PAGE = 100;
+
+async function baseEverChanged(number: unknown, get: GitHubGet): Promise<boolean> {
+  for (let page = 1; ; page++) {
+    const events = list(
+      await get(`issues/${String(number)}/events?per_page=${EVENTS_PAGE}&page=${page}`),
+      'the pull request events'
+    );
+    if (events.some(event => field(event, 'event', 'an event') === 'base_ref_changed')) return true;
+    if (events.length < EVENTS_PAGE) return false;
+  }
+}
+
+/** Reads the repository and token GitHub Actions provides. The token is never printed. */
+function githubApi(env: NodeJS.ProcessEnv = process.env): GitHubGet {
+  return async path => {
+    const { GITHUB_TOKEN: token, GITHUB_REPOSITORY: repository, GITHUB_API_URL: api } = env;
+    if (!token || !repository || !api) {
+      throw new Error('GITHUB_TOKEN, GITHUB_REPOSITORY and GITHUB_API_URL must all be set');
+    }
+    const response = await fetch(`${api}/repos/${repository}/${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!response.ok) throw new Error(`GET ${path} answered ${String(response.status)}`);
+    return await response.json();
+  };
+}
+
 /** Reads the event GitHub Actions names in `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`. */
-function main(): void {
+async function main(): Promise<void> {
+  const args = Bun.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--workflow-fixtures')) {
+    throw new Error('Usage: bun scripts/should-run-test-suite.ts [--workflow-fixtures]');
+  }
+  const fixtures = args.length === 1;
   const eventName = process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventName || !eventPath) {
@@ -174,7 +372,26 @@ function main(): void {
   }
   const event: EventPayload = JSON.parse(readFileSync(eventPath, 'utf8'));
   const range = diffRange(eventName, event);
-  console.log(range === null ? true : decideFromDiff(range.base, range.head));
+  if (range === null) {
+    console.log(true);
+    return;
+  }
+  if (eventName === 'push') {
+    const proof = await proofFromPullRequestRun(range, githubApi());
+    if (proof.proven) {
+      console.error(proof.evidence);
+      console.log(false);
+      return;
+    }
+    console.error(`No pull request run proves this push: ${proof.reason}.`);
+    // A push is never path-filtered for the suite; only fixtures still follow the push diff.
+    if (!fixtures) {
+      console.log(true);
+      return;
+    }
+  }
+  const predicate = fixtures ? shouldRunWorkflowFixtures : shouldRunTestSuite;
+  console.log(decideFromDiff(range.base, range.head, predicate));
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

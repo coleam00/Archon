@@ -35,40 +35,48 @@ while IFS='=' read -r key value; do
 done
 
 if [ "$host" != "github.com" ]; then
-  printf 'git-credential-archon: ignoring non-github host (%s)\n' "$host" >&2
+  printf 'git-credential-archon: ignoring non-github host\n' >&2
   exit 0
 fi
 
-# Path must look like "owner/repo" or "owner/repo.git". Defence-in-depth —
-# the server's regex blocks bad paths at the API layer too, but mirroring
-# the contract here keeps the credential helper safe even if someone wires
-# it up against a different (or older) Archon server.
+# GitHub names contain no JSON metacharacters, so interpolation preserves the literal path.
+# The server owns the owner/repo shape check; a path it rejects gets no token.
 case "$path" in
+  *[!a-zA-Z0-9_./-]*)
+    printf 'git-credential-archon: malformed path; expected owner/repo[.git]\n' >&2
+    exit 0
+    ;;
   */*) ;;
   *)
-    printf 'git-credential-archon: malformed path (%s); expected owner/repo[.git]\n' "$path" >&2
+    printf 'git-credential-archon: malformed path; expected owner/repo[.git]\n' >&2
     exit 0
     ;;
 esac
 
-port="${ARCHON_PORT:-3090}"
-url="http://127.0.0.1:$port/internal/git-credential"
-
-# Capture stderr separately so a curl failure (server unreachable, 5xx) can
-# be surfaced to the workflow without leaking through git's interactive
-# prompt path. --connect-timeout / --max-time keep git from blocking
-# indefinitely when Archon isn't listening on the expected port.
-resp=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST \
-  -H 'Content-Type: application/json' \
-  -d "{\"host\":\"$host\",\"path\":\"$path\"}" "$url" 2>/tmp/git-credential-archon.curlerr)
-curl_status=$?
-if [ "$curl_status" -ne 0 ]; then
-  printf 'git-credential-archon: curl to %s failed (exit %d): %s\n' \
-    "$url" "$curl_status" "$(cat /tmp/git-credential-archon.curlerr 2>/dev/null)" >&2
-  rm -f /tmp/git-credential-archon.curlerr
+# The server publishes its actual bound port before starting child work.
+port="${ARCHON_PORT:-}"
+case "$port" in
+  ''|*[!0-9]*|??????*)
+    printf 'git-credential-archon: missing or invalid server port\n' >&2
+    exit 0
+    ;;
+esac
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+  printf 'git-credential-archon: missing or invalid server port\n' >&2
   exit 0
 fi
-rm -f /tmp/git-credential-archon.curlerr
+url="http://127.0.0.1:$port/internal/git-credential"
+
+# Bound curl's wait without forwarding server or transport text into diagnostics.
+resp=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST \
+  -H 'Content-Type: application/json' \
+  -d "{\"host\":\"$host\",\"path\":\"$path\"}" "$url" 2>/dev/null)
+curl_status=$?
+if [ "$curl_status" -ne 0 ]; then
+  printf 'git-credential-archon: curl to %s failed (exit %d)\n' \
+    "$url" "$curl_status" >&2
+  exit 0
+fi
 
 # Minimal JSON extract: only `{"token":"..."}` is supported. If the response
 # shape grows we should switch to a small Node/Bun script.

@@ -1,31 +1,41 @@
+import { readProviderEventRows } from '@archon/workflows/provider-event-reader';
+import { WORKFLOW_ORIGIN_ANCHOR_ID } from './workflow-origin-anchor';
+import {
+  attentionNoticeDataSchema,
+  type AttentionNoticeData,
+} from '@archon/workflows/schemas/attention-notice';
+import type { IDatabase } from './adapters/types';
 /**
  * Database operations for workflow events (lean UI-relevant events).
  *
- * Stores node lifecycle, parallel agent status, artifacts, and errors.
- * Verbose assistant/tool content stays in JSONL logs only.
+ * Stores node lifecycle, parallel agent status, artifacts, errors, and every provider
+ * event in the engine envelope (`provider_event`).
  *
  * Ordinary observability writes are fire-and-forget. Correctness-critical lifecycle
  * writes use `persistWorkflowEvent` and propagate storage failure to their owner.
  * Read operations also throw on error — callers own the degradation policy.
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect } from './connection';
 import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
-import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
-import { readFile } from 'node:fs/promises';
-import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
-import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import { foldDagResumeSnapshot } from '@archon/workflows/dag-resume-snapshot';
 import {
+  type ProviderEventQuery,
+  type ProviderEventRecord,
+} from '@archon/workflows/schemas/provider-event';
+import { toHydratedTimestamp } from './timestamps';
+import {
+  PROVIDER_EVENT_ROW_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
-  NODE_STATE_EVENT_TYPES,
-  type NodeStateEventType,
+  foldActiveNodeIds,
+  DURABLE_WORKFLOW_EVENT_TYPES,
+  type DurableWorkflowEventType,
   type NodeLifecycleEventType,
   type DagResumeSnapshot,
-  type PersistedNodeOutput,
   type WorkflowEventInput,
   type ObservabilityEventInput,
+  type WorkflowEventType,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -36,20 +46,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export type { WorkflowEventRow } from '../schemas/workflow-event';
-
-/**
- * Format a Date for a `created_at` comparison param to match how each dialect
- * STORES it. SQLite stores `datetime('now')` → "YYYY-MM-DD HH:MM:SS" as TEXT and
- * compares lexicographically, so the cursor MUST use that exact shape — an ISO
- * string ("…T…Z") sorts wrong (the space at index 10 is below 'T'), so
- * `created_at >= cursor` would silently match nothing. Postgres has a native
- * timestamptz and accepts the ISO string.
- */
-function toDbDateParam(d: Date): string {
-  return getDatabaseType() === 'sqlite'
-    ? d.toISOString().replace('T', ' ').slice(0, 19) // "YYYY-MM-DD HH:MM:SS"
-    : d.toISOString();
-}
 
 /**
  * Parse a row's `data` JSON defensively. A single malformed row must not abort a
@@ -81,8 +77,8 @@ type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult
 
 /**
  * Insert one workflow-event row via `query` and THROW on failure. This is the
- * single source of truth for the event columns and dialect UUID; the
- * fire-and-forget createWorkflowEvent wraps it in try/catch, while callers that
+ * single source of truth for the event columns and dialect UUID; the autocommit
+ * writers below queue it in run order, while callers that
  * need the write to be atomic with another mutation (the approval-gate CAS in
  * db/workflows.ts, #2146) pass a transaction-scoped query so a failed event
  * write rolls back the enclosing UPDATE instead of stranding a resolved gate
@@ -113,19 +109,52 @@ export async function insertWorkflowEvent(
  */
 export async function createWorkflowEvent(data: ObservabilityEventInput): Promise<void> {
   try {
-    await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+    await persistWorkflowEvent(data);
   } catch (error) {
     getLog().error(
-      { err: error as Error, eventType: data.event_type, runId: data.workflow_run_id },
+      {
+        err: error as Error,
+        eventType: data.event_type,
+        runId: data.workflow_run_id,
+        stepName: data.step_name,
+        // A lost provider event leaves a hole in its attempt's `seq`; name it.
+        ...(data.event_type === 'provider_event'
+          ? { attemptId: data.data?.attemptId, seq: data.data?.seq }
+          : {}),
+      },
       'db.workflow_event_create_failed'
     );
     // Fire-and-forget: never throw
   }
 }
 
+/**
+ * Tail of each run's pending autocommit event writes. On PostgreSQL each `pool.query`
+ * can run on its own connection, so two writes issued back to back commit, and draw
+ * `created_at` and `event_order`, in whichever order their backends finish. Chaining a
+ * run's writes makes them commit in the order they were issued. The tail is taken when
+ * the writer is called, not after an await, or the race moves into the queue.
+ * Ordering holds within one process. Transactional `insertWorkflowEvent` callers
+ * commit with their own mutation and do not join the chain.
+ */
+const runWriteTails = new Map<string, Promise<unknown>>();
+
+function inRunOrder<T>(runId: string, write: () => Promise<T>): Promise<T> {
+  const result = (runWriteTails.get(runId) ?? Promise.resolve()).then(write);
+  const release = (): void => {
+    if (runWriteTails.get(runId) === tail) runWriteTails.delete(runId);
+  };
+  // A failed write rejects its own caller but must not block the run's later writes.
+  const tail = result.then(release, release);
+  runWriteTails.set(runId, tail);
+  return result;
+}
+
 /** Persist a correctness-critical event and propagate storage errors to the caller. */
-export async function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
-  await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+export function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+  return inRunOrder(data.workflow_run_id, () =>
+    insertWorkflowEvent((sql, params) => pool.query(sql, params), data)
+  );
 }
 
 /**
@@ -140,22 +169,23 @@ export async function persistWorkflowEventIfRunning(
   data: WorkflowEventInput,
   options?: { allowPaused?: boolean }
 ): Promise<{ persisted: boolean }> {
-  const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   const statusPredicate =
     options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
-  const result = await pool.query(
-    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+  const result = await inRunOrder(data.workflow_run_id, () =>
+    pool.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
      SELECT $1, $2, $3, $4, $5, $6
      FROM remote_agent_workflow_runs
-     WHERE id = $2 AND ${statusPredicate}${lockClause}`,
-    [
-      getDialect().generateUuid(),
-      data.workflow_run_id,
-      data.event_type,
-      data.step_index ?? null,
-      data.step_name ?? null,
-      JSON.stringify(data.data ?? {}),
-    ]
+     WHERE id = $2 AND ${statusPredicate}${getDialect().rowLock()}`,
+      [
+        getDialect().generateUuid(),
+        data.workflow_run_id,
+        data.event_type,
+        data.step_index ?? null,
+        data.step_name ?? null,
+        JSON.stringify(data.data ?? {}),
+      ]
+    )
   );
   return { persisted: result.rowCount > 0 };
 }
@@ -164,13 +194,21 @@ export async function persistWorkflowEventIfRunning(
  * List all events for a workflow run in lifecycle order. `event_order` is
  * allocated by the database, so it preserves insertion order when timestamps tie.
  */
-export async function listWorkflowEvents(workflowRunId: string): Promise<WorkflowEventRow[]> {
+export async function listWorkflowEvents(
+  workflowRunId: string,
+  options: { excludeEventTypes?: readonly string[] } = {}
+): Promise<WorkflowEventRow[]> {
+  const excluded = options.excludeEventTypes ?? [];
+  const excludeClause =
+    excluded.length === 0
+      ? ''
+      : ` AND event_type NOT IN (${excluded.map((_, i) => `$${String(i + 2)}`).join(', ')})`;
   try {
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id = $1
+       WHERE workflow_run_id = $1${excludeClause}
        ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-      [workflowRunId]
+      [workflowRunId, ...excluded]
     );
     return [...result.rows].map(row => ({
       ...row,
@@ -182,176 +220,49 @@ export async function listWorkflowEvents(workflowRunId: string): Promise<Workflo
   }
 }
 
-/**
- * List recent events for a workflow run since a given timestamp.
- */
-export async function listRecentEvents(
-  workflowRunId: string,
-  since?: Date
-): Promise<WorkflowEventRow[]> {
-  try {
-    if (since) {
-      const result = await pool.query<WorkflowEventRow>(
-        `SELECT * FROM remote_agent_workflow_events
-         WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        [workflowRunId, toDbDateParam(since)]
-      );
-      return [...result.rows].map(row => ({
-        ...row,
-        data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
-      }));
-    }
-    return await listWorkflowEvents(workflowRunId);
-  } catch (error) {
-    getLog().error(
-      { err: error as Error, runId: workflowRunId },
-      'db.workflow_events_list_recent_failed'
-    );
-    throw new Error(`Failed to list recent workflow events: ${(error as Error).message}`);
-  }
-}
+/** Every row type `listProviderEvents` reads: the envelope and the rows it replaced. */
+export { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 
 /**
- * List workflow events across ALL runs created at or after `after`, oldest first,
- * capped at `limit`. Used by the dashboard event poller to tail events written by
- * any process (incl. out-of-process CLI runs) and replay them to the SSE dashboard.
+ * A run's provider events as served (see `IWorkflowStore.listProviderEvents`). Records
+ * come grouped by node, in the order each node first appears, and each node's in
+ * emission order. A row that cannot be read is skipped and logged with its id, so one
+ * bad row cannot blank a run.
  *
- * `>=` (not `>`) so events sharing the boundary timestamp are not skipped — SQLite's
- * `datetime('now')` is 1-second resolution, so ties are common; the caller dedupes by
- * id at the boundary and tolerates harmless duplicates (the dashboard reacts to events
- * by refetching, which is idempotent).
- *
- * `eventTypes` (when given) filters to those event types in SQL. The poller passes the
- * small set of dashboard-relevant types, which keeps high-frequency `tool_*` rows out of
- * the result — so a single 1-second bucket realistically never exceeds `limit`, and the
- * boundary `>=` + seen-set paging can't stall on overflow.
+ * Rows written before the engine recorded envelopes translate with a null `attemptId`
+ * and a `seq` counting that node's legacy rows from 0 in store order, and their
+ * `observedAt` is the row's `created_at` (1-second precision on SQLite).
  */
-export async function listWorkflowEventsSince(
-  after: Date,
-  limit: number,
-  eventTypes?: readonly string[]
-): Promise<WorkflowEventRow[]> {
+export async function listProviderEvents(
+  workflowRunId: string,
+  query: ProviderEventQuery = {}
+): Promise<ProviderEventRecord[]> {
+  const params: unknown[] = [workflowRunId, ...PROVIDER_EVENT_ROW_TYPES];
+  const typePlaceholders = PROVIDER_EVENT_ROW_TYPES.map((_, i) => `$${String(i + 2)}`).join(', ');
+  let stepClause = '';
+  if (query.stepName !== undefined) {
+    params.push(query.stepName);
+    stepClause = ` AND step_name = $${String(params.length)}`;
+  }
+  let rows: WorkflowEventRow[];
   try {
-    const params: unknown[] = [toDbDateParam(after)];
-    let typeClause = '';
-    if (eventTypes && eventTypes.length > 0) {
-      const placeholders = eventTypes.map((_, i) => `$${String(i + 2)}`).join(', ');
-      typeClause = ` AND event_type IN (${placeholders})`;
-      params.push(...eventTypes);
-    }
-    params.push(limit);
-    const limitParam = `$${String(params.length)}`;
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
-       WHERE created_at >= $1${typeClause}
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC
-       LIMIT ${limitParam}`,
+       WHERE workflow_run_id = $1 AND event_type IN (${typePlaceholders})${stepClause}
+       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
       params
     );
-    return [...result.rows].map(parseEventRow);
+    rows = result.rows.map(parseEventRow);
   } catch (error) {
-    getLog().error({ err: error as Error }, 'db.workflow_events_list_since_failed');
-    throw new Error(
-      `Failed to list workflow events since ${after.toISOString()}: ${(error as Error).message}`
-    );
+    getLog().error({ err: error as Error, runId: workflowRunId }, 'db.provider_events_list_failed');
+    throw new Error(`Failed to list provider events: ${(error as Error).message}`);
   }
-}
 
-/**
- * Return completed node outputs and cumulative usage (tokens AND cost) for a workflow
- * run. Used by the DAG executor to restore state when resuming a failed run.
- * Throws on DB error — caller owns the degradation policy.
- *
- * Both usage axes are summed from `node_completed` and `node_failed` rows, and only
- * from rows that are not marked `data.aggregate`. Failed rows contribute spend but
- * never completed outputs, so their nodes remain eligible for resume.
- *
- * This makes a run's total MONEY BURNED, not the cost of the surviving path — the
- * figure an operator watching a budget wants, and a deliberate change from what the
- * number meant before failed rows were summed (#2654). Three consequences follow, all
- * intended:
- *
- * - The same node's first and second attempt both count. A node that failed at $0.02
- *   and succeeded at $0.03 on resume contributes $0.05, because both rows are real
- *   spend.
- * - `retry:` counts every attempt, for the same reason — `runNodeRetryLoop` writes one
- *   event per attempt.
- * - An `always_run` node re-executes on every resume pass and its spend accrues each
- *   time.
- *
- * A resumed run's total therefore exceeds what the surviving path cost, and grows with
- * each resume. That is the point; it is not double counting, which is what the two
- * exclusions below prevent.
- *
- * Cache axes sum over the rows that reported them and carry `cachePartial` when any row
- * did not, so a pre-#2654 row narrows the cache total instead of erasing it. Two
- * distinct duplication hazards:
- *
- * - `node_skipped_prior_success` rows replay a node an earlier pass already counted, so
- *   counting them would multiply that node's usage by the number of resume passes.
- * - `aggregate: true` rows are derived from other rows already in this log — a
- *   `loop_group`'s roll-up restates the `cost_usd` its own `<groupId>.<nodeId>` body rows
- *   carry, so summing both counts that group twice (#2469).
- *
- * Rows written before the `aggregate` marker existed carry no flag, so a run that
- * completed a loop_group under an older build and is resumed under this one can still
- * double-count its cost. Bounded and self-clearing: only cost is affected (the roll-up
- * never carried `tokens`), and only until those runs reach a terminal state.
- */
-function isFanOutItem(value: unknown): value is FanOutInstanceSnapshot['item'] {
-  if (
-    value === null ||
-    typeof value === 'string' ||
-    typeof value === 'boolean' ||
-    (typeof value === 'number' && Number.isFinite(value))
-  ) {
-    return true;
-  }
-  if (Array.isArray(value)) return value.every(isFanOutItem);
-  if (typeof value !== 'object') return false;
-  return Object.values(value).every(isFanOutItem);
-}
-
-function isFanOutInputs(value: unknown): value is Record<string, FanOutInstanceSnapshot['item']> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value).every(isFanOutItem)
+  return readProviderEventRows(
+    workflowRunId,
+    rows.map(row => ({ ...row, created_at: toHydratedTimestamp(row.created_at).toISOString() })),
+    query
   );
-}
-
-function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const identities = new Set<string>();
-  const snapshots: FanOutInstanceSnapshot[] = [];
-  for (const [index, entry] of value.entries()) {
-    if (
-      typeof entry !== 'object' ||
-      entry === null ||
-      !('ordinal' in entry) ||
-      !('identity' in entry) ||
-      !('item' in entry) ||
-      !('inputs' in entry) ||
-      entry.ordinal !== index ||
-      typeof entry.identity !== 'string' ||
-      entry.identity.length === 0 ||
-      identities.has(entry.identity) ||
-      !isFanOutItem(entry.item) ||
-      !isFanOutInputs(entry.inputs)
-    ) {
-      return undefined;
-    }
-    identities.add(entry.identity);
-    snapshots.push({
-      ordinal: index,
-      identity: entry.identity,
-      item: entry.item,
-      inputs: entry.inputs,
-    });
-  }
-  return snapshots;
 }
 
 interface NodeLifecycleEvent {
@@ -361,19 +272,6 @@ interface NodeLifecycleEvent {
 
 interface NodeLifecycleEventRow extends NodeLifecycleEvent {
   workflow_run_id: string;
-}
-
-function foldActiveNodeIds(
-  activeNodeIds: Set<string>,
-  stepName: string | null,
-  eventType: NodeStateEventType
-): void {
-  if (!stepName) return;
-  if (eventType === 'node_started' || eventType === 'node_suspended') {
-    activeNodeIds.add(stepName);
-  } else {
-    activeNodeIds.delete(stepName);
-  }
 }
 
 export async function listActiveWorkflowNodeIds(
@@ -403,275 +301,165 @@ export async function listActiveWorkflowNodeIds(
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
 }
 
+/**
+ * Rows of the given event types, data included, for several runs in one query: each
+ * run's rows in event order, and an entry (possibly empty) for every requested run. A
+ * run list uses it to report per-node state without one query per run, fetching only the
+ * types its fold reads so high-volume rows such as provider events never leave the
+ * database.
+ */
+export async function listEventsForRuns(
+  workflowRunIds: readonly string[],
+  eventTypes: readonly WorkflowEventType[]
+): Promise<Map<string, WorkflowEventRow[]>> {
+  const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
+  if (workflowRunIds.length === 0 || eventTypes.length === 0) return byRun;
+
+  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
+  const eventPlaceholders = eventTypes.map(
+    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
+  );
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
+         AND event_type IN (${eventPlaceholders.join(', ')})
+       ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+      [...workflowRunIds, ...eventTypes]
+    );
+    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    return byRun;
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.events_for_runs_list_failed');
+    throw new Error(`Failed to list events for runs: ${(error as Error).message}`);
+  }
+}
+
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: NodeStateEventType | 'fan_out_instances';
+    event_type: DurableWorkflowEventType | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN (${NODE_STATE_EVENT_TYPES.map(
+     WHERE workflow_run_id = $1 AND event_type IN (${DURABLE_WORKFLOW_EVENT_TYPES.map(
        (_, index) => `$${String(index + 2)}`
-     ).join(', ')}, $${String(NODE_STATE_EVENT_TYPES.length + 2)})
+     ).join(', ')}, $${String(DURABLE_WORKFLOW_EVENT_TYPES.length + 2)})
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [workflowRunId, ...NODE_STATE_EVENT_TYPES, 'fan_out_instances']
+    [workflowRunId, ...DURABLE_WORKFLOW_EVENT_TYPES, 'fan_out_instances']
   );
-  const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
-  const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
-  const unresolvedNodeStarts = new Set<string>();
-  const unfinishedInvocations = new Map<string, NodeExecutionMetadata>();
-  // The completion a reusable output belongs to. A prior-success replay row carries no
-  // execution facts of its own, so it inherits the completion it replays.
-  const completedExecutions = new Map<string, NodeExecutionMetadata>();
-  // Collected and merged once at the end rather than folded pairwise: a pairwise fold
-  // cannot tell "one of five contributions reported" from "one of two" (#2662).
-  const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
-  const authoritativeInstanceScopes = new Set<string>();
+  return foldDagResumeSnapshot(result.rows, workflowRunId);
+}
+
+export interface AttentionNoticeRecord {
+  runId: string;
+  data: AttentionNoticeData;
+}
+
+export async function listAttentionNotices(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<AttentionNoticeRecord[]> {
+  if (runIds.length === 0) return [];
+  const result = await query<WorkflowEventRow>(
+    `SELECT * FROM remote_agent_workflow_events
+    WHERE event_type = 'attention_notice_sent' AND workflow_run_id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})
+    ORDER BY created_at, event_order, id`,
+    [...runIds]
+  );
+  return result.rows.map(row => ({
+    runId: row.workflow_run_id,
+    data: attentionNoticeDataSchema.parse(parseEventRow(row).data),
+  }));
+}
+
+/**
+ * Pauses whose inline chat notice the executor could not post, as `undeliveredNoticeKey`s.
+ * Events from before the pause occurrence was recorded carry none and are not reported.
+ */
+export async function listUndeliveredPauseNotices(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const result = await query<WorkflowEventRow>(
+    `SELECT * FROM remote_agent_workflow_events
+    WHERE event_type = 'pause_notice_undelivered' AND workflow_run_id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})`,
+    [...runIds]
+  );
+  const keys = new Set<string>();
   for (const row of result.rows) {
-    if (!row.step_name) continue;
-    if (row.event_type !== 'fan_out_instances') {
-      foldActiveNodeIds(unresolvedNodeStarts, row.step_name, row.event_type);
-      // Every later node state supersedes reusable success, even when that row
-      // carries no output (or its data cannot be recovered). Only success restores it.
-      completedNodeOutputs.delete(row.step_name);
-    }
-    let rawData: Record<string, unknown>;
-    let record: ReturnType<typeof readNodeRecordEvent>;
-    try {
-      rawData = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
-    } catch (parseErr) {
-      getLog().warn(
-        { err: parseErr as Error, runId: workflowRunId, stepName: row.step_name },
-        'db.workflow_dag_node_output_parse_failed'
-      );
-      continue;
-    }
-    if (row.event_type === 'fan_out_instances') {
-      if (!fanOutSnapshots.has(row.step_name)) {
-        const snapshots = parseFanOutSnapshots(rawData.instances);
-        if (snapshots !== undefined) fanOutSnapshots.set(row.step_name, snapshots);
-      }
-      continue;
-    }
-    try {
-      record = readNodeRecordEvent({
-        workflow_run_id: workflowRunId,
-        step_name: row.step_name,
-        event_type: row.event_type,
-        data: rawData,
-      });
-    } catch (parseErr) {
-      throw new Error(
-        `Invalid node execution record for '${row.step_name}' in run ${workflowRunId}`,
-        { cause: parseErr }
-      );
-    }
-    if (!record) continue;
-    const data = record.data;
-    if (record.metadata) {
-      const key = nodeInvocationKey(record.path, record.metadata.invocation.loopPath);
-      if (
-        record.eventType === 'node_started' ||
-        record.eventType === 'node_suspended' ||
-        record.eventType === 'node_failed'
-      ) {
-        unfinishedInvocations.set(key, record.metadata);
-      } else if (record.eventType === 'node_completed' || record.eventType === 'node_skipped') {
-        unfinishedInvocations.delete(key);
-      }
-      if (record.eventType === 'node_completed')
-        completedExecutions.set(record.path, record.metadata);
-      else completedExecutions.delete(record.path);
-    } else if (
-      record.eventType === 'node_skipped_prior_success' ||
-      record.eventType === 'node_always_run_reset' ||
-      record.eventType === 'node_prior_cache_invalidated'
-    ) {
-      for (const [key, metadata] of unfinishedInvocations)
-        if (metadata.path === record.path) unfinishedInvocations.delete(key);
-    }
-    if (
-      row.event_type !== 'node_completed' &&
-      row.event_type !== 'node_skipped_prior_success' &&
-      row.event_type !== 'node_failed'
-    )
-      continue;
-    if (row.event_type !== 'node_failed' && typeof data.node_output === 'string') {
-      // A bash/script node's persisted text is a bounded preview once it exceeded the
-      // truncation cap; the full bytes were spilled to `node_output_spill_path` at write
-      // time (#2726). Prefer the spill so a resumed run's `$node.output`/`.field` sees
-      // exactly what a fresh run's in-process consumer would have. A missing/unreadable
-      // spill retains the preview and its incompleteness rather than failing resume.
-      // Prior-success replay must preserve that provenance for later terminal records.
-      //
-      // The spill file is addressed by a stable, node-scoped filename that a later
-      // execution of the SAME node overwrites in place (by design — see
-      // `formatPersistedNodeOutput`'s doc comment). The spill precedes its awaited
-      // lifecycle insert, so a process crash between the file overwrite and that insert
-      // can still leave an older, durable row pointing at
-      // a NEWER execution's content. Guard against that by validating the file's actual
-      // byte length against this row's own recorded `node_output_original_bytes` before
-      // trusting it — a mismatch means the file no longer describes this row, so fall
-      // back to the bounded preview exactly like a missing spill would.
-      let output = data.node_output;
-      let outputTruncation: PersistedNodeOutput['outputTruncation'] =
-        data.node_output_truncated === true || typeof data.node_output_spill_path === 'string'
-          ? {
-              originalBytes:
-                typeof data.node_output_original_bytes === 'number'
-                  ? data.node_output_original_bytes
-                  : null,
-              spillPath:
-                typeof data.node_output_spill_path === 'string'
-                  ? data.node_output_spill_path
-                  : null,
-            }
-          : undefined;
-      if (typeof data.node_output_spill_path === 'string') {
-        try {
-          const spilled = await readFile(data.node_output_spill_path, 'utf8');
-          const spilledBytes = Buffer.byteLength(spilled, 'utf8');
-          if (
-            typeof data.node_output_original_bytes === 'number' &&
-            spilledBytes !== data.node_output_original_bytes
-          ) {
-            getLog().warn(
-              {
-                runId: workflowRunId,
-                stepName: row.step_name,
-                spillPath: data.node_output_spill_path,
-                expectedBytes: data.node_output_original_bytes,
-                actualBytes: spilledBytes,
-              },
-              'db.workflow_dag_node_output_spill_stale'
-            );
-          } else {
-            output = spilled;
-            outputTruncation = undefined;
-          }
-        } catch (spillErr) {
-          getLog().warn(
-            {
-              err: spillErr as Error,
-              runId: workflowRunId,
-              stepName: row.step_name,
-              spillPath: data.node_output_spill_path,
-            },
-            'db.workflow_dag_node_output_spill_read_failed'
-          );
-        }
-      }
-      // The field-access contract this node completed under (#2453), written only by
-      // `workflow:` nodes — the child owns that projection, so re-deriving it from the
-      // parent's own definition on resume would lose it. Accepted only as an array of
-      // strings; anything else is corrupt and degrades to "no persisted contract".
-      const rawDeclaredFields = data.declared_fields;
-      const declaredFields =
-        Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
-          ? rawDeclaredFields
-          : undefined;
-      completedNodeOutputs.set(row.step_name, {
-        output,
-        ...(outputTruncation !== undefined ? { outputTruncation } : {}),
-        // The node's logical value (#2637), persisted beside its text by the emit
-        // sites (and copied forward by node_skipped_prior_success re-emits). Absent
-        // on pre-#2637 rows — the executor then falls back to text re-parsing.
-        ...(data.structured_output !== undefined
-          ? { structuredOutput: data.structured_output }
-          : {}),
-        ...(declaredFields !== undefined ? { declaredFields } : {}),
-        ...(completedExecutions.has(row.step_name)
-          ? { execution: completedExecutions.get(row.step_name) }
-          : {}),
-      });
-    }
-    // Composed-instance terminals are the durable accounting source for their whole
-    // scope. Their inner rows are observability writes and may be missing after a crash.
-    const isAuthoritativeInstanceUsage =
-      data.type === 'compose_fan_out_instance' &&
-      (row.event_type === 'node_completed' || row.event_type === 'node_failed');
-    if (isAuthoritativeInstanceUsage) authoritativeInstanceScopes.add(row.step_name);
-    // Other aggregate rows merely restate usage already carried by their leaves.
-    if (data.aggregate === true && !isAuthoritativeInstanceUsage) continue;
-    const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
-      stepName: row.step_name,
-    };
-    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.tokens !== undefined) {
-      const eventTokens = record.rawUsage.tokens;
-      if (
-        typeof eventTokens === 'object' &&
-        eventTokens !== null &&
-        'input' in eventTokens &&
-        'output' in eventTokens &&
-        typeof eventTokens.input === 'number' &&
-        typeof eventTokens.output === 'number' &&
-        Number.isFinite(eventTokens.input) &&
-        Number.isFinite(eventTokens.output)
-      ) {
-        const normalized: TokenUsage = {
-          input: eventTokens.input,
-          output: eventTokens.output,
-        };
-        const optionalTokens = eventTokens as Record<string, unknown>;
-        for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-          const value = optionalTokens[axis];
-          if (value === undefined) continue;
-          if (typeof value === 'number' && Number.isFinite(value)) {
-            normalized[axis] = value;
-          } else {
-            getLog().warn(
-              { runId: workflowRunId, stepName: row.step_name, axis, value },
-              'db.workflow_dag_node_optional_tokens_invalid_ignored'
-            );
-          }
-        }
-        // A node whose own usage was already a floor (a loop total, an OpenCode
-        // multi-agent node) keeps the resumed run a floor. Anything other than `true`
-        // is ignored without a warn: unlike the numeric axes it carries no total.
-        if (optionalTokens.cachePartial === true) {
-          normalized.cachePartial = true;
-        }
-        contribution.tokens = normalized;
-      } else {
-        getLog().warn(
-          { runId: workflowRunId, stepName: row.step_name, tokens: eventTokens },
-          'db.workflow_dag_node_tokens_invalid_ignored'
-        );
-      }
-    }
-    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.costUsd !== undefined) {
-      const eventCost = record.rawUsage.costUsd;
-      // Same guard shape as tokens: a non-finite value from a provider must not
-      // silently poison the total (NaN > 0 is false, which would drop the run's
-      // cost from the persisted metadata with no trace).
-      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-        contribution.costUsd = eventCost;
-      } else {
-        getLog().warn(
-          { runId: workflowRunId, stepName: row.step_name, costUsd: eventCost },
-          'db.workflow_dag_node_cost_invalid_ignored'
-        );
-      }
-    }
-    if (contribution.tokens !== undefined || contribution.costUsd !== undefined) {
-      usageContributions.push(contribution);
-    }
+    const { occurrence } = parseEventRow(row).data;
+    if (typeof occurrence === 'string')
+      keys.add(undeliveredNoticeKey(row.workflow_run_id, occurrence));
   }
-  const authoritativeInstancePrefixes = [...authoritativeInstanceScopes].map(scope => `${scope}__`);
-  const countedUsage = usageContributions.filter(
-    contribution =>
-      !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
+  return keys;
+}
+
+export function undeliveredNoticeKey(runId: string, occurrence: string): string {
+  return `${runId}:${occurrence}`;
+}
+
+export async function hasAnyAttentionNotice(
+  destination: string,
+  query: IDatabase['query'] = pool.query
+): Promise<boolean> {
+  const extract = getDialect().jsonText('data', 'destination');
+  const result = await query(
+    `SELECT id FROM remote_agent_workflow_events WHERE event_type = 'attention_notice_sent' AND ${extract} = $1 LIMIT 1`,
+    [destination]
   );
-  return {
-    unfinishedInvocations,
-    completedNodeOutputs,
-    fanOutSnapshots,
-    unresolvedNodeStarts,
-    tokens: mergeTokenUsage(
-      countedUsage.flatMap(contribution =>
-        contribution.tokens === undefined ? [] : [contribution.tokens]
-      )
-    ),
-    costUsd: countedUsage.reduce((total, contribution) => total + (contribution.costUsd ?? 0), 0),
-  };
+  return result.rows.length > 0;
+}
+
+export async function attentionConversationPlatforms(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<Map<string, string>> {
+  if (runIds.length === 0) return new Map();
+  const result = await query<{ run_id: string; platform_type: string }>(
+    `
+    WITH RECURSIVE ancestors AS (
+      SELECT id AS run_id, id, parent_run_id, COALESCE(parent_conversation_id, NULLIF(conversation_id, '${WORKFLOW_ORIGIN_ANCHOR_ID}')) AS conversation_id
+      FROM remote_agent_workflow_runs WHERE id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})
+      UNION
+      SELECT a.run_id, r.id, r.parent_run_id, COALESCE(r.parent_conversation_id, NULLIF(r.conversation_id, '${WORKFLOW_ORIGIN_ANCHOR_ID}'))
+      FROM ancestors a JOIN remote_agent_workflow_runs r ON r.id = a.parent_run_id
+      WHERE a.conversation_id IS NULL
+    )
+    SELECT a.run_id, c.platform_type FROM ancestors a
+    JOIN remote_agent_conversations c ON c.id = a.conversation_id`,
+    [...runIds]
+  );
+  return new Map(result.rows.map(row => [row.run_id, row.platform_type]));
+}
+
+export async function getWorkflowEventHead(): Promise<string> {
+  const result = await pool.query<{ head: string | number | null }>(
+    `SELECT MAX(head) AS head FROM (
+       SELECT value AS head FROM remote_agent_workflow_event_sequence WHERE id = 1
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_events
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_event_archive
+     ) committed`
+  );
+  const row = result.rows[0];
+  if (row?.head == null) throw new Error('Workflow event head is missing');
+  return String(row.head);
+}
+
+export async function readWorkflowEventsAfter(
+  after: string,
+  limit: number
+): Promise<WorkflowEventRow[]> {
+  const result = await pool.query<WorkflowEventRow>(
+    `SELECT * FROM (
+       SELECT * FROM remote_agent_workflow_events WHERE event_order > $1
+       UNION ALL
+       SELECT * FROM remote_agent_workflow_event_archive WHERE event_order > $1
+     ) feed ORDER BY event_order LIMIT $2`,
+    [after, limit]
+  );
+  return result.rows.map(parseEventRow);
 }

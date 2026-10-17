@@ -1,0 +1,4 @@
+# Package-local Bun config (Bun reads bunfig.toml from the cwd only, so the
+# repo root preload does not apply here). Tests get a scratch ARCHON_HOME and no telemetry.
+[test]
+preload = ["../../scripts/test-preload.ts"]

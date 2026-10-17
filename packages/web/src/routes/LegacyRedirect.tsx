@@ -1,10 +1,12 @@
 import { Navigate, matchPath, useLocation } from 'react-router';
 
+export const PUSH_RUN_PATH = '/runs/:runId';
+
 export function legacyDestination(pathname: string, search: string): string {
   const path = pathname === '/legacy' ? '/' : pathname.replace(/^\/legacy\//, '/');
   if (path === '/settings') return '/console/settings';
 
-  const run = matchPath('/workflows/runs/:runId', path);
+  const run = matchPath(PUSH_RUN_PATH, path) ?? matchPath('/workflows/runs/:runId', path);
   if (run?.params.runId) return `/console/r/${encodeURIComponent(run.params.runId)}`;
 
   if (path === '/workflows' || path === '/workflows/builder') {

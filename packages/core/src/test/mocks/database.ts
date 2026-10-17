@@ -1,6 +1,7 @@
 import type { QueryResult, QueryResultRow } from 'pg';
 import { mock, type Mock } from 'bun:test';
 import type { SqlDialect } from '../../db/adapters/types';
+import { postgresDialect } from '../../db/adapters/postgres';
 
 export interface MockPool {
   query: Mock<(...args: unknown[]) => Promise<QueryResult<QueryResultRow>>>;
@@ -49,13 +50,13 @@ export const mockPostgresDialect: SqlDialect = {
   jsonMerge(column: string, paramIndex: number): string {
     return `${column} || $${String(paramIndex)}::jsonb`;
   },
-  jsonArrayContains(column: string, path: string, paramIndex: number): string {
-    return `${column}->'${path}' ? $${String(paramIndex)}`;
-  },
   nowMinusDays(paramIndex: number): string {
     return `NOW() - ($${String(paramIndex)} || ' days')::INTERVAL`;
   },
   daysSince(column: string): string {
     return `EXTRACT(EPOCH FROM (NOW() - ${column})) / 86400`;
   },
+  jsonText: postgresDialect.jsonText,
+  jsonRemove: postgresDialect.jsonRemove,
+  rowLock: postgresDialect.rowLock,
 };

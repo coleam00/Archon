@@ -46,9 +46,11 @@ the 7-step resolution order:
 
 ### 5. Understand Error Classification
 
-Read `packages/isolation/src/errors.ts` in full — `classifyIsolationError()` maps raw git
-errors (permission denied, no space left, timeout, not a git repo) to user-friendly messages.
-`IsolationBlockedError` for limit-exceeded cases. `isKnownIsolationError` for detection.
+Read `packages/isolation/src/errors.ts` in full — failures carry a typed kind set where they
+are thrown, and `classifyIsolationError()` maps that kind (permission denied, no space, timeout,
+not a git repo, Docker unreachable, ...) to a user-friendly message. `isKnownIsolationError`
+blocks typed kinds; unclassified failures crash with their evidence. `IsolationBlockedError`
+for limit-exceeded cases.
 
 ### 6. Understand the Worktree Provider
 

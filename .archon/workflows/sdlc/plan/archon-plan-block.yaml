@@ -1,0 +1,82 @@
+name: archon-plan-block
+description: |
+  Turn decided intent — a feature request, an investigation report, an idea —
+  into an implementable plan: the approach chosen with alternatives rejected for
+  stated reasons, the work broken into verifiable steps, and the validation that
+  proves it. Advisory: it reads and reports — the repository is left exactly as
+  it was found.
+
+  The graph of archon-plan, as a building block for a workflow that composes the
+  stage and owns what follows its ending. It never pauses for a person: run
+  archon-plan, which adds that pause, by hand.
+
+model: large
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to plan — a feature description, an issue reference, or a goal. When
+      empty, the run's trigger message is the work.
+  report:
+    default: ""
+    description: >-
+      Optional path to a prior investigation report to build on — its claims are
+      verified, not trusted. Empty means no prior report.
+
+# ready:false is a valid completion (see the plan node): the run succeeds with
+# an authored outcome of false — lifecycle status and work outcome are separate facts.
+returns: plan
+outcome_field: ready
+
+nodes:
+  # The directory of the pack's default policy documents in this run's captured
+  # source, the same in a source checkout and a binary install. The prompt names the
+  # policy file it needs and chooses between the project's own and the default.
+  - id: policy
+    script: policy
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        defaults: { type: string }
+      required: [defaults]
+
+  # Open questions are a valid outcome, not a failure: the calls only a person can
+  # make, named, beat a plan built on guesses. Whether the plan is ready is the
+  # planner's judgment; consumers gate on $plan.output.ready and relay
+  # $plan.output.open_questions either way. A schema cannot tie the two without a
+  # root union, which the providers' structured output rejects, so the prompt
+  # holds the rule: not ready always names at least one question.
+  - id: plan
+    command: plan
+    depends_on: [policy]
+    with:
+      policy_defaults: "$policy.output.defaults"
+    # Advisory on both counts, and the engine holds both: it fails this node with
+    # the touched paths named if the checkout is modified, and it refuses the
+    # artifact pointer below if the report it names does not exist.
+    mutates_checkout: false
+    output_type: implementation-plan
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        open_questions:
+          type: array
+          items: { type: string, pattern: '\S' }
+        summary:
+          type: string
+        report:
+          # The evidence contract, enforced by the engine at this node: a pointer at a
+          # file this run's artifacts do not hold is refused before the node completes,
+          # so a verdict cannot arrive without its report. The bar is an existing, non-empty
+          # file, the bar the node this replaced enforced by hand.
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [plan.md] }
+          required: [type, run_id, path]
+      required: [ready, open_questions, summary, report]

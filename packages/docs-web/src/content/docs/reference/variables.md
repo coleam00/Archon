@@ -14,7 +14,7 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
 
-They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they receive the same two passes a `prompt:` does: workflow variables first, then `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
+They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -29,8 +29,8 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
-| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
-| `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
+| `$LOOP_USER_INPUT` | **Deprecated.** Feedback from a deprecated interactive loop gate. Replacement: end a `loop_group` body in a `wait: attention` node and read `$LOOP_PREV.<wait-id>.output.text`; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
+| `$REJECTION_REASON` | **Deprecated.** The reason given when rejecting a deprecated `approval:` node. Replacement: a node with `when: "$<wait-id>.output.decision == 'reject'"` that reads `$<wait-id>.output.text`; see [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 | `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. In a body `when:`, it is a typed condition reference rather than text substitution. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 
@@ -75,14 +75,15 @@ warning with the exact `mv` command and moves nothing.
 
 **Concurrency.** The engine does no locking on `$STATE_DIR`. See
 [Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
-the read-modify-write hazard and how to avoid it.
+the read-modify-write hazard. Use [durable state documents](/guides/authoring-workflows/#durable-state-documents) for concurrent, audited JSON updates.
 
 **Name collisions.** The project segment is derived from the project's identity, and distinct
 projects can derive the same one — two no-remote local repos both called `api`, or two folder
-projects whose display names slugify identically. Artifacts and logs are keyed by run id, so a
-collision is harmless there. `$STATE_DIR` has no run-id segment, so colliding projects
-genuinely **share** their state files. If that matters, register one of them under a distinct
-name, or namespace inside `$STATE_DIR`.
+projects whose display names slugify identically. Registration keeps them apart: a new project
+whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
+`my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
+parallel checkouts. Unregistered working directories (`_cwd/<basename>`) are not registered, so
+two of them with the same folder name still share `$STATE_DIR`.
 
 ## Positional Arguments (not supported)
 
@@ -95,20 +96,51 @@ prompt body.
 
 ## Node Output References
 
-In DAG workflows, nodes can reference the output of any completed upstream node. These are substituted after workflow variables.
+In DAG workflows, nodes can reference the output of any completed upstream node. They resolve in the same pass as workflow variables (see [Substitution Order](#substitution-order)).
 
 | Pattern | Resolves to | Notes |
 |---------|-------------|-------|
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
-| `$nodeId.output.field` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
+| `$nodeId.output.field` / `$nodeId.output.a.b` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
 
-A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. For a `workflow:` sub-run node the contract is the child's own: the `output_format` on the child's `returns:` node certifies the value and its declared field names travel back with the result, so `$sub.output.field` is strict under the child's schema. Declaring `output_format` on the `workflow:` node itself is a load error — the result contract belongs to the child's `returns:` node.
+Dot paths read nested object fields: `$review.output.proposal.action` resolves the
+`action` inside `proposal`. The same paths work in templates, scalar `when:`
+comparisons, whole-value `with:` bindings, and `$LOOP_PREV.review.output.proposal.action`.
+A whole-value binding preserves the logical value, including objects and arrays;
+`when:` requires a scalar. Paths cannot index or traverse arrays, use wildcards, or
+compute expressions. Shorthand conditions (`$node.field`) remain single-field only.
 
-During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
+With `output_format`, each segment must be an explicit `properties` entry. A reference
+to an undeclared segment, at any depth, fails validation when the producer's schema is
+known locally; otherwise it fails the consuming node at runtime, naming the reference
+and segment. `additionalProperties`, array `items`, `$ref`, and schema combinators do not
+supply declarations. An object with nullable type can declare child properties.
+Authorization checks the entire path before reading values, so a typo fails even under
+an absent optional parent. A declared missing or null field or parent resolves to `''`.
+The root output must still be a JSON object. For schemaless `bash:`/`script:` producers,
+every nested key must exist and intermediate values must be objects; a missing key or
+non-object intermediate fails the consuming node.
+
+A `wait:` node's contract is fixed by the engine. A time or event wait declares
+`status`, `waited_ms`, `event` and `payload`. An [attention wait](/guides/authoring-workflows/#attention-waits)
+declares its answer by form: `message` declares `text`; `approval` and `select` declare
+`decision` and `text`; `multi_select` declares `decisions` (an array of option ids) and
+`text`. So `$ask.output.decision` is checked at load time, and in a `loop_group` whose body
+ends in the wait, the next iteration reads the answer as `$LOOP_PREV.ask.output.text`.
+A wait's `options` may be one whole `$node.output.<field>` reference; it is read as a
+logical value when the wait pauses, not substituted as text.
+
+For `workflow:` results, the selected child producer owns the contract. Its declared
+paths travel with the result and survive resume; the parent cannot declare an
+`output_format` on the `workflow:` node. A child result recorded before nested paths
+carries only its top-level fields, so a nested read from it fails as undeclared until
+the producer reruns.
+
+During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful `bash:` and `script:` events store at most a 32 KiB UTF-8 preview. When the output is larger, Archon also writes the full output to `$ARTIFACTS_DIR/.archon/node-output-spills/persisted/<node>.nodeoutput`, and a resumed run restores `$nodeId.output` from that file. Resume falls back to the preview, which ends in a `[truncated; original output was N bytes]` marker, when the file was never written, cannot be read (for example, after an operator [removed the run's artifacts](/reference/archon-directories/#user-level-archon)), or its byte length no longer matches the length recorded with the event. Each fallback logs a warning (`db.workflow_dag_node_output_spill_read_failed` or `db.workflow_dag_node_output_spill_stale`); a failed write is logged as `dag.spill_file_write_failed` when the node runs. The length check catches a later execution of the same node overwriting the file, but not one that wrote different output of the same length.
 
 ### Shell Quoting in `bash:` vs `script:`
 
-`$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead — the unquoted assignment form is correct in both cases. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+`$nodeId.output` and `$LOOP_PREV.nodeId.output` references, including their field forms, use two substitution regimes in `bash:` and `until_bash:`. Small string outputs are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead. A bare argument works with the inline form, but the unquoted command substitution splits words and expands globs. **Assign, then quote the variable** to handle both regimes safely. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
 User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
 
@@ -116,20 +148,19 @@ At load time, Archon scans inline and named exec sources for static environment 
 
 This is a deliberately lexical check, not a language parser. Computed keys, aliases, destructuring, `os.getenv`, and ordinary non-`INPUTS_*` bash variables are outside the supported detection boundary. An exact supported accessor spelling inside a comment or string literal can still be reported.
 
-Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
+Keep the reference as the whole, unquoted assignment value, then quote the shell variable wherever you use it:
 
 ```bash
-# WRONG — for a small value, $emit.output.status is injected as 'ok' (single-quoted),
-# so status="$emit.output.status" becomes status="'ok'" — the quotes become data.
-status="$emit.output.status"
-[ "$status" = "ok" ] && echo pass   # → silently fails ($status is 'ok', not ok)
+value=$emit.output
+printf '%s' "$value"
 
-# CORRECT — leave the substitution unquoted; Archon's quoting is the quoting.
-status=$emit.output.status          # → status='ok' → bash assigns: ok
-[ "$status" = "ok" ] && echo pass   # → passes
+status=$emit.output.status
+[ "$status" = "ok" ] && echo pass
 ```
 
-For **large** outputs (>32 KB) the substitution is `$(cat '/path')`, where `var="$(cat ...)"` is correct bash — but you can't know the size at author time, so the rule is unconditional. Numeric and boolean **fields** are injected raw (no quotes), so double-quoting accidentally "works" for them — which makes the bug intermittent. Always use `var=$node.output.field`, never `var="$node.output.field"`.
+Assignments suppress word splitting and glob expansion in both regimes. `export value=$emit.output` and `local value=$emit.output` are also safe. Wrapping the reference in double quotes breaks small string values: `status="$emit.output.status"` becomes `status="'ok'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value. Numeric and boolean fields are injected raw, but use the same assign-then-quote idiom so a change to a string value remains safe.
+
+`archon validate workflows` warns about quoted references and bare references outside complete assignments in `bash:` and `until_bash:`. Heredoc bodies remain outside this check.
 
 ### Example
 
@@ -153,8 +184,9 @@ nodes:
 
 ### Node-local `with:` bindings on `command:` and `script:` nodes
 
-A command file and a named script are opaque to inline text substitution — the engine never
-rewrites their bodies. `with:` on a `command:` or `script:` node binds upstream values **by
+A command file and a named script live in their own files, outside the workflow YAML. A
+command body gets the same variable substitution as an inline `prompt:`; a named script body
+is never rewritten. `with:` on a `command:` or `script:` node binds upstream values **by
 name** through the channels those bodies already read: `$INPUTS.<name>` in a command file,
 `INPUTS_<UPPER_SNAKE>` env vars in a script.
 
@@ -182,13 +214,14 @@ Three value forms, resolved per binding:
 |-------|-------------|
 | A non-string literal (`true`, `42`, `[a, b]`) | The value itself, with its logical type |
 | A string that is **exactly one** whole `$node.output`, `$node.output.field`, or `$INPUTS.<name>` reference | The **logical value** — a boolean field arrives as a boolean, an object as an object (env delivery uses its canonical text: strings raw, everything else JSON) |
-| Any other string | A text template, substituted like `input:` (workflow vars, then `$node.output` refs) |
+| Any other string | A text template, substituted like `input:` (workflow vars and `$node.output` refs) |
 
 An object value is reserved for the **binding directive** `{ from, if_skipped }`: `from` is
 one whole `$node.output[.field]` reference, and when that producer was **skipped** (a
 `when:`-false branch reached through `trigger_rule: all_done`) the binding takes `if_skipped`
 instead. A skipped producer with no `if_skipped` fails the node with the fix named — a
-binding never silently resolves to an empty string.
+binding never silently resolves to an empty string. `if_skipped` is literal data, so
+reference-looking text there is neither substituted nor validated as an output reference.
 
 ```yaml
   - id: join
@@ -257,15 +290,21 @@ is for machine readers, and a prompt inside the producing run keeps the
 
 ## Substitution Order
 
-Variables are substituted in a defined order:
+A template is substituted in one left-to-right pass. Each reference the template itself
+contains resolves once, from its own source, and the value is inserted exactly as it is.
+A substituted value is never scanned again: a trigger message, issue context, loop reply,
+rejection reason, previous output, or input value that contains `$nodeId.output`,
+`$INPUTS.<name>`, a variable name, or `$&` reaches the node as written.
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$TYPED_ARTIFACTS_FILE`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
-2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
+Where two grammars could match at the same `$`, the earlier group in this list wins:
+
+1. **Loop references** (inside a `loop_group` body) -- `$LOOP_PREV.<nodeId>.output`, and the
+   group's `$LOOP_USER_INPUT` reply
+2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
-Inside a `loop_group` body, `$LOOP_PREV.<nodeId>.output` refs are resolved
-first (before `$LOOP_USER_INPUT` is spliced in, so user-provided text is never
-re-processed as a workflow ref), then the node's normal substitution runs.
+Issue context that is appended because the template names no context variable is added after
+substitution, so it is never scanned either.
 
 Positional arguments (`$1` through `$9`) are **not** supported in any context — `$ARGUMENTS` / `$USER_MESSAGE` deliver the whole trigger message instead.
 
@@ -281,8 +320,8 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |
 | `$CONTEXT` / aliases | Yes | No | No |
-| `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No |
-| `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
+| `$LOOP_USER_INPUT` (deprecated) | Yes (loop nodes) | No | No |
+| `$REJECTION_REASON` (deprecated) | Yes (`on_reject` only) | No | No |
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | Yes (loop_group body nodes) |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
@@ -296,5 +335,10 @@ These are standard environment variables read from `process.env` at clone time. 
 | Variable | Description |
 |----------|-------------|
 | `GH_TOKEN` | GitHub personal access token for authenticated clone operations |
-| `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated GitLab clones |
-| `GITEA_TOKEN` | Gitea API token for authenticated Gitea/Forgejo clones |
+| `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated clones from `gitlab.com` or the `GITLAB_URL` host |
+| `GITEA_TOKEN` | Gitea API token for authenticated clones from `gitea.com` or the `GITEA_URL` or `FORGEJO_URL` host |
+| `GITLAB_URL` | Base URL of a self-hosted GitLab (e.g. `https://gitlab.example.com`). Clones with this exact scheme, host and port use `GITLAB_TOKEN` |
+| `GITEA_URL` | Base URL of a self-hosted Gitea. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
+| `FORGEJO_URL` | Base URL of a self-hosted Forgejo. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
+
+A forge token is sent only to the host it is configured for, and only over the scheme it is configured for: HTTPS for `github.com`, `gitlab.com` and `gitea.com`, and the `*_URL`'s own scheme for a self-hosted instance. An `http://` clone of an HTTPS forge gets no token. A hostname that merely contains `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.

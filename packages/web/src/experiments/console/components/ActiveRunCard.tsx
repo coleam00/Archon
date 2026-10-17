@@ -1,9 +1,11 @@
+import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
+import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
 import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
@@ -22,9 +24,8 @@ interface ActiveRunCardProps {
   showProject?: boolean;
   selected?: boolean;
   /**
-   * True when this run's approval is currently surfaced in the pending-input
-   * banner at the top of the feed. The card then shows a pointer instead of a
-   * second live ApprovalPanel; dismissing the banner restores the inline panel.
+   * Promoted runs show a pointer instead of duplicating the banner's actions.
+   * Dismissing the banner restores the inline controls.
    */
   inputPromoted?: boolean;
 }
@@ -168,6 +169,8 @@ export function ActiveRunCard({
           </div>
         </div>
 
+        <ToolCallAttentionSection run={run} />
+
         {/* Provenance + activity detail: the triggering input (when present, truncated —
             full text on hover), plus live node/tool rows while running. */}
         {showDetailGrid ? (
@@ -202,7 +205,15 @@ export function ActiveRunCard({
           </div>
         ) : null}
 
-        {run.status === 'paused' && run.wait != null ? (
+        {run.status === 'paused' && inputPromoted ? (
+          <div className="mt-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
+            {run.attention?.kind === 'usage_limit'
+              ? 'Waiting on a provider limit — see the banner at the top.'
+              : 'Waiting for your input — see the banner at the top.'}
+          </div>
+        ) : null}
+
+        {run.status === 'paused' && !inputPromoted && run.wait != null ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px]">
             <span className="font-mono text-text-tertiary">node</span>
             <span className="font-mono text-text-primary">{run.wait.nodeId}</span>
@@ -212,40 +223,45 @@ export function ActiveRunCard({
                 <span className="font-mono text-text-primary">{run.wait.event}</span>
               </>
             ) : null}
-            {run.wait.kind === 'attention' ? (
+            {run.attention?.kind === 'attention' ? (
               <>
-                <span className="font-mono text-text-tertiary">action</span>
-                <span className="text-text-secondary">{run.wait.message}</span>
-                <span className="font-mono text-text-tertiary">then</span>
-                <span className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation();
-                      void resolveAttention('resume');
-                    }}
-                    disabled={attentionBusy !== null}
-                    className="rounded bg-warning/15 px-2 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50"
-                  >
-                    {attentionBusy === 'resume' ? 'Resuming…' : 'Resume'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation();
-                      void resolveAttention('abandon');
-                    }}
-                    disabled={attentionBusy !== null}
-                    className="rounded px-2 py-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-                  >
-                    {attentionBusy === 'abandon' ? 'Abandoning…' : 'Abandon'}
-                  </button>
-                  {attentionError !== null ? (
-                    <span className="font-mono text-error">{attentionError}</span>
-                  ) : null}
+                <span className="font-mono text-text-tertiary">needs</span>
+                <span className="text-text-secondary">{run.attention.message}</span>
+                <span className="font-mono text-text-tertiary">answer</span>
+                <span className="flex flex-col gap-1">
+                  <AttentionAnswerPanel run={run} attention={run.attention} />
+                  <span className="flex flex-wrap items-center gap-2">
+                    {isLegacyAttention(run.attention) ? (
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          void resolveAttention('resume');
+                        }}
+                        disabled={attentionBusy !== null}
+                        className="rounded bg-warning/15 px-2 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50"
+                      >
+                        {attentionBusy === 'resume' ? 'Resuming…' : 'Resume'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        void resolveAttention('abandon');
+                      }}
+                      disabled={attentionBusy !== null}
+                      className="rounded px-2 py-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                    >
+                      {attentionBusy === 'abandon' ? 'Abandoning…' : 'Abandon'}
+                    </button>
+                    {attentionError !== null ? (
+                      <span className="font-mono text-error">{attentionError}</span>
+                    ) : null}
+                  </span>
                 </span>
               </>
-            ) : (
+            ) : run.wait.kind !== 'attention' ? (
               <>
                 <span className="font-mono text-text-tertiary">
                   {run.wait.kind === 'event' ? 'deadline' : 'resume'}
@@ -254,7 +270,7 @@ export function ActiveRunCard({
                   {new Date(run.wait.resumeAt).toLocaleString()}
                 </span>
               </>
-            )}
+            ) : null}
           </div>
         ) : null}
 
@@ -262,20 +278,11 @@ export function ActiveRunCard({
             The context block shows the actual question the agent asked (pulled
             from the last text event), because the approval node's own
             `message` is usually just a pointer ("answer the questions above"). */}
-        {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-          inputPromoted ? (
-            <div className="mt-2 flex items-center gap-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
-              <span aria-hidden className="leading-none">
-                ⚠
-              </span>
-              <span>Waiting for your input — see the banner at the top.</span>
-            </div>
-          ) : (
-            <>
-              <ApprovalContext run={run} />
-              <ApprovalPanel run={run} />
-            </>
-          )
+        {!inputPromoted && run.attention?.kind === 'awaiting_response' ? (
+          <>
+            <ApprovalContext run={run} />
+            <ApprovalPanel run={run} />
+          </>
         ) : null}
 
         {/* Resolved gate awaiting auto-resume — the run is still 'paused' in the

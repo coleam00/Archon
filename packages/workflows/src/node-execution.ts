@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { ProviderCapabilities, TokenUsage } from '@archon/providers/types';
+import type { ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type { DagNode } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';
 import type { CheckoutObservation } from './schemas/checkout-observation';
+import { sessionPreview, tokenUsageSchema } from '@archon/provider-contract';
 import {
-  executionTokenUsageSchema,
   nodeExecutionMetadataSchema,
   type ExecutionBinding,
   type ExecutionOutput,
@@ -31,6 +31,8 @@ export function describeExecutionNode(node: DagNode): NodeDescriptor {
       return { id, kind, runtime: node.runtime };
     case 'loop':
       return { id, kind, ...(node.loop.command ? { command: node.loop.command } : {}) };
+    case 'workflow':
+      return { id, kind, ...(node.fan_out !== undefined ? { fanOut: true } : {}) };
     default:
       return { id, kind };
   }
@@ -112,7 +114,7 @@ export function startNodeExecution(input: {
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.sessionId !== undefined
         ? {
-            sessionPreview: input.sessionId.slice(0, 8),
+            sessionPreview: sessionPreview(input.sessionId),
             sessionOrigin: 'resumed' as const,
           }
         : hasProvider
@@ -138,8 +140,11 @@ export function startNodeExecution(input: {
 }
 
 export interface ExecutionObservations {
+  tokensUnknown?: boolean;
   tokens?: TokenUsage;
   costUsd?: number;
+  /** Some provider call in the attempt reported no cost, so `costUsd` is a floor. */
+  costPartial?: boolean;
   stopReason?: string;
   numTurns?: number;
   resolvedModel?: string;
@@ -155,6 +160,8 @@ export function finishNodeExecution(
     sessionId?: string;
     resumed?: boolean;
     durationMs?: number;
+    /** The attempt ended before any provider call, so it has no spend to measure. */
+    providerNotCalled?: boolean;
   } = {}
 ): NodeExecutionRecord {
   const observed = <T>(
@@ -177,7 +184,7 @@ export function finishNodeExecution(
           },
         }
       : {}),
-    ...(result.sessionId !== undefined ? { sessionPreview: result.sessionId.slice(0, 8) } : {}),
+    ...(result.sessionId ? { sessionPreview: sessionPreview(result.sessionId) } : {}),
     ...(result.resumed !== undefined
       ? {
           sessionOrigin: result.resumed ? ('resumed' as const) : ('resume-failed-cold' as const),
@@ -192,19 +199,40 @@ export function finishNodeExecution(
       startedAt: start.timing.startedAt,
       durationMs: result.durationMs ?? Math.max(0, Date.now() - Date.parse(start.timing.startedAt)),
     },
-    spend: {
-      tokens: observed(
-        result.tokens,
-        start.spend.tokens,
-        value => executionTokenUsageSchema.safeParse(value).success
-      ),
-      costUsd: observed(result.costUsd, start.spend.costUsd, Number.isFinite),
-      stopReason: observed(result.stopReason, start.spend.stopReason),
-      numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),
-    },
+    spend: result.providerNotCalled
+      ? {
+          tokens: NOT_APPLICABLE,
+          costUsd: NOT_APPLICABLE,
+          stopReason: NOT_APPLICABLE,
+          numTurns: NOT_APPLICABLE,
+        }
+      : {
+          tokens: result.tokensUnknown
+            ? { source: 'unavailable', reason: 'incomplete' }
+            : observed(
+                result.tokens,
+                start.spend.tokens,
+                value => tokenUsageSchema.safeParse(value).success
+              ),
+          costUsd: withCostPartial(
+            observed(result.costUsd, start.spend.costUsd, Number.isFinite),
+            result.costPartial === true
+          ),
+          stopReason: observed(result.stopReason, start.spend.stopReason),
+          numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),
+        },
     ...(result.output !== undefined ? { output: result.output } : {}),
     ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
+    ...(result.sessionId ? { sessionId: result.sessionId } : {}),
   };
+}
+
+const NOT_APPLICABLE = { source: 'unavailable', reason: 'not_applicable' } as const;
+
+type CostMeasurement = NodeExecutionRecord['spend']['costUsd'];
+
+function withCostPartial(cost: CostMeasurement, partial: boolean): CostMeasurement {
+  return partial && cost.source === 'provider' ? { ...cost, partial: true } : cost;
 }
 
 /** Excludes output bodies and diagnostics from the shared public execution facts. */

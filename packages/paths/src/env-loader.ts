@@ -24,11 +24,12 @@
  *   - Passes `{ quiet: true }` to suppress dotenv's own `[dotenv@17.3.1] …`
  *     output.
  */
-import { config } from 'dotenv';
-import { existsSync } from 'fs';
+import { config, parse } from 'dotenv';
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
+import { applyEnvLogLevel } from './logger';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -93,11 +94,13 @@ const REPO_SCOPE_REFUSED_KEYS = [
  */
 export function loadArchonEnv(
   cwd: string = process.cwd(),
-  options: { afterUserLoad?: () => void } = {}
+  options: { afterUserLoad?: () => void; env?: NodeJS.ProcessEnv } = {}
 ): void {
-  const homePath = getArchonEnvPath();
+  const env = options.env ?? process.env;
+  const logLevelBefore = process.env.LOG_LEVEL;
+  const homePath = getArchonEnvPath(env);
   if (existsSync(homePath)) {
-    const result = config({ path: homePath, override: true, quiet: true });
+    const result = config({ path: homePath, processEnv: env, override: true, quiet: true });
     if (result.error) {
       console.error(`Error loading .env from ${homePath}: ${result.error.message}`);
       console.error('Hint: Check for syntax errors in your .env file.');
@@ -133,7 +136,7 @@ export function loadArchonEnv(
       );
       process.exit(1);
     }
-    Object.assign(process.env, parsed);
+    Object.assign(env, parsed);
     const count = Object.keys(parsed).length;
     if (count > 0 && isVerboseBoot()) {
       process.stderr.write(
@@ -141,4 +144,30 @@ export function loadArchonEnv(
       );
     }
   }
+
+  // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
+  if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
+}
+
+function envFileKeyNames(path: string): string[] {
+  return existsSync(path) ? Object.keys(parse(readFileSync(path))) : [];
+}
+
+/**
+ * Names `~/.archon/.env`/`<cwd>/.archon/.env` declare, read fresh from disk rather than
+ * from `loadArchonEnv`'s own already-applied result.
+ *
+ * This is the "Archon supplies this" set the exec env-read checker (see
+ * `@archon/workflows`' `exec-input-validation.ts`) treats as configured — deliberately
+ * not the process's full ambient environment. `loadArchonEnv` folds both files into
+ * `process.env`, which also holds every shell/CI var inherited at process start; a
+ * checker that trusted all of `process.env` would stop warning on a genuinely unbound
+ * name the moment it happened to collide with one of those, not with anything Archon
+ * actually supplies.
+ */
+export function getArchonEnvNames(cwd: string = process.cwd()): ReadonlySet<string> {
+  return new Set([
+    ...envFileKeyNames(getArchonEnvPath()),
+    ...envFileKeyNames(getRepoArchonEnvPath(cwd)),
+  ]);
 }

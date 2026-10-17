@@ -1,9 +1,30 @@
 # =============================================================================
 # Archon - Remote Agentic Coding Platform
-# Multi-stage build: deps → web build → production image
+# Multi-stage build: workspace layout → deps → web build → production image
 # =============================================================================
 
 ARG BUN_VERSION=1.4.2
+
+# ---------------------------------------------------------------------------
+# Workspace layout, derived from packages/ so a new package needs no edit here
+# ---------------------------------------------------------------------------
+# Every workspace package.json and nothing else. A source-only change leaves this
+# output byte-identical, so the install layers that copy it stay cached.
+FROM oven/bun:${BUN_VERSION}-slim AS manifests
+WORKDIR /app
+COPY packages/ ./packages/
+RUN find packages -mindepth 2 -maxdepth 2 ! -name package.json -exec rm -r {} +
+
+# Package source for the production image. Each exclusion is deliberate; rm
+# without -f fails the build if an excluded package is renamed or removed.
+#   docs-web   - static site deployed separately (.github/workflows/deploy-docs.yml)
+#   web        - ships only as the pre-built dist from the web-build stage
+#   chat-slack - compiled plugin binary installed with `archon plugin add`;
+#                the server never imports it
+FROM oven/bun:${BUN_VERSION}-slim AS sources
+WORKDIR /app
+COPY packages/ ./packages/
+RUN rm -r packages/docs-web packages/web packages/chat-slack
 
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies
@@ -15,23 +36,9 @@ WORKDIR /app
 # Copy root package files and lockfile
 COPY package.json bun.lock ./
 
-# Copy ALL workspace package.json files (monorepo lockfile depends on all of them)
-COPY packages/adapters/package.json ./packages/adapters/
-COPY packages/cli/package.json ./packages/cli/
-COPY packages/core/package.json ./packages/core/
-# docs-web source is NOT copied — it's a static site deployed separately
-# (see .github/workflows/deploy-docs.yml). package.json is included only
-# so Bun's workspace lockfile resolves correctly.
-COPY packages/docs-web/package.json ./packages/docs-web/
-COPY packages/forge/package.json ./packages/forge/
-COPY packages/git/package.json ./packages/git/
-COPY packages/isolation/package.json ./packages/isolation/
-COPY packages/paths/package.json ./packages/paths/
-COPY packages/plugin-manifest/package.json ./packages/plugin-manifest/
-COPY packages/providers/package.json ./packages/providers/
-COPY packages/server/package.json ./packages/server/
-COPY packages/web/package.json ./packages/web/
-COPY packages/workflows/package.json ./packages/workflows/
+# Every workspace manifest, docs-web and chat-slack included: the monorepo
+# lockfile resolves against all of them.
+COPY --from=manifests /app/packages/ ./packages/
 
 # Install ALL dependencies (including devDependencies needed for web build)
 # --linker=hoisted: Bun's default "isolated" linker stores packages in
@@ -120,6 +127,8 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 # CLAUDE_BIN_PATH is set at container startup (docker-entrypoint.sh).
 # The entrypoint pins the glibc variant to bypass the SDK's musl-first resolver.
 
+ENV HOME=/home/appuser
+
 # Create non-root user for running Claude Code
 # Claude Code refuses to run with --dangerously-skip-permissions as root for security
 # /app is still empty here (only WORKDIR created it) — non-recursive chown suffices.
@@ -136,23 +145,8 @@ USER appuser
 # Copy root package files and lockfile
 COPY --chown=appuser:appuser package.json bun.lock ./
 
-# Copy ALL workspace package.json files
-COPY --chown=appuser:appuser packages/adapters/package.json ./packages/adapters/
-COPY --chown=appuser:appuser packages/cli/package.json ./packages/cli/
-COPY --chown=appuser:appuser packages/core/package.json ./packages/core/
-# docs-web source is NOT copied — it's a static site deployed separately
-# (see .github/workflows/deploy-docs.yml). package.json is included only
-# so Bun's workspace lockfile resolves correctly.
-COPY --chown=appuser:appuser packages/docs-web/package.json ./packages/docs-web/
-COPY --chown=appuser:appuser packages/forge/package.json ./packages/forge/
-COPY --chown=appuser:appuser packages/git/package.json ./packages/git/
-COPY --chown=appuser:appuser packages/isolation/package.json ./packages/isolation/
-COPY --chown=appuser:appuser packages/paths/package.json ./packages/paths/
-COPY --chown=appuser:appuser packages/plugin-manifest/package.json ./packages/plugin-manifest/
-COPY --chown=appuser:appuser packages/providers/package.json ./packages/providers/
-COPY --chown=appuser:appuser packages/server/package.json ./packages/server/
-COPY --chown=appuser:appuser packages/web/package.json ./packages/web/
-COPY --chown=appuser:appuser packages/workflows/package.json ./packages/workflows/
+# Every workspace manifest (see the deps stage)
+COPY --from=manifests --chown=appuser:appuser /app/packages/ ./packages/
 
 # Install production dependencies only (--ignore-scripts skips husky prepare hook).
 # Cache goes to /tmp and is removed in the same layer: not baked into the image,
@@ -161,18 +155,9 @@ RUN HOME=/home/appuser BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache \
       bun install --frozen-lockfile --production --ignore-scripts --linker=hoisted \
     && rm -rf /tmp/bun-install-cache
 
-# Copy application source (Bun runs TypeScript directly, no compile step needed)
-COPY --chown=appuser:appuser packages/adapters/ ./packages/adapters/
-COPY --chown=appuser:appuser packages/cli/ ./packages/cli/
-COPY --chown=appuser:appuser packages/core/ ./packages/core/
-COPY --chown=appuser:appuser packages/forge/ ./packages/forge/
-COPY --chown=appuser:appuser packages/git/ ./packages/git/
-COPY --chown=appuser:appuser packages/isolation/ ./packages/isolation/
-COPY --chown=appuser:appuser packages/paths/ ./packages/paths/
-COPY --chown=appuser:appuser packages/plugin-manifest/ ./packages/plugin-manifest/
-COPY --chown=appuser:appuser packages/providers/ ./packages/providers/
-COPY --chown=appuser:appuser packages/server/ ./packages/server/
-COPY --chown=appuser:appuser packages/workflows/ ./packages/workflows/
+# Copy application source (Bun runs TypeScript directly, no compile step needed).
+# The sources stage lists the packages left out.
+COPY --from=sources --chown=appuser:appuser /app/packages/ ./packages/
 
 # Copy pre-built web UI from build stage
 COPY --from=web-build --chown=appuser:appuser /app/packages/web/dist/ ./packages/web/dist/
@@ -190,10 +175,10 @@ USER root
 RUN mkdir -p /home/appuser/.codex && chown appuser:appuser /home/appuser/.codex
 
 # Configure git to trust Archon directories (as appuser)
-RUN gosu appuser git config --global --add safe.directory '/.archon/workspaces' && \
-    gosu appuser git config --global --add safe.directory '/.archon/workspaces/*' && \
-    gosu appuser git config --global --add safe.directory '/.archon/worktrees' && \
-    gosu appuser git config --global --add safe.directory '/.archon/worktrees/*'
+RUN gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/workspaces' '/.archon/workspaces' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/workspaces/*' '/.archon/workspaces/*' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/worktrees' '/.archon/worktrees' && \
+    gosu appuser git config --global --fixed-value --replace-all safe.directory '/.archon/worktrees/*' '/.archon/worktrees/*'
 
 # Copy entrypoint script (fixes volume permissions, drops to appuser)
 # sed strips Windows CRLF in case .gitattributes eol=lf was bypassed

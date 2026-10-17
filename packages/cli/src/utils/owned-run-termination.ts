@@ -1,6 +1,7 @@
-import * as workflowDb from '@archon/core/db/workflows';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
+import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
 
@@ -9,11 +10,19 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
+  store: Pick<IWorkflowStore, 'getWorkflowRunStatus' | 'failWorkflowRun'>;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
   liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested'>;
+  /**
+   * End the in-flight node process trees on interrupt, so a resume does not overlap the
+   * interrupted attempt (#3552); a descendant that calls `setsid` still escapes. False for
+   * a detached owner: `archon workflow cancel` ends its nodes by killing the owner's process
+   * group, which a recorded node escapes.
+   */
+  endNodeProcessTrees: boolean;
   /**
    * Resources the forced exit would otherwise strand, because it skips the caller's
    * `finally`. Report its own failures; a rejection is dropped.
@@ -32,6 +41,7 @@ export interface OwnedRunTerminationInput {
 export function registerOwnedRunTermination(input: OwnedRunTerminationInput): () => void {
   const { runId, liveOwner } = input;
   const log = createLogger(input.logModule);
+  const nodeTrees = input.endNodeProcessTrees ? recordNodeProcessTrees() : undefined;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
     if (terminating) return;
@@ -45,7 +55,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      const status = await workflowDb.getWorkflowRunStatus(runId);
+      const status = await input.store.getWorkflowRunStatus(runId);
       if (status !== 'running') {
         // Externally transitioned (paused at a new gate, completed, cancelled,
         // failed) or never claimed (still pending) — not this handler's to mutate.
@@ -56,7 +66,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       // status CAS closes the read-then-write window: if the executor commits a gate
       // pause between the read above and this write, the CAS misses and the run
       // stays paused.
-      await workflowDb.failWorkflowRun(runId, `Process terminated (${signal})`, {
+      await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
         exitReason: 'process_terminated',
         signal,
       });
@@ -66,6 +76,14 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.error(
           { err: e, errorType: e.constructor.name, runId },
           'workflow.termination_cleanup_failed'
+        );
+      })
+      // After the failed status write: ending a tree first lets the executor fail the
+      // run through its own path and win the status write, losing stop_reason.
+      .then(() => nodeTrees?.end())
+      .catch((error: unknown) => {
+        console.error(
+          `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
       .then(() => input.teardown?.(signal))
@@ -95,5 +113,6 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   return () => {
     process.off('SIGTERM', sigtermHandler);
     process.off('SIGINT', sigintHandler);
+    nodeTrees?.release();
   };
 }

@@ -1,22 +1,30 @@
 /**
- * The forge opt-in, end to end: the pack's publishing scripts drive the real
- * `archon forge` command, its dispatch and audit, and the real GitHub plugin
+ * The forge source, end to end: the pack's publishing scripts drive the real
+ * `archon forge` command, its dispatch, and the real GitHub plugin
  * process, which talks to a fake GitHub (./fake-github-fetch.ts).
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
- * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, reads checks and flips ready, and every one of
- * those steps is an audited plugin operation with no authored content in the
- * audit and no `gh` call at all.
+ * a delivery creates a draft pull request and upserts the same review comment
+ * across rounds, and none of
+ * those steps calls `gh`; intake's close links a resolved issue both ways.
  */
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { PR, runPackScript, type ScriptOptions, type ScriptRun } from './deliver-checks-harness';
+import {
+  PR,
+  gitCheckout,
+  packScriptRunner,
+  type ScriptOptions,
+  type ScriptRun,
+} from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
+import { closeComments, type Closure, planClose } from '../../workflows/sdlc/.shared/close';
 
+const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
 const REPO_ROOT = resolve(import.meta.dir, '../../..');
 const FORGE_COMMAND = join(REPO_ROOT, 'packages/cli/src/commands/forge.ts');
@@ -24,20 +32,40 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-const HEAD_SHA = 'feedface00000000000000000000000000000000';
+// A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+// it before it creates.
+const CHECKOUT = gitCheckout({}, trackTempRoot);
+const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
-const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
-const ROUND_ONE = 'Round one: one finding still open.';
-const ROUND_TWO = 'Round two: every finding resolved.';
+const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
+const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
 /** A host with the GitHub plugin configured for the fake host and a host command. */
-function forgeHost(): { argv: string[]; statePath: string; auditLog: string } {
+function forgeHost(other = false): { argv: string[]; statePath: string } {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-forge-delivery-')));
   const home = join(root, 'home');
   mkdirSync(home);
   const statePath = join(root, 'github.json');
-  const auditLog = join(root, 'audit.jsonl');
-  writeFileSync(statePath, JSON.stringify(initialState(HEAD_SHA)));
+  writeFileSync(
+    statePath,
+    JSON.stringify(
+      other
+        ? {
+            issues: [
+              { number: 7, title: 'Triage', body: '', labels: ['operator', 'archon-blocked'] },
+            ],
+            labels: [
+              { name: 'operator', color: 'abcdef', description: '' },
+              { name: 'area', color: 'abcdef', description: '' },
+              { name: 'archon-blocked', color: 'abcdef', description: '' },
+            ],
+            operations: [],
+            writes: [],
+          }
+        : initialState(HEAD_SHA)
+    )
+  );
 
   const preload = join(root, 'fake-github.ts');
   writeFileSync(
@@ -51,10 +79,17 @@ function forgeHost(): { argv: string[]; statePath: string; auditLog: string } {
       forge: {
         scanPath: false,
         hosts: {
-          [FAKE_HOST]: {
-            plugin: 'github',
+          [other ? 'tracker.example' : FAKE_HOST]: {
+            plugin: other ? 'tracker' : 'github',
             command: process.execPath,
-            args: ['--no-env-file', '--preload', preload, GITHUB_PLUGIN],
+            args: other
+              ? [
+                  '--no-env-file',
+                  join(import.meta.dir, 'fixtures/workitem-plugin.ts'),
+                  '--state',
+                  statePath,
+                ]
+              : ['--no-env-file', '--preload', preload, GITHUB_PLUGIN],
           },
         },
       },
@@ -62,12 +97,11 @@ function forgeHost(): { argv: string[]; statePath: string; auditLog: string } {
   );
 
   // The host command: the real `archon forge` command function with a trusted
-  // Archon home, a run id, and an audit sink standing in for the run's event log.
+  // Archon home and a run id. The host audit is covered by the CLI tests.
   const cli = join(root, 'archon.ts');
   writeFileSync(
     cli,
-    `import { appendFileSync } from 'node:fs';
-import { forgeCommand } from ${JSON.stringify(FORGE_COMMAND)};
+    `import { forgeCommand } from ${JSON.stringify(FORGE_COMMAND)};
 const [command, op, ...rest] = process.argv.slice(2);
 if (command !== 'forge') throw new Error('unexpected host command: ' + String(command));
 const flag = (name: string): string | undefined => {
@@ -86,135 +120,228 @@ process.exitCode = await forgeCommand(
   { data: flag('--data'), dataFile: flag('--data-file'), configPath: ${JSON.stringify(config)}, trustedEnv: env },
   {
     env,
-    audit: async (audit, runId) => {
-      appendFileSync(${JSON.stringify(auditLog)}, JSON.stringify({ runId, audit }) + '\\n');
-    },
+    audit: async () => {},
   }
 );
 `
   );
-  return { argv: [process.execPath, '--no-env-file', cli], statePath, auditLog };
+  return { argv: [process.execPath, '--no-env-file', cli], statePath };
 }
 
-describe('the forge opt-in delivers through audited plugin operations', () => {
-  it(
-    'creates a draft, resyncs its body, upserts one review comment, reads checks and flips ready',
-    () => {
-      const host = forgeHost();
-      const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
-        const run = runPackScript(relative, {
-          ...options,
-          source: 'forge',
-          forge: { kind: 'command', argv: host.argv },
-        });
-        expect({ script: relative, code: run.code, stderr: run.stderr }).toMatchObject({
-          code: 0,
-        });
-        // The forge path never reaches for gh, not even to read.
-        expect(run.gh).toEqual([]);
-        return run;
-      };
-      const github = (): FakeGitHubState =>
-        JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
-      const review = (report: string, ready: boolean): void => {
-        through('review/scripts/publish-review', {
-          inputs: {
-            INPUTS_PR: JSON.stringify(PR),
-            INPUTS_REPORT: '{ARTIFACTS}/report.md',
-            INPUTS_READY: String(ready),
-            INPUTS_ACTION: ready ? 'none' : 'correct',
-            INPUTS_SUMMARY: 'summary',
-            INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
-          },
-          artifacts: { 'report.md': report },
-        });
-      };
-
-      // 1. The draft pull request.
-      const created = through('pr/scripts/publish-pr', {
-        inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-intent.json' },
-        artifacts: {
-          'pr-intent.json': JSON.stringify({
-            repo: PR.repo,
-            headRepo: PR.repo,
-            head: 'feature',
-            headRevision: HEAD_SHA,
-            base: 'dev',
-            title: 'Add a guard',
-            bodyPath: '{ARTIFACTS}/pr-body.md',
-            draft: true,
+describe('the forge source delivers through plugin operations', () => {
+  it('creates a draft and upserts one review comment', () => {
+    const host = forgeHost();
+    const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
+      const run = runPackScript(relative, {
+        cwd: CHECKOUT,
+        ...options,
+        source: 'forge',
+        forge: { kind: 'command', argv: host.argv },
+      });
+      expect({ script: relative, code: run.code, stderr: run.stderr }).toMatchObject({
+        code: 0,
+      });
+      // The forge path never reaches for gh, not even to read.
+      expect(run.gh).toEqual([]);
+      return run;
+    };
+    const github = (): FakeGitHubState =>
+      JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+    const review = (report: string, ready: boolean): void => {
+      through('review/scripts/publish-review', {
+        inputs: {
+          INPUTS_PR: JSON.stringify(PR),
+          INPUTS_REPORT: '{ARTIFACTS}/report.md',
+          INPUTS_HEAD: HEAD_SHA,
+          ARCHON_NODE_EXECUTION: JSON.stringify({
+            attempt: { checkoutStart: { kind: 'git', commit: HEAD_SHA } },
           }),
-          'pr-body.md': OPENING_BODY,
+          INPUTS_READY: String(ready),
+          INPUTS_ACTION: ready ? 'none' : 'correct',
+          INPUTS_SUMMARY: 'summary',
+          INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
+          INPUTS_DISCOVERIES: '[]',
+          INPUTS_CONTRACT_LEFT: '[]',
         },
+        artifacts: { 'report.md': report },
       });
-      const record = JSON.parse(created.stdout) as Record<string, unknown>;
-      expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
+    };
 
-      // 2. The first review round's canonical comment.
-      review(ROUND_ONE, false);
+    // 1. The draft pull request.
+    const created = through('pr/scripts/publish-pr', {
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: 'feature',
+        INPUTS_BASE: 'dev',
+        INPUTS_EXISTING: 'null',
+        INPUTS_TITLE: 'Add a guard',
+        WORKFLOW_ID: 'run-forge-delivery',
+        INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run-forge-delivery', path: 'pr-body.md' }),
+        INPUTS_DRAFT: 'true',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+      },
+      artifacts: { 'pr-body.md': OPENING_BODY, 'listing.json': EMPTY_LISTING },
+    });
+    const record = JSON.parse(created.stdout) as Record<string, unknown>;
+    expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
 
-      // 3. The body resync reads the live body, then replaces it.
-      const read = through('deliver/scripts/read-pr-body', {
-        inputs: { INPUTS_PR: created.stdout },
-      });
-      const current = JSON.parse(read.stdout) as { body: string };
-      expect(readFileSync(current.body, 'utf8')).toBe(OPENING_BODY);
-      through('deliver/scripts/publish-pr-body', {
-        inputs: { INPUTS_PR: created.stdout, INPUTS_INTENT: '{ARTIFACTS}/intent.json' },
-        artifacts: {
-          'intent.json': JSON.stringify({ change: true, bodyPath: '{ARTIFACTS}/final.md' }),
-          'final.md': RESYNCED_BODY,
-        },
-      });
+    // 2. The first review round's canonical comment.
+    review(ROUND_ONE, false);
 
-      // 4. The second round edits the same comment rather than adding one.
-      review(ROUND_TWO, true);
+    // 3. The second round edits the same comment rather than adding one.
+    review(ROUND_TWO, true);
 
-      // 5. The ready flip reads checks, then flips.
-      const flipped = through('deliver/scripts/flip-ready');
-      expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
-
-      const state = github();
-      expect(state.pulls).toHaveLength(1);
-      expect(state.pulls[0]).toMatchObject({ draft: false, body: RESYNCED_BODY });
-      expect(state.comments).toEqual([{ id: 900, body: `${MARKER}\n${ROUND_TWO}` }]);
-      const writes = state.calls.filter(call => !call.startsWith('GET '));
-      expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
-        `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
-        `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
-        `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/pulls/42`,
-        `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
-        `POST https://${FAKE_HOST}/api/graphql`,
-      ]);
-
-      // Every step is an audited plugin operation, and no audit carries what was authored.
-      const audits = readFileSync(host.auditLog, 'utf8')
-        .split('\n')
-        .filter(line => line !== '');
-      const operations = audits.map(line => {
-        const entry = JSON.parse(line) as {
-          runId: string;
-          audit: { operation: string; plugin: { name: string } };
-        };
-        expect(entry.runId).toBe('run-forge-delivery');
-        expect(entry.audit.plugin.name).toBe('github');
-        return entry.audit.operation;
-      });
-      expect(operations).toEqual([
-        'pr.view',
-        'pr.create',
-        'comment.upsert',
-        'pr.view',
-        'pr.edit-body',
-        'comment.upsert',
-        'checks.state',
-        'pr.view',
-        'pr.ready',
-      ]);
-      for (const authored of [OPENING_BODY, RESYNCED_BODY, ROUND_ONE, ROUND_TWO]) {
-        expect(audits.some(line => line.includes(authored))).toBe(false);
-      }
-    },
-    120_000
-  );
+    const state = github();
+    expect(state.pulls).toHaveLength(1);
+    expect(state.pulls[0]).toMatchObject({ draft: true });
+    expect(state.comments).toEqual([
+      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\nVerdict: ready\n\n${ROUND_TWO}` },
+    ]);
+    const writes = state.calls.filter(call => !call.startsWith('GET '));
+    expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
+      `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
+      `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
+      `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
+    ]);
+  }, 120_000);
 });
+
+// Real CLI and plugin processes, like the delivery test above: several seconds on a
+// loaded machine, past the default five.
+it('preserves inherited-property labels through a non-GitHub tracker', () => {
+  const host = forgeHost(true);
+  const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
+  const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
+    issues: { labels: (string | { name: string })[] }[];
+    labels: { name: string; color: string; description: string }[];
+  };
+  seeded.issues[0].labels.push(...operatorLabels);
+  seeded.labels.push(...operatorLabels.map(name => ({ name, color: 'abcdef', description: '' })));
+  writeFileSync(host.statePath, JSON.stringify(seeded));
+  const repo = { host: 'tracker.example', path: 'group/team/project' };
+  const inputs = {
+    INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
+    INPUTS_PUBLISH: 'true',
+    INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
+    INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
+    INPUTS_SIZE: '{"value":"s","reason":"one script"}',
+    INPUTS_COMPLEXITY: '{"value":"low","reason":"clear change"}',
+    INPUTS_IMPORTANCE: '{"value":"medium","reason":"on direction"}',
+    INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
+    INPUTS_SUMMARY: 'Ready',
+    INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
+    INPUTS_REPORT: '{"path":"triage.md"}',
+  };
+  const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };
+  const triage = runPackScript('triage/scripts/verdict', { ...options, inputs });
+  expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
+  expect(triage.gh).toEqual([]);
+  expect(JSON.parse(triage.stdout)).toMatchObject({
+    published: true,
+    labels: ['archon-ready', 'archon-size-s', 'archon-type-feature', 'area', 'constructor'],
+  });
+  const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
+    issues: { number: number; labels: (string | { name: string })[] }[];
+    labels: { name: string }[];
+    writes?: string[];
+    calls?: string[];
+  };
+  const labels = state.issues[0].labels.map(label =>
+    typeof label === 'string' ? label : label.name
+  );
+  expect(labels.sort()).toEqual(
+    [
+      'archon-ready',
+      'archon-size-s',
+      'archon-type-feature',
+      'area',
+      'operator',
+      ...operatorLabels,
+    ].sort()
+  );
+  expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
+}, 120_000);
+
+/** Run `body` with the pack's close and comment writes routed through `host`. */
+function throughForge(host: { argv: string[] }, body: () => void): void {
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    ARCHON_SDLC_FORGE: 'forge',
+    ARCHON_CLI_COMMAND: JSON.stringify(host.argv),
+  });
+  try {
+    body();
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+}
+
+/** A plugin-backed host whose state also holds open issues with these numbers. */
+function forgeHostWith(...rows: { number: number; pull?: boolean }[]): { argv: string[]; statePath: string } {
+  const host = forgeHost();
+  const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  for (const row of rows) {
+    seeded.issues.push({
+      ...seeded.issues[0],
+      number: row.number,
+      html_url: `https://${FAKE_HOST}/example/repo/${row.pull ? 'pull' : 'issues'}/${String(row.number)}`,
+      labels: [],
+      ...(row.pull ? { pull_request: {} } : {}),
+    });
+  }
+  writeFileSync(host.statePath, JSON.stringify(seeded));
+  return host;
+}
+
+it('closes a resolved item through the plugin, linking it to what resolved it and back', () => {
+  const host = forgeHostWith({ number: 3 }, { number: 8 });
+  const original = { repo: PR.repo, number: 3 };
+  const originalUrl = `https://${FAKE_HOST}/example/repo/issues/3`;
+  const change = `https://${FAKE_HOST}/example/repo/pull/5`;
+
+  const close = (number: number, closure: Closure): void => {
+    const plan = planClose({ repo: PR.repo, number }, closure);
+    if (plan.refused !== null) throw new Error(plan.refused);
+    plan.close();
+  };
+  throughForge(host, () => {
+    close(7, { kind: 'duplicate', url: originalUrl, original });
+    close(8, { kind: 'delivered', url: change });
+  });
+
+  const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  const closed = (number: number) => state.issues.find(row => row.number === number);
+  expect(closed(7)).toMatchObject({ state: 'closed', state_reason: 'duplicate' });
+  expect(closed(3)).toMatchObject({ state: 'open' });
+  expect(closed(8)).toMatchObject({ state: 'closed', state_reason: 'completed' });
+  const expected = [
+    ...closeComments({ repo: PR.repo, number: 7 }, `https://${FAKE_HOST}/example/repo/issues/7`, { kind: 'duplicate', url: originalUrl, original }),
+    ...closeComments({ repo: PR.repo, number: 8 }, `https://${FAKE_HOST}/example/repo/issues/8`, { kind: 'delivered', url: change }),
+  ];
+  expect(state.comments.map(row => ({ number: row.issue, body: row.body }))).toEqual(
+    expected.map(comment => ({ number: comment.item.number, body: comment.body }))
+  );
+  expect(state.calls.filter(call => call.startsWith('POST ') && call.endsWith('/comments'))).toEqual(
+    expected.map(comment => `POST https://${comment.item.repo.host}/api/v3/repos/${comment.item.repo.path}/issues/${comment.item.number}/comments`)
+  );
+}, 120_000);
+
+it('refuses through the plugin to close a duplicate of a pull request', () => {
+  const host = forgeHostWith({ number: 5, pull: true });
+  const original = { repo: PR.repo, number: 5 };
+  const url = `https://${FAKE_HOST}/example/repo/pull/5`;
+  const before = readFileSync(host.statePath, 'utf8');
+
+  let plan: ReturnType<typeof planClose> | undefined;
+  throughForge(host, () => {
+    plan = planClose({ repo: PR.repo, number: 7 }, { kind: 'duplicate', url, original });
+  });
+
+  expect(plan?.refused).toContain('is a pull request, not an issue');
+  const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+  const seeded = JSON.parse(before) as FakeGitHubState;
+  expect(state.issues).toEqual(seeded.issues);
+  expect(state.comments).toEqual([]);
+}, 120_000);

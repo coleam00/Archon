@@ -1,3 +1,4 @@
+import { isSourceReadFailure } from './workflow-source';
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes, INCLUDE_MAX_DEPTH } from './include-expander';
 import { resolvedBodyNodes } from './graph-plan';
@@ -100,6 +101,33 @@ function blockWorkflow(): WorkflowDefinition {
 // ---------------------------------------------------------------------------
 // Namespacing + edge rewiring
 // ---------------------------------------------------------------------------
+
+describe('missing include discovery errors', () => {
+  const root = wf('root', [{ id: 'wrapped', include: 'Missing' }]);
+  const cause = Object.assign(new Error('source unavailable'), { code: 'EIO', syscall: 'open' });
+
+  test('an unreadable declaration makes the missing target a read failure', () => {
+    const result = expandWorkflowIncludes(mapOf(root), undefined, [
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
+    ]);
+    expect(result.errors[0]?.errorType).toBe('read_error');
+    expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(true);
+  });
+
+  test('the target is looked up the way every other load-error consumer looks it up', () => {
+    const result = expandWorkflowIncludes(mapOf(root), undefined, [
+      { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
+      {
+        filename: 'invalid.yaml',
+        workflowName: 'missing',
+        error: 'invalid definition',
+        errorType: 'validation_error',
+      },
+    ]);
+    expect(result.errors[0]?.error).toBe("Node 'wrapped': invalid definition");
+    expect(result.errors[0]?.errorType).toBe('validation_error');
+  });
+});
 
 describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
   test('leaves an include+fan_out node unexpanded but validates the target exists', () => {
@@ -262,10 +290,7 @@ describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
   });
 
   test('rejects a pause-capable nested workflow target at load time', () => {
-    const child = {
-      ...wf('child', [{ id: 'pause', wait: { duration_ms: 3_600_000 } }]),
-      interactive: true,
-    };
+    const child = wf('child', [{ id: 'pause', wait: { duration_ms: 3_600_000 } }]);
     const block = wf('workflow-block', [{ id: 'child-run', workflow: 'child' }]);
     const parent = wf('parent', [
       { id: 'list', bash: 'echo []' },
@@ -281,7 +306,6 @@ describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
 
     expect(workflows.has('parent')).toBe(false);
     const error = errors.find(entry => entry.filename === 'parent')?.error;
-    expect(error).toContain("'child' (interactive workflow)");
     expect(error).toContain("'pause' (durable wait)");
   });
 
@@ -464,13 +488,13 @@ describe('expandWorkflowIncludes — namespacing', () => {
         id: 'review',
         include: 'blk',
         depends_on: ['gate'],
-        when: 'true',
+        when: "$gate.output == 'gate'",
         trigger_rule: 'all_success',
       },
     ]);
     const { workflows } = expandWorkflowIncludes(mapOf(blockWorkflow(), parent));
     const entry = nodeById(workflows.get('parent')!, 'review__verify');
-    expect(entry?.when).toBe('true');
+    expect(entry?.when).toBe("$gate.output == 'gate'");
     expect(entry?.trigger_rule).toBe('all_success');
   });
 
@@ -617,14 +641,9 @@ describe('expandWorkflowIncludes — with input mapping', () => {
         },
       },
     ]);
-    // `interactive: true` because the block carries an approval gate — a composed gate a
-    // background run cannot drive is a load error (#1764).
-    const parent = {
-      ...wf('parent', [
-        { id: 'review', include: 'parameterized', with: { detail: 'CLEAN-TEMP-FILES' } },
-      ]),
-      interactive: true,
-    };
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { detail: 'CLEAN-TEMP-FILES' } },
+    ]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
@@ -815,28 +834,27 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(error).toContain('right-hand side');
   });
 
-  test('does not broaden the load error to an unchanged malformed when expression', () => {
+  test('rejects an unchanged malformed when expression', () => {
     const block = wf('parameterized', [{ id: 'use', prompt: 'work', when: 'not an atom' }]);
     block.inputs = { mode: { default: 'fast' } };
     const parent = wf('parent', [{ id: 'review', include: 'parameterized' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
 
-    expect(errors).toHaveLength(0);
-    expect(nodeById(workflows.get('parent')!, 'review__use')?.when).toBe('not an atom');
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.some(error => error.error.includes('unsupported condition syntax'))).toBe(true);
   });
 
   test('substitutes inputs across every other supported inline node surface', () => {
     const block = wf('parameterized', [
       { id: 'shell', bash: 'echo $INPUTS.value' },
-      { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.value")' },
       {
         id: 'loop',
         loop: {
           prompt: 'Do $INPUTS.value',
           until: 'DONE',
           max_iterations: 1,
-          until_bash: 'test "$INPUTS.value" = done',
+          until_bash: 'test $INPUTS.value = done',
         },
       },
       { id: 'approval', approval: { message: 'Approve $INPUTS.value?' } },
@@ -852,15 +870,14 @@ describe('expandWorkflowIncludes — with input mapping', () => {
         loop_group: {
           until: 'DONE',
           max_iterations: 1,
-          until_bash: 'test "$INPUTS.value" = done',
+          until_bash: 'test $INPUTS.value = done',
           nodes: [{ id: 'body', bash: 'echo $INPUTS.value' }],
         },
       },
     ]);
-    const parent = {
-      ...wf('parent', [{ id: 'review', include: 'parameterized', with: { value: 'done' } }]),
-      interactive: true, // the block carries an approval gate (#1764)
-    };
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { value: 'done' } },
+    ]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
@@ -868,13 +885,13 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     const loop = nodeById(expanded, 'review__loop');
     const approval = nodeById(expanded, 'review__approval');
     const group = nodeById(expanded, 'review__group');
+    // Shell slots read the value from the env the executor delivers, never as source.
     expect(nodeById(expanded, 'review__shell')).toMatchObject({
-      script: 'echo done',
+      script: 'echo "${INPUTS_VALUE}"',
       runtime: 'sh',
     });
-    expect(nodeById(expanded, 'review__script')).toMatchObject({ script: 'console.log("done")' });
     expect(loop).toMatchObject({
-      loop: { prompt: 'Do done', until_bash: 'test "done" = done' },
+      loop: { prompt: 'Do done', until_bash: 'test "${INPUTS_VALUE}" = done' },
     });
     expect(approval).toMatchObject({ message: 'Approve done?' });
     expect(nodeById(expanded, 'review__cancel')).toMatchObject({ reason: 'Stop: done' });
@@ -887,10 +904,41 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     });
     expect(group).toMatchObject({
       loop_group: {
-        until_bash: 'test "done" = done',
-        nodes: [{ id: 'body', script: 'echo done', runtime: 'sh' }],
+        until_bash: 'test "${INPUTS_VALUE}" = done',
+        nodes: [{ id: 'body', script: 'echo "${INPUTS_VALUE}"', runtime: 'sh' }],
       },
     });
+  });
+
+  test('a shell macro the author already quoted is not unquoted', () => {
+    // The expansion carries its own quotes and the expander does not parse shell, so
+    // `"$INPUTS.value"` leaves the reference unquoted between two empty strings. The
+    // guide tells authors to write the macro bare.
+    const block = wf('quoted', [{ id: 'shell', bash: 'echo "$INPUTS.value"' }]);
+    const parent = wf('parent', [{ id: 'inc', include: 'quoted', with: { value: 'a b' } }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    expect(nodeById(workflows.get('parent')!, 'inc__shell')).toMatchObject({
+      script: 'echo ""${INPUTS_VALUE}""',
+    });
+  });
+
+  test('rejects the input macro in an inline script body and names the env var', () => {
+    const block = wf('parameterized', [
+      { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.base-branch")' },
+    ]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { 'base-branch': 'main' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+
+    expect(workflows.has('parent')).toBe(false);
+    const error = errors.find(candidate => candidate.filename === 'parent')?.error;
+    expect(error).toContain("included node 'script'");
+    expect(error).toContain('$INPUTS.base-branch');
+    expect(error).toContain('INPUTS_BASE_BRANCH');
   });
 });
 
@@ -1130,13 +1178,10 @@ describe('expandWorkflowIncludes — refs in Markdown code spans', () => {
         depends_on: ['plan'],
       },
     ]);
-    const parent = {
-      ...wf('parent', [
-        { id: 'plan', prompt: 'parent plan' },
-        { id: 'inc', include: 'approval-block', depends_on: ['plan'] },
-      ]),
-      interactive: true, // the block carries an approval gate (#1764)
-    };
+    const parent = wf('parent', [
+      { id: 'plan', prompt: 'parent plan' },
+      { id: 'inc', include: 'approval-block', depends_on: ['plan'] },
+    ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
     const gate = nodeById(workflows.get('parent')!, 'inc__gate');
@@ -2497,16 +2542,14 @@ describe('expandWorkflowIncludes — systemPrompt/agents are node-ref surfaces (
   });
 });
 
-describe('expandWorkflowIncludes — composed approval gates are stamped, not rejected (#1764)', () => {
+describe('expandWorkflowIncludes — composed approval gates carry their origin (#1764)', () => {
   const gateBlock = (): WorkflowDefinition =>
     wf('gate-blk', [
       { id: 'plan', prompt: 'plan' },
       { id: 'gate', approval: { message: 'Approve?' }, depends_on: ['plan'] },
     ]);
 
-  test('a composed gate carries its origin so invocation can decide', () => {
-    // Expansion records WHERE the gate came from; whether a run can drive it is a
-    // question only the invoked workflow can answer (see assertComposedGateDriveable).
+  test('a composed gate carries its origin', () => {
     const parent = wf('parent', [{ id: 'inc', include: 'gate-blk' }]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), parent));
 
@@ -2514,12 +2557,9 @@ describe('expandWorkflowIncludes — composed approval gates are stamped, not re
     expect(composedOrigin(nodeById(workflows.get('parent')!, 'inc__gate'))).toBe('gate-blk');
   });
 
-  test('a non-interactive INTERMEDIATE block still expands — it is never the run owner', () => {
-    // The regression this replaced: rejecting at every expansion level made a valid
-    // three-level composition unloadable even when the top-level workflow declared
-    // `interactive: true`, because the intermediate block has no reason to declare it.
+  test('a gate composed through an intermediate block names the file that authored it', () => {
     const mid = wf('mid', [{ id: 'i', include: 'gate-blk' }]);
-    const top = { ...wf('top', [{ id: 'm', include: 'mid' }]), interactive: true };
+    const top = wf('top', [{ id: 'm', include: 'mid' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), mid, top));
     expect(errors).toHaveLength(0);
@@ -2530,8 +2570,6 @@ describe('expandWorkflowIncludes — composed approval gates are stamped, not re
   });
 
   test("a parent's OWN approval node carries no composed origin", () => {
-    // One file, one reader: the gate and the missing `interactive:` are visible together,
-    // so invocation has nothing to refuse.
     const plain = wf('plain-blk', [{ id: 'work', prompt: 'work' }]);
     const parent = wf('parent', [
       { id: 'inc', include: 'plain-blk' },
@@ -2658,10 +2696,9 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
 // ---------------------------------------------------------------------------
 
 describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
-  test('typed literals splice as canonical text into prompt and bash surfaces', () => {
+  test('typed literals splice as canonical text into prompt surfaces', () => {
     const block = wf('typed-blk', [
       { id: 'think', prompt: 'flag=$INPUTS.flag items=$INPUTS.items' },
-      { id: 'run', bash: 'echo "n=$INPUTS.count"', depends_on: ['think'] },
     ]);
     const parent = wf('parent', [
       { id: 'use', include: 'typed-blk', with: { flag: true, items: ['a', 'b'], count: 3 } },
@@ -2671,8 +2708,6 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(errors).toHaveLength(0);
     const think = nodeById(workflows.get('parent')!, 'use__think');
     expect(inlinePrompt(think) ?? '').toBe('flag=true items=["a","b"]');
-    const run = nodeById(workflows.get('parent')!, 'use__run');
-    expect(bashScript(run) ?? '').toBe('echo "n=3"');
   });
 
   test('a whole-$INPUTS with: value position forwards the LOGICAL value; templates splice text', () => {
@@ -2799,5 +2834,211 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     const second = expandWorkflowIncludes(mapOf(block, sneaky));
     expect(second.workflows.has('parent')).toBe(false);
     expect(second.errors.find(e => e.filename === 'parent')?.error).toContain("binding 'mode'");
+  });
+});
+
+test('include aliases and prior-iteration namespaces retain complete nested suffixes', () => {
+  const block = wf('nested-block', [
+    { id: 'work', bash: 'echo json' },
+    {
+      id: 'read',
+      prompt: '$work.output.proposal.action $LOOP_PREV.work.output.proposal.details.count',
+      depends_on: ['work'],
+    },
+  ]);
+  const parent = wf('nested-parent', [
+    { id: 'sub', include: 'nested-block' },
+    { id: 'summary', prompt: '$sub.output.proposal.action', depends_on: ['sub'] },
+  ]);
+  const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+  expect(errors).toEqual([]);
+  const expanded = workflows.get('nested-parent')!;
+  expect(inlinePrompt(nodeById(expanded, 'sub__read'))).toBe(
+    '$sub__work.output.proposal.action $LOOP_PREV.sub__work.output.proposal.details.count'
+  );
+  expect(inlinePrompt(nodeById(expanded, 'summary'))).toBe('$sub__read.output.proposal.action');
+});
+
+describe('loop_group structured completion after include expansion (#2998)', () => {
+  test.each([
+    { type: 'object', properties: { done: { type: 'boolean' } } },
+    { type: ['object', 'null'] },
+  ])('checks an included terminal schema: %j', outputFormat => {
+    for (const withBash of [false, true]) {
+      const block = wf('structured-review', [
+        {
+          id: 'review',
+          prompt: 'Review',
+          output_format: outputFormat,
+        },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            ...(withBash ? { until_bash: 'exit 0' } : {}),
+            nodes: [{ id: 'check', include: 'structured-review' }],
+          },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      if (withBash) {
+        expect(errors).toEqual([]);
+        expect(workflows.has('parent')).toBe(true);
+      } else {
+        expect(errors).toHaveLength(1);
+        expect(errors[0].error).toContain(
+          "node 'check__review', which the group's output is read from"
+        );
+        expect(errors[0].error).toContain('until_bash');
+        expect(workflows.has('parent')).toBe(false);
+      }
+    }
+  });
+
+  test.each([{ type: 'string' }, { type: ['string', 'object'] }])(
+    'preserves included schemas that permit strings: %j',
+    outputFormat => {
+      const block = wf('string-review', [
+        { id: 'review', prompt: 'Review', output_format: outputFormat },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [{ id: 'check', include: 'string-review' }],
+          },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      expect(errors).toEqual([]);
+      expect(workflows.has('parent')).toBe(true);
+    }
+  );
+});
+
+describe('named loop owner ancestry after composition', () => {
+  test('namespaces both the pre-loop source and the body selector', () => {
+    const block = wf('correction-block', [
+      { id: 'implement', prompt: 'Implement' },
+      {
+        id: 'corrections',
+        depends_on: ['implement'],
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 2,
+          nodes: [{ id: 'owner', prompt: 'Correct', context: { resume: 'implement' } }],
+        },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'delivery', include: 'correction-block' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toEqual([]);
+    const group = workflows.get('parent')?.nodes.find(n => n.id === 'delivery__corrections');
+    if (group?.kind !== 'loop_group') throw new Error('missing expanded group');
+    expect(resolvedBodyNodes(group.loop_group)[0]?.context).toEqual({
+      resume: 'delivery__implement',
+    });
+    expect(group.depends_on).toEqual(['delivery__implement']);
+  });
+});
+
+// #3972 — a command body is read after expansion has replaced every include node, so its
+// `$<include>.output` alias and its own `with:` names must survive into the composed body
+// exactly as an inline prompt's do.
+describe('expandWorkflowIncludes — command bodies read include aliases and own bindings', () => {
+  const leaf = (): WorkflowDefinition =>
+    wf('open-pr', [
+      { id: 'prep', bash: 'echo prep' },
+      { id: 'open', bash: 'echo 42', depends_on: ['prep'] },
+    ]);
+
+  test('names the include primary sink in top-level command and loop.command bodies', () => {
+    const block = wf('deliver', [
+      { id: 'pr', include: 'open-pr' },
+      { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+      {
+        id: 'retry',
+        depends_on: ['pr'],
+        loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(leaf(), block, parent),
+      new Map([
+        ['check-ci', 'Check CI for $pr.output and PR $pr.output.number.'],
+        ['retry-ci', 'Retry CI for $pr.output.'],
+      ])
+    );
+    expect(errors).toEqual([]);
+    const ship = workflows.get('ship')!;
+    expect(inlinePrompt(nodeById(ship, 'deliver__check'))).toBe(
+      'Check CI for $deliver__pr__open.output and PR $deliver__pr__open.output.number.'
+    );
+    expect(compiledLoopPrompt(nodeById(ship, 'deliver__retry'))).toBe(
+      'Retry CI for $deliver__pr__open.output.'
+    );
+  });
+
+  test('names enclosing and body-scoped include sinks in a loop-body command body', () => {
+    const block = wf('deliver', [
+      { id: 'pr', include: 'open-pr' },
+      {
+        id: 'fix',
+        depends_on: ['pr'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'p', include: 'open-pr' },
+            { id: 'ci', command: 'check-ci', depends_on: ['p'] },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(leaf(), block, parent),
+      new Map([['check-ci', 'PR $pr.output, this pass $p.output, last $LOOP_PREV.p__open.output.']])
+    );
+    expect(errors).toEqual([]);
+    const ci = loopGroupNodes(nodeById(workflows.get('ship')!, 'deliver__fix'))?.find(
+      node => node.id === 'ci'
+    );
+    expect(inlinePrompt(ci)).toBe(
+      'PR $deliver__pr__open.output, this pass $p__open.output, last $LOOP_PREV.p__open.output.'
+    );
+  });
+
+  test('shields a loop-body command own with: name from the caller', () => {
+    const block = wf('deliver', [
+      {
+        id: 'fix',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'p', bash: 'echo 42' },
+            { id: 'ci', command: 'check-ci', depends_on: ['p'], with: { bound: '$p.output' } },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['check-ci', 'Check PR $INPUTS.bound.']])
+    );
+    expect(errors).toEqual([]);
+    const ci = loopGroupNodes(nodeById(workflows.get('ship')!, 'deliver__fix'))?.find(
+      node => node.id === 'ci'
+    );
+    expect(inlinePrompt(ci)).toBe('Check PR $INPUTS.bound.');
+    expect(composedBindings(ci)).toEqual({ bound: '$p.output' });
   });
 });

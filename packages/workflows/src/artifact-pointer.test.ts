@@ -23,6 +23,7 @@ describe('artifact pointers (#2453)', () => {
 
   function makeRun(id: string, overrides?: Partial<WorkflowRun>): WorkflowRun {
     return {
+      origin: { conversationId: 'conv' },
       id,
       workflow_name: 'wf',
       conversation_id: 'conv',

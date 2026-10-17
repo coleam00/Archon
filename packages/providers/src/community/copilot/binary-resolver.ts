@@ -1,11 +1,11 @@
 /**
  * Copilot CLI binary resolver for compiled (bun --compile) archon binaries.
  *
- * The @github/copilot-sdk bundles @github/copilot (the CLI) as a transitive
- * dep, and by default the SDK resolves the binary from its own bundled copy
- * via `import.meta.url`. In compiled archon binaries that path is frozen to
- * the build host's filesystem, so we resolve explicitly and pass the result
- * via `new CopilotClient({ cliPath })`.
+ * The SDK resolves its bundled runtime from platform-specific optional
+ * packages using `import.meta.url`. In compiled Archon binaries that path
+ * is frozen to the build host's filesystem, so we resolve an installed
+ * Copilot CLI explicitly and pass the result
+ * via `new CopilotClient({ connection: { kind: 'stdio', path } })`.
  *
  * Resolution order:
  *  1. `COPILOT_BIN_PATH` environment variable
