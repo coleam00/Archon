@@ -3,7 +3,7 @@
  * capabilities and token names, so the host refuses every operation that release
  * lacks. It answers `pr.view` for a token it accepts and refuses any other.
  */
-import { forgeRequestSchema } from '../../../../packages/forge/src/operations';
+import { readFileSync } from 'node:fs';
 
 const ACCEPTED_TOKEN = 'accepted';
 
@@ -31,7 +31,7 @@ if (process.argv.includes('metadata')) {
   process.exit(0);
 }
 
-const request = forgeRequestSchema.parse(await Bun.stdin.json());
+const request = JSON.parse(readFileSync(0, 'utf8')) as { op: string; operationId: string };
 if (request.op !== 'pr.view') throw new Error(`the stub does not answer ${request.op}`);
 const accepted = process.env.ARCHON_FORGE_TOKEN === ACCEPTED_TOKEN;
 process.stdout.write(

@@ -1614,6 +1614,9 @@ describe('CLI git repo check', () => {
 // timed body (#2982).
 let jsonEnvelopeHome: string;
 let cliTestHome: string;
+// A git repo holding one workflow, so discovery results never depend on this checkout.
+let listRepo: string;
+const LONG_DESCRIPTION = 'Describes a workflow at length. '.repeat(8).trim();
 let inheritedHome: string | undefined;
 let inheritedDocker: string | undefined;
 let inheritedWorkspace: string | undefined;
@@ -1640,6 +1643,13 @@ beforeAll(() => {
   process.env.WORKSPACE_PATH = '';
   process.env.ARCHON_HOME = cliTestHome;
   jsonEnvelopeHome = mkdtempSync(join(tmpdir(), 'archon-json-envelope-home-'));
+  listRepo = mkdtempSync(join(tmpdir(), 'archon-cli-list-repo-'));
+  spawnSync('git', ['init', '-q', '.'], { cwd: listRepo });
+  mkdirSync(join(listRepo, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(listRepo, '.archon', 'workflows', 'described.yaml'),
+    `name: described\ndescription: ${LONG_DESCRIPTION}\nnodes:\n  - id: a\n    prompt: hi\n`
+  );
 
   // Build the registry once, here, so no timed body below pays for creating it.
   // Seeding through `spawnJsonError` rather than a bespoke spawn is deliberate:
@@ -1665,6 +1675,7 @@ afterAll(async () => {
   else process.env.WORKSPACE_PATH = inheritedWorkspace;
   await removeTempTree(cliTestHome);
   if (jsonEnvelopeHome) await removeTempTree(jsonEnvelopeHome);
+  if (listRepo) await removeTempTree(listRepo);
 });
 
 describe('workflow list arguments', () => {
@@ -1672,11 +1683,11 @@ describe('workflow list arguments', () => {
     const { status, envelope } = spawnJsonError([
       'workflow',
       'list',
-      'archon-deliver',
+      'described',
       '--full',
       '--json',
       '--cwd',
-      repoRoot,
+      listRepo,
     ]);
 
     expect(status).toBe(0);
@@ -1689,8 +1700,8 @@ describe('workflow list arguments', () => {
       errors: unknown[];
     };
     expect(output.workflows).toHaveLength(1);
-    expect(output.workflows[0].name).toBe('archon-deliver');
-    expect(Array.from(output.workflows[0].description).length).toBeGreaterThan(160);
+    expect(output.workflows[0].name).toBe('described');
+    expect(output.workflows[0].description).toBe(LONG_DESCRIPTION);
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
 
@@ -1726,7 +1737,7 @@ describe('workflow list arguments', () => {
   it('rejects extra positionals with human-readable usage', () => {
     const result = spawnSync(
       process.execPath,
-      [CLI_ENTRY, 'workflow', 'list', 'first', 'second', '--cwd', repoRoot],
+      [CLI_ENTRY, 'workflow', 'list', 'first', 'second', '--cwd', listRepo],
       {
         encoding: 'utf8',
         env: {
@@ -1750,7 +1761,7 @@ describe('workflow list arguments', () => {
       'second',
       '--json',
       '--cwd',
-      repoRoot,
+      listRepo,
     ]);
 
     expect(status).toBe(1);
@@ -1768,7 +1779,7 @@ describe('workflow list arguments', () => {
       'definitely-not-a-workflow',
       '--json',
       '--cwd',
-      repoRoot,
+      listRepo,
     ]);
 
     expect(status).toBe(1);
@@ -1825,8 +1836,8 @@ describe('main catch --json error envelope', () => {
     // the name (workflow.ts: prepareWorkflowSource precedes
     // resolveWorkflowName, deliberately — discovery must read the frozen
     // bytes, #2660/#2747), so without the flag this single spawn copies and
-    // digests every project, global, and bundled workflow file this repository
-    // has — thousands of filesystem operations, and growing — then deletes
+    // digests every project, global, and bundled workflow file the run can
+    // see — thousands of filesystem operations, and growing — then deletes
     // them, only to report that the workflow does not exist. The throw, its
     // route to main()'s catch, and the envelope are identical either way.
     const { status, envelope } = spawnJsonError([
@@ -1836,7 +1847,7 @@ describe('main catch --json error envelope', () => {
       '--json',
       '--dry-run',
       '--cwd',
-      repoRoot,
+      listRepo,
     ]);
 
     expect(status).toBe(1);

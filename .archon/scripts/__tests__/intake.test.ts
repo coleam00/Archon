@@ -3,15 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  workflowRunStatusSchema,
-} from '../../../packages/workflows/src/schemas/workflow-run';
+import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import { BODY_SOURCES } from '../../workflows/sdlc/.shared/issue';
-import { claimDisposition, statePut } from '../../workflows/sdlc/.shared/state';
+import { statePut } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
@@ -40,6 +35,7 @@ import {
 import {
   forgeOperation,
   gitCheckout,
+  hostCli,
   type GhApiIssue,
   type GhCommentRow,
   type GhIssue,
@@ -377,14 +373,6 @@ describe('pickup', () => {
     ]);
   });
 
-  test("a claim is released only when its run's status is one the engine calls terminal", () => {
-    for (const status of workflowRunStatusSchema.options)
-      expect(claimDisposition(status)).toBe(
-        TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
-      );
-    expect(claimDisposition(null)).toBe('hold');
-  });
-
   test('an item whose last attempt failed sorts after every other waiting item', () => {
     const released = {
       ...newWorkItem({ repo: PR.repo, number: 1 }, '2026-01-01'),
@@ -416,7 +404,6 @@ describe('pickup', () => {
 // --- the scripts, run as the engine runs them --------------------------------------
 
 const FAKE_ARCHON = resolve(import.meta.dir, 'fixtures/fake-archon-runs.ts');
-const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli.ts');
 
 interface Install {
   readonly checkout: string;
@@ -447,7 +434,7 @@ function install(): Install {
       HOME: home,
       DATABASE_URL: '',
       ARCHON_TELEMETRY_DISABLED: '1',
-      INTAKE_STATE_CWD: checkout,
+      INTAKE_STATE_CWD: checkout, INTAKE_HOST_CLI: JSON.stringify(hostCli()),
     },
   };
 }
@@ -588,15 +575,12 @@ function outcome(
 }
 
 function stored(at: Install): { revision: number; value: WorkItem } {
-  const result = spawnSync(
-    process.execPath,
-    ['--no-env-file', CLI_ENTRY, 'state', 'get', 'work/7'],
-    {
-      cwd: at.checkout,
-      env: { ...process.env, ...at.env, WORKFLOW_ID: '', ARCHON_NODE_EXECUTION: '' },
-      encoding: 'utf8',
-    }
-  );
+  const [command, ...prefix] = hostCli();
+  const result = spawnSync(command, [...prefix, 'state', 'get', 'work/7'], {
+    cwd: at.checkout,
+    env: { ...process.env, ...at.env, WORKFLOW_ID: '', ARCHON_NODE_EXECUTION: '' },
+    encoding: 'utf8',
+  });
   const parsed = JSON.parse(result.stdout) as { revision: number; value: unknown };
   return { revision: parsed.revision, value: parseWorkItem(parsed.value) };
 }
@@ -1274,18 +1258,9 @@ function evalOutcome(
 const ISSUE_READ = /^api --hostname ghe\.example\.com repos\/example\/repo\/issues\/\d+$/;
 const HISTORY_READ = /^api graphql --hostname ghe\.example\.com -f query=query\(/;
 
-function outputSchema(id: 'facts' | 'outcome'): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(
-    readFileSync(join(PACK, 'intake/archon-intake.yaml'), 'utf8')
-  ) as { nodes: { id: string; output_format?: Record<string, unknown> }[] };
-  return workflow.nodes.find(node => node.id === id)?.output_format ?? {};
-}
-
-function succeeded(run: ScriptRun, id: 'facts' | 'outcome'): Record<string, unknown> {
+function succeeded(run: ScriptRun): Record<string, unknown> {
   expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
-  const output = JSON.parse(run.stdout) as Record<string, unknown>;
-  expect(validateStructuredOutput(output, outputSchema(id))).toEqual({ valid: true });
-  return output;
+  return JSON.parse(run.stdout) as Record<string, unknown>;
 }
 
 /** Only issue reads: the REST view and the GraphQL history query. */
@@ -1305,7 +1280,7 @@ describe('eval mode', () => {
       body: 'A body edited to name the fix',
       history: { createdBody: CREATED.body, createdTitle: CREATED.title },
     });
-    const decided = succeeded(facts, 'facts');
+    const decided = succeeded(facts);
     expect(decided).toMatchObject({
       path: 'triage',
       item: SUBJECT,
@@ -1319,7 +1294,7 @@ describe('eval mode', () => {
     expect(facts.gh).toHaveLength(2);
 
     const outcome = evalOutcome(at, decided, READY_VERDICT);
-    const result = succeeded(outcome, 'outcome');
+    const result = succeeded(outcome);
     expect(outcome.gh).toEqual([]);
     expect(outcome.forge).toEqual([]);
     expect(result).toMatchObject({
@@ -1350,9 +1325,9 @@ describe('eval mode', () => {
 
   test('a duplicate verdict closes nothing in eval, and reports what it would close as', () => {
     const at = install();
-    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }), 'facts');
+    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }));
     const outcome = evalOutcome(at, decided, DUPLICATE_VERDICT);
-    const result = succeeded(outcome, 'outcome');
+    const result = succeeded(outcome);
     expect([...outcome.gh, ...outcome.forge]).toEqual([]);
     expect(result).toMatchObject({
       stage: 'close',
@@ -1369,7 +1344,7 @@ describe('eval mode', () => {
       ['Maintainer', 'outside'],
     ] as const) {
       const facts = evalRun(at, 'facts', { author }, { INPUTS_TRUST: trust });
-      const decided = succeeded(facts, 'facts');
+      const decided = succeeded(facts);
       expect(decided).toMatchObject({
         path: 'outside',
         decision: { trust: 'outside' },
@@ -1378,7 +1353,7 @@ describe('eval mode', () => {
       readsOnly(facts);
 
       const outcome = evalOutcome(at, decided, SKIPPED_TRIAGE, trust);
-      expect(succeeded(outcome, 'outcome')).toMatchObject({
+      expect(succeeded(outcome)).toMatchObject({
         stage: 'needs_maintainer',
         labels: ['archon-needs-maintainer'],
         evaluation: {
@@ -1398,7 +1373,7 @@ describe('eval mode', () => {
     ];
     for (const history of unrecoverable) {
       const at = install();
-      const decided = succeeded(evalRun(at, 'facts', { body: 'The body now', history }), 'facts');
+      const decided = succeeded(evalRun(at, 'facts', { body: 'The body now', history }));
       expect(decided).toMatchObject({
         target: '# An issue\n\nThe body now',
         seen: { body_from: 'current' },
@@ -1428,7 +1403,7 @@ describe('eval mode', () => {
       }
     );
     // A closed issue is decided as it was opened.
-    expect(succeeded(run, 'facts')).toMatchObject({
+    expect(succeeded(run)).toMatchObject({
       path: 'triage',
       target: '# Forge title\n\nForge body',
       seen: { body_from: 'current' },
@@ -1458,7 +1433,7 @@ describe('eval mode', () => {
     expect(unreadable.code).not.toBe(0);
     readsOnly(unreadable);
 
-    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }), 'facts');
+    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }));
     // The triage path with no verdict refuses in the outcome.
     const unjudged = evalOutcome(at, decided, SKIPPED_TRIAGE);
     expect(unjudged.code).not.toBe(0);

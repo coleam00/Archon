@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 
 const track = trackTempRoots();
 const SCRIPT = join(import.meta.dir, '../../workflows/sdlc/cleanup/scripts/merged.ts');

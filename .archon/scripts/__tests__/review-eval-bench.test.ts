@@ -11,34 +11,17 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getRunArtifactsDirForRoot } from '@archon/paths';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { nodeCostScope } from '../../../packages/workflows/src/node-record-serialization';
-import { EFFORT_LEVELS } from '../../../packages/workflows/src/schemas/effort';
-import { type ModelAliasPreset, TIER_NAMES, modelAliasPresetSchema } from '../../../packages/workflows/src/schemas/model-binding';
-import {
-  executionBindingSchema,
-  executionSpendSchema,
-  nodeExecutionMetadataSchema,
-  unavailableMeasurementSchema,
-} from '../../../packages/workflows/src/schemas/node-execution';
+import { trackTempRoots } from './temp-roots';
 import {
   type ResolvedVersion,
   type RunDetail,
   type RunNode,
-  EFFORTS,
   type FindingMark,
   MARKS,
-  TIERS,
-  type TierBinding,
-  agentBinding,
   appendLine,
-  artifactsOf,
   latestLines,
   readLines,
-  reportsOwnSpend,
   resolveVersion,
-  spendOf,
 } from '../../workflows/sdlc/.shared/bench';
 import {
   cloneSample,
@@ -58,6 +41,9 @@ import { FINDING_VALUES, type Finding, type ItemRecord, readFindings, writeItem 
 import { MARKS as INTAKE_MARKS } from '../../workflows/sdlc/intake/scripts/bench/score';
 
 const track = trackTempRoots();
+
+/** A run's artifacts directory under its output root, where the bench reads a run's files. */
+const runArtifacts = (root: string, runId: string): string => join(root, 'artifacts', 'runs', runId);
 
 function git(cwd: string, ...args: string[]): { code: number; stdout: string; stderr: string } {
   const result = spawnSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], {
@@ -233,62 +219,6 @@ describe('resolveVersion refuses', () => {
     const { repo, sha, out } = packRepository();
     const file = versionFile(out, { label: 'v', pack_sha: sha, tiers: { ...tiers, large: { ...tiers.large, effort: 'extreme' } } });
     expect(() => resolveVersion(file, repo, out, subject)).toThrow('tier `large` effort must be one of');
-  });
-});
-
-describe("a version's tiers are the engine's", () => {
-  it('names every tier and effort the engine binds, in a shape its alias preset accepts', () => {
-    expect([...TIERS]).toEqual([...TIER_NAMES]);
-    expect([...EFFORTS]).toEqual([...EFFORT_LEVELS]);
-    const binding: TierBinding = { provider: 'claude', model: 'opus', effort: 'high' };
-    expect(modelAliasPresetSchema.parse(binding)).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
-    const fromEngine = (preset: ModelAliasPreset): TierBinding => preset;
-    expect(fromEngine({ provider: 'codex', model: 'gpt' })).toEqual({ provider: 'codex', model: 'gpt' });
-  });
-});
-
-describe("a run's spend and binding are read on the engine's terms", () => {
-  const unmeasured = { source: 'unavailable', reason: 'not_reported' } as const;
-  const spend = (fields: object) => executionSpendSchema.parse({ stopReason: unmeasured, numTurns: unmeasured, ...fields });
-
-  it('counts a row as own spend exactly when the engine does, legacy roll-ups included', () => {
-    const rows = [
-      ...nodeExecutionMetadataSchema.shape.accounting.options.map(accounting => ({ accounting })),
-      {},
-      { aggregate: true },
-      { aggregate: false },
-    ];
-    expect(rows.map(reportsOwnSpend)).toEqual(rows.map(row => nodeCostScope(row) === 'own'));
-  });
-
-  it('reads every unavailable reason, a floor cost and a resolved model as the engine writes them', () => {
-    for (const reason of unavailableMeasurementSchema.shape.reason.options) {
-      const none = { source: 'unavailable', reason };
-      const known = reason === 'not_applicable';
-      expect(spendOf([spend({ tokens: none, costUsd: none })])).toEqual({
-        cost_usd: known ? 0 : null,
-        cost_partial: false,
-        tokens: known ? { input: 0, output: 0 } : null,
-      });
-    }
-    const floor = spend({
-      tokens: { source: 'provider', value: { input: 3, output: 1, cacheRead: 2 } },
-      costUsd: { source: 'provider', value: 1.5, partial: true },
-    });
-    expect(spendOf([floor])).toEqual({ cost_usd: 1.5, cost_partial: true, tokens: { input: 3, output: 1 } });
-
-    const binding = executionBindingSchema.parse({
-      provider: 'claude',
-      tier: 'large',
-      effort: 'high',
-      model: { requested: 'opus', resolved: { source: 'provider', value: 'claude-opus' } },
-    });
-    expect(agentBinding({ nodeId: 'review__code', state: 'completed', kind: 'agent', binding, attempts: [] })).toEqual({
-      provider: 'claude',
-      tier: 'large',
-      requested: 'opus',
-      resolved: 'claude-opus',
-    });
   });
 });
 
@@ -473,16 +403,9 @@ describe('hard checks decide whether a sample counts', () => {
 });
 
 describe('collectItem', () => {
-  it('reads the artifacts directory the engine writes', () => {
-    const detail = { id: 'r1', output_root: '/home/me/.archon/workspaces/o/r' } as const;
-    expect(artifactsOf({ ...detail, status: 'completed', started_at: '', completed_at: null, base_branch: 'dev', aliases: {}, transcript_path: null, returns: null, nodes: [] })).toBe(
-      getRunArtifactsDirForRoot(detail.output_root, detail.id)
-    );
-  });
-
   it('names lens files, not the review\'s own files, and reads findings.json', () => {
     const root = track(mkdtempSync(join(tmpdir(), 'archon-bench-item-')));
-    const artifacts = getRunArtifactsDirForRoot(root, 'r1');
+    const artifacts = runArtifacts(root, 'r1');
     for (const file of ['code.md', 'scope.md', 'report.md', 'discoveries.md', 'code-round-1.md']) {
       write(artifacts, `review/${file}`, 'x');
     }
@@ -913,7 +836,7 @@ describe('bench run', () => {
   });
   /** `run-1`: a completed sample whose code lens and simplify left output, with one finding. */
   const passing = (root: string) => {
-    const artifacts = getRunArtifactsDirForRoot(root, 'run-1');
+    const artifacts = runArtifacts(root, 'run-1');
     write(artifacts, 'review/code.md', 'x');
     write(artifacts, 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', sources: ['code'], claim: 'Unrelated.', status: 'open', round: 1 }]));
     write(artifacts, 'shape.md', 'x');
@@ -1181,7 +1104,7 @@ describe('bench run', () => {
   it('leaves a changed cited finding unmarked and retains the marked previous verdict', () => {
     const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
       const detail = passing(root);
-      const file = join(getRunArtifactsDirForRoot(root, 'run-1'), 'review/findings.json');
+      const file = join(runArtifacts(root, 'run-1'), 'review/findings.json');
       const [first] = JSON.parse(readFileSync(file, 'utf8')) as Finding[];
       writeFileSync(file, JSON.stringify([first, { ...first, id: 'R2', claim: 'Wrong count.' }]));
       return detail;
@@ -1338,7 +1261,7 @@ describe('bench run', () => {
   it('heads the page FAILED and judges nothing when a sample fails a hard check', () => {
     const unreadable = (root: string) => {
       const detail = passing(root);
-      write(getRunArtifactsDirForRoot(root, 'run-1'), 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', claim: 'No sources.', status: 'open' }]));
+      write(runArtifacts(root, 'run-1'), 'review/findings.json', JSON.stringify([{ id: 'R1', severity: 'note', claim: 'No sources.', status: 'open' }]));
       return detail;
     };
     const { out, cli, run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, unreadable);

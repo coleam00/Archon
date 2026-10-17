@@ -1,24 +1,13 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import {
   forgeFailure,
   forgeOperation,
-  PACK,
   PR,
   packScriptRunner,
 } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
-
-function outputFormat(id: 'triage' | 'verdict'): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(
-    readFileSync(join(PACK, 'triage/archon-triage-block.yaml'), 'utf8')
-  ) as { nodes: { id: string; output_format?: Record<string, unknown> }[] };
-  return workflow.nodes.find(node => node.id === id)?.output_format ?? {};
-}
 
 const inputs = {
   INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
@@ -112,22 +101,6 @@ test('a close verdict keeps the type label, drops the size label, and carries it
   const output = JSON.parse(run.stdout);
   expect(output.labels).toEqual(['archon-close', 'archon-type-feature', 'area', 'nonexistent']);
   expect(output.closure).toEqual(DELIVERED);
-  expect(validateStructuredOutput(output, outputFormat('verdict'))).toEqual({ valid: true });
-});
-
-test('the verdict output admits exactly the closures the triage decision does', () => {
-  const closure = (outputFormat('verdict').properties as Record<string, Record<string, unknown>>)
-    .closure;
-  const url = 'https://ghe.example.com/example/repo/issues/3';
-  const admitted: (Closure | null)[] = [
-    null,
-    DELIVERED,
-    { kind: 'duplicate', url, original: { repo: PR.repo, number: 3 } },
-  ];
-  for (const value of admitted) expect(validateStructuredOutput(value, closure).valid).toBe(true);
-  for (const value of [{ kind: 'duplicate', url }, { kind: 'delivered' }, { url }]) {
-    expect(validateStructuredOutput(value, closure).valid).toBe(false);
-  }
 });
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {
@@ -156,41 +129,6 @@ test("a close link that is not a qualified URL is refused, so a guess never reac
   });
   expect(run.code).not.toBe(0);
   expect(run.stderr).toContain('closure.url must be a fully qualified');
-});
-
-test('the triage schema requires the kind and URL on NO_ACTION, so the provider is re-asked', () => {
-  const schema = outputFormat('triage');
-  const declared = (decision: unknown) =>
-    validateStructuredOutput(
-      {
-        decision,
-        type: { value: 'feature', reason: 'r' },
-        size: { value: 's', reason: 'r' },
-        complexity: { value: 'low', reason: 'r' },
-        importance: { value: 'medium', reason: 'r' },
-        urgency: { value: 'none', reason: 'r' },
-        item: { repo: PR.repo, number: 7 },
-        area_labels: [],
-        summary: 's',
-        report: { type: 'archon_artifact', run_id: 'r', path: 'triage.md' },
-      },
-      schema
-    ).valid;
-  const original = { repo: PR.repo, number: 3 };
-  const url = 'https://ghe.example.com/example/repo/issues/3';
-  expect(declared({ contract: 'NO_ACTION', closure: DELIVERED })).toBe(true);
-  expect(declared({ contract: 'NO_ACTION', closure: { kind: 'duplicate', url, original } })).toBe(
-    true
-  );
-  for (const closure of [
-    undefined,
-    { url },
-    { kind: 'delivered' },
-    { kind: 'duplicate', url },
-    { kind: 'obsolete', url },
-  ]) {
-    expect(declared({ contract: 'NO_ACTION', closure })).toBe(false);
-  }
 });
 
 test('malformed qualified triage identity refuses before invoking a transport', () => {

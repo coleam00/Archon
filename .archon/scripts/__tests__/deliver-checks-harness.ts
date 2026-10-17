@@ -11,11 +11,25 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 
 export const PACK = resolve(import.meta.dir, '../../workflows/sdlc');
 export const SCRIPTS = join(PACK, 'deliver/scripts');
-export const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli.ts');
+
+/**
+ * The host Archon CLI argv, from `ARCHON_CLI_COMMAND` (a JSON string array), the contract a
+ * workflow run gives pack scripts. The pack may not reach into the engine's source, so the
+ * test runner names the CLI: `scripts/repo-tests.ts` sets it for root runs when it is unset.
+ */
+export function hostCli(): string[] {
+  const value = process.env.ARCHON_CLI_COMMAND;
+  if (!value) {
+    throw new Error(
+      'pack tests run the Archon CLI named by ARCHON_CLI_COMMAND; run them with `bun run test --plan pack`'
+    );
+  }
+  return JSON.parse(value) as string[];
+}
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
@@ -435,7 +449,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     mkdirSync(home);
     writeFileSync(join(home, 'config.yaml'), JSON.stringify({ forge: forge.config }));
     Object.assign(env, {
-      ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, '--no-env-file', CLI_ENTRY]),
+      ARCHON_CLI_COMMAND: JSON.stringify(hostCli()),
       ARCHON_HOME: home,
       HOME: home,
       ARCHON_TELEMETRY_DISABLED: '1',

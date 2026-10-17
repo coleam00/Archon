@@ -175,7 +175,7 @@ The node's provider cannot fork a session (no `sessionFork` in the [provider cap
 ## Useful Diagnostic Commands
 
 ```bash
-# Environment sanity first: binaries, gh auth, DB, adapters
+# Environment sanity first: providers, DB, adapters (forge access: archon workflow run archon-forge-check)
 archon doctor
 
 # One run, any status, with raw events — the fastest "why did node X skip/fail"

@@ -14,7 +14,6 @@ import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
-import { REQUIRED_FORGE_OPERATIONS } from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
 import {
   checkConfigFiles,
   checkInstalledProviders,
@@ -23,7 +22,6 @@ import {
   checkDatabase,
   checkConnectedProviders,
   checkGitHubApp,
-  checkSdlcForge,
   checkAssistantLogin,
   type AssistantLoginDeps,
   checkWorkspaceWritable,
@@ -55,72 +53,6 @@ const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
-
-describe('gh credential-source reporting', () => {
-  it.each([
-    { host: 'github.com', env: { GH_TOKEN: 'first', GITHUB_TOKEN: 'second' }, source: 'GH_TOKEN' },
-    { host: 'tenant.ghe.com', env: { GITHUB_TOKEN: 'second' }, source: 'GITHUB_TOKEN' },
-    {
-      host: 'ghe.example.com',
-      env: { GH_TOKEN: '', GH_ENTERPRISE_TOKEN: 'first', GITHUB_ENTERPRISE_TOKEN: 'second' },
-      source: 'GH_ENTERPRISE_TOKEN',
-    },
-    {
-      host: 'ghe.example.com',
-      env: { GITHUB_ENTERPRISE_TOKEN: 'second' },
-      source: 'GITHUB_ENTERPRISE_TOKEN',
-    },
-  ])('$host uses $source', async ({ host, env, source }) => {
-    const spawn = spyOn(Bun, 'spawnSync').mockImplementation(
-      argv =>
-        ({
-          exitCode: 0,
-          stdout: Buffer.from(
-            (argv as string[])[0] === 'git'
-              ? `remote.origin.url https://${host}/example/repo.git`
-              : ''
-          ),
-          stderr: Buffer.from(''),
-        }) as ReturnType<typeof Bun.spawnSync>
-    );
-    try {
-      const result = await checkSdlcForge(env);
-      expect(result.status).toBe('pass');
-      expect(result.message).toContain(`source: ${source}`);
-    } finally {
-      spawn.mockRestore();
-    }
-  });
-});
-
-describe('selected forge diagnostics', () => {
-  const repo = { host: 'github.com', path: 'coleam00/Archon' };
-  it.each(['GH_TOKEN', 'GITHUB_TOKEN', 'gh auth token'])(
-    'names %s after checking capabilities and read access',
-    async credentialSource => {
-      const spawn = spyOn(Bun, 'spawnSync').mockReturnValue({
-        exitCode: 0,
-        stdout: Buffer.from('remote.origin.url https://github.com/coleam00/Archon.git'),
-        stderr: Buffer.from(''),
-      } as ReturnType<typeof Bun.spawnSync>);
-      const probe = mock(async (op: string) => ({
-        value: op === 'metadata' ? { capabilities: REQUIRED_FORGE_OPERATIONS } : null,
-        credentialSource: op === 'metadata' ? undefined : credentialSource,
-      }));
-      try {
-        const result = await checkSdlcForge({ ARCHON_SDLC_FORGE: 'forge' }, probe);
-        expect(result.status).toBe('pass');
-        expect(result.message).toContain(`source: ${credentialSource}`);
-        expect(probe.mock.calls.map(call => call[0])).toEqual(['metadata', 'pr.view']);
-        expect(probe).toHaveBeenLastCalledWith('pr.view', {
-          selector: { kind: 'head', repo, headRepo: repo, head: 'archon-forge-check' },
-        });
-      } finally {
-        spawn.mockRestore();
-      }
-    }
-  );
-});
 
 describe('checkGitHubApp', () => {
   let execSpy: ReturnType<typeof spyOn<typeof Bun, 'spawnSync'>>;

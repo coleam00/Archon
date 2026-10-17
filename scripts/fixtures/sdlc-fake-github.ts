@@ -47,7 +47,14 @@ export interface FakeGitHubState {
   comments: { id: number; body: string; issue?: number }[];
   nextComment: number;
   checkRuns: { id: number; name: string; status: string; conclusion: string | null }[];
-  workflowRuns: { id: number; head_sha: string; check_suite_id: number; run_attempt: number; status: string; conclusion: string | null }[];
+  workflowRuns: {
+    id: number;
+    head_sha: string;
+    check_suite_id: number;
+    run_attempt: number;
+    status: string;
+    conclusion: string | null;
+  }[];
   /** Every request, as `METHOD url`, so a test can see what was written. */
   calls: string[];
 }
@@ -183,7 +190,11 @@ function route(
   if (commentsOn !== undefined) {
     const on = Number(commentsOn) === 42 ? undefined : Number(commentsOn);
     if (method === 'POST' && typeof body?.body === 'string') {
-      const row = { id: state.nextComment++, body: body.body, ...(on === undefined ? {} : { issue: on }) };
+      const row = {
+        id: state.nextComment++,
+        body: body.body,
+        ...(on === undefined ? {} : { issue: on }),
+      };
       state.comments.push(row);
       return Response.json(comment(row), { status: 201 });
     }
@@ -197,7 +208,11 @@ function route(
     if (method === 'PATCH' && typeof body?.body === 'string') row.body = body.body;
     return Response.json(comment(row));
   }
-  if (path === `${ROOT}/actions/runs`) return Response.json({ total_count: state.workflowRuns.length, workflow_runs: page === 1 ? state.workflowRuns : [] });
+  if (path === `${ROOT}/actions/runs`)
+    return Response.json({
+      total_count: state.workflowRuns.length,
+      workflow_runs: page === 1 ? state.workflowRuns : [],
+    });
   if (path === `${ROOT}/commits/${state.headSha}/check-runs`) {
     return Response.json({ check_runs: page === 1 ? state.checkRuns : [] });
   }

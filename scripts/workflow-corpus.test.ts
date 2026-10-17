@@ -3,14 +3,24 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { z } from 'zod';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
-import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
-import { discoverWorkflowsWithConfig } from './workflow-discovery';
-import { validateWorkflowResources, type ValidationIssue } from './validator';
+import {
+  validationSourceConfigSchema,
+  workflowValidationConfig,
+} from '../packages/workflows/src/validation-config';
+import { discoverWorkflowsWithConfig } from '../packages/workflows/src/workflow-discovery';
+import {
+  validateWorkflowResources,
+  type ValidationIssue,
+} from '../packages/workflows/src/validator';
 
-const repo = resolve(import.meta.dir, '../../..');
+/**
+ * Lints this repository's own workflows with the engine's discovery and validator. It
+ * lives in `scripts/` because it reads the SDLC pack and the engine together; engine
+ * tests never read the pack. The scratch-project cases prove the lint itself reports.
+ */
+const repo = resolve(import.meta.dir, '..');
 const root = await mkdtemp(join(tmpdir(), 'archon-workflow-corpus-'));
 const originalHome = process.env.ARCHON_HOME;
 process.env.ARCHON_HOME = join(root, 'home');
@@ -49,10 +59,10 @@ async function validateCorpus(
   );
   const fileByName = new Map<string, string>();
   for (const file of files) {
-    const value = z
-      .object({ name: z.string() })
-      .safeParse(Bun.YAML.parse(await readFile(join(workflowRoot, file), 'utf8')));
-    if (value.success) fileByName.set(value.data.name, file);
+    const value: unknown = Bun.YAML.parse(await readFile(join(workflowRoot, file), 'utf8'));
+    if (typeof value === 'object' && value !== null && 'name' in value) {
+      if (typeof value.name === 'string') fileByName.set(value.name, file);
+    }
   }
   const discovered = await discoverWorkflowsWithConfig(
     cwd,

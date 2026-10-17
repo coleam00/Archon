@@ -142,6 +142,8 @@ The gh check first refuses a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN
 otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
 has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
 `source` is what the `ci` and `update-pr-body` agents act through.
+Run `archon workflow run archon-forge-check` from a checkout to see the same check's
+result without starting delivery.
 
 ## Public writes belong to a script
 
@@ -859,20 +861,3 @@ the same project gate on two pinned parts and their composed tree. Its `interact
 result remains red; delivery holds it rather than treating it as inherited or
 environmental. The report retains revision, tree and check evidence for an existing
 merger to consume. It does not install a queue or authorize a merge.
-
-## CI agent eval
-
-The fast-rerun eval runs the shipped CI command through the Claude provider with
-in-memory forge responses. A rerun returns a newer attempt that is already green,
-with a changed check-unit ID. The state read either shows it immediately or first
-returns the old failed attempt on the same revision. The agent must read through
-the stale attempt, finish green, leave the PR ready, and record the newer attempt
-in its reports within the tool-call budget.
-
-Run it explicitly with native Claude authentication (it makes paid model calls):
-
-```bash
-ARCHON_TEST_CI_AGENT=1 bun run test .archon/scripts/__tests__/ci-rerun-agent.test.ts
-```
-
-Ordinary package tests skip this live eval. It has no real forge access.

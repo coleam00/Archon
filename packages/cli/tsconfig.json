@@ -2,9 +2,6 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    // Doctor shares the SDLC pack's preflight, and pack modules import
-    // each other with `.ts` extensions (pack scripts run under Bun with no build step).
-    "allowImportingTsExtensions": true,
     "paths": {
       "@archon/adapters": ["../adapters/src"],
       "@archon/adapters/*": ["../adapters/src/*"],

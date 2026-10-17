@@ -5,9 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
+import { archonCliInvocation } from '@archon/paths/cli-command';
 import {
   planRequestedRuns,
   planShard,
+  rootTestEnv,
   planStepCommand,
   ROOT_TEST_PLAN,
   type RootTestStep,
@@ -155,6 +157,15 @@ describe('planShard', () => {
 
   test.each([[[]], [['scripts/']], [['-t', '--plan']]])('leaves %j to the router', requested => {
     expect(planShard(requested)).toBeUndefined();
+  });
+});
+
+describe('rootTestEnv', () => {
+  test("names this checkout's CLI for pack tests, even when a host CLI is inherited", () => {
+    expect(JSON.parse(rootTestEnv({}).ARCHON_CLI_COMMAND ?? '')).toEqual(archonCliInvocation());
+    expect(
+      JSON.parse(rootTestEnv({ ARCHON_CLI_COMMAND: '["archon"]' }).ARCHON_CLI_COMMAND ?? '')
+    ).toEqual(archonCliInvocation());
   });
 });
 

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
 import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 

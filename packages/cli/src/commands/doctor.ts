@@ -35,14 +35,6 @@ import {
   type CredentialStatus,
   type StoredCredentialKind,
 } from '@archon/provider-contract';
-import { forgeCommand } from './forge';
-import { loadCliEnv } from '../load-cli-env';
-import { resolveCliUserId } from '../utils/cli-user';
-import {
-  checkForgeAccess,
-  type ForgeProbe,
-} from '../../../../.archon/workflows/sdlc/.shared/forge-check.ts';
-import { forgeResult } from '../../../../.archon/workflows/sdlc/.shared/forge.ts';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -228,48 +220,6 @@ export async function checkGitHubApp(env: NodeJS.ProcessEnv): Promise<CheckResul
     };
   }
   return { label: 'GitHub App', status: 'skip', message: 'App mode not configured' };
-}
-
-async function runForgeCommand(
-  op: string,
-  data: Record<string, unknown>,
-  env: NodeJS.ProcessEnv,
-  trustedEnv: NodeJS.ProcessEnv
-): ReturnType<ForgeProbe> {
-  let response: unknown;
-  let credentialSource: string | undefined;
-  const exitCode = await forgeCommand(
-    op,
-    { data: JSON.stringify(data), trustedEnv },
-    {
-      env,
-      write: async value => {
-        response = value;
-      },
-    }
-  );
-  const value = forgeResult(op, response, exitCode, source => {
-    credentialSource = source;
-  });
-  return { value, credentialSource };
-}
-
-export async function checkSdlcForge(
-  env: NodeJS.ProcessEnv,
-  probe: ForgeProbe = (op, data) => runForgeCommand(op, data, env, trustedEnv),
-  trustedEnv: NodeJS.ProcessEnv = env
-): Promise<CheckResult> {
-  const label = 'SDLC forge';
-  try {
-    const { detail } = await checkForgeAccess(env, probe);
-    return { label, status: 'pass', message: detail };
-  } catch (error) {
-    return {
-      label,
-      status: 'fail',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
 }
 
 export interface AssistantLoginDeps {
@@ -897,49 +847,6 @@ function renderResult(r: CheckResult): string {
   return `${icon} ${r.label}: ${r.message}`;
 }
 
-async function checkWorkflowSdlcForge(env: NodeJS.ProcessEnv): Promise<CheckResult> {
-  try {
-    const cwd = process.cwd();
-    const config = await defaultLoadMergedConfig(cwd);
-    const { createCliWorkflowHost } = await import('../utils/workflow-host');
-    const { resolveCodebaseForPath } = await import(
-      '@archon/core/services/codebase-checkout-resolver'
-    );
-    const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
-    const host = await createCliWorkflowHost(true);
-    const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
-    let repositoryUrl: string | null = null;
-    if (!codebase && repoRoot) {
-      const { getDefaultRemote, getRemoteUrl, toRepoPath } = await import('@archon/git');
-      const { loadRepoConfig } = await import('@archon/core/config/config-loader');
-      const repoConfig = await loadRepoConfig(repoRoot);
-      const path = toRepoPath(repoRoot);
-      const remote = repoConfig.worktree?.remote?.trim() || (await getDefaultRemote(path));
-      if (remote) repositoryUrl = await getRemoteUrl(path, remote);
-    }
-    const cliId = resolveCliUserId(env);
-    const user = cliId
-      ? await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId)
-      : undefined;
-    const github = await resolveWorkflowGithubEnvironment(
-      host.deps,
-      codebase ?? { repository_url: repositoryUrl },
-      user?.id,
-      config
-    );
-    const workflowEnv = { ...env, ...github.envVars };
-    const cliEnv = { ...workflowEnv };
-    const trustedEnv = await loadCliEnv(cwd, { env: cliEnv, preserveGithubCredentials: true });
-    return checkSdlcForge(workflowEnv, (op, data) => runForgeCommand(op, data, cliEnv, trustedEnv));
-  } catch (error) {
-    return {
-      label: 'SDLC forge',
-      status: 'fail',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
@@ -956,7 +863,6 @@ export async function doctorCommand(
         checkInstalledProviders(),
         ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
         checkGitHubApp(env),
-        checkWorkflowSdlcForge(env),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
         checkDatabase(),

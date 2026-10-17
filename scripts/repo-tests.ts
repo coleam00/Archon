@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 /**
@@ -135,10 +136,23 @@ function routeArgument(argument: string): RoutedArgument | undefined {
     : undefined;
 }
 
+/**
+ * The environment of a root-owned run. Pack tests run the host CLI through
+ * `ARCHON_CLI_COMMAND`, the same contract a workflow run gives pack scripts, because the
+ * pack may not reach into `packages/`. It always names this checkout's CLI: an inherited
+ * value, as inside an Archon run, names another checkout's.
+ */
+export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ARCHON_CLI_COMMAND: JSON.stringify(archonCliInvocation()),
+  };
+}
+
 async function run(command: string[], cwd: string): Promise<number> {
   const child = Bun.spawn(command, {
     cwd,
-    env: bunTestEnv(),
+    env: bunTestEnv(cwd === REPO_ROOT ? rootTestEnv() : process.env),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   return await child.exited;
