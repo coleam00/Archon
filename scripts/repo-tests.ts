@@ -139,13 +139,13 @@ function routeArgument(argument: string): RoutedArgument | undefined {
 /**
  * The environment of a root-owned run. Pack tests run the host CLI through
  * `ARCHON_CLI_COMMAND`, the same contract a workflow run gives pack scripts, because the
- * pack may not reach into `packages/`. A value already set wins, so the pack tests can run
- * against a release binary.
+ * pack may not reach into `packages/`. It always names this checkout's CLI: an inherited
+ * value, as inside an Archon run, names another checkout's.
  */
 export function rootTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     ...env,
-    ARCHON_CLI_COMMAND: env.ARCHON_CLI_COMMAND || JSON.stringify(archonCliInvocation()),
+    ARCHON_CLI_COMMAND: JSON.stringify(archonCliInvocation()),
   };
 }
 

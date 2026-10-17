@@ -161,9 +161,11 @@ describe('planShard', () => {
 });
 
 describe('rootTestEnv', () => {
-  test('names the source CLI for pack tests and keeps a host CLI already set', () => {
+  test("names this checkout's CLI for pack tests, even when a host CLI is inherited", () => {
     expect(JSON.parse(rootTestEnv({}).ARCHON_CLI_COMMAND ?? '')).toEqual(archonCliInvocation());
-    expect(rootTestEnv({ ARCHON_CLI_COMMAND: '["archon"]' }).ARCHON_CLI_COMMAND).toBe('["archon"]');
+    expect(
+      JSON.parse(rootTestEnv({ ARCHON_CLI_COMMAND: '["archon"]' }).ARCHON_CLI_COMMAND ?? '')
+    ).toEqual(archonCliInvocation());
   });
 });
 
