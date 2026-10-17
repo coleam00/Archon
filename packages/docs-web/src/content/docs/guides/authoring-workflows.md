@@ -264,11 +264,11 @@ When a `bash:` or `script:` node on the host reaches its `timeout`, Archon signa
 whole process tree before it reports the timeout, so the real work behind a wrapper such as
 `bun run` or `uv run` stops too. On Windows it runs `taskkill /T /F` on the node's process.
 On macOS and Linux a foreground `workflow run`, `workflow resume` or `trigger execute` starts
-the node in its own process group and sends `SIGTERM` to that group. A node under
-`archon serve` or a detached run shares its owner's process group, so on macOS and Linux its
-timeout still ends only the node's own process, and work it started in the background keeps
-running. `until_bash` checks end only their own process. A container node's timeout ends only
-the local `docker exec` client, so the command inside the container may keep running.
+the node in its own process group and sends `SIGTERM` to that group. Under `archon serve` and
+in a detached run, a timeout on macOS and Linux still ends only the node's own process, and
+work it started in the background keeps running. `until_bash` checks end only their own
+process. A container node's timeout ends only the local `docker exec` client, so the command
+inside the container may keep running.
 
 Archon does not confirm that the tree is gone, so some work outlives a reported timeout:
 
@@ -282,6 +282,13 @@ Archon does not confirm that the tree is gone, so some work outlives a reported 
 If the tree cannot be ended, Archon kills the node's own process (`SIGKILL` on macOS and
 Linux) and the node fails with the termination error instead of timing out. It does not take
 `on_timeout: skip`, and dependents follow their `trigger_rule` as for any failed node.
+
+Cancelling a run that `archon serve` executes ends the process tree of each of that run's
+running host `bash:` and `script:` nodes and `until_bash` checks within about a second
+(`SIGKILL` to the node's process group on macOS and Linux, `taskkill /T /F` on Windows), and
+records the node failed as cancelled. Other runs' processes are not touched. A process that
+left the node's group with `setsid` escapes, and a container node's command is not reached.
+Cancelling a detached run ends its owner's process group, nodes included.
 
 ### Addressable session ancestry
 
