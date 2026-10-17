@@ -29,6 +29,7 @@ jobs:
       actions: read
     outputs:
       run-tests: ${{ steps.decision.outputs.run-tests }}
+      run-workspace-tests: ${{ steps.decision.outputs.run-workspace-tests }}
       run-fixtures: ${{ steps.decision.outputs.run-fixtures }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +56,8 @@ jobs:
         run: |
           run_tests=$(bun scripts/should-run-test-suite.ts)
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
+          run_workspace_tests=$(bun scripts/should-run-test-suite.ts --workspace-tests)
+          echo "run-workspace-tests=$run_workspace_tests" >> "$GITHUB_OUTPUT"
           run_fixtures=$(bun scripts/should-run-test-suite.ts --workflow-fixtures)
           echo "run-fixtures=$run_fixtures" >> "$GITHUB_OUTPUT"
 
@@ -100,9 +103,15 @@ jobs:
   # CI splits `bun run validate` across jobs by check id so the slow checks run side by side
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
   # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
+  #
+  # The test shards are the `shard` names in `ROOT_TEST_PLAN` (scripts/repo-tests.ts). The
+  # workspace shards run here; the root scripts shard runs in `test-scripts`. They are two jobs
+  # because each has its own gate, and a job-level `if` cannot read the matrix. A skipped job,
+  # unlike a skipped step, keeps a pull request run from proving its merge, so the dev push
+  # then runs every shard.
   test:
     needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
+    if: needs.changes.outputs.run-workspace-tests == 'true'
     strategy:
       # Every leg must always report. With the default fail-fast, an ubuntu
       # failure cancels windows, so a windows-only break stays invisible until
@@ -111,13 +120,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        # The workspace packages and the root script tests each run on their own runner.
-        # Serial, the root half added 11-17 minutes after the packages on Windows
-        # (measured for #4396).
-        shard: [packages, scripts]
+        # @archon/cli runs on its own runner: with every package on one 4-vCPU Windows
+        # runner the packages step took about 19 minutes, and cli finished last (#4430).
+        shard: [cli, packages]
     runs-on: ${{ matrix.os }}
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
-    # every other PR queues behind it. A healthy Windows shard takes about 20 minutes.
+    # every other PR queues behind it.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -136,20 +144,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Compile Slack chat conformance fixture
-        if: runner.os == 'Linux' && matrix.shard == 'scripts'
-        run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
-
-      - name: Run compiled Slack chat conformance
-        if: runner.os == 'Linux' && matrix.shard == 'scripts'
-        run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
-
-      - name: Build and smoke-test Slack chat release binary
-        if: runner.os == 'Linux' && matrix.shard == 'scripts'
-        run: |
-          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
-          bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
-
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
       # added and run on windows-latest — and its own readback disproved the
@@ -165,30 +159,17 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
 
-      - name: Install Caddy for deployment recipe tests
-        if: runner.os == 'Linux' && matrix.shard == 'scripts'
-        run: |
-          mkdir -p "$RUNNER_TEMP/caddy"
-          curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
-          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/caddy" caddy
-          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
-          docker compose version
+      - name: Validate (Linux, cli)
+        if: runner.os == 'Linux' && matrix.shard == 'cli'
+        run: bun run validate --only cli-tests
 
       - name: Validate (Linux, packages)
         if: runner.os == 'Linux' && matrix.shard == 'packages'
         run: bun run validate --only package-tests
 
-      - name: Validate (Linux, scripts)
-        if: runner.os == 'Linux' && matrix.shard == 'scripts'
-        run: bun run validate --only installer,script-tests
-
-      # The generated-file and import-boundary checks ride the Windows scripts shard as
-      # well as `static` because their scripts normalize Windows path separators, and only
-      # a Windows run proves that; they cost seconds. The installer check is POSIX-only
-      # (validate skips it on Windows). The test checks use the shared 20 s per-test budget
-      # in scripts/bun-test-command.ts; see coleam00/Archon#3294.
-      #
-      # The temp-disk and git-launcher settings below apply to both Windows shards.
+      # The test checks use the shared 20 s per-test budget in scripts/bun-test-command.ts;
+      # see coleam00/Archon#3294. The temp-disk and git-launcher settings below apply to
+      # every Windows test step, here and in `test-scripts`.
       #
       # Temp goes to the runner's local disk (`runner.temp`, D:). C: is the remote-backed
       # OS disk that Windows background maintenance also reads from: measured on this
@@ -200,6 +181,15 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
+      - name: Validate (Windows, cli)
+        if: runner.os == 'Windows' && matrix.shard == 'cli'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-tests
+
       - name: Validate (Windows, packages)
         if: runner.os == 'Windows' && matrix.shard == 'packages'
         env:
@@ -209,8 +199,67 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only package-tests
 
+  # The root scripts shard. Root tests read the packages, so it runs whenever the suite does.
+  test-scripts:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compile Slack chat conformance fixture
+        if: runner.os == 'Linux'
+        run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Run compiled Slack chat conformance
+        if: runner.os == 'Linux'
+        run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Build and smoke-test Slack chat release binary
+        if: runner.os == 'Linux'
+        run: |
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
+          bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
+
+      - name: Warm uv
+        if: runner.os == 'Windows'
+        run: uv run python -c "print('uv warm')"
+
+      - name: Install Caddy for deployment recipe tests
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/caddy"
+          curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
+          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/caddy" caddy
+          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
+          docker compose version
+
+      - name: Validate (Linux, scripts)
+        if: runner.os == 'Linux'
+        run: bun run validate --only installer,script-tests
+
+      # The generated-file and import-boundary checks ride the Windows scripts shard as
+      # well as `static` because their scripts normalize Windows path separators, and only
+      # a Windows run proves that; they cost seconds. The installer check is POSIX-only
+      # (validate skips it on Windows). Temp and git settings: see the Windows steps in `test`.
       - name: Validate (Windows, scripts)
-        if: runner.os == 'Windows' && matrix.shard == 'scripts'
+        if: runner.os == 'Windows'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -554,6 +603,7 @@ jobs:
         changes,
         static,
         test,
+        test-scripts,
         workflow-fixtures,
         workflow-fixtures-windows,
         file-store-primitives-macos,

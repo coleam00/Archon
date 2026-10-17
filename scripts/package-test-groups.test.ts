@@ -3,7 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { resolvePackageTestGroups, TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
+import {
+  resolvePackageTestConcurrency,
+  resolvePackageTestGroups,
+  TEST_ISOLATION_DIRECTIVE,
+} from './package-test-groups';
 import { inspectPackage, isCollectedByRepositoryTest } from './test-inventory.test';
 
 const track = trackTempRoots();
@@ -62,6 +66,16 @@ test('legacy groups retain their order and malformed declarations fail', () => {
     { testGroups: 'src/' },
   ]) {
     expect(() => resolvePackageTestGroups(root, declaration)).toThrow();
+  }
+});
+
+test('group concurrency defaults to one and rejects anything but a positive integer', () => {
+  expect(resolvePackageTestConcurrency({})).toBe(1);
+  expect(resolvePackageTestConcurrency({ testConcurrency: 3 })).toBe(3);
+  for (const testConcurrency of [0, 1.5, '2', null]) {
+    expect(() => resolvePackageTestConcurrency({ testConcurrency })).toThrow(
+      'testConcurrency must be a positive integer'
+    );
   }
 });
 

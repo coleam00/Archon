@@ -7,6 +7,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { ROOT_TEST_PLAN } from './repo-tests';
 import { VALIDATE_CHECKS, parseOnly, selectChecks, runCheckCommands } from './validate';
 
 const track = trackTempRoots();
@@ -22,6 +23,7 @@ describe('validate check selection', () => {
       'format',
       'installer',
       'package-tests',
+      'cli-tests',
       'script-tests',
     ]);
     expect(selectChecks(['workflow-fixtures', 'format']).map(check => check.id)).toEqual([
@@ -71,25 +73,31 @@ describe('validate check selection', () => {
     const workflow = Bun.YAML.parse(
       readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
     ) as {
-      jobs: {
-        test: {
-          strategy: { matrix: { os: string[]; shard: string[] } };
+      jobs: Record<
+        'test' | 'test-scripts',
+        {
+          strategy: { matrix: { os: string[]; shard?: string[] } };
           steps: { if?: string; run?: string }[];
-        };
-      };
+        }
+      >;
     };
-    const { matrix } = workflow.jobs.test.strategy;
     const runnerOs: Record<string, string> = {
       'ubuntu-latest': 'Linux',
       'windows-latest': 'Windows',
     };
     const shardCheck: Record<string, string> = {
+      cli: 'cli-tests',
       packages: 'package-tests',
       scripts: 'script-tests',
     };
-    const legs = matrix.os.flatMap(os => matrix.shard.map(shard => ({ os, shard })));
-    const selectedBy = ({ os, shard }: { os: string; shard: string }): string[] =>
-      workflow.jobs.test.steps
+    const legs = (['test', 'test-scripts'] as const).flatMap(job => {
+      const { matrix } = workflow.jobs[job].strategy;
+      return matrix.os.flatMap(os =>
+        (matrix.shard ?? ['scripts']).map(shard => ({ job, os, shard }))
+      );
+    });
+    const selectedBy = ({ job, os, shard }: (typeof legs)[number]): string[] =>
+      workflow.jobs[job].steps
         .filter(step => {
           const condition = step.if ?? '';
           const wantedOs = /runner\.os == '(\w+)'/.exec(condition)?.[1];
@@ -102,10 +110,18 @@ describe('validate check selection', () => {
         .flatMap(step => [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)])
         .flatMap(match => match[1].split(','));
 
+    expect(new Set(legs.map(leg => leg.shard))).toEqual(new Set(Object.keys(shardCheck)));
     for (const leg of legs) {
       const tests = selectedBy(leg).filter(id => Object.values(shardCheck).includes(id));
       expect({ ...leg, tests }).toEqual({ ...leg, tests: [shardCheck[leg.shard]] });
     }
+  });
+
+  test('the checks run every shard of the test plan and name no other', () => {
+    const planned = VALIDATE_CHECKS.flatMap(check => check.commands).flatMap(command =>
+      command[3] === '--plan' ? [command[4]] : []
+    );
+    expect(new Set(planned)).toEqual(new Set(ROOT_TEST_PLAN.map(step => step.shard)));
   });
 
   test('check ids are unique', () => {

@@ -142,9 +142,10 @@ function packageTestSelectors(
 }
 
 /** Paths the root plan tests itself, rather than delegating to a workspace. */
-const ROOT_TEST_SELECTORS = ROOT_TEST_PLAN.flatMap((step): string[] =>
+const ROOT_TEST_SELECTORS = ROOT_TEST_PLAN.flatMap((step): readonly string[] =>
   step.kind === 'root' ? step.selectors : []
 );
+/** The `workspaces` step runs every package the `workspace` steps do not, so together they run all. */
 const ROOT_PLAN_RUNS_WORKSPACE_TESTS = ROOT_TEST_PLAN.some(
   (step): boolean => step.kind === 'workspaces'
 );
@@ -202,7 +203,7 @@ function packageDirectoryForTest(
 
 export function isCollectedByRepositoryTest(
   testPath: string,
-  rootSelectors: string[],
+  rootSelectors: readonly string[],
   workspacePatterns: string[],
   workspaceTestsRun: boolean,
   packageSelectors: Map<string, string[]>

@@ -7,10 +7,10 @@ import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
 
 const track = trackTempRoots();
 const runner = join(import.meta.dir, 'package-tests.ts');
-function fixture(): string {
+function fixture(manifest: object = {}): string {
   const root = track(mkdtempSync(join(tmpdir(), 'package-runner-')));
   mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({}));
+  writeFileSync(join(root, 'package.json'), JSON.stringify(manifest));
   return root;
 }
 async function run(root: string, args: string[] = []): Promise<number> {
@@ -113,6 +113,40 @@ test(
     expect(await run(root, ['src/a-failure.test.ts'])).not.toBe(0);
     expect(await run(root)).not.toBe(0);
     expect(existsSync(join(root, 'later'))).toBe(false);
+  },
+  testTimeout(5000)
+);
+
+test(
+  'testConcurrency runs that many groups at once, each in its own process',
+  async () => {
+    const root = fixture({ testConcurrency: 2 });
+    // Each group waits for the file the other writes, so both pass only side by side.
+    const rendezvous = (mine: string, theirs: string): string =>
+      `import { existsSync, writeFileSync } from 'node:fs';
+    test('meets', async () => {
+      writeFileSync('${mine}', String(process.pid));
+      const deadline = Date.now() + 4000;
+      while (!existsSync('${theirs}') && Date.now() < deadline) await Bun.sleep(25);
+      expect(existsSync('${theirs}')).toBe(true);
+    }, 5000);`;
+    testFile(root, 'a', rendezvous('a-ready', 'b-ready'), true);
+    testFile(root, 'b', rendezvous('b-ready', 'a-ready'), true);
+    expect(await run(root)).toBe(0);
+    expect(readFileSync(join(root, 'a-ready'), 'utf8')).not.toBe(
+      readFileSync(join(root, 'b-ready'), 'utf8')
+    );
+  },
+  testTimeout(10000)
+);
+
+test(
+  'a failing group fails a concurrent run',
+  async () => {
+    const root = fixture({ testConcurrency: 2 });
+    testFile(root, 'a-failure', `test('fails', () => { throw new Error('expected'); });`, true);
+    testFile(root, 'b-pass', `test('passes', () => {});`, true);
+    expect(await run(root)).not.toBe(0);
   },
   testTimeout(5000)
 );
