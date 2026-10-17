@@ -436,7 +436,7 @@ If the user merges the PR themselves and comes back, still offer to tag, release
 
 ### Step 9.5: Add the new tag's SQLite vintage fixture
 
-A release tag is a released schema shape. Once `vx.y.z` exists, `check:sqlite-vintages` (the `schema-upgrade` CI job) fails on every PR until the fixture for it is committed. Generate it on a branch off dev and open a PR:
+A release tag is a released schema shape. When `vx.y.z` changes the SQLite schema, `check:sqlite-vintages` (the `schema-upgrade` CI job) fails on every PR until the tag's fixture is committed. A tag that keeps the previous schema gets no fixture and needs nothing. Generate it on a branch off dev and commit whatever it writes:
 
 ```bash
 git fetch --tags origin
