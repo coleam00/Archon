@@ -40,10 +40,13 @@ function decisionLabel(id: string, label: string | undefined): string {
  * preview UI doesn't hit the backend with bogus ids.
  */
 export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
-  if (run.approval?.type === 'child_workflow') {
+  const attention = run.attention;
+  if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
     return (
       <p className="mt-2 rounded border border-warning/30 bg-warning/[0.06] p-3 text-[12px] text-warning">
-        {run.approval.message}
+        Waiting on sub-runs: {childRunIds.join(', ')}. Review the child runs to continue.
       </p>
     );
   }

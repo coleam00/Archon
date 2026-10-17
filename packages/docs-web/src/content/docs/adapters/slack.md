@@ -195,10 +195,14 @@ When a workflow runs in a Slack thread, Archon now:
   authored outcome disagrees, it also adds the outcome reaction, so both facts remain visible
 - Posts a single status message in the thread that's edited in place as DAG
   nodes start, complete, fail, or get skipped
-- Renders each gate's declared decisions as buttons, using labels when supplied
-  and sending the exact decision ID. Legacy gates keep **Approve** / **Reject**.
+- When approval details are available, renders the gate's declared decisions as
+  buttons, using labels when supplied and sending the exact decision ID.
+  Legacy gates keep **Approve** / **Reject**.
   The fallback text lists `/archon-workflow respond <id> <decision> [text]` commands;
   use these to include optional text with a decision
+- If approval details cannot be loaded, posts an **Approval details unavailable**
+  notice naming the run instead of decision buttons or response commands. Check
+  the run status before responding
 - Adds a **Cancel** button on the status message while the run is
   non-terminal, so anyone on the allowed user list can abandon a runaway run
   with a click
