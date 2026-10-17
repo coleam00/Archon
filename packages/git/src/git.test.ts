@@ -3899,6 +3899,79 @@ branch refs/heads/feature/auth
       }
     });
 
+    const withEnv = async (
+      vars: Record<string, string | undefined>,
+      run: () => Promise<void>
+    ): Promise<void> => {
+      const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
+      const apply = (values: Record<string, string | undefined>): void => {
+        for (const [key, value] of Object.entries(values)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      };
+      apply(vars);
+      try {
+        await run();
+      } finally {
+        apply(previous);
+      }
+    };
+
+    test('creates a missing global config for the first registration', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-missing-')));
+      const configPath = join(root, 'gitconfig');
+      await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
+        const path = repo('/workspace/first');
+        await git.addSafeDirectory(path);
+        expect(await readFile(configPath, 'utf8')).toContain(`directory = ${path}`);
+      });
+    });
+
+    test('writes to the XDG config when it is the only global config', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-xdg-')));
+      const home = join(root, 'home');
+      const xdgConfig = join(root, 'xdg', 'git', 'config');
+      await realMkdir(home);
+      await realMkdir(join(root, 'xdg', 'git'), { recursive: true });
+      await writeFile(xdgConfig, '[user]\n\tname = other\n');
+      await withEnv(
+        { GIT_CONFIG_GLOBAL: undefined, HOME: home, XDG_CONFIG_HOME: join(root, 'xdg') },
+        async () => {
+          const path = repo('/workspace/xdg');
+          await git.addSafeDirectory(path);
+          expect(await readFile(xdgConfig, 'utf8')).toContain(`directory = ${path}`);
+          await expect(stat(join(home, '.gitconfig'))).rejects.toThrow('ENOENT');
+        }
+      );
+    });
+
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'fails without waiting when the config lock cannot be created',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-readonly-')));
+        const configDir = join(root, 'config');
+        const configPath = join(configDir, 'gitconfig');
+        await realMkdir(configDir);
+        await writeFile(configPath, '');
+        await chmod(configDir, 0o500);
+        try {
+          await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
+            const started = Date.now();
+            await expect(git.addSafeDirectory(repo('/workspace/readonly'))).rejects.toThrow(
+              'EACCES'
+            );
+            expect(Date.now() - started).toBeLessThan(2000);
+          });
+        } finally {
+          await chmod(configDir, 0o700);
+        }
+      }
+    );
+
     test('times out a hung initial config read before any write', async () => {
       execSpy.mockRestore();
       const realExec = git.execFileAsync;
