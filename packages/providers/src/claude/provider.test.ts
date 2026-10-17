@@ -3866,6 +3866,8 @@ describe('typed failures (#1797, #3524)', () => {
     ['gateway_signin_required', 'auth'],
     ['org_pin_api_key_conflict', 'auth'],
     ['worktree_unverified', 'transient'],
+    ['org_config_required_unavailable', 'transient'],
+    ['org_config_refused', 'auth'],
     ['proxy_invalid', 'misconfigured'],
     ['cli_version_too_old', 'misconfigured'],
     ['bypass_root', 'misconfigured'],
