@@ -153,9 +153,15 @@ for target_pair in "${TARGETS[@]}"; do
     # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
     # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
     # Always --minify to match release parity.
+    # A standalone executable autoloads .env and bunfig.toml from its working
+    # directory unless told not to. Providers run in the target repository, so
+    # autoloading would undo strip-cwd-env.ts and hand the repository's keys to
+    # them; source mode passes --no-env-file for the same reason.
     bun build \
       --compile \
       --minify \
+      --no-compile-autoload-dotenv \
+      --no-compile-autoload-bunfig \
       --target="$target" \
       --outfile="$output" \
       "$entry"
