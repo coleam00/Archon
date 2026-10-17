@@ -105,6 +105,26 @@ describe('checkRatchet', () => {
     expect(result.allowed).toHaveLength(2);
   });
 
+  test('ignores a trailer the base already contains', () => {
+    const repo = repoOnBranch();
+    git(repo, 'checkout', '-q', 'main');
+    git(
+      repo,
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'earlier waiver\n\nRatchet-Allow: src/a.ts:run'
+    );
+    git(repo, 'checkout', '-q', 'change');
+    git(repo, 'merge', '-q', '--ff-only', 'main');
+    write(repo, 'src/a.ts', COMPLEX);
+    commitAll(repo, 'complicate');
+    expect(checkRatchet(repo, 'main').failures).toContain(
+      'src/a.ts: `run` cognitive complexity 1 -> 3'
+    );
+  });
+
   test('compares a moved function with its old file', () => {
     const repo = repoOnBranch();
     write(repo, 'src/a.ts', '');

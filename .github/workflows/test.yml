@@ -369,8 +369,10 @@ jobs:
       # The ratchet compares against the merge base with origin/$GITHUB_BASE_REF, which the
       # full fetch above provides. A push skips it: the change is already merged, and a squash
       # merge turns the change's Ratchet-Allow trailers into body text git no longer reads.
+      # A dev -> main release PR skips it for the same reason: its range is squashed dev
+      # commits whose increases dev already accepted.
       - name: Ratchet
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.base_ref == 'dev'
         run: bun run validate --only ratchet
 
   schema-upgrade:
