@@ -3929,6 +3929,22 @@ branch refs/heads/feature/auth
       });
     });
 
+    test.skipIf(process.platform === 'win32')(
+      'creates the target of a dangling global config symlink',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-dangling-')));
+        const configPath = join(root, 'gitconfig');
+        const target = join(root, 'dotfiles-gitconfig');
+        await symlink(target, configPath);
+        await withEnv({ GIT_CONFIG_GLOBAL: configPath }, async () => {
+          const path = repo('/workspace/dangling');
+          await git.addSafeDirectory(path);
+          expect(await readFile(target, 'utf8')).toContain(`directory = ${path}`);
+        });
+      }
+    );
+
     test('writes to the XDG config when it is the only global config', async () => {
       execSpy.mockRestore();
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'git-safe-xdg-')));

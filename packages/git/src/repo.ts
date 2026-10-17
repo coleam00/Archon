@@ -760,11 +760,8 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
     const targetPath = process.env.GIT_CONFIG_GLOBAL ?? defaultGlobalConfigPath();
     // git config --global creates a missing file; the lock-and-rename edit needs one.
-    try {
-      await (await open(targetPath, 'wx', 0o666)).close();
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-    }
+    // Append mode creates through a dangling symlink and never truncates a racing writer's file.
+    if (!existsSync(targetPath)) await (await open(targetPath, 'a', 0o666)).close();
     if (grants.length === 0 && !values.includes('')) {
       await editConfigFile(targetPath, lockPath => replaceSafeDirectory(lockPath, path));
       return;
