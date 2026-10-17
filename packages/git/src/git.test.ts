@@ -4128,6 +4128,59 @@ branch refs/heads/feature/auth
         else process.env.GIT_CONFIG_GLOBAL = previousConfig;
       }
     });
+
+    // Windows and root keep the write: git compares owner SIDs on Windows, which
+    // we do not read, and judges root callers by SUDO_UID.
+    test.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)(
+      'concurrent worktree setups under a directory this user owns all succeed',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'git-safe-race-'))));
+        const configPath = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = configPath;
+        try {
+          await writeFile(configPath, '[user]\n\tname = other-process\n');
+          const worktrees = Array.from({ length: 8 }, (_, i) => repo(join(root, `worktree-${i}`)));
+          await Promise.all(worktrees.map(path => git.addSafeDirectory(path)));
+          expect(await readFile(configPath, 'utf8')).toBe('[user]\n\tname = other-process\n');
+          // Git trusts a repository its own user created without any grant.
+          await git.execFileAsync('git', ['init', '--quiet', worktrees[0]]);
+          await git.execFileAsync('git', ['-C', worktrees[0], 'status', '--porcelain']);
+        } finally {
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
+
+    test.skipIf(process.platform === 'win32' || process.geteuid?.() === 0)(
+      'a new path under a symlink into a root-owned directory keeps its grant',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'git-safe-link-'))));
+        const configPath = join(root, 'gitconfig');
+        const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_GLOBAL = configPath;
+        try {
+          await writeFile(configPath, '');
+          // The link is this user's; the directory the checkout would land in is root's.
+          await symlink('/usr', join(root, 'link'));
+          const checkout = repo(join(root, 'link', 'checkout'));
+          await git.addSafeDirectory(checkout);
+          const { stdout } = await git.execFileAsync('git', [
+            'config',
+            '--global',
+            '--get-all',
+            'safe.directory',
+          ]);
+          expect(stdout.trim()).toBe(checkout);
+        } finally {
+          if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+          else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        }
+      }
+    );
   });
 
   describe('findRepoRoot', () => {

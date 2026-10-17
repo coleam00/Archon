@@ -1203,7 +1203,10 @@ describe('WorktreeProvider against real git', () => {
   test('marker write failure rolls back the locked setup and retains trust', async () => {
     const config = process.env.GIT_CONFIG_GLOBAL;
     if (!config) throw new Error('Scratch global config missing');
-    await writeFile(config, '[safe]\n directory = /workspace/other\n');
+    await writeFile(
+      config,
+      `[safe]\n directory = /workspace/other\n directory = ${JSON.stringify(repoPath)}\n`
+    );
     await git(repoPath, 'remote', 'add', 'origin', repoPath);
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),
@@ -1220,12 +1223,19 @@ describe('WorktreeProvider against real git', () => {
       },
     };
     const path = provider.getWorktreePath(freshRequest, 'marker-failure');
-    await expect(provider.create(freshRequest)).rejects.toThrow();
+    const previousOwnerCheck = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+    process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+    try {
+      await expect(provider.create(freshRequest)).rejects.toThrow('archon-creation-id');
+    } finally {
+      if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
+    }
     expect(existsSync(path)).toBe(false);
     expect(await registeredWorktrees()).not.toContain(resolve(path));
     expect(
       (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
-    ).toEqual(['/workspace/other', path]);
+    ).toEqual(['/workspace/other', repoPath, path]);
   });
 
   describe('a new-branch request naming a branch that already exists', () => {
