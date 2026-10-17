@@ -59,3 +59,16 @@ export function resolvePackageTestGroups(
   }
   return shared.length > 0 ? [...isolated, shared] : isolated;
 }
+
+/** How many of a package's test groups may run at once; 1 when the manifest does not say. */
+export function resolvePackageTestConcurrency(declaration: unknown): number {
+  if (typeof declaration !== 'object' || declaration === null || Array.isArray(declaration)) {
+    throw new Error('Package test declaration must be an object');
+  }
+  const concurrency = 'testConcurrency' in declaration ? declaration.testConcurrency : undefined;
+  if (concurrency === undefined) return 1;
+  if (typeof concurrency !== 'number' || !Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error('testConcurrency must be a positive integer');
+  }
+  return concurrency;
+}
