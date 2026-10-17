@@ -58,13 +58,18 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'package-tests',
-    label: 'Workspace package tests, per-package isolation preserved',
-    commands: [['bun', 'run', 'test', '--plan', 'workspaces']],
+    label: 'Workspace package tests except @archon/cli, per-package isolation preserved',
+    commands: [['bun', 'run', 'test', '--plan', 'packages']],
+  },
+  {
+    id: 'cli-tests',
+    label: '@archon/cli package tests',
+    commands: [['bun', 'run', 'test', '--plan', 'cli']],
   },
   {
     id: 'script-tests',
     label: 'Repository and pack script tests',
-    commands: [['bun', 'run', 'test', '--plan', 'root']],
+    commands: [['bun', 'run', 'test', '--plan', 'scripts']],
   },
   {
     id: 'workflow-fixtures',

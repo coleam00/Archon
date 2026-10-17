@@ -13,6 +13,8 @@ import {
   proofFromPullRequestRun,
   shouldRunTestSuite,
   shouldRunWorkflowFixtures,
+  shouldRunWorkspaceTests,
+  workspaceTestInputs,
   type EventPayload,
   type GitHubGet,
 } from './should-run-test-suite';
@@ -416,6 +418,93 @@ describe('workflow fixture selection', () => {
     expect(result.stdout).toBe('');
   });
 });
+
+describe('workspace test selection', () => {
+  const track = trackTempRoots();
+  const REPO_ROOT = resolve(import.meta.dir, '..');
+  const inputs = workspaceTestInputs(REPO_ROOT);
+
+  test('derives the root scripts the package tests read from this repository', () => {
+    for (const runnerFile of [
+      'scripts/package-tests.ts',
+      'scripts/package-test-groups.ts',
+      'scripts/test-preload.ts',
+      'scripts/check-schema-upgrades.ts',
+    ]) {
+      expect(inputs.has(runnerFile)).toBe(true);
+    }
+    expect(inputs.has('scripts/should-run-test-suite.ts')).toBe(false);
+  });
+
+  test('skips for root scripts no package test reads, and for prose', () => {
+    expect(
+      shouldRunWorkspaceTests(
+        ['scripts/should-run-test-suite.ts', 'scripts/should-run-test-suite.test.ts', 'NOTES.md'],
+        inputs
+      )
+    ).toBe(false);
+  });
+
+  test.each([
+    'scripts/package-tests.ts',
+    'packages/core/src/index.ts',
+    '.archon/scripts/__tests__/x.test.ts',
+    '.github/workflows/test.yml',
+  ])('runs for %s', file => {
+    expect(shouldRunWorkspaceTests(['scripts/should-run-test-suite.ts', file], inputs)).toBe(true);
+  });
+
+  test('a deleted root script a package still names counts as an input', () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'workspace-inputs-')));
+    gitIn(root, 'init', '-q', '-b', 'main');
+    mkdirSync(join(root, 'packages/a'), { recursive: true });
+    writeFileSync(join(root, 'packages/a/package.json'), '{"test":"bun ../../scripts/gone.ts"}');
+    gitIn(root, 'add', '.');
+    expect(workspaceTestInputs(root).has('scripts/gone.ts')).toBe(false);
+    expect(workspaceTestInputs(root, ['scripts/gone.ts']).has('scripts/gone.ts')).toBe(true);
+  });
+
+  test('the script decides a pull request from its diff and the derived inputs', () => {
+    const repo = track(mkdtempSync(join(tmpdir(), 'workspace-decision-')));
+    gitIn(repo, 'init', '-q', '-b', 'main');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    mkdirSync(join(repo, 'packages/a'), { recursive: true });
+    mkdirSync(join(repo, 'scripts'));
+    writeFileSync(join(repo, 'packages/a/package.json'), '{"test":"bun ../../scripts/run.ts"}');
+    writeFileSync(join(repo, 'scripts/run.ts'), "import './shared';\n");
+    writeFileSync(join(repo, 'scripts/shared.ts'), '');
+    writeFileSync(join(repo, 'scripts/tool.ts'), '');
+    gitIn(repo, 'add', '.');
+    gitIn(repo, 'commit', '-q', '-m', 'seed');
+    const base = gitIn(repo, 'rev-parse', 'HEAD');
+
+    const decide = (file: string): string => {
+      gitIn(repo, 'checkout', '-q', '-B', 'change', base);
+      writeFileSync(join(repo, file), 'changed\n');
+      gitIn(repo, 'commit', '-q', '-am', `change ${file}`);
+      const head = gitIn(repo, 'rev-parse', 'HEAD');
+      const result = runDecision(
+        track,
+        'pull_request',
+        { pull_request: { base: { sha: base }, head: { sha: head } } },
+        repo,
+        ['--workspace-tests']
+      );
+      expect(result.exitCode).toBe(0);
+      return result.stdout;
+    };
+
+    expect(decide('scripts/tool.ts')).toBe('false');
+    expect(decide('scripts/shared.ts')).toBe('true');
+  });
+});
+
+function gitIn(cwd: string, ...args: string[]): string {
+  const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr.toString()}`);
+  return result.stdout.toString().trim();
+}
 
 describe('a push proven by its pull request run', () => {
   const PUSH = { head: 'squash-commit' };

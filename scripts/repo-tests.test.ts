@@ -5,7 +5,13 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
-import { planKind, planRequestedRuns } from './repo-tests';
+import {
+  planRequestedRuns,
+  planShard,
+  planStepCommand,
+  ROOT_TEST_PLAN,
+  type RootTestStep,
+} from './repo-tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const fromRoot = (path: string): string => join(REPO_ROOT, path);
@@ -130,20 +136,43 @@ describe('planRequestedRuns', () => {
   });
 });
 
-describe('planKind', () => {
-  test.each(['workspaces', 'root'] as const)('--plan %s selects that half', kind => {
-    expect(planKind(['--plan', kind])).toBe(kind);
+describe('planShard', () => {
+  test.each(['cli', 'packages', 'scripts'] as const)('--plan %s selects that shard', shard => {
+    expect(planShard(['--plan', shard])).toBe(shard);
   });
 
-  test.each([[['--plan', 'nope']], [['--plan']], [['--plan', 'root', 'scripts/']]])(
+  test.each([[['--plan', 'nope']], [['--plan']], [['--plan', 'scripts', 'scripts/']]])(
     'rejects the malformed request %j',
     requested => {
-      expect(() => planKind(requested)).toThrow('Usage: bun run test --plan <workspaces|root>');
+      expect(() => planShard(requested)).toThrow(
+        'Usage: bun run test --plan <cli|packages|scripts>'
+      );
     }
   );
 
   test.each([[[]], [['scripts/']], [['-t', '--plan']]])('leaves %j to the router', requested => {
-    expect(planKind(requested)).toBeUndefined();
+    expect(planShard(requested)).toBeUndefined();
+  });
+});
+
+describe('planStepCommand', () => {
+  test('the workspaces step leaves out exactly the packages that run alone', () => {
+    const steps: readonly RootTestStep[] = ROOT_TEST_PLAN;
+    const solo = steps.flatMap(step => (step.kind === 'workspace' ? [step.package] : []));
+    expect(solo.length).toBeGreaterThan(0);
+    for (const step of steps) {
+      if (step.kind === 'workspace') {
+        expect(planStepCommand(step)).toEqual(['bun', '--filter', step.package, 'test']);
+      }
+      if (step.kind === 'workspaces') {
+        expect(planStepCommand(step)).toEqual([
+          'bun',
+          ...solo.flatMap(name => ['--filter', `!${name}`]),
+          '--parallel',
+          'test',
+        ]);
+      }
+    }
   });
 });
 
@@ -176,11 +205,11 @@ describe('repo-tests exit codes', () => {
     expect(stderr).toContain('No argument named a test path this runner can place');
   });
 
-  test('exits non-zero with the usage for an unknown plan half', () => {
+  test('exits non-zero with the usage for an unknown plan shard', () => {
     const { exitCode, stderr } = invoke(['--plan', 'nope']);
 
     expect(exitCode).toBe(1);
-    expect(stderr).toContain('Usage: bun run test --plan <workspaces|root>');
+    expect(stderr).toContain('Usage: bun run test --plan <cli|packages|scripts>');
   });
 
   test('propagates a failing run instead of reporting success', () => {
