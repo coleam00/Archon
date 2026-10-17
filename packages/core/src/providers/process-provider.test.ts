@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as paths from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { buildProviderSubprocessEnv, type ProviderChunk } from '@archon/provider-contract';
+import {
+  buildProviderSubprocessEnv,
+  MAINTAINED_PROVIDER_IDS,
+  type ProviderChunk,
+} from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import {
   PROVIDER_PLUGIN_PROTOCOL,
@@ -205,12 +209,23 @@ test('installed plugin descriptor mismatch keeps the update message and refuses 
   const directory = mkdtempSync(join(tmpdir(), 'archon-provider-descriptor-'));
   try {
     const file = join(directory, 'session');
-    await expect(collect(provider('mismatch', file).sendQuery('turn', tmpdir()))).rejects.toEqual(
-      new Error(
-        `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
-      )
-    );
-    expect(existsSync(file)).toBe(false);
+    for (const id of [descriptor.id, ...MAINTAINED_PROVIDER_IDS]) {
+      const runtime = processProviderRegistration({ ...descriptor, id }, [
+        process.execPath,
+        fixture,
+        'mismatch',
+        file,
+        id,
+      ]).factory();
+      await expect(
+        collect(runtime.sendQuery('turn', tmpdir(), undefined, { env: { WORKFLOW_ID: 'run-id' } }))
+      ).rejects.toEqual(
+        new Error(
+          `Provider plugin ${id} changed since install; run archon plugin update for this plugin`
+        )
+      );
+      expect(existsSync(file)).toBe(false);
+    }
   } finally {
     await removeTempTree(directory);
   }
@@ -220,12 +235,11 @@ test('built-in descriptor mismatch names source change and run resume and refuse
   const directory = mkdtempSync(join(tmpdir(), 'archon-builtin-descriptor-'));
   try {
     const file = join(directory, 'session');
-    const runtime = processProviderRegistration({ ...descriptor, id: 'claude' }, [
-      process.execPath,
-      fixture,
-      'mismatch',
-      file,
-    ]).factory();
+    const runtime = processProviderRegistration(
+      { ...descriptor, id: 'claude' },
+      [process.execPath, fixture, 'mismatch', file, 'claude'],
+      'source'
+    ).factory();
     const runId = '15454d16-0000-4000-8000-000000000001';
     await expect(
       collect(runtime.sendQuery('turn', tmpdir(), undefined, { env: { WORKFLOW_ID: runId } }))
@@ -237,6 +251,28 @@ test('built-in descriptor mismatch names source change and run resume and refuse
     expect(existsSync(file)).toBe(false);
   } finally {
     await removeTempTree(directory);
+  }
+});
+
+test('source descriptor mismatch without a run names restart advice', async () => {
+  const runtime = processProviderRegistration(
+    { ...descriptor, id: 'claude' },
+    [process.execPath, fixture, 'mismatch', '', 'claude'],
+    'source'
+  ).factory();
+  const signal = new AbortController().signal;
+  for (const operation of [
+    () => collect(runtime.sendQuery('turn', tmpdir())),
+    () => runtime.checkCredential({ env: {}, signal }),
+    () => runtime.diagnose?.({ signal }),
+    () => runtime.listModels?.({ signal }),
+    () => runtime.resolveCredentialModel?.({ cwd: tmpdir() }),
+  ]) {
+    await expect(operation()).rejects.toEqual(
+      new Error(
+        'The Archon process is running older code than the checkout (built-in provider claude); restart the Archon process'
+      )
+    );
   }
 });
 

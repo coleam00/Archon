@@ -21,7 +21,10 @@ const descriptor =
   mode === 'pi-gated'
     ? (await import('@archon/providers/pi/descriptor')).descriptor
     : fixtureDescriptor;
-if (mode === 'mismatch') descriptor.version = '2';
+if (mode === 'mismatch') {
+  descriptor.id = process.argv[4] ?? descriptor.id;
+  descriptor.version = '2';
+}
 if (mode === 'record-pid' || mode === 'hung-models' || mode === 'hung-diagnose')
   writeFileSync(process.argv[3], String(process.pid));
 async function closeOutput(): Promise<never> {

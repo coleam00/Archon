@@ -9,7 +9,6 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
-  isMaintainedProvider,
   providerFailureClassSchema,
   type IAgentProvider,
   type CredentialStatus,
@@ -24,6 +23,8 @@ import {
   type ConnectedProvider,
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
+
+export type ProcessProviderOrigin = 'source' | 'installed';
 
 const EXIT_GRACE_MS = 10_000;
 
@@ -44,6 +45,7 @@ export class ProviderPluginExitedError extends Error {
 function startProcess(
   descriptor: ProviderPluginDescriptor,
   argv: readonly [string, ...string[]],
+  origin: ProcessProviderOrigin,
   options: Pick<SendQueryOptions, 'env' | 'execContext' | 'protectedEnvKeys'>,
   signal?: AbortSignal
 ): {
@@ -161,8 +163,10 @@ function startProcess(
     return disposing;
   }
   const descriptorMismatch = new Error(
-    isMaintainedProvider(descriptor.id)
-      ? `Archon's source changed under this run (built-in provider ${descriptor.id}); the run can continue with archon workflow resume ${options.env?.WORKFLOW_ID ?? '<run id>'}`
+    origin === 'source'
+      ? options.env?.WORKFLOW_ID
+        ? `Archon's source changed under this run (built-in provider ${descriptor.id}); the run can continue with archon workflow resume ${options.env.WORKFLOW_ID}`
+        : `The Archon process is running older code than the checkout (built-in provider ${descriptor.id}); restart the Archon process`
       : `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
   );
   return {
@@ -236,7 +240,8 @@ function startProcess(
 export class ProcessAgentProvider implements IAgentProvider {
   constructor(
     private readonly descriptor: ProviderPluginDescriptor,
-    private readonly argv: readonly [string, ...string[]]
+    private readonly argv: readonly [string, ...string[]],
+    private readonly origin: ProcessProviderOrigin
   ) {}
 
   getType(): string {
@@ -253,7 +258,13 @@ export class ProcessAgentProvider implements IAgentProvider {
     options: SendQueryOptions = {}
   ): AsyncGenerator<ProviderChunk> {
     if (options.abortSignal?.aborted) return;
-    const process = startProcess(this.descriptor, this.argv, options, options.abortSignal);
+    const process = startProcess(
+      this.descriptor,
+      this.argv,
+      this.origin,
+      options,
+      options.abortSignal
+    );
     let settled = false;
     try {
       const connection = await process.connect();
@@ -276,7 +287,13 @@ export class ProcessAgentProvider implements IAgentProvider {
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
-    const process = startProcess(this.descriptor, this.argv, { env: request.env }, request.signal);
+    const process = startProcess(
+      this.descriptor,
+      this.argv,
+      this.origin,
+      { env: request.env },
+      request.signal
+    );
     try {
       return await (await process.connect()).checkCredential(request);
     } catch (error) {
@@ -290,7 +307,7 @@ export class ProcessAgentProvider implements IAgentProvider {
   async diagnose(
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): ReturnType<NonNullable<IAgentProvider['diagnose']>> {
-    const process = startProcess(this.descriptor, this.argv, {}, request.signal);
+    const process = startProcess(this.descriptor, this.argv, this.origin, {}, request.signal);
     try {
       return await (await process.connect()).diagnose(request);
     } catch (error) {
@@ -304,7 +321,7 @@ export class ProcessAgentProvider implements IAgentProvider {
   async listModels(
     request: Parameters<NonNullable<IAgentProvider['listModels']>>[0]
   ): ReturnType<NonNullable<IAgentProvider['listModels']>> {
-    const process = startProcess(this.descriptor, this.argv, {}, request.signal);
+    const process = startProcess(this.descriptor, this.argv, this.origin, {}, request.signal);
     try {
       return await (await process.connect()).listModels(request);
     } catch (error) {
@@ -317,7 +334,7 @@ export class ProcessAgentProvider implements IAgentProvider {
   async resolveCredentialModel(
     request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
   ): Promise<string | undefined> {
-    const process = startProcess(this.descriptor, this.argv, {});
+    const process = startProcess(this.descriptor, this.argv, this.origin, {});
     try {
       return await (await process.connect()).resolveCredentialModel(request);
     } catch (error) {

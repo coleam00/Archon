@@ -12,12 +12,13 @@ import {
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
 import { KNOWN_VENDORS } from '../credentials/delivery';
-import { ProcessAgentProvider } from './process-provider';
+import { ProcessAgentProvider, type ProcessProviderOrigin } from './process-provider';
 import { modelConfigSchema, scopedConfigSchema } from './scoped-config';
 
 export function processProviderRegistration(
   input: ProviderPluginDescriptor,
-  argv: readonly [string, ...string[]]
+  argv: readonly [string, ...string[]],
+  origin: ProcessProviderOrigin = 'installed'
 ): ProviderRegistration {
   const descriptor = providerPluginDescriptorSchema.parse(input);
   if (!hasValidProviderCapabilities(descriptor.capabilities)) {
@@ -73,6 +74,6 @@ export function processProviderRegistration(
       }
       return z.record(z.string(), z.unknown()).parse(parsed.data);
     },
-    factory: () => new ProcessAgentProvider(descriptor, argv),
+    factory: () => new ProcessAgentProvider(descriptor, argv, origin),
   };
 }
