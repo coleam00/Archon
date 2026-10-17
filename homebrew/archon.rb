@@ -7,28 +7,28 @@
 class Archon < Formula
   desc "Governed agentic automation engine"
   homepage "https://github.com/coleam00/Archon"
-  version "0.11.1"
+  version "0.12.0"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-arm64"
-      sha256 "b9338474fd3151d5d5402d76ae278105e65835f2e3506a93f0e5e4a378d10ede"
+      sha256 "f8017d76d450115b5cabfc2c7970086aa7057cda7b36e60e76c272b3af8cf9e3"
     end
     on_intel do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-x64"
-      sha256 "a78527fb8a204812a20857f1f6488f7eedf092370a252fad1efade2db1ec461f"
+      sha256 "a4aa2e15872202abfb7e6c6ae3419f7068dd719ccd1cd114429ecb1515b5aec8"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-arm64"
-      sha256 "2d85e5edf214dc249611499cf30a3e6ba0ea3061eced64563c9cc2c5879d2fb1"
+      sha256 "6a3fbb7818a87683102872fbee9200222c5e10d5235e66111533713146874910"
     end
     on_intel do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-x64"
-      sha256 "81ee5feaf4e6c8de19903a6c1252743228d235bbedb818dbee045b21df49d59d"
+      sha256 "21fd00ffd6a7cd531e784acf94d842a4f56ed1810a38d018920e26dc3c00f35b"
     end
   end
 
@@ -45,20 +45,6 @@ class Archon < Formula
     end
 
     bin.install binary_name => "archon"
-  end
-
-  def caveats
-    <<~EOS
-      Archon ships without AI providers. Add the ones you use:
-        archon setup
-      or directly:
-        archon provider add <claude|codex|pi>
-
-      Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
-
-      After `brew upgrade archon`, run `archon provider add` again for each
-      provider you use; installed providers must match the CLI version.
-    EOS
   end
 
   test do
