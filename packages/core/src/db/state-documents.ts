@@ -136,6 +136,27 @@ export function createSqlStateDocumentStore(
       return next;
     });
   };
+  /** Each document's latest revision under the prefix, ordered by name. */
+  const latestRevisions = async <T extends { name: string }>(
+    target: StateScope,
+    options: { prefix?: string },
+    columns: string,
+    filter: string
+  ): Promise<T[]> => {
+    const project = stateScopeKey(target);
+    const prefix = stateNamePrefixSchema.parse(options.prefix ?? '');
+    // substr, not LIKE: `_` is a legal name character and a LIKE wildcard.
+    const rows = await query<T>(
+      `SELECT ${columns}
+        FROM remote_agent_state_revisions latest_revision
+        WHERE project_key = $1 AND substr(name, 1, $2) = $3
+          AND revision = (SELECT MAX(revision) FROM remote_agent_state_revisions other
+            WHERE other.project_key = latest_revision.project_key AND other.name = latest_revision.name)${filter}`,
+      [project, prefix.length, prefix]
+    );
+    // Sorted here by code unit: PostgreSQL's ORDER BY follows the database collation.
+    return [...rows.rows].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  };
   return {
     getStateDocument: async (target, name): ReturnType<IStateDocumentStore['getStateDocument']> => {
       const row = await latest(query, scope(target, name), name);
@@ -173,27 +194,18 @@ export function createSqlStateDocumentStore(
       target,
       options = {}
     ): ReturnType<IStateDocumentStore['listStateDocuments']> => {
-      const project = stateScopeKey(target);
-      const prefix = stateNamePrefixSchema.parse(options.prefix ?? '');
-      // substr, not LIKE: `_` is a legal name character and a LIKE wildcard.
-      const rows = await query<
+      const rows = await latestRevisions<
         Omit<RevisionRow, 'value' | 'operation'> & {
           deleted: boolean | number;
         }
       >(
-        `SELECT name, revision, writer_kind, writer_run_id, writer_node_path, writer_via, created_at,
-            (value IS NULL) AS deleted
-          FROM remote_agent_state_revisions latest_revision
-          WHERE project_key = $1 AND substr(name, 1, $2) = $3
-            AND revision = (SELECT MAX(revision) FROM remote_agent_state_revisions other
-              WHERE other.project_key = latest_revision.project_key AND other.name = latest_revision.name)`,
-        [project, prefix.length, prefix]
+        target,
+        options,
+        `name, revision, writer_kind, writer_run_id, writer_node_path, writer_via, created_at,
+            (value IS NULL) AS deleted`,
+        ''
       );
-      // Sorted here by code unit: PostgreSQL's ORDER BY follows the database collation.
-      const ordered = [...rows.rows].sort((a, b) =>
-        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
-      );
-      return ordered.map(row =>
+      return rows.map(row =>
         stateDocumentSummarySchema.parse({
           name: row.name,
           revision: row.revision,
@@ -203,6 +215,13 @@ export function createSqlStateDocumentStore(
         })
       );
     },
+    getStateDocuments: async (
+      target,
+      options = {}
+    ): ReturnType<IStateDocumentStore['getStateDocuments']> =>
+      (await latestRevisions<RevisionRow>(target, options, '*', ' AND value IS NOT NULL')).map(
+        hydrate
+      ),
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       z.number().int().nonnegative().parse(days);
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();

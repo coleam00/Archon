@@ -68,6 +68,7 @@ export const cliArgOptions: CliArgOptions = {
   project: { type: 'string' },
   install: { type: 'boolean' },
   raw: { type: 'boolean' },
+  values: { type: 'boolean' },
   timeout: { type: 'string' },
   follow: { type: 'boolean' },
   format: { type: 'string' },

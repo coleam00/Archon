@@ -168,6 +168,37 @@ export function describeStateDocumentConformance(
       ).toEqual(['b_x/1', 'b_x/3']);
       expect(await store.listStateDocuments(p('empty'))).toEqual([]);
     });
+    check('a bulk read returns each live document with its value', async ({ store }) => {
+      const scope = p('bulk');
+      for (const name of ['b_x/1', 'a/2', 'bax/3', 'c/4'])
+        await store.putStateDocument({ scope, name, value: { v: name }, ifRevision: 0, writer });
+      await store.patchStateDocument({
+        scope,
+        name: 'a/2',
+        ops: [{ op: 'set', path: '/v', value: 'patched' }],
+        writer,
+      });
+      await store.deleteStateDocument({ scope, name: 'c/4', writer });
+      await store.putStateDocument({
+        scope: p('other'),
+        name: 'a/9',
+        value: 1,
+        ifRevision: 0,
+        writer,
+      });
+      const all = await store.getStateDocuments(scope);
+      expect(all.map(row => [row.name, row.revision, row.value])).toEqual([
+        ['a/2', 2, { v: 'patched' }],
+        ['b_x/1', 1, { v: 'b_x/1' }],
+        ['bax/3', 1, { v: 'bax/3' }],
+      ]);
+      for (const row of all) expect(await store.getStateDocument(scope, row.name)).toEqual(row);
+      // `_` is a literal prefix character, not a wildcard.
+      expect((await store.getStateDocuments(scope, { prefix: 'b_' })).map(row => row.name)).toEqual(
+        ['b_x/1']
+      );
+      expect(await store.getStateDocuments(p('empty'))).toEqual([]);
+    });
     check('writers, project isolation, tombstones and recreation', async ({ store }) => {
       const input = { scope: p('one'), name: 'ledger', value: { seen: [] }, ifRevision: 0, writer };
       const first = await store.putStateDocument(input);
