@@ -156,10 +156,11 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         continue;
       }
       if (lock.kind === 'unpushed') {
-        getLog().warn({ envId: env.id, runId: lock.runId }, 'skip_stale_unpushed_commits');
-        console.log(
-          `  Status: Skipped — failed run ${lock.runId.slice(0, 8)} has ${String(lock.commits)} unpushed commit(s)`
+        getLog().warn(
+          { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
+          'skip_stale_unpushed_commits'
         );
+        console.log(`  Status: Skipped — ${lock.display}`);
         skipped++;
         continue;
       }

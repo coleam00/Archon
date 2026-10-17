@@ -35,6 +35,12 @@ function initRepo(repo: string, remote: string, file: string): void {
     join(repo, '.archon', 'workflows', 'probe.yaml'),
     `name: probe\ndescription: Probe checkout\nnodes:\n  - id: probe\n    bash: cat ${file}\n`
   );
+  // A completed run removes a clean worktree it created; the untracked file keeps it
+  // for the tests that inspect the checkout afterwards.
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'probe-keep.yaml'),
+    `name: probe-keep\ndescription: Probe checkout and keep it\nnodes:\n  - id: probe\n    bash: cat ${file} && echo kept > kept.txt\n`
+  );
   git(repo, ['init', '-qb', 'main']);
   // Windows runners default to core.autocrlf=true, which would check the file
   // out as CRLF in the run's worktree.
@@ -102,7 +108,7 @@ test('nested repo registers independently and its worktree retains the child own
         join(import.meta.dir, '..', 'cli.ts'),
         'workflow',
         'run',
-        'probe',
+        'probe-keep',
         invocation,
         '--conversation-id',
         invocation,
@@ -177,7 +183,15 @@ test('legacy relative registration fails with recovery guidance', () => {
         ARCHON_TEST_GIT_LOG: gitLog,
       },
     });
-  const initial = run(['workflow', 'run', 'probe', '--branch', 'legacy-probe', '--from', 'main']);
+  const initial = run([
+    'workflow',
+    'run',
+    'probe-keep',
+    '--branch',
+    'legacy-probe',
+    '--from',
+    'main',
+  ]);
   expect(initial.status, initial.stdout + initial.stderr).toBe(0);
   const db = new Database(join(home, 'archon.db'));
   try {

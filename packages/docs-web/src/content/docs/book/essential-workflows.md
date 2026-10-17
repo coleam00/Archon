@@ -59,7 +59,7 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 **What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. When the work was not done and only a person can take it forward, such as a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, the run pauses as one attention item with the agent's recommendation and continues on your answer: `rerun` runs it again with your note, and `finish` keeps the outcome. The workflow never merges; merging stays with you.
 
-`--input pull_request=<number>` has delivery finish that open PR whichever route triage takes; a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
+`--input pull_request=<number>` has delivery finish that open PR whichever route reaches delivery; a run that stops before delivery leaves it as it was, and a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
 
 **Delivering one part of a multi-part plan**: When an approved plan splits the work into several PRs, tell the run which part it delivers and which contract items each part owns, quoting each item as the contract states it:
 
@@ -126,6 +126,16 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 **When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. Start it by hand, or add the schedule binding the SDLC pack README's "Discoveries" section shows; the pack installs none.
 
 **What it produces**: Filed issues and evidence comments, and one decision record per discovery (`archon state list --prefix discoveries/decisions/`), so a discovery is decided once and a maintainer's answer is remembered.
+
+---
+
+#### `archon-worktree-cleanup`
+
+Runs `archon isolation cleanup --merged` across every registered project: each worktree whose pull request merged goes, with the branch Archon created and its remote branch. A worktree with uncommitted changes, a live run, or commits its pull request did not carry stays. `include_closed: "true"` also removes worktrees whose pull request was closed.
+
+**When to use it**: You run Archon without a server, whose cleanup schedule already does this, and merged worktrees pile up. Add the schedule binding the SDLC pack README's "Worktree cleanup" section shows; the pack installs none.
+
+**What it produces**: The cleanup report on the node's output. It changes no code.
 
 ---
 
@@ -264,6 +274,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into any PR that is behind it) |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
+| `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

@@ -5,8 +5,9 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PACK, PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -153,10 +154,14 @@ describe("upkeep's terminal outcome", () => {
 });
 
 describe("deliver's terminal outcome", () => {
-  interface Outcome { ready: boolean; reason: string; pr_url: string; ci_rerun: string; summary: string }
-  const outcome = (rounds: object): Outcome => {
+  interface Outcome { ready: boolean; reason: string; pr_url: string; ci_rerun: string; threads_checked: boolean; summary: string }
+  const outcome = (rounds: object, source = 'gh'): Outcome => {
     const run = runPackScript('deliver/scripts/outcome', {
-      inputs: { INPUTS_ROUNDS: JSON.stringify(rounds), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      inputs: {
+        INPUTS_ROUNDS: JSON.stringify({ threads_checked: true, ...rounds }),
+        INPUTS_SOURCE: source,
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+      },
       artifacts: { 'listing.json': EMPTY_LISTING },
     });
     expect(run.code).toBe(0);
@@ -171,11 +176,25 @@ describe("deliver's terminal outcome", () => {
       reason: 'delivered',
       pr_url: PR_URL,
       ci_rerun: 'green',
+      threads_checked: true,
       summary: `Ready: Round 1: delivered. all passed\n${PR_URL}`,
     });
     const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
     expect(blocked.summary).toBe('Not ready: Round 1: implement_blocked. x');
+  });
+
+  it('records that review threads were not checked on the forge source', () => {
+    const forge = outcome(
+      { ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'none', contract_left: [], threads_checked: false, summary: 'Round 1: delivered. all passed' },
+      'forge'
+    );
+    expect(forge.threads_checked).toBe(false);
+    expect(forge.summary).toBe(
+      `Ready: Round 1: delivered. all passed\n${PR_URL}\n\nReview threads on the pull request were not checked: delivery reads them through gh, and this run selected the forge source.`
+    );
+    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, threads_checked: false, summary: 'x' }, 'forge');
+    expect(noPr.summary).not.toContain('Review threads');
   });
 
   it('lists the contract items the latest review left open', () => {
@@ -194,20 +213,20 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's report after a node failure", () => {
-  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
+  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string; threads_checked: boolean } =>
     JSON.parse(
       runPackScript('deliver/scripts/report', {
         inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
         artifacts: { 'listing.json': JSON.stringify({ runId: 'run', errors: [], ...listing }), ...artifacts },
       }).stdout
-    ) as { reason: string; pr_url: string };
+    ) as { reason: string; pr_url: string; threads_checked: boolean };
 
-  it('names the pull request a round published before the failure, so the next run continues it', () => {
+  it('names the pull request a round published before the failure, so the next run continues it, and checked no threads', () => {
     const published = failedReport(
       { artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] } },
       { 'nodes/publish.json': JSON.stringify({ number: 42, url: PR_URL }) }
     );
-    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
+    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL, threads_checked: false });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
 });
@@ -230,8 +249,30 @@ describe("ship's continued pull request", () => {
   });
 });
 
+describe("deliver's reasons", () => {
+  interface Node { id: string; output_format?: { properties: { reason: { enum: string[] } } }; loop_group?: { nodes: Node[] } }
+  const reasons = (workflow: string, path: string[]): string[] => {
+    let nodes = (Bun.YAML.parse(readFileSync(join(PACK, workflow), 'utf8')) as { nodes: Node[] }).nodes;
+    let node: Node | undefined;
+    for (const id of path) {
+      node = nodes.find(candidate => candidate.id === id);
+      nodes = node?.loop_group?.nodes ?? [];
+    }
+    return node?.output_format?.properties.reason.enum ?? [];
+  };
+
+  // A dry run ends after one round, so any round's reason can reach both reports.
+  it('reach the deliver and ship reports from every round ending', () => {
+    const round = reasons('deliver/archon-deliver.yaml', ['rounds', 'round']);
+    const report = reasons('deliver/archon-deliver.yaml', ['report']);
+    expect(round).toContain('threads_open');
+    expect(report).toEqual([...round, 'failed']);
+    expect(reasons('ship/archon-ship.yaml', ['report'])).toEqual(expect.arrayContaining(report));
+  });
+});
+
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; threads_checked: boolean; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -251,6 +292,10 @@ describe("deliver's round", () => {
           INPUTS_CI: 'green',
           INPUTS_CI_RERUN: 'none',
           INPUTS_CI_SUMMARY: 'all passed',
+          INPUTS_THREADS_OPEN: '0',
+          INPUTS_THREADS_SUMMARY: 'no thread open',
+          INPUTS_SETTLE_NEEDS_HUMAN: 'null',
+          INPUTS_SETTLE_SUMMARY: 'null',
           ...inputs,
         },
       }).stdout
@@ -291,6 +336,27 @@ describe("deliver's round", () => {
       ready: false,
       reason: 'needs_human',
     });
+  });
+
+  it('does not end ready while a review thread is open, and stops for a person on one no round can settle', () => {
+    const open = round({ INPUTS_THREADS_OPEN: '2', INPUTS_THREADS_SUMMARY: '2 review threads are unresolved' });
+    expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open', threads_checked: true, light_review: false });
+    expect(open.summary).toBe('Round 1: threads_open. 2 review threads are unresolved');
+    expect(round({ INPUTS_PREVIOUS: '3', INPUTS_THREADS_OPEN: '1' })).toMatchObject({ done: true, ready: false, reason: 'round_cap' });
+    const human = round({
+      INPUTS_THREADS_OPEN: '1',
+      INPUTS_SETTLE_NEEDS_HUMAN: 'true',
+      INPUTS_SETTLE_SUMMARY: 'a person decides the API name',
+    });
+    expect(human).toMatchObject({ done: true, ready: false, reason: 'needs_human' });
+    expect(human.summary).toContain('a person decides the API name');
+    // A CI red decides the round before the threads do.
+    expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
+  });
+
+  it('records whether the round read its review threads', () => {
+    expect(round({})).toMatchObject({ reason: 'delivered', threads_checked: true });
+    expect(round({ INPUTS_THREADS_OPEN: 'null' })).toMatchObject({ reason: 'delivered', threads_checked: false });
   });
 
   it('lets the light review of the reshape delta decide the round', () => {

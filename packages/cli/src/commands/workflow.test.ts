@@ -720,7 +720,7 @@ mock.module('@archon/core/db/workflows', () => ({
   createWorkflowRun: mockCreateWorkflowRun,
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
-  failWorkflowRun: mock(() => Promise.resolve()),
+  failWorkflowRun: mock(() => Promise.resolve({ failed: true })),
   cancelWorkflowRun: mockCancelWorkflowRunCommand,
   findChildRuns: mock(() => Promise.resolve([])),
   getRunAncestry: mock(() => Promise.resolve([])),
@@ -3759,6 +3759,7 @@ describe('workflowRunCommand', () => {
     const closesBefore = mockRunLiveOwnerClose.mock.calls.length;
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       expect(mockRunLiveOwnerClose.mock.calls).toHaveLength(closesBefore);
+      return { failed: true };
     });
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')

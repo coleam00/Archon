@@ -1,0 +1,30 @@
+name: archon-worktree-cleanup
+description: |
+  Remove the worktrees, and the branches Archon created for them, whose pull
+  request has merged, across every project registered on this install. It runs
+  the host CLI's `archon isolation cleanup --merged`, so a worktree with
+  uncommitted changes, a run that can still claim it, or commits its pull
+  request did not carry stays. With include_closed true, worktrees whose pull
+  request was closed without merging go too.
+
+  Use when: a schedule binding the operator installed starts it (see the SDLC
+  pack README, "Worktree cleanup"), or an operator runs it by hand. The pack
+  installs no binding.
+  NOT for: worktrees that never opened a pull request (a completed run releases
+  its own clean checkout; the age sweep and `archon complete` handle the rest).
+
+inputs:
+  include_closed:
+    default: "false"
+    description: >-
+      true or false. True also removes worktrees whose pull request was closed
+      without merging. Any other value refuses the run.
+
+# Cleanup runs against the registered projects, not a checkout of its own.
+worktree:
+  enabled: false
+
+nodes:
+  - id: merged
+    script: merged
+    runtime: bun
