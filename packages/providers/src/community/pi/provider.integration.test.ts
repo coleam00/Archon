@@ -274,3 +274,60 @@ test('persisted Pi resume and fork report only the current prompt usage', async 
     writeFileSync(modelsPath, savedModels);
   }
 });
+
+test('a resumed or forked Pi node without tool restrictions gets the default tools, not the tools of the node it resumes', async () => {
+  const toolsPerRequest: string[][] = [];
+  const stub = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { tools?: { function: { name: string } }[] };
+      toolsPerRequest.push((body.tools ?? []).map(t => t.function.name).sort());
+      return sse(completion({ role: 'assistant', content: 'done' }, 'stop'));
+    },
+  });
+  const modelsPath = join(agentDir, 'models.json');
+  const savedModels = readFileSync(modelsPath, 'utf8');
+  writeFileSync(
+    modelsPath,
+    JSON.stringify({
+      providers: {
+        tools: {
+          baseUrl: `http://127.0.0.1:${stub.port}/v1`,
+          api: 'openai-completions',
+          apiKey: 'stub',
+          models: [{ id: 'tools' }],
+        },
+      },
+    })
+  );
+  try {
+    async function turn(
+      nodeConfig: { allowed_tools?: string[] },
+      resume?: string,
+      forkSession = false
+    ) {
+      for await (const chunk of new PiProvider().sendQuery('reply done', repoDir, resume, {
+        model: 'tools/tools',
+        forkSession,
+        nodeConfig,
+      })) {
+        if (chunk.type === 'result') return chunk;
+      }
+      throw new Error('missing Pi result');
+    }
+    const restricted = await turn({ allowed_tools: ['read'] });
+    expect(restricted.sessionId).toBeDefined();
+    for (const forkSession of [false, true]) {
+      const result = await turn({}, restricted.sessionId, forkSession);
+      expect(result.resumed).toBe(true);
+    }
+    expect(toolsPerRequest).toEqual([
+      ['read'],
+      ['bash', 'edit', 'read', 'write'],
+      ['bash', 'edit', 'read', 'write'],
+    ]);
+  } finally {
+    void stub.stop(true);
+    writeFileSync(modelsPath, savedModels);
+  }
+});
