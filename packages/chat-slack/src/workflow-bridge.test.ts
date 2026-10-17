@@ -558,3 +558,36 @@ for (const [cause, setup] of [
     expect(logs.join('\n')).not.toMatch(/private SDK details|U1|C1|Alice/);
   });
 }
+
+test('child card and refused approve preserve host-rendered Slack guidance', async () => {
+  await started();
+  const message = 'Review the child: `/archon-workflow approve child-full-id`';
+  await plugin.onRunEvent({
+    type: 'approval_pending',
+    runId: 'run',
+    nodeId: 'sub',
+    pauseId: 'pause',
+    message,
+    decisions: [{ id: 'approve' }, { id: 'reject' }],
+  });
+  const card = slack.posts.at(-1);
+  expect(card && 'text' in card ? card.text : undefined).toContain(
+    '/archon-workflow approve child-full-id'
+  );
+  expect(JSON.stringify(card && 'blocks' in card ? card.blocks : undefined)).toContain(
+    '/archon-workflow approve child-full-id'
+  );
+  expect(JSON.stringify(card)).not.toContain('/workflow ');
+  const updates = slack.updates.length;
+  runAction.mockResolvedValue({ status: 'refused', message });
+  await click(
+    'respond:0',
+    JSON.stringify({ runId: 'run', nodeId: 'sub', pauseId: 'pause', decision: 'approve' })
+  );
+  const note = slack.posts.at(-1);
+  expect(note && 'text' in note ? note.text : undefined).toContain(
+    '/archon-workflow approve child-full-id'
+  );
+  expect(note && 'text' in note ? note.text : undefined).not.toContain('Could not record');
+  expect(slack.updates).toHaveLength(updates);
+});
