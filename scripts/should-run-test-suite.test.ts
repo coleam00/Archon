@@ -418,20 +418,21 @@ describe('workflow fixture selection', () => {
 });
 
 describe('a push proven by its pull request run', () => {
-  const PUSH = { base: 'previous-tip', head: 'squash-commit' };
+  const PUSH = { head: 'squash-commit' };
+  const PR_BASE = 'pr-base';
   const PR_HEAD = 'pr-head';
   const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/7';
   const JOBS = 'actions/runs/7/jobs?filter=latest&per_page=100';
 
-  /** The API answers for a squash merge of a pull request whose head already contained dev. */
-  function provenApi(): Record<string, unknown> {
+  /** The API answers for a squash merge of a pull request whose head contained its base. */
+  function provenApi(head = PUSH.head): Record<string, unknown> {
     return {
-      [`commits/${PUSH.head}/pulls`]: [
+      [`commits/${head}/pulls`]: [
         { number: 3, merge_commit_sha: 'other', head: { sha: 'other-head' } },
-        { number: 4, merge_commit_sha: PUSH.head, head: { sha: PR_HEAD } },
+        { number: 4, merge_commit_sha: head, base: { sha: PR_BASE }, head: { sha: PR_HEAD } },
       ],
-      [`compare/${PUSH.base}...${PR_HEAD}`]: { status: 'ahead' },
-      [`git/commits/${PUSH.head}`]: { tree: { sha: 'tree-a' } },
+      [`compare/${PR_BASE}...${PR_HEAD}`]: { status: 'ahead' },
+      [`git/commits/${head}`]: { tree: { sha: 'tree-a' } },
       [`git/commits/${PR_HEAD}`]: { tree: { sha: 'tree-a' } },
       [`actions/workflows/test.yml/runs?head_sha=${PR_HEAD}&event=pull_request&status=success`]: {
         workflow_runs: [{ id: 7, html_url: RUN_URL }],
@@ -466,20 +467,20 @@ describe('a push proven by its pull request run', () => {
     }
   });
 
-  test('a head identical to the previous tip also proves', async () => {
+  test('a head identical to its base also proves', async () => {
     const answers = provenApi();
-    answers[`compare/${PUSH.base}...${PR_HEAD}`] = { status: 'identical' };
+    answers[`compare/${PR_BASE}...${PR_HEAD}`] = { status: 'identical' };
 
     expect((await prove(answers)).proven).toBe(true);
   });
 
   test.each([
     [
-      'a head that diverged from the previous tip',
+      'a head that diverged from the base its run merged with',
       (answers: Record<string, unknown>) => {
-        answers[`compare/${PUSH.base}...${PR_HEAD}`] = { status: 'diverged' };
+        answers[`compare/${PR_BASE}...${PR_HEAD}`] = { status: 'diverged' };
       },
-      'does not contain previous-tip (diverged)',
+      'does not contain its base pr-base (diverged)',
     ],
     [
       'a head whose tree differs from the pushed tree',
@@ -563,6 +564,107 @@ describe('a push proven by its pull request run', () => {
     expect(proof).toEqual({
       proven: false,
       reason: `could not check pull request runs: GET commits/${PUSH.head}/pulls answered 502`,
+    });
+  });
+
+  /**
+   * The workflow's own path: the script reads the push event and asks a stub of the GitHub API.
+   * The pushed commit only changes Markdown, so a decision that ignored the proof and followed
+   * the diff would print `false` for the suite.
+   */
+  describe('the script', () => {
+    const trackTempRoot = trackTempRoots();
+
+    function docsOnlyPush(): { repo: string; before: string; after: string } {
+      const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-push-')));
+      const git = (...args: string[]): string => {
+        const r = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+        if (r.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.toString()}`);
+        return r.stdout.toString().trim();
+      };
+      git('init', '-q', '-b', 'dev');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      const commit = (file: string): string => {
+        writeFileSync(join(repo, file), `${file}\n`);
+        git('add', file);
+        git('commit', '-q', '-m', file);
+        return git('rev-parse', 'HEAD');
+      };
+      const before = commit('seed.ts');
+      return { repo, before, after: commit('GUIDE.md') };
+    }
+
+    async function runPush(
+      answers: Record<string, unknown>,
+      push: { repo: string; before: string; after: string },
+      args: readonly string[] = []
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+      const prefix = '/repos/owner/repo/';
+      using server = Bun.serve({
+        port: 0,
+        fetch(request) {
+          const url = new URL(request.url);
+          const path = url.pathname.slice(prefix.length) + url.search;
+          return path in answers
+            ? Response.json(answers[path])
+            : new Response('not found', { status: 404 });
+        },
+      });
+      const eventDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-event-')));
+      const eventPath = join(eventDir, 'event.json');
+      writeFileSync(eventPath, JSON.stringify({ before: push.before, after: push.after }));
+      // Async spawn: a synchronous one would block the stub server this test runs.
+      const child = Bun.spawn(['bun', SCRIPT, ...args], {
+        cwd: push.repo,
+        env: {
+          ...process.env,
+          GITHUB_EVENT_NAME: 'push',
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_TOKEN: 'test-token',
+          GITHUB_REPOSITORY: 'owner/repo',
+          GITHUB_API_URL: server.url.origin,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout: stdout.trim(), stderr };
+    }
+
+    test('a proven push skips the suite and logs its evidence', async () => {
+      const push = docsOnlyPush();
+      const result = await runPush(provenApi(push.after), push);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('false');
+      expect(result.stderr).toContain(RUN_URL);
+    });
+
+    test('an unproven push runs the suite even when its diff is prose', async () => {
+      const push = docsOnlyPush();
+      const answers = provenApi(push.after);
+      answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
+      const result = await runPush(answers, push);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('true');
+      expect(result.stderr).toContain('No pull request run proves this push');
+    });
+
+    test('an unproven push decides fixtures from its diff', async () => {
+      const push = docsOnlyPush();
+      const answers = provenApi(push.after);
+      answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
+      const result = await runPush(answers, push, ['--workflow-fixtures']);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('false');
+      expect(result.stderr).toContain('No pull request run proves this push');
     });
   });
 });

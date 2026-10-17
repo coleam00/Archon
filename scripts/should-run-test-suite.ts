@@ -212,10 +212,12 @@ function text(value: unknown, what: string): string {
  * Whether a pull request run already passed every job on exactly the tree this push lands, so
  * running the suite again would retest it. All four must hold:
  *   1. a pull request was merged as `head`, the pushed commit;
- *   2. that pull request's head contains `base`, the previous branch tip. A `pull_request` run
- *      tests the merge ref, not the head. A head that contains the base the run merged with
- *      makes the merge ref's tree the head's tree. This relies on the branch never being
- *      force-pushed, which AGENTS.md forbids for `dev` and `main`;
+ *   2. that pull request's head contains its recorded `base.sha`. A `pull_request` run tests the
+ *      merge ref, not the head, and GitHub records the base it merged with as the pull request's
+ *      `base.sha` when the head is pushed. A head that contains that base makes the merge ref's
+ *      tree the head's tree. The branch's previous tip is no substitute: after a reset of the
+ *      branch it can lack commits the run's merge ref contained. Retargeting the base also
+ *      rewrites `base.sha` but starts no run, so a run from before a retarget goes undetected;
  *   3. the pushed commit and the pull request head have the same tree;
  *   4. a successful `pull_request` run of `test.yml` at that head concluded `success` in every
  *      job of its latest attempt. A prose-only run skipped its gated jobs, so it proves nothing
@@ -225,7 +227,7 @@ function text(value: unknown, what: string): string {
  * skip merges unchecked code.
  */
 export async function proofFromPullRequestRun(
-  push: { base: string; head: string },
+  push: { head: string },
   get: GitHubGet
 ): Promise<PushProof> {
   try {
@@ -242,11 +244,16 @@ export async function proofFromPullRequestRun(
       'head.sha'
     );
 
-    const status = field(await get(`compare/${push.base}...${prHead}`), 'status', 'the comparison');
+    const prBase = text(
+      field(field(pull, 'base', 'the pull request'), 'sha', 'its base'),
+      'base.sha'
+    );
+
+    const status = field(await get(`compare/${prBase}...${prHead}`), 'status', 'the comparison');
     if (status !== 'ahead' && status !== 'identical') {
       return {
         proven: false,
-        reason: `pull request #${String(number)}'s head does not contain ${push.base} (${String(status)})`,
+        reason: `pull request #${String(number)}'s head does not contain its base ${prBase} (${String(status)})`,
       };
     }
 
