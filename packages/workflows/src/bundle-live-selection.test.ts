@@ -20,11 +20,31 @@ mock.module('@archon/paths', () => ({
   getBundledWorkflowsPath: () => join(app, 'workflows'),
 }));
 
+await mkdir(join(app, 'workflows'), { recursive: true });
+await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
+await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
+await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
+await pack(join(home, 'workflows'), 'home-only', 'home-flow');
+
 const inventory = await import('./defaults/bundle-inventory');
+// A binary embeds the records the build reads from the indexed tree; these stand in for it.
+const actualDefaults = await import('./defaults/bundled-defaults');
+const embedded = await inventory.readBundleRecords(
+  await inventory.collectBundleSources(join(app, 'workflows'), ['shipped'])
+);
+let binary = false;
+mock.module('./defaults/bundled-defaults', () => ({
+  ...actualDefaults,
+  BUNDLED_COMMANDS: embedded.commands,
+  BUNDLED_WORKFLOWS: embedded.workflows,
+  BUNDLED_WORKFLOW_PATHS: embedded.workflowPaths,
+  BUNDLED_WORKFLOW_OWNERS: embedded.workflowOwners,
+  BUNDLED_SCRIPT_PACKS: embedded.scriptPacks,
+  isBinaryBuild: () => binary,
+}));
 const defaults = await import('./defaults/bundled-defaults');
 let selectedPacks = ['shipped'];
 const index = spyOn(inventory, 'readBundleIndex').mockImplementation(async () => selectedPacks);
-const binary = spyOn(defaults, 'isBinaryBuild').mockReturnValue(false);
 const { discoverWorkflows } = await import('./workflow-discovery');
 const { discoverScriptsForCwd } = await import('./script-discovery');
 const { loadCommandPrompt } = await import('./executor-shared');
@@ -60,21 +80,14 @@ async function pack(directory: string, packName: string, name: string): Promise<
   await write(join(path, 'scripts', 'helper.ts'), `console.log('${name}')`);
 }
 
-await mkdir(join(app, 'workflows'), { recursive: true });
-await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
-await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
-await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
-await pack(join(home, 'workflows'), 'home-only', 'home-flow');
-
 beforeEach(() => {
   app = join(root, 'app');
   selectedPacks = ['shipped'];
   index.mockImplementation(async () => selectedPacks);
-  binary.mockReturnValue(false);
+  binary = false;
 });
 
 afterAll(async () => {
-  binary.mockRestore();
   index.mockRestore();
   if (originalHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalHome;
@@ -154,7 +167,7 @@ test('a captured bundle retains formerly indexed resources without reading the l
 test('a capture an older binary took keeps resolving the flat commands it froze', async () => {
   // Current builds bundle only packaged commands. An older binary embedded flat ones and
   // wrote them into its captures, so a run paused before an upgrade must still find them.
-  binary.mockReturnValue(true);
+  binary = true;
   Object.assign(defaults.BUNDLED_COMMANDS, { 'flat-command': 'flat command' });
   let roots: ReturnType<typeof capturedSourceRoots>;
   try {
@@ -215,7 +228,7 @@ test('binary discovery preserves an authored yml filename when a project overrid
     join(project, '.archon', 'workflows', `${name}.yml`),
     yaml.replace('bundled version', 'project version')
   );
-  binary.mockReturnValue(true);
+  binary = true;
   index.mockImplementation(async () => {
     throw new Error('A binary must not read the source index');
   });

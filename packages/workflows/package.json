@@ -165,9 +165,6 @@
       "src/mcp-path.test.ts"
     ],
     [
-      "src/workflow-corpus.test.ts"
-    ],
-    [
       "src/script-discovery.test.ts"
     ],
     [
@@ -220,8 +217,7 @@
       "src/scripts/generate-node-execution-reference.test.ts"
     ],
     [
-      "src/checkout-observation.test.ts",
-      "src/implement-guard-conformance.test.ts"
+      "src/checkout-observation.test.ts"
     ],
     [
       "src/structured-output.test.ts"
