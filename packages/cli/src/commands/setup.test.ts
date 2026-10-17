@@ -2,15 +2,7 @@
  * Tests for setup command utility functions
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import {
-  existsSync,
-  readFileSync,
-  mkdirSync,
-  mkdtempSync,
-  writeFileSync,
-  rmSync,
-  readdirSync,
-} from 'fs';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, readdirSync } from 'fs';
 import { join, dirname, relative, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
@@ -53,13 +45,8 @@ describe('setup command', () => {
     mkdirSync(TEST_DIR, { recursive: true });
   });
 
-  afterEach(() => {
-    // Clean up test directory
-    try {
-      rmSync(TEST_DIR, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  afterEach(async () => {
+    await removeTempTree(TEST_DIR);
   });
 
   describe('generateWebhookSecret', () => {
@@ -627,10 +614,10 @@ describe('writeScopedEnv (#1303)', () => {
     process.env.ARCHON_HOME = HOME_DIR;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
-    rmSync(ROOT, { recursive: true, force: true });
+    await removeTempTree(ROOT);
   });
 
   it('fresh home scope writes content with no backup', () => {
@@ -897,8 +884,8 @@ describe('writeHomePiModelConfig', () => {
     process.env.ARCHON_HOME = tmpDir;
   });
 
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tmpDir);
     if (originalHome !== undefined) {
       process.env.ARCHON_HOME = originalHome;
     } else {
@@ -1054,8 +1041,8 @@ describe('readInstallDefaultModel (#1999)', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'archon-default-model-'));
   });
 
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tmpDir);
   });
 
   const configAt = (content: string): string => {
