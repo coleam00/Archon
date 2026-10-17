@@ -423,6 +423,7 @@ describe('a push proven by its pull request run', () => {
   const PR_HEAD = 'pr-head';
   const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/7';
   const JOBS = 'actions/runs/7/jobs?filter=latest&per_page=100';
+  const EVENTS = (page: number) => `issues/4/events?per_page=100&page=${page}`;
 
   /** The API answers for a squash merge of a pull request whose head contained its base. */
   function provenApi(head = PUSH.head): Record<string, unknown> {
@@ -431,6 +432,7 @@ describe('a push proven by its pull request run', () => {
         { number: 3, merge_commit_sha: 'other', head: { sha: 'other-head' } },
         { number: 4, merge_commit_sha: head, base: { sha: PR_BASE }, head: { sha: PR_HEAD } },
       ],
+      [EVENTS(1)]: [{ event: 'labeled' }, { event: 'head_ref_force_pushed' }],
       [`compare/${PR_BASE}...${PR_HEAD}`]: { status: 'ahead' },
       [`git/commits/${head}`]: { tree: { sha: 'tree-a' } },
       [`git/commits/${PR_HEAD}`]: { tree: { sha: 'tree-a' } },
@@ -481,6 +483,21 @@ describe('a push proven by its pull request run', () => {
         answers[`compare/${PR_BASE}...${PR_HEAD}`] = { status: 'diverged' };
       },
       'does not contain its base pr-base (diverged)',
+    ],
+    [
+      'a pull request whose base was retargeted after its run',
+      (answers: Record<string, unknown>) => {
+        answers[EVENTS(1)] = [{ event: 'labeled' }, { event: 'base_ref_changed' }];
+      },
+      "#4's base was changed",
+    ],
+    [
+      'a base change past the first page of events',
+      (answers: Record<string, unknown>) => {
+        answers[EVENTS(1)] = Array.from({ length: 100 }, () => ({ event: 'labeled' }));
+        answers[EVENTS(2)] = [{ event: 'base_ref_changed' }];
+      },
+      "#4's base was changed",
     ],
     [
       'a head whose tree differs from the pushed tree',

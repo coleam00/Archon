@@ -216,8 +216,9 @@ function text(value: unknown, what: string): string {
  *      merge ref, not the head, and GitHub records the base it merged with as the pull request's
  *      `base.sha` when the head is pushed. A head that contains that base makes the merge ref's
  *      tree the head's tree. The branch's previous tip is no substitute: after a reset of the
- *      branch it can lack commits the run's merge ref contained. Retargeting the base also
- *      rewrites `base.sha` but starts no run, so a run from before a retarget goes undetected;
+ *      branch it can lack commits the run's merge ref contained. Retargeting the base rewrites
+ *      `base.sha` without starting a run, so a pull request whose base ever changed proves
+ *      nothing: its `base.sha` may not be the base any run merged with;
  *   3. the pushed commit and the pull request head have the same tree;
  *   4. a successful `pull_request` run of `test.yml` at that head concluded `success` in every
  *      job of its latest attempt. A prose-only run skipped its gated jobs, so it proves nothing
@@ -244,6 +245,12 @@ export async function proofFromPullRequestRun(
       'head.sha'
     );
 
+    if (await baseEverChanged(number, get)) {
+      return {
+        proven: false,
+        reason: `pull request #${String(number)}'s base was changed, so its base.sha may not be the base its run merged with`,
+      };
+    }
     const prBase = text(
       field(field(pull, 'base', 'the pull request'), 'sha', 'its base'),
       'base.sha'
@@ -317,6 +324,19 @@ export async function proofFromPullRequestRun(
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
     return { proven: false, reason: `could not check pull request runs: ${cause}` };
+  }
+}
+
+const EVENTS_PAGE = 100;
+
+async function baseEverChanged(number: unknown, get: GitHubGet): Promise<boolean> {
+  for (let page = 1; ; page++) {
+    const events = list(
+      await get(`issues/${String(number)}/events?per_page=${EVENTS_PAGE}&page=${page}`),
+      'the pull request events'
+    );
+    if (events.some(event => field(event, 'event', 'an event') === 'base_ref_changed')) return true;
+    if (events.length < EVENTS_PAGE) return false;
   }
 }
 
