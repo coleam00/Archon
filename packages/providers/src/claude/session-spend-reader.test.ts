@@ -11,24 +11,31 @@ import { buildDockerExecTranscriptReadArgs } from './container-spawn';
 import { parseSessionSpend, readSessionSpendBaseline } from './session-spend-reader';
 
 const track = trackTempRoots();
-const sessionId = '15a9997d-9290-4413-b04b-fe34df088586';
+const sessionId = '55a9a375-ec0a-40b3-a92d-177efa7a763b';
 // Captured from a real SDK error_max_turns turn; error and graceful abort durability
 // were checked on this version. An upgrade must recapture this private SDK format.
+const capturedSdkVersion = '0.3.302';
 const fixture = readFileSync(
-  join(import.meta.dir, 'fixtures/cost-state.sdk-0.3.289.jsonl'),
+  join(import.meta.dir, `fixtures/cost-state.sdk-${capturedSdkVersion}.jsonl`),
   'utf8'
 );
 const record = JSON.parse(fixture) as Record<string, unknown>;
 const known = {
   kind: 'known' as const,
   spend: {
-    costUsd: 0.01558,
+    costUsd: 0.0024422000000000003,
     modelUsage: {
-      'claude-haiku-4-5-20251001': {
-        inputTokens: 920,
-        outputTokens: 280,
+      'claude-haiku-5-5': {
+        inputTokens: 1193,
+        outputTokens: 17,
         cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 6630,
+        cacheCreationInputTokens: 0,
+      },
+      'claude-haiku-4-5': {
+        inputTokens: 10,
+        outputTokens: 142,
+        cacheReadInputTokens: 15944,
+        cacheCreationInputTokens: 0,
       },
     },
   },
@@ -48,7 +55,7 @@ function read(root: string, id = sessionId) {
 test('real cost-state fixture conforms to the installed SDK version', () => {
   const sdk = createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
   expect(JSON.parse(readFileSync(join(dirname(sdk), 'package.json'), 'utf8')).version).toBe(
-    '0.3.289'
+    capturedSdkVersion
   );
   expect(parseSessionSpend(fixture, sessionId)).toEqual(known);
 });
@@ -61,7 +68,7 @@ test('old output-only records remain usable for cost and model selection', () =>
     )
   ).toEqual({
     kind: 'known',
-    spend: { costUsd: 0.01558, modelUsage: { main: { outputTokens: 280 } } },
+    spend: { costUsd: 0.0024422000000000003, modelUsage: { main: { outputTokens: 280 } } },
   });
 });
 
@@ -101,7 +108,7 @@ test.each([
 test('an empty model record is valid, while a missing cost record is unknown', () => {
   expect(parseSessionSpend(JSON.stringify({ ...record, modelUsage: {} }), sessionId)).toEqual({
     kind: 'known',
-    spend: { costUsd: 0.01558, modelUsage: {} },
+    spend: { costUsd: 0.0024422000000000003, modelUsage: {} },
   });
   expect(parseSessionSpend('{"type":"user"}\n', sessionId)).toEqual({ kind: 'unknown' });
 });
