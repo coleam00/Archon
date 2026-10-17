@@ -29,6 +29,7 @@ import { spawnSync } from 'child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { isFinalReleaseTag } from './release-tags';
 
 const SCHEMA_PATH = resolve(import.meta.dir, '..', 'migrations', '000_combined.sql');
 const SCHEMA_REPO_PATH = 'migrations/000_combined.sql';
@@ -40,7 +41,7 @@ interface Baseline {
 
 /**
  * Deliberately `spawnSync` rather than `@archon/git`: this script must run in CI
- * with no `bun install` (it imports nothing outside Node builtins), and reads
+ * with no `bun install` (only local modules and Node builtins), and reads
  * history — `git show <ref>:<path>` — rather than manipulating worktrees, which
  * is what `@archon/git` covers. The argument array means no ref ever reaches a
  * shell.
@@ -107,7 +108,7 @@ function admin(sql: string): { code: number; out: string } {
  * grows with schema churn instead of release cadence.
  */
 function defaultBaselines(): string[] {
-  const tags = git('tag', '--sort=creatordate').stdout.split('\n').filter(Boolean);
+  const tags = git('tag', '--sort=creatordate').stdout.split('\n').filter(isFinalReleaseTag);
   const oldestTagPerSchema = new Map<string, string>();
   let withoutSchema = 0;
 
