@@ -147,7 +147,7 @@ jobs:
       - name: Build and smoke-test Slack chat release binary
         if: runner.os == 'Linux' && matrix.shard == 'scripts'
         run: |
-          bun build --compile packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
           bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
 
       # No Windows Defender exclusion step here on purpose. It was the named
