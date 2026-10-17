@@ -78,7 +78,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.forge).toEqual([]);
   });
 
-  it.each(['deliver', 'pr', 'ship', 'upkeep'])('emits the selected forge source from %s', entry => {
+  it.each(['deliver', 'pr', 'ship', 'upkeep', 'forge-check'])('emits the selected forge source from %s', entry => {
     const run = check({ entry, forge: { kind: 'fake', response: ANSWERED } });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
     expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
@@ -283,7 +283,7 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     ]);
   });
 
-  it.each(['deliver', 'pr', 'ship', 'upkeep'])(
+  it.each(['deliver', 'pr', 'ship', 'upkeep', 'forge-check'])(
     'refuses %s when host authentication succeeds but repository access fails',
     entry => {
       const run = check({
