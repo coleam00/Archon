@@ -117,6 +117,29 @@ describe('validate check selection', () => {
     }
   });
 
+  test('pack tests run in CI only on a dispatch that asks for them', () => {
+    // An unconditional `--only pack-tests` would put the slow pack tests back on every PR.
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+    ) as {
+      on: { workflow_dispatch: { inputs: Record<string, { type: string; default: unknown }> } };
+      jobs: Record<string, { steps?: { if?: string; run?: string }[] }>;
+    };
+    expect(workflow.on.workflow_dispatch.inputs['pack-tests']).toMatchObject({
+      type: 'boolean',
+      default: false,
+    });
+    const packSteps = Object.values(workflow.jobs)
+      .flatMap(job => job.steps ?? [])
+      .filter(step =>
+        [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)].some(match =>
+          match[1].split(',').includes('pack-tests')
+        )
+      );
+    expect(packSteps.length).toBeGreaterThan(0);
+    for (const step of packSteps) expect(step.if ?? '').toContain('inputs.pack-tests');
+  });
+
   test('the checks run every shard of the test plan and name no other', () => {
     const planned = VALIDATE_CHECKS.flatMap(check => check.commands).flatMap(command =>
       command[3] === '--plan' ? [command[4]] : []

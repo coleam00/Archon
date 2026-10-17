@@ -58,6 +58,7 @@ bun run validate                            # optional local checks
 bun run validate --only generated-files     # generated artifacts
 bun run validate --only format              # formatting, also run by the staged-file hook
 bun run validate --only workflow-fixtures   # when changing pack or fixture execution
+bun run test --plan pack                    # when changing .archon/workflows or .archon/scripts
 ```
 
 `scripts/validate.ts` owns the check commands and CI selects them by ID.
@@ -76,6 +77,13 @@ prose change's test-visible effects are checked on `dev`. Workflow fixtures run
 when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or
 `packages/cli/src/commands/workflow.ts` changes; both fixture jobs still report success
 when their execution steps skip. Dispatch runs fixtures regardless of paths.
+
+CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) on pull
+requests or pushes. Run them with `bun run test --plan pack` when you change
+`.archon/workflows/` or `.archon/scripts/`; a single file runs with
+`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
+Test Suite workflow with `pack-tests` set:
+`gh workflow run test.yml --ref <branch> -f pack-tests=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine
 load matters. The audit for [#3985](https://github.com/coleam00/Archon/issues/3985)

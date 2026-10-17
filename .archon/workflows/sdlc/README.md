@@ -204,6 +204,11 @@ covers every TypeScript file under `.archon/workflows/`, so it needs no globs of
 own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
 rather than going quietly unchecked.
 
+The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI does not run
+them on pull requests or pushes. Run `bun run test --plan pack` when you change
+`.archon/workflows/` or `.archon/scripts/`, or dispatch the Test Suite workflow with
+`pack-tests` set.
+
 Three rules, each protecting something a script cannot get back on its own:
 
 - **Read every binding as a literal `process.env.INPUTS_<NAME>`.** The engine scans

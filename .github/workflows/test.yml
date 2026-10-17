@@ -2,6 +2,11 @@ name: Test Suite
 
 on:
   workflow_dispatch:
+    inputs:
+      pack-tests:
+        description: 'Also run the pack script tests under .archon/scripts/'
+        type: boolean
+        default: false
   push:
     branches: [main, dev]
   # Draft pull requests skip the suite: their branches are pushed many times while the
@@ -105,7 +110,8 @@ jobs:
   # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
   #
   # The test shards are the `shard` names in `ROOT_TEST_PLAN` (scripts/repo-tests.ts). The
-  # workspace shards run here; the root scripts shard runs in `test-scripts`. They are two jobs
+  # workspace shards run here; the root scripts shard runs in `test-scripts`, and so does the
+  # pack shard, only on a dispatch that sets `pack-tests`. They are two jobs
   # because each has its own gate, and a job-level `if` cannot read the matrix. A skipped job,
   # unlike a skipped step, keeps a pull request run from proving its merge, so the dev push
   # then runs every shard.
@@ -266,6 +272,21 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only cli-import-boundary,package-edges,generated-files,script-tests
+
+      # The pack shard runs only on a dispatch that sets `pack-tests`. These are steps, not a
+      # job: a job skipped on every pull request would keep that run from proving its merge.
+      - name: Pack script tests (Linux)
+        if: inputs.pack-tests && runner.os == 'Linux'
+        run: bun run validate --only pack-tests
+
+      - name: Pack script tests (Windows)
+        if: inputs.pack-tests && runner.os == 'Windows'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only pack-tests
 
   # Windows fixtures run beside the Windows tests rather than after them: they are the
   # second-slowest Windows check, and serial they made that leg the critical path.
