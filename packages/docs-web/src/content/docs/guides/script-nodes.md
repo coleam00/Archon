@@ -474,11 +474,10 @@ Then reference it by name from any repo's workflow:
   see EOF immediately.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
 - **Cancelling mid-execution** — there is no cooperative cancellation signal.
-  When cancel stops the run's owner process, a script subprocess in the owner's
-  process group stops with it. When the owner still answers, as under
-  `archon serve`, the run stops at its next status check and a running script
-  keeps running until it exits or reaches its `timeout`. Declare a `timeout` on
-  a script that can hang.
+  Cancelling the run ends a running script's process tree instead; see
+  [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts)
+  for what it reaches. Without a `timeout`, a script that hangs runs until it is
+  cancelled.
 
 ## See Also
 
