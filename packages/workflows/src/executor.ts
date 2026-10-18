@@ -96,8 +96,9 @@ import {
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
 } from './workflow-source';
-import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
-import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
+import { executeDagWorkflow, type PriorRunUsage } from './dag-executor';
+import { childOutcomeFromRun } from './dag/child-run';
+import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
 import {
   CONTINUATION_RETRY_MS,
   executionClaim,

@@ -1,8 +1,3 @@
-import {
-  ActiveContainerEnvironmentsError,
-  ActiveWorktreeEnvironmentsError,
-  WorktreeRegistrationChangedError,
-} from '@archon/core/db/codebase-delete-error';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
 import { deleteWebPushSubscription } from '@archon/core/db/web-push-subscriptions';
@@ -14,7 +9,6 @@ import {
   webPushPayloadSchema,
 } from '@archon/core/schemas/web-push';
 import { getAgentProvider } from '@archon/core/services/provider-admission';
-import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
@@ -22,16 +16,13 @@ import { RunActionForbiddenError } from '@archon/core/operations/run-authorizati
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
-import type { RunActor } from '@archon/core';
 import { providerRegistry } from '@archon/providers';
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -52,13 +43,7 @@ import {
   loadRepoConfig,
   toSafeConfig,
   updateGlobalConfig,
-  cloneRepository,
   type CloneOptions,
-  inspectProjectBaseBranch,
-  ProjectRegistrationError,
-  registerRepository,
-  registerFolder,
-  ConversationNotFoundError,
   generateTitleForUser,
   resolveTitleRequest,
 } from '@archon/core';
@@ -66,14 +51,6 @@ import type { AliasesPatch } from '@archon/core';
 import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
-  ConfiguredBaseBranchNotFoundError,
-  isWorktreeRegistered,
-  removeWorktree,
-  toRepoPath,
-  toWorktreePath,
-} from '@archon/git';
-import {
-  canonicalizeProjectPath,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
   getBundledWorkflowsPath,
@@ -84,7 +61,6 @@ import {
   isRunArtifactsEngineEntry,
   resolveRunStorageRoot,
   isInsideArchonHome,
-  isInsideArchonWorkspaces,
   isPathInside,
   getArchonHome,
   isDocker,
@@ -126,23 +102,18 @@ import {
 import {
   authorizeConversation,
   authorizeDispatchConversation,
-  requireConversationVisibility,
   requireWebUser,
   resolveAuthContext,
   resolveRunActor,
-  resolveWebUserId,
 } from './api-request-auth';
-import {
-  toApiCodebase,
-  toApiConversation,
-  toApiDashboardWorkflowRun,
-  toApiMessage,
-  toApiWorkflowRun,
-} from './api-serializers';
+import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
 import { createOrchestratorDispatch, persistUploadedFiles } from './api-message-dispatch';
 import { toCleanEntry, validatePresetEntry } from './api-preset-entry';
 import { registerAuthRoutes } from './api.auth';
 import { registerProviderKeyRoutes } from './api.provider-keys';
+import { registerConversationRoutes } from './api.conversations';
+import { registerMessageRoutes } from './api.messages';
+import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.codebases';
 import { registerUserAiPrefsRoutes } from './api.user-ai-prefs';
 
 interface RawWorkflowFile {
@@ -310,8 +281,6 @@ function findBundledWorkflow(
 }
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
-import * as envVarDb from '@archon/core/db/env-vars';
-import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
@@ -384,40 +353,13 @@ import {
   listArtifactsResponseSchema,
   workflowSourceSchema,
 } from './schemas/workflow.schemas';
-import {
-  conversationListResponseSchema,
-  listConversationsQuerySchema,
-  conversationIdParamsSchema,
-  conversationSchema,
-  createConversationBodySchema,
-  createConversationResponseSchema,
-  updateConversationBodySchema,
-  successResponseSchema,
-  messageListResponseSchema,
-  listMessagesQuerySchema,
-  dispatchResponseSchema,
-} from './schemas/conversation.schemas';
-import {
-  codebaseListResponseSchema,
-  codebaseSchema,
-  codebaseIdParamsSchema,
-  addCodebaseBodySchema,
-  renameCodebaseBodySchema,
-  inspectBaseBranchBodySchema,
-  inspectBaseBranchResponseSchema,
-  deleteCodebaseResponseSchema,
-  codebaseEnvVarsResponseSchema,
-  setEnvVarBodySchema,
-  codebaseEnvVarParamsSchema,
-  envVarMutationResponseSchema,
-} from './schemas/codebase.schemas';
+import { dispatchResponseSchema } from './schemas/conversation.schemas';
 import {
   updateAssistantConfigBodySchema,
   updateAssistantConfigResponseSchema,
   configResponseSchema,
   updateTiersBodySchema,
   updateAliasesBodySchema,
-  codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import { validateAliasName } from './alias-name';
 import { TIER_NAMES, isTierName } from '@archon/workflows/model-validation';
@@ -613,336 +555,6 @@ const getCommandsRoute = createRoute({
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
-  },
-});
-
-// =========================================================================
-// Conversation route configs
-// =========================================================================
-
-const getConversationsRoute = createRoute({
-  method: 'get',
-  path: '/api/conversations',
-  tags: ['Conversations'],
-  summary: 'List conversations',
-  request: { query: listConversationsQuerySchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: conversationListResponseSchema } },
-      description: 'OK',
-    },
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const getConversationRoute = createRoute({
-  method: 'get',
-  path: '/api/conversations/{id}',
-  tags: ['Conversations'],
-  summary: 'Get a conversation by platform conversation ID',
-  request: { params: conversationIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: conversationSchema } },
-      description: 'Conversation',
-    },
-    404: jsonError('Not found'),
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const createConversationRoute = createRoute({
-  method: 'post',
-  path: '/api/conversations',
-  tags: ['Conversations'],
-  summary: 'Create a new conversation',
-  request: {
-    body: {
-      content: { 'application/json': { schema: createConversationBodySchema } },
-      required: false,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: createConversationResponseSchema } },
-      description: 'Created conversation',
-    },
-    400: jsonError('Bad request'),
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const updateConversationRoute = createRoute({
-  method: 'patch',
-  path: '/api/conversations/{id}',
-  tags: ['Conversations'],
-  summary: 'Update a conversation (title)',
-  request: {
-    params: conversationIdParamsSchema,
-    body: {
-      content: { 'application/json': { schema: updateConversationBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: successResponseSchema } },
-      description: 'Updated',
-    },
-    400: jsonError('Bad request'),
-    404: jsonError('Not found'),
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const deleteConversationRoute = createRoute({
-  method: 'delete',
-  path: '/api/conversations/{id}',
-  tags: ['Conversations'],
-  summary: 'Soft-delete a conversation',
-  request: { params: conversationIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: successResponseSchema } },
-      description: 'Deleted',
-    },
-    404: jsonError('Not found'),
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const listMessagesRoute = createRoute({
-  method: 'get',
-  path: '/api/conversations/{id}/messages',
-  tags: ['Conversations'],
-  summary: 'List message history for a conversation',
-  request: {
-    params: conversationIdParamsSchema,
-    query: listMessagesQuerySchema,
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: messageListResponseSchema } },
-      description: 'Message list',
-    },
-    404: jsonError('Not found'),
-    401: jsonError('Authentication required'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-// Body validation is handled manually in the handler (multipart vs JSON branching).
-// Declaring both content types in the OpenAPI route causes @hono/zod-openapi to
-// validate JSON bodies against the multipart schema. We keep `request.body` empty
-// and document the schemas via the OpenAPI spec comments instead.
-const sendMessageRoute = createRoute({
-  method: 'post',
-  path: '/api/conversations/{id}/message',
-  tags: ['Conversations'],
-  summary: 'Send a message (JSON or multipart with file uploads)',
-  description:
-    'Accepts `application/json` with `{ message: string }` or `multipart/form-data` ' +
-    'with a `message` field and optional file attachments (max 5 files, 10 MB each).',
-  request: {
-    params: conversationIdParamsSchema,
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: dispatchResponseSchema } },
-      description: 'Accepted',
-    },
-    400: jsonError('Bad request'),
-    401: jsonError('Authentication required'),
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-    503: jsonError('Identity backend unavailable'),
-  },
-});
-
-// =========================================================================
-// Codebase route configs
-// =========================================================================
-
-const listCodebasesRoute = createRoute({
-  method: 'get',
-  path: '/api/codebases',
-  tags: ['Codebases'],
-  summary: 'List registered codebases',
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseListResponseSchema } },
-      description: 'OK',
-    },
-    500: jsonError('Server error'),
-  },
-});
-
-const getCodebaseRoute = createRoute({
-  method: 'get',
-  path: '/api/codebases/{id}',
-  tags: ['Codebases'],
-  summary: 'Get a codebase by ID',
-  request: { params: codebaseIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Codebase',
-    },
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
-const inspectBaseBranchRoute = createRoute({
-  method: 'post',
-  path: '/api/codebases/base-branch',
-  tags: ['Codebases'],
-  summary: 'Inspect the remote default without registering a project',
-  request: {
-    body: {
-      content: { 'application/json': { schema: inspectBaseBranchBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: inspectBaseBranchResponseSchema } },
-      description: 'Base branch inspection',
-    },
-    400: jsonError('Bad request'),
-    500: jsonError('Server error'),
-  },
-});
-
-const addCodebaseRoute = createRoute({
-  method: 'post',
-  path: '/api/codebases',
-  tags: ['Codebases'],
-  summary: 'Register a codebase (clone from URL or register local path)',
-  request: {
-    body: {
-      content: { 'application/json': { schema: addCodebaseBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Codebase already existed',
-    },
-    201: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Codebase created',
-    },
-    400: jsonError('Bad request'),
-    500: jsonError('Server error'),
-  },
-});
-
-const renameCodebaseRoute = createRoute({
-  method: 'patch',
-  path: '/api/codebases/{id}',
-  tags: ['Codebases'],
-  summary: 'Rename a codebase',
-  description:
-    'Changes the display name. Refused with 409 when another codebase already uses the name, ' +
-    'or when the new name would move the project storage (worktrees, state, logs, artifacts).',
-  request: {
-    params: codebaseIdParamsSchema,
-    body: {
-      content: { 'application/json': { schema: renameCodebaseBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Renamed codebase',
-    },
-    400: jsonError('Bad request'),
-    404: jsonError('Codebase not found'),
-    409: jsonError('Name already used, or the rename would move project storage'),
-    500: jsonError('Server error'),
-  },
-});
-
-const deleteCodebaseRoute = createRoute({
-  method: 'delete',
-  path: '/api/codebases/{id}',
-  tags: ['Codebases'],
-  summary: 'Delete a codebase and clean up associated resources',
-  request: { params: codebaseIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: deleteCodebaseResponseSchema } },
-      description: 'Deleted',
-    },
-    404: jsonError('Not found'),
-    409: jsonError('Active container environments or newly registered worktrees require cleanup'),
-    500: jsonError('Server error'),
-  },
-});
-
-// =========================================================================
-// Codebase env var route configs
-// =========================================================================
-
-const listEnvVarsRoute = createRoute({
-  method: 'get',
-  path: '/api/codebases/{id}/env',
-  tags: ['Codebases'],
-  summary: 'List env vars for a codebase',
-  request: { params: codebaseIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseEnvVarsResponseSchema } },
-      description: 'Env vars for codebase',
-    },
-    404: jsonError('Codebase not found'),
-  },
-});
-
-const setEnvVarRoute = createRoute({
-  method: 'put',
-  path: '/api/codebases/{id}/env',
-  tags: ['Codebases'],
-  summary: 'Set (upsert) an env var for a codebase',
-  request: {
-    params: codebaseIdParamsSchema,
-    body: { content: { 'application/json': { schema: setEnvVarBodySchema } } },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: envVarMutationResponseSchema } },
-      description: 'Env var set',
-    },
-    404: jsonError('Codebase not found'),
-  },
-});
-
-const deleteEnvVarRoute = createRoute({
-  method: 'delete',
-  path: '/api/codebases/{id}/env/{key}',
-  tags: ['Codebases'],
-  summary: 'Delete an env var from a codebase',
-  request: { params: codebaseEnvVarParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: envVarMutationResponseSchema } },
-      description: 'Env var deleted',
-    },
-    404: jsonError('Codebase not found'),
   },
 });
 
@@ -1512,22 +1124,6 @@ const getOpencodeCredentialsRoute = createRoute({
   },
 });
 
-const getCodebaseEnvironmentsRoute = createRoute({
-  method: 'get',
-  path: '/api/codebases/{id}/environments',
-  tags: ['Codebases'],
-  summary: 'List isolation environments for a codebase',
-  request: { params: codebaseIdParamsSchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseEnvironmentsResponseSchema } },
-      description: 'List of isolation environments',
-    },
-    404: jsonError('Codebase not found'),
-    500: jsonError('Server error'),
-  },
-});
-
 const getWebPushKeyRoute = createRoute({
   method: 'get',
   path: '/api/web-push/key',
@@ -1805,6 +1401,9 @@ export function registerApiRoutes(
   registerUserAiPrefsRoutes(app);
 
   const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
+  registerConversationRoutes(app, { webAdapter, dispatchToOrchestrator });
+  registerMessageRoutes(app, { webAdapter, dispatchToOrchestrator });
+  registerCodebaseRoutes(app, registration);
 
   /**
    * What happens after a gate answer is recorded. The routes never resume the run:
@@ -1817,644 +1416,6 @@ export function registerApiRoutes(
       ? 'The run continues on its own.'
       : `Run \`archon workflow resume ${run.id}\` from the CLI to continue it.`;
   }
-
-  // GET /api/conversations - List conversations
-  registerOpenApiRoute(getConversationsRoute, async c => {
-    try {
-      const platformType = c.req.query('platform') ?? undefined;
-      const codebaseId = c.req.query('codebaseId') ?? undefined;
-      const visibility = await requireConversationVisibility(c);
-      if ('error' in visibility) return visibility.error;
-      // `mine=true` narrows every platform to the caller. Off enforcement it is
-      // best-effort: it applies only when an identity happens to resolve.
-      let userId: string | undefined;
-      if (c.req.query('mine') === 'true') {
-        userId = visibility.kind === 'owner' ? visibility.userId : await resolveWebUserId(c);
-      }
-      const conversations = await conversationDb.listConversations(visibility, {
-        platformType,
-        codebaseId,
-        excludeEmpty: true,
-        userId,
-      });
-      return c.json(conversations.map(toApiConversation));
-    } catch (error) {
-      getLog().error({ err: error }, 'list_conversations_failed');
-      return apiError(c, 500, 'Failed to list conversations');
-    }
-  });
-
-  // GET /api/conversations/:id - Get single conversation by platform conversation ID
-  registerOpenApiRoute(getConversationRoute, async c => {
-    const platformId = c.req.param('id') ?? '';
-    try {
-      const access = await authorizeConversation(c, { platformId }, 'read');
-      if ('error' in access) return access.error;
-      return c.json(toApiConversation(access.conversation));
-    } catch (error) {
-      getLog().error({ err: error, platformId }, 'get_conversation_failed');
-      return apiError(c, 500, 'Failed to get conversation');
-    }
-  });
-
-  // POST /api/conversations - Create new conversation
-  // Accepts optional `message` field for atomic create+send (avoids ghost "Untitled" entries)
-  registerOpenApiRoute(createConversationRoute, async c => {
-    try {
-      const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
-      const visibility = await requireConversationVisibility(c);
-      if ('error' in visibility) return visibility.error;
-      // Under enforcement the strictly resolved caller owns the row; a second,
-      // soft resolution could fail and leave it ownerless.
-      const actor: RunActor =
-        visibility.kind === 'owner'
-          ? { kind: 'user', userId: visibility.userId }
-          : await resolveRunActor(c);
-      const userId = actor.kind === 'user' ? actor.userId : undefined;
-
-      // Validate codebase exists if provided
-      if (codebaseId) {
-        const codebase = await codebaseDb.getCodebase(codebaseId);
-        if (!codebase) {
-          return apiError(c, 400, 'Codebase not found', `No codebase with id "${codebaseId}"`);
-        }
-      }
-
-      const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      const conversation = await conversationDb.getOrCreateConversation(
-        'web',
-        conversationId,
-        codebaseId,
-        undefined,
-        userId
-      );
-      webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
-
-      // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
-      if (message) {
-        try {
-          await messageDb.addMessage(conversation.id, 'user', message, undefined, userId);
-        } catch (e: unknown) {
-          // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
-          // The existing /message endpoint emits a warning because the stream is guaranteed to be active.
-          getLog().error({ err: e, conversationId: conversation.id }, 'message_persistence_failed');
-        }
-
-        // Set placeholder title immediately so the sidebar never shows "Untitled conversation"
-        const placeholderTitle = message.length > 60 ? message.slice(0, 60) + '...' : message;
-        await conversationDb.updateConversationTitle(conversation.id, placeholderTitle);
-
-        // Generate proper AI title for non-command messages (fire-and-forget, overwrites placeholder).
-        // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
-        // assistant default — the config-default Codex model may not be usable on the
-        // active account (e.g. ChatGPT-plan accounts, #1855). Both calls never throw.
-        if (!message.startsWith('/')) {
-          void resolveTitleRequest(conversation.ai_assistant_type, userId).then(titleRequest =>
-            generateTitleForUser(
-              conversation.id,
-              message,
-              titleRequest,
-              getArchonWorkspacesPath(),
-              userId
-            )
-          );
-        }
-
-        const result = await dispatchToOrchestrator(
-          conversation.platform_conversation_id,
-          message,
-          { actor }
-        );
-
-        return c.json({
-          conversationId: conversation.platform_conversation_id,
-          id: conversation.id,
-          dispatched: true,
-          ...result,
-        });
-      }
-
-      return c.json({ conversationId: conversation.platform_conversation_id, id: conversation.id });
-    } catch (error) {
-      getLog().error({ err: error }, 'create_conversation_failed');
-      return apiError(c, 500, 'Failed to create conversation');
-    }
-  });
-
-  // PATCH /api/conversations/:id - Update conversation (title)
-  registerOpenApiRoute(updateConversationRoute, async c => {
-    const platformId = c.req.param('id') ?? '';
-    const { title } = getValidatedBody(c, updateConversationBodySchema);
-    try {
-      const access = await authorizeConversation(c, { platformId }, 'write');
-      if ('error' in access) return access.error;
-      if (title !== undefined) {
-        await conversationDb.updateConversationTitle(access.conversation.id, title.slice(0, 255));
-      }
-      return c.json({ success: true });
-    } catch (error) {
-      if (error instanceof ConversationNotFoundError) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      getLog().error({ err: error }, 'update_conversation_failed');
-      return apiError(c, 500, 'Failed to update conversation');
-    }
-  });
-
-  // DELETE /api/conversations/:id - Soft delete
-  registerOpenApiRoute(deleteConversationRoute, async c => {
-    const platformId = c.req.param('id') ?? '';
-    try {
-      const access = await authorizeConversation(c, { platformId }, 'write');
-      if ('error' in access) return access.error;
-      await conversationDb.softDeleteConversation(access.conversation.id);
-      return c.json({ success: true });
-    } catch (error) {
-      if (error instanceof ConversationNotFoundError) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      getLog().error({ err: error }, 'delete_conversation_failed');
-      return apiError(c, 500, 'Failed to delete conversation');
-    }
-  });
-
-  // GET /api/conversations/:id/messages - Message history
-  registerOpenApiRoute(listMessagesRoute, async c => {
-    const platformConversationId = c.req.param('id') ?? '';
-    const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
-    try {
-      const access = await authorizeConversation(c, { platformId: platformConversationId }, 'read');
-      if ('error' in access) return access.error;
-      const messages = await messageDb.listMessages(access.conversation.id, limit);
-      return c.json(messages.map(toApiMessage));
-    } catch (error) {
-      getLog().error({ err: error }, 'list_messages_failed');
-      return apiError(c, 500, 'Failed to list messages');
-    }
-  });
-
-  // POST /api/conversations/:id/message - Send message
-  // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
-  registerOpenApiRoute(sendMessageRoute, async c => {
-    const conversationId = c.req.param('id') ?? '';
-
-    // Reject conversation IDs that could be used for path traversal when building
-    // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
-    if (!/^[\w-]+$/.test(conversationId)) {
-      return c.json({ error: 'Invalid conversation ID' }, 400);
-    }
-
-    // Before the body is read, so a refused caller writes no attachment into the
-    // conversation's upload directory.
-    const access = await authorizeDispatchConversation(c, conversationId);
-    if ('error' in access) return access.error;
-    const conv = access.conversation;
-    const actor = access.actor;
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
-
-    let message: string;
-    let savedFiles: AttachedFile[] = [];
-
-    const contentType = c.req.header('content-type') ?? '';
-
-    if (contentType.includes('multipart/form-data')) {
-      let body: Record<string, string | File | (string | File)[]>;
-      try {
-        body = await c.req.parseBody({ all: true });
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr, conversationId }, 'upload.parse_failed');
-        return c.json({ error: 'Invalid multipart form data' }, 400);
-      }
-
-      const rawMessage = body.message;
-      if (typeof rawMessage !== 'string' || !rawMessage) {
-        return c.json({ error: 'message must be a non-empty string' }, 400);
-      }
-      message = rawMessage;
-
-      const rawFiles = body.files;
-      let fileList: (string | File)[];
-      if (Array.isArray(rawFiles)) {
-        fileList = rawFiles;
-      } else if (rawFiles !== undefined) {
-        fileList = [rawFiles];
-      } else {
-        fileList = [];
-      }
-
-      const fileEntries = fileList.filter((e): e is File => e instanceof File);
-      if (fileEntries.length > 0) {
-        const result = await persistUploadedFiles(conversationId, fileEntries);
-        if (!result.ok) {
-          return c.json({ error: result.error }, result.status);
-        }
-        savedFiles = result.savedFiles;
-        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
-      }
-    } else {
-      let body: { message?: unknown };
-      try {
-        body = await c.req.json();
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr, conversationId }, 'message.json_parse_failed');
-        return c.json({ error: 'Invalid JSON in request body' }, 400);
-      }
-
-      if (typeof body.message !== 'string' || !body.message) {
-        return c.json({ error: 'message must be a non-empty string' }, 400);
-      }
-      message = body.message;
-    }
-
-    // Persist user message and pass DB ID to adapter for assistant message persistence
-    if (conv) {
-      // Omit path from persisted metadata — the on-disk file is ephemeral and will be
-      // deleted after the AI processes it; storing stale paths would confuse future readers.
-      const meta =
-        savedFiles.length > 0
-          ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
-          : undefined;
-      try {
-        await messageDb.addMessage(conv.id, 'user', message, meta, userId);
-      } catch (e: unknown) {
-        getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
-        for (const file of savedFiles) {
-          await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT') {
-              getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
-            }
-          });
-        }
-        return apiError(c, 500, 'Failed to save message to history');
-      }
-      webAdapter.setConversationDbId(conversationId, conv.id);
-    }
-
-    // Pass savedFiles to dispatchToOrchestrator so cleanup happens inside the lock handler,
-    // AFTER handleMessage completes — not in the HTTP handler's finally block where the
-    // fire-and-forget lock callback may still be running and the AI has not yet read the files.
-    const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
-      actor,
-      ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
-    };
-    const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
-    const result = await dispatchToOrchestrator(
-      conversationId,
-      message,
-      extraContext,
-      filesToCleanup
-    );
-    return c.json(result);
-  });
-
-  // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
-  // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
-  app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
-    return streamSSE(c, async stream => {
-      await stream.writeSSE({
-        data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-      });
-
-      webAdapter.registerStream(DASHBOARD_STREAM, stream);
-      getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
-
-      stream.onAbort(() => {
-        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream(DASHBOARD_STREAM, stream);
-      });
-
-      try {
-        while (true) {
-          await stream.sleep(30000);
-          if (!stream.closed) {
-            await stream.writeSSE({
-              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-            });
-          }
-        }
-      } catch (e: unknown) {
-        const msg = (e as Error).message ?? '';
-        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
-          getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
-        }
-      } finally {
-        webAdapter.removeStream(DASHBOARD_STREAM, stream);
-        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
-      }
-    });
-  });
-
-  // GET /api/stream/:conversationId - SSE streaming
-  app.get('/api/stream/:conversationId', async c => {
-    const conversationId = c.req.param('conversationId');
-
-    // Decided before streamSSE owns the response, so a refused caller gets a JSON
-    // error rather than an open stream. A solo install skips the lookup and keeps
-    // streaming ids whose row has not been written yet.
-    if (isConversationOwnershipEnforced()) {
-      try {
-        const access = await authorizeConversation(
-          c,
-          { webFirstPlatformId: conversationId },
-          'read'
-        );
-        if ('error' in access) return access.error;
-      } catch (err: unknown) {
-        getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');
-        return apiError(c, 500, 'Failed to load conversation');
-      }
-    }
-
-    return streamSSE(c, async stream => {
-      // Send initial heartbeat immediately to flush HTTP headers.
-      // Without this, EventSource stays in CONNECTING state until the first write.
-      await stream.writeSSE({
-        data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-      });
-
-      webAdapter.registerStream(conversationId, stream);
-      getLog().debug({ conversationId }, 'sse_stream_opened');
-
-      stream.onAbort(() => {
-        getLog().debug({ conversationId }, 'sse_client_disconnected');
-        webAdapter.removeStream(conversationId, stream);
-      });
-
-      try {
-        while (true) {
-          await stream.sleep(30000);
-          if (!stream.closed) {
-            await stream.writeSSE({
-              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-            });
-          }
-        }
-      } catch (e: unknown) {
-        // stream.sleep() throws when client disconnects — expected behavior.
-        // Log unexpected errors for debugging.
-        const msg = (e as Error).message ?? '';
-        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
-          getLog().warn({ err: e as Error, conversationId }, 'sse_heartbeat_error');
-        }
-      } finally {
-        webAdapter.removeStream(conversationId, stream);
-        getLog().debug({ conversationId }, 'sse_stream_closed');
-      }
-    });
-  });
-
-  // GET /api/codebases - List codebases
-  registerOpenApiRoute(listCodebasesRoute, async c => {
-    try {
-      const codebases = await codebaseDb.listCodebases();
-
-      // Deduplicate by repository_url (keep most recently updated)
-      const normalizeUrl = (url: string): string => url.replace(/\.git$/, '');
-      const seen = new Map<string, (typeof codebases)[number]>();
-      const deduped: (typeof codebases)[number][] = [];
-      for (const cb of codebases) {
-        if (!cb.repository_url) {
-          deduped.push(cb);
-          continue;
-        }
-        const key = normalizeUrl(cb.repository_url);
-        const existing = seen.get(key);
-        if (!existing || cb.updated_at > existing.updated_at) {
-          seen.set(key, cb);
-        }
-      }
-      deduped.push(...seen.values());
-      deduped.sort((a, b) => a.name.localeCompare(b.name));
-
-      return c.json(deduped.map(toApiCodebase));
-    } catch (error) {
-      getLog().error({ err: error }, 'list_codebases_failed');
-      return apiError(c, 500, 'Failed to list codebases');
-    }
-  });
-
-  // GET /api/codebases/:id - Codebase detail
-  registerOpenApiRoute(getCodebaseRoute, async c => {
-    try {
-      const codebase = await codebaseDb.getCodebase(c.req.param('id') ?? '');
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-      return c.json(toApiCodebase(codebase));
-    } catch (error) {
-      getLog().error({ err: error }, 'get_codebase_failed');
-      return apiError(c, 500, 'Failed to get codebase');
-    }
-  });
-
-  registerOpenApiRoute(inspectBaseBranchRoute, async c => {
-    const body = getValidatedBody(c, inspectBaseBranchBodySchema);
-    try {
-      return c.json(await inspectProjectBaseBranch(body, registration), 200);
-    } catch (error) {
-      if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
-      getLog().error({ err: error }, 'inspect_base_branch_failed');
-      return apiError(c, 500, `Failed to inspect base branch: ${(error as Error).message}`);
-    }
-  });
-
-  // POST /api/codebases - Add a project (clone from URL or register local path)
-  registerOpenApiRoute(addCodebaseRoute, async c => {
-    const body = getValidatedBody(c, addCodebaseBodySchema);
-
-    try {
-      let result;
-      if ('url' in body) {
-        result = await cloneRepository(body.url, {
-          ...registration,
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else if (body.folder === true) {
-        result = await registerFolder(body.path, undefined, {
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else {
-        const localPath = await canonicalizeProjectPath(body.path);
-        const kind = await detectProjectKind(localPath);
-        result =
-          kind === 'repo'
-            ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
-            : await registerFolder(localPath, undefined, {
-                baseBranch: body.base_branch ?? undefined,
-              });
-      }
-
-      // Fetch the full codebase record for a consistent response
-      const codebase = await codebaseDb.getCodebase(result.codebaseId);
-      if (!codebase) {
-        return apiError(c, 500, 'Codebase created but not found');
-      }
-
-      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
-    } catch (error) {
-      if (error instanceof ProjectKindDetectionError) {
-        getLog().warn({ err: error }, 'api.add_codebase_repo_detect_failed');
-        return apiError(c, 500, error.message);
-      }
-      if (
-        error instanceof ProjectRegistrationError ||
-        error instanceof ConfiguredBaseBranchNotFoundError
-      )
-        return apiError(c, 400, error.message);
-      getLog().error({ err: error }, 'add_codebase_failed');
-      return apiError(
-        c,
-        500,
-        `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
-      );
-    }
-  });
-
-  // PATCH /api/codebases/:id - Rename a project
-  registerOpenApiRoute(renameCodebaseRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    const { name } = getValidatedBody(c, renameCodebaseBodySchema);
-    try {
-      return c.json(toApiCodebase(await codebaseDb.renameCodebase(id, name)), 200);
-    } catch (error) {
-      if (error instanceof codebaseDb.CodebaseNotFoundError) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-      if (
-        error instanceof codebaseDb.CodebaseNameTakenError ||
-        error instanceof codebaseDb.CodebaseStorageIdentityChangeError
-      ) {
-        return apiError(c, 409, error.message);
-      }
-      getLog().error({ err: error, codebaseId: id }, 'rename_codebase_failed');
-      return apiError(c, 500, 'Failed to rename codebase');
-    }
-  });
-
-  // DELETE /api/codebases/:id - Delete a project and clean up
-  registerOpenApiRoute(deleteCodebaseRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-
-      const environments = await isolationEnvDb.listByCodebase(id);
-      const containers = environments.filter(env => env.provider === 'container');
-      if (containers.length > 0) {
-        throw new ActiveContainerEnvironmentsError(containers.map(env => env.id));
-      }
-      for (const env of environments.filter(env => env.provider === 'worktree')) {
-        try {
-          const exists = await stat(env.working_path).then(
-            () => true,
-            (error: NodeJS.ErrnoException) => {
-              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
-              throw error;
-            }
-          );
-          if (exists) {
-            await removeWorktree(
-              toRepoPath(codebase.default_cwd),
-              toWorktreePath(env.working_path)
-            );
-          }
-          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
-            throw new Error('Checkout is still registered with Git');
-          }
-          await isolationEnvDb.markWorktreeDestroyed(env);
-          getLog().info({ path: env.working_path }, 'worktree_removed');
-        } catch (wtErr) {
-          if (wtErr instanceof WorktreeRegistrationChangedError) {
-            return apiError(c, 409, wtErr.message);
-          }
-          getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
-          return apiError(
-            c,
-            500,
-            `Failed to clean up worktree ${env.id}. Project kept; resolve the cleanup failure and retry deletion.`
-          );
-        }
-      }
-
-      await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
-
-      // Remove workspace directory from disk — only for Archon-managed repos
-      const normalizedCwd = normalize(codebase.default_cwd);
-      if (isInsideArchonWorkspaces(normalizedCwd)) {
-        try {
-          await rm(normalizedCwd, { recursive: true, force: true });
-          getLog().info({ path: normalizedCwd }, 'workspace_removed');
-        } catch (rmErr) {
-          getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
-          return apiError(
-            c,
-            500,
-            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
-          );
-        }
-      } else {
-        getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
-      }
-
-      return c.json({ success: true });
-    } catch (error) {
-      if (
-        error instanceof ActiveContainerEnvironmentsError ||
-        error instanceof ActiveWorktreeEnvironmentsError
-      ) {
-        return apiError(c, 409, error.message);
-      }
-      getLog().error({ err: error }, 'delete_codebase_failed');
-      return apiError(c, 500, 'Failed to delete codebase');
-    }
-  });
-
-  // GET /api/codebases/:id/env - List env var keys for a codebase (values never returned)
-  registerOpenApiRoute(listEnvVarsRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
-      const envVars = await envVarDb.getCodebaseEnvVars(id);
-      return c.json({ keys: Object.keys(envVars) });
-    } catch (error) {
-      getLog().error({ err: error, codebaseId: id }, 'list_env_vars_failed');
-      return apiError(c, 500, 'Failed to list env vars');
-    }
-  });
-
-  // PUT /api/codebases/:id/env - Set (upsert) an env var
-  registerOpenApiRoute(setEnvVarRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    try {
-      const body = getValidatedBody(c, setEnvVarBodySchema);
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
-      await envVarDb.setCodebaseEnvVar(id, body.key, body.value);
-      return c.json({ success: true });
-    } catch (error) {
-      getLog().error({ err: error, codebaseId: id }, 'set_env_var_failed');
-      return apiError(c, 500, 'Failed to set env var');
-    }
-  });
-
-  // DELETE /api/codebases/:id/env/:key - Delete an env var
-  registerOpenApiRoute(deleteEnvVarRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    const key = c.req.param('key') ?? '';
-    try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
-      await envVarDb.deleteCodebaseEnvVar(id, key);
-      return c.json({ success: true });
-    } catch (error) {
-      getLog().error({ err: error, codebaseId: id, key }, 'delete_env_var_failed');
-      return apiError(c, 500, 'Failed to delete env var');
-    }
-  });
 
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
@@ -4470,22 +3431,7 @@ export function registerApiRoutes(
     }
   });
 
-  // GET /api/codebases/:id/environments - List isolation environments for a codebase
-  registerOpenApiRoute(getCodebaseEnvironmentsRoute, async c => {
-    try {
-      const { id } = c.req.param();
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-
-      const environments = await isolationEnvDb.listByCodebaseWithAge(id);
-      return c.json({ environments });
-    } catch (error) {
-      getLog().error({ err: error }, 'codebases.environments_list_failed');
-      return apiError(c, 500, 'Failed to list environments');
-    }
-  });
+  registerCodebaseEnvironmentRoute(app);
 
   const webPush = attention?.webPush ?? new WebPushDestination();
   registerOpenApiRoute(getWebPushKeyRoute, c => c.json({ publicKey: webPush.publicKey() }));
