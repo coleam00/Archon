@@ -410,6 +410,39 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
+  it('refuses a second script before it starts when the work-unit budget is exhausted', async () => {
+    const deps = createMockDeps();
+    const marker = join(testDir, 'script-attempts');
+    const script = `import { appendFile } from "node:fs/promises"; await appendFile(${JSON.stringify(marker)}, "ran\\n");`;
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('script-budget'),
+        workflow: {
+          name: 'script-budget',
+          budget: { max_work_units: 1 },
+          nodes: [
+            { id: 'first', kind: 'exec', runtime: 'bun', script },
+            { id: 'second', kind: 'exec', runtime: 'bun', script, depends_on: ['first'] },
+          ],
+        },
+      })
+    );
+
+    expect(await readFile(marker, 'utf8')).toBe('ran\n');
+    const events = persistedEvents(deps.store);
+    expect(
+      events.filter(event => event.event_type === 'node_started').map(event => event.step_name)
+    ).toEqual(['first']);
+    expect(events.filter(event => event.event_type === 'run_budget_work_unit')).toHaveLength(1);
+    expect(events.find(event => event.event_type === 'run_budget_refused')?.data).toMatchObject({
+      reason: 'work_units_exhausted',
+      node: 'second',
+    });
+    expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('inline bun script output available for downstream substitution', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
