@@ -20,7 +20,7 @@ import {
   itemPullRequest,
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
-import { CONFIDENCES, checkAttention, chosen, renderAttention } from '../../workflows/sdlc/.shared/queue';
+import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   applyDecision,
@@ -423,10 +423,11 @@ describe('the build queue scripts', () => {
       options: [
         { id: 'relax', label: 'Relax it' },
         { id: 'park', label: 'Park it' },
+        { id: 'other', label: 'Something else' },
       ],
-      asked: { attention: ATTENTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
+      asked: { attention: withOther(ATTENTION, 'continue'), brief: 'continue PR 42 under the ruling', by: 'stop' },
     });
-    expect(applied.attention).toBe(renderAttention('Build queue, issue 7: stop decision', ATTENTION));
+    expect(applied.attention).toBe(renderAttention('Build queue, issue 7: stop decision', withOther(ATTENTION, 'continue')));
     for (const part of [
       ATTENTION.what,
       ATTENTION.why,
@@ -536,6 +537,23 @@ describe('the build queue scripts', () => {
     expect(build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'relax', text: 'Only for this item.' } }] });
     expect(build?.brief).toContain('continue PR 42 under the ruling');
     expect(build?.brief).toContain(heading);
+  }, 60_000);
+
+  test("an 'other' answer writes its text as the ruling and continues the item", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const asked = JSON.stringify({ attention: withOther(ATTENTION, 'continue'), brief: 'continue PR 42 under the ruling', by: 'stop' });
+    const ruled = run(at, 'ruling', {
+      INPUTS_ITEM: JSON.stringify(SUBJECT),
+      INPUTS_ASKED: asked,
+      INPUTS_CHOICE: 'other',
+      INPUTS_TEXT: 'Keep the field and fix the review findings by class.',
+    });
+    const output = ok(ruled);
+    expect(output.decision).toBe('continue');
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Keep the field and fix the review findings by class.");
+    expect(stored(at).value?.facts.build).toMatchObject({ status: 'next' });
+    expect(stored(at).value?.facts.build?.brief).toContain(output.section as string);
   }, 60_000);
 
   test('a park with no ruling and no words writes no section and stops working the item', () => {

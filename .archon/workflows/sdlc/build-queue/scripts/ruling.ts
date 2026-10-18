@@ -36,7 +36,8 @@ function main(): void {
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = chosen(asked.attention, trimmed(process.env.INPUTS_CHOICE));
+  const id = trimmed(process.env.INPUTS_CHOICE);
+  const choice = chosen(asked.attention, id);
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
 

@@ -36,7 +36,7 @@ Only on ask; null on launch. A maintainer reads it without opening the run, so e
 - `what`: the item and the decision, in plain words.
 - `why`: what happens if it is decided either way.
 - `recommendation`: the id of the choice you recommend, `why`, the `evidence` it rests on, your `confidence`, and what evidence `would_change` it.
-- `choices`: at least two, each a kebab-case `id`, a short `label`, what it `does`, its `effect` (`continue` launches the next run from the brief; `park` stops the queue working the item until a re-triage), and the `ruling` written into the issue body as a dated scope section when it is chosen. Write the ruling as the contract sentence the next run reads, such as "Downstream nodes may gate on head_matches too"; leave it empty when the choice changes no scope.
+- `choices`: at least two, each a kebab-case `id`, a short `label`, what it `does`, its `effect` (`continue` launches the next run from the brief; `park` stops the queue working the item until a re-triage), and the `ruling` written into the issue body as a dated scope section when it is chosen. Write the ruling as the contract sentence the next run reads, such as "Downstream nodes may gate on head_matches too"; leave it empty when the choice changes no scope. The queue adds `other` itself, for an answer none of your choices covers; don't declare it.
 - `if_unanswered`: whether the item waits, blocks other work, or goes stale as the base moves.
 - `links`: the issue, and any pull request, report or run the decision rests on.
 
