@@ -4,7 +4,7 @@ import {
   makeDeps,
   makePlatform,
   setForceRenameFailure,
-} from './child-runs-test-harness';
+} from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile, readdir } from 'fs/promises';

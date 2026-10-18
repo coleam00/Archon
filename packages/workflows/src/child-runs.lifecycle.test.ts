@@ -7,7 +7,7 @@ import {
   makeDeps,
   makePlatform,
   realArchonPaths,
-} from './child-runs-test-harness';
+} from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';

@@ -6,7 +6,7 @@ import {
   makeFanResolver,
   fanChildEcho,
   fanChildCond,
-} from './child-runs-test-harness';
+} from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import type { InMemoryStoreEvent } from './test-utils';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';

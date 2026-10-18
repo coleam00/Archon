@@ -1,7 +1,7 @@
 import { providerRegistry } from '@archon/providers';
-import type { InMemoryStoreEvent } from './test-utils';
-import { foldDagResumeSnapshot } from './dag-resume-snapshot';
-import { settlingProvider } from './test-settling-provider';
+import type { InMemoryStoreEvent } from '../test-utils';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
+import { settlingProvider } from '../test-settling-provider';
 /**
  * Shared scaffolding for the end-to-end `workflow:` sub-run tests (#2121 Phase 2), the
  * `child-runs.*.test.ts` files beside child-runs.ts.
@@ -18,7 +18,7 @@ import { settlingProvider } from './test-settling-provider';
  * deliberately does NOT mock ./dag-executor, so it cannot share a process with
  * executor.test.ts, which does (mock.module is process-global and irreversible).
  */
-import { readBundleIndex } from './defaults/bundle-inventory';
+import { readBundleIndex } from '../defaults/bundle-inventory';
 import { afterAll, mock } from 'bun:test';
 import { mkdir, cp } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -186,20 +186,20 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 
-import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore } from './store';
+import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from '../deps';
+import type { IWorkflowStore } from '../store';
 import {
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
   WorkflowRunPauseConflictError,
-} from './store';
-import { type WorkflowRun, type WorkflowWaitContext } from './schemas/workflow-run';
-import type { WorkflowRunConfigMetadata } from './schemas/run-config';
+} from '../store';
+import { type WorkflowRun, type WorkflowWaitContext } from '../schemas/workflow-run';
+import type { WorkflowRunConfigMetadata } from '../schemas/run-config';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
   ChildIsolationResult,
-} from './child-isolation';
+} from '../child-isolation';
 
 // A run in one of these statuses still holds the ancestor-aware path lock; this
 // must stay in lockstep with the production collision check in dag-executor.ts.

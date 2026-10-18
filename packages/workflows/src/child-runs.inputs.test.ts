@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { InMemoryStore, makeProvider, makeDeps, makePlatform } from './child-runs-test-harness';
+import { InMemoryStore, makeProvider, makeDeps, makePlatform } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from './test-settling-provider';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
