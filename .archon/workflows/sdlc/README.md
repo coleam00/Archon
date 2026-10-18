@@ -112,7 +112,7 @@ Keep `gh` as the default until a compatible release passes a real-PR check.
 The merge queue reads through `gh` alone and refuses `forge`: its sweep judges a pull
 request's unresolved review threads, which the forge contract does not report. The gate
 itself doesn't refuse over threads; the sweep holds a merge only for a thread that
-raises a defect in what the pull request changes.
+raises a defect in code the pull request changes or makes reachable.
 Delivery reads, answers and resolves review threads through `gh` alone for the same
 reason. On the `forge` source it never calls `gh` for them: its `threads` node does
 not run, and the report records `threads_checked: false` and says the threads were

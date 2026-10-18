@@ -15,7 +15,7 @@ For every thread in `threads.md`, find the implementer's disposition and check i
 
 - **Not this change's.** The thread is about code this pull request doesn't change or make reachable, for example a thread that arrived with a merge of the default branch. Check that against the pull request's diff yourself. It is settled whether or not the implementer gave it a disposition. The reply says what it is about and that this pull request doesn't touch it, so it belongs in its own issue. Name each one in your summary.
 
-A thread whose disposition holds is settled: declare its answer. A thread with no disposition gets no answer; it stays open, and the next round's implementer judges it. A disposition that does not hold also gets no answer, and you say why in your summary so the next round can correct it.
+A thread whose disposition holds is settled: declare its answer. Any other thread with no disposition gets no answer; it stays open, and the next round's implementer judges it. A thread that is not this change's is the exception: it gets its reply either way. A disposition that does not hold also gets no answer, and you say why in your summary so the next round can correct it.
 
 A thread is unsettleable when its disposition records that only a person can decide it, when its evidence needs a check no agent in this run can make, or when it disputes an answer this run already gave and the evidence does not settle the dispute. Do not answer it. Declare `needs_human`, and name the thread, its URL and what a person must decide in your summary.
 
