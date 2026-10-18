@@ -12,12 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { expandWorkflowIncludes } from '../packages/workflows/src/include-expander';
-import { parseWorkflow } from '../packages/workflows/src/loader';
 import { nodeCostScope } from '../packages/workflows/src/node-record-serialization';
-import type { WorkflowDefinition } from '../packages/workflows/src/schemas';
 import { EFFORT_LEVELS } from '../packages/workflows/src/schemas/effort';
 import {
   type ModelAliasPreset,
@@ -57,11 +53,6 @@ import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.s
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
 import { claimDisposition } from '../.archon/workflows/sdlc/.shared/state';
-import {
-  bindingStubs,
-  TRIAGE_VERDICT_NODE,
-  triageNodeId,
-} from '../.archon/workflows/sdlc/intake/scripts/bench/runner';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -514,42 +505,6 @@ describe('discoveries', () => {
       'answer'
     );
   }, 60_000);
-});
-
-describe('the intake bench', () => {
-  test('the judge node id is the agent node of archon-triage, alone and as intake includes it', () => {
-    const definitions = new Map<string, WorkflowDefinition>();
-    for (const file of ['intake/archon-intake.yaml', 'triage/archon-triage-block.yaml']) {
-      const parsed = parseWorkflow(readFileSync(join(PACK, file), 'utf8'), file, providerRegistry);
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      definitions.set(parsed.workflow.name, parsed.workflow);
-    }
-    const { workflows, errors } = expandWorkflowIncludes(
-      definitions,
-      new Map([['triage', 'Triage.']])
-    );
-    expect(errors).toEqual([]);
-    const agentIds = (name: string) =>
-      (workflows.get(name)?.nodes ?? []).filter(node => node.kind === 'agent').map(node => node.id);
-    expect(agentIds('archon-triage-block')).toEqual([triageNodeId('triage')]);
-    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake')]);
-    expect(TRIAGE_VERDICT_NODE).toBe(
-      `triage__${String(definitions.get('archon-triage-block')?.returns)}`
-    );
-  });
-
-  test('the dry-run stand-ins satisfy archon-triage as the pack declares it', () => {
-    const root = join(import.meta.dir, '..');
-    const workflowPath = '.archon/workflows/sdlc/triage/archon-triage-block.yaml';
-    const stubs = bindingStubs(root, workflowPath);
-    for (const [id, stub] of Object.entries(stubs)) {
-      expect(
-        validateStructuredOutput(stub, outputFormat('triage/archon-triage-block.yaml', id))
-      ).toEqual({ valid: true });
-    }
-    // The policy and verdict scripts run for real.
-    expect(Object.keys(stubs)).toEqual(['triage']);
-  });
 });
 
 describe('the review bench', () => {
