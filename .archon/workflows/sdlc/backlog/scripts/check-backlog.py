@@ -67,12 +67,22 @@ def main() -> int:
         if len(ticket["body"]) < 120:
             fail(f"ticket '{key}' body is too short to be a contract")
         seen.append(key)
-    lines = ["# Backlog", "", f"{len(tickets)} tickets, in build order.", ""]
+    # Several workers build the backlog at once, each only on tickets whose dependencies
+    # are done, so the longest chain bounds how much of it can be built side by side.
+    depth: dict[str, int] = {}
+    for ticket in tickets:
+        depth[ticket["key"]] = 1 + max((depth[d] for d in ticket.get("depends_on", [])), default=0)
+    longest = max(depth.values())
+    lines = ["# Backlog", "", f"{len(tickets)} tickets, in build order. Longest dependency chain: "
+             f"{longest} ticket(s); on average {len(tickets) / longest:.1f} can be built side by side.", ""]
     for index, ticket in enumerate(tickets, 1):
         deps = ", ".join(ticket.get("depends_on", [])) or "none"
         lines += [f"## {index}. {ticket['title']}", "",
-                  f"- key: `{ticket['key']}`  phase: {ticket['phase']}  size: {ticket['size']}  depends on: {deps}",
-                  "", ticket["body"].strip(), ""]
+                  f"- key: `{ticket['key']}`  phase: {ticket['phase']}  size: {ticket['size']}  depends on: {deps}"]
+        why = ticket.get("depends_why")
+        if isinstance(why, str) and why.strip():
+            lines.append(f"- why: {why.strip()}")
+        lines += ["", ticket["body"].strip(), ""]
     (artifacts / "backlog.md").write_text("\n".join(lines), encoding="utf-8")
     print(json.dumps({"count": len(tickets), "keys": seen}))
     return 0

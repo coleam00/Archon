@@ -1,7 +1,8 @@
 # Dry-run fixture: the simple route. pick chooses a contained issue, the in-loop
-# builder builds it, the black-box check and the reviewer run in order, and ship
-# and deploy stay skipped (no ship stubs: a ship node that ran would fail the
-# fixture as a reached node without a stub).
+# builder builds it, subject names what the black-box check tests, the check and
+# the evidence check run, the reviewer decides to merge, and the merge gate (land)
+# merges. Ship and deploy stay skipped (no ship stubs: a ship node that ran would
+# fail the fixture as a reached node without a stub).
 pick:
   route: simple
   target: "https://github.com/example/app/issues/5"
@@ -10,11 +11,30 @@ pick:
   area: app/
   reason: "stub: next unblocked issue, one module, clear criteria"
 build: "Built the notes endpoint.\nPR: https://github.com/example/app/pull/9"
-check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234\nC1 PASS  saves a note  POST /notes returned 201\nOverall: PASS"
-review:
-  outcome: merged
+subject:
   pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  base: main
+  behind: "0"
+  conflicts: "false"
+  files: "app/notes.py"
+  started: "1700000000000"
+check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234 merged with main at abc1234\nC1 PASS  saves a note  POST /notes returned 201  [evidence: c1.txt]\nDEFECTS SEEN: none\nOverall: PASS"
+evidence:
+  ok: "true"
+  problems: ""
+  overall: PASS
+  checked_at: "1700000100000"
+review:
+  outcome: merge
+  pr: "https://github.com/example/app/pull/9"
+  sha: abc1234
+  delivers: all
+  dispositions: []
   reason: "stub: every criterion passed, CI green"
+land:
+  outcome: merged
+  reason: "stub: merged abc1234"
 claim:
   held: "true"
   holder: fixture-run
@@ -22,7 +42,7 @@ claim:
 release: "released 1 claim(s)"
 fixture:
   expect: completed
-  reached: [pick, claim, build, check-app, review, release]
+  reached: [pick, claim, build, subject, check-app, evidence, review, land, release]
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"

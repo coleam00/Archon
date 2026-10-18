@@ -15,7 +15,7 @@ The move:
 ## Read first
 
 - The issue in full, with its comments. A comment headed `Contract` is the acceptance contract: build to it, criterion by criterion.
-- For `continue`: the pull request, its diff, its CI (`gh pr checks <n>`), every review comment (the latest `Loop review:` comment first) and the builder reports before yours. Fix what they found, with the evidence they gave.
+- For `continue`: the pull request, its diff, its CI (`gh pr checks <n>`), every review comment (the latest `Loop review:` comment first) and the builder reports before yours. Fix what they found, with the evidence they gave. A `Loop review: not merged` comment is the merge gate refusing a merge: when its reasons are about the code (a failed line the review marked as this change's, a failed step of the shipping pipeline) fix those; when they are only about the default branch having moved, merge it in; when they are only about the app check's evidence or the review's record, change nothing and say so, and the reviewers check it again.
 - The product's direction and conventions: `engineering.md`, the mission and the product document (look once at the root and in `docs/`; treat a file that is not there as absent).
 
 If the move turns out to be wrong (the pull request was already merged, the issue is already done, or a decision only the owner can make blocks it), do not force it: comment what you found, label the item `needs-owner` if it needs a decision, and report `PR: none`.
@@ -28,6 +28,7 @@ If the move turns out to be wrong (the pull request was already merged, the issu
 - Run the project's own checks (the commands in `engineering.md`, the harness config, or the CI workflow). They must pass before you push. If the change is something a user would see or do, run the app the way a user would and look: $INPUTS.runtime
 - Commit with a clear message, push, and open a pull request that says `Closes #<n>` for a new issue, or push to the existing pull request. When the work is complete, make sure the pull request is not a draft (`gh pr ready <n>`). Never merge it yourself.
 - The pull request body has an `Evidence` section: for each contract criterion, the evidence that proves it, named the way the criterion asks for it (the command and its result, the report or frame path, the soak or check output line), at the commit you pushed. A criterion with no evidence yet says so. Reviewers send back a pull request whose body does not name its evidence, so keep the section current on every push.
+- If the change alters what an in-repository check samples, skips, excuses or measures (fewer frames, ticks or claims; an excuse or skip list; a lower threshold or tolerance), say so in the pull request body under its own heading: that is a change to the judge, and it needs the owner's approval or a contract criterion that asks for it.
 - Leave one comment on the pull request: what you did this run, how each contract criterion is met, and anything left.
 
 ## Never

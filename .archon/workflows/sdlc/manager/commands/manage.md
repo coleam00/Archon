@@ -25,15 +25,19 @@ Then ask:
 The loop's runs fail in ways no single run sees: a run that never started holds a slot, a run dies on
 a passing infrastructure fault with its work intact, an app instance outlives the run that started
 it, laps spend money picking nothing. You are the only one who looks across runs, so check every
-pass. Run the `archon` CLI from this repository: `archon workflow runs --json --limit 60` lists
-recent runs with their status, `archon workflow get <id>` shows one (its working path, its nodes, and
-its error), and each run's log is at its `transcript_path`.
+pass. Run Archon's CLI the way this repository's factory runs it, so it is the version the loop is
+pinned to: when the repository has a factory wrapper (`factory/consumer.py`), use
+`python factory/consumer.py <command>` with the same commands as `archon workflow <command>`;
+otherwise use `archon workflow <command>`. `runs --json --limit 60` lists recent runs with their
+status, `get <id>` shows one (its working path, its nodes, and its error), and each run's log is at
+its `transcript_path`. The scheduler already abandons runs whose launch failed and releases claims
+of runs that ended; you are the backstop for what it misses.
 
 - **A run that never started.** Status pending (or running with no node ever started) and no log
-  activity for 30 minutes or more: abandon it (`archon workflow abandon <id>`) so its slot frees.
+  activity for 30 minutes or more: abandon it (`abandon <id>`) so its slot frees.
 - **A run that failed on infrastructure, not on the work.** A database error, a network or provider
   outage, a crashed process, a timeout in the engine rather than in the project's checks: if its
-  worktree still has its work, resume it once (`archon workflow resume <id>`). Do not resume a run
+  worktree still has its work, resume it once (`resume <id>`). Do not resume a run
   that failed on a used-up usage limit or on the work itself (a check, a gate, a refused change), or
   one that was already resumed; record those instead. When the same fault fails runs again and
   again, it is not passing: put it in your report as a fault the loop cannot fix.
@@ -64,8 +68,11 @@ Act directly on GitHub. Every change gets a one-line comment saying why. Per pas
 - Pull requests idle for more than 24 hours: comment what the builder should do next so the loop picks them up, or close one that is beyond saving and reopen its issue.
 - When one root cause keeps producing patches, open one issue that fixes the cause (replace or delete the flawed part, not another patch) and close the patch issues into it. When the same kind of defect or review finding has come up three or more times, open one issue to turn it into an automatic check or lint rule instead of another fix.
 - Run every holdout scenario on the default branch each pass (the reviewers only run the ones a change could affect). Write the results to `holdout-baseline.md` in the holdout file's directory (outside the repository), replacing the previous pass's: the default-branch commit, the date and time, and for each scenario its id, PASS or FAIL, and what a user sees when it fails. The app checks read it to tell a pre-existing failure from a new one without rerunning the default branch. A failure with no open issue: open one, without quoting the scenario.
-- A defect that got past review: open an issue for it, and if a holdout file is named above, add a scenario to it that would have caught the defect (the file stays outside the repository; never copy its contents anywhere public).
-- `needs-owner`: when you can decide an item yourself (a mechanical blocker, a criterion you can make checkable without changing what the owner asked for), decide it, say so in a comment, and remove the label in the same pass. Product direction, scope, and anything in the mission or the product document are not yours to decide.
+- A defect that got past review: open an issue for it, and if a holdout file is named above, add a scenario to it that would have caught the defect (the file stays outside the repository; never copy its contents anywhere public). Write the scenario about the behaviour, not the issue: generalise beyond the issue's wording to the misuse and neighbouring cases a user would hit, so a builder working to the issue's criteria does not pass it by construction.
+- **Holdouts come before the work.** When a section of the product document has been sliced into new issues and the holdout file (if one is named above) has no scenarios for it, write them in this pass, before laps build it: from the product document, not from the issues. Cover what the issues do not spell out: misuse, the edges of each new state, how the new feature meets the features already there, and the user's journey through it. Check each one: a scenario that repeats an issue's acceptance criteria is not a holdout; rewrite it. Where a scenario has a numeric rule, put a small script beside the holdout file that turns what a run records into PASS, FAIL or INCONCLUSIVE, and name it in the scenario, so the verdict is not a judgement call.
+- **You may add and tighten holdout scenarios, never loosen them.** An edit that would turn a failing scenario into a passing or inconclusive one, any edit to a scenario the owner wrote (the holdout file marks its author; treat an unmarked scenario that predates the loop as the owner's), and suspending a scenario or a floor in one are owner questions with no default: put the exact edit and your reason in the owner decisions issue and leave the scenario as it is. When a scenario fails on the default branch, open an issue for the failure (without quoting the scenario) before you consider any change to it.
+- `needs-owner`: when you can decide an item yourself (a mechanical blocker, a criterion you can make checkable without changing what the owner asked for), decide it, say so in a comment, and remove the label in the same pass. Product direction, scope, and anything in the mission or the product document are not yours to decide. Neither is a change to what a check judges: when a reviewer parked an item because it changes what a check samples, skips, excuses or measures, or what a check proves, the label stays until the owner answers; put it in the owner decisions issue.
+- **Everything you see becomes a record in the same pass.** Every problem a user would notice that you saw while running the product (a defect, something hard to read or find, a panel in the way) becomes an issue, or an owner question when it is a matter of taste or direction, in this pass. Never leave one only in your report. When the per-pass issue cap binds, group the rest by area into one issue each and say so.
 - If the default branch is red, open an issue for it at the top of the order.
 
 ## Owner decisions
@@ -76,7 +83,9 @@ Keep exactly one open issue titled `Owner decisions needed`. List each open ques
 
 Every pass, append one line to the body of a single open issue titled `Loop metrics` (create it on the first pass), in this form:
 
-`<UTC date-time> | merged since last pass: N (simple S, complex C, continue K) | open PRs: N | send-backs since last pass: N | needs-owner open: N | owner questions open: N | default branch CI: green|red | laps since last pass: N (empty E, failed F) | health actions: N`
+`<UTC date-time> | merged since last pass: N (simple S, complex C, continue K) | open PRs: N | loop send-backs since last pass: N | merge-gate refusals: N | ship correction rounds: N | needs-owner open: N | owner questions open: N | default branch checks: green|red (CI|local gate) | laps since last pass: N (empty E, failed F) | health actions: N`
+
+Count send-backs only from `Loop review: sent back` comments, refusals from `Loop review: not merged`, and the shipping pipeline's own correction rounds separately: they are different things. When the repository has no CI running, say `local gate` and report the result of running the project's checks on the default branch yourself.
 
 ## Never
 

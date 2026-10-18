@@ -1,5 +1,7 @@
 # Dry-run fixture: the continue route. pick names an open pull request with
-# findings; the builder is told which one, and both reviewers see the builder's report.
+# findings; the builder is told which one, the black-box check is told only the pull
+# request and its head (never the builder's report), and the reviewer sees both.
+# The reviewer sends it back, so the merge gate never runs.
 pick:
   route: continue
   target: "https://github.com/example/app/issues/3"
@@ -8,10 +10,26 @@ pick:
   area: app/
   reason: "stub: review findings outstanding on a loop-owned pull request"
 build: "Fixed the review findings on the open pull request.\nPR: https://github.com/example/app/pull/7"
-check-app: "APP CHECK https://github.com/example/app/pull/7 at def5678\nOverall: PASS"
+subject:
+  pr: "https://github.com/example/app/pull/7"
+  head: "def5678"
+  base: main
+  behind: "0"
+  conflicts: "false"
+  files: "app/notes.py"
+  started: "1700000000000"
+check-app: "APP CHECK https://github.com/example/app/pull/7 at def5678\nDEFECTS SEEN: none\nOverall: PASS"
+evidence:
+  ok: "true"
+  problems: ""
+  overall: PASS
+  checked_at: "1700000100000"
 review:
   outcome: sent-back
   pr: "https://github.com/example/app/pull/7"
+  sha: def5678
+  delivers: none
+  dispositions: []
   reason: "stub: a test was skipped to get green"
 claim:
   held: "true"
@@ -20,10 +38,10 @@ claim:
 release: "released 1 claim(s)"
 fixture:
   expect: completed
-  reached: [pick, claim, build, check-app, review, release]
+  reached: [pick, claim, build, subject, check-app, evidence, review, release]
   resolved-text-contains:
     build: "https://github.com/example/app/pull/7"
-    check-app: "PR: https://github.com/example/app/pull/7"
+    check-app: "Pull request: https://github.com/example/app/pull/7"
     review: "Fixed the review findings"
   inputs:
     runtime: "/private/run-the-app.md"

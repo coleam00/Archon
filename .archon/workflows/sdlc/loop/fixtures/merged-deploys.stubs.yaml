@@ -9,12 +9,33 @@ pick:
 build: 'Built it.
 
   PR: https://github.com/example/app/pull/9'
+subject:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  base: main
+  behind: "0"
+  conflicts: "false"
+  files: "app/notes.py"
+  started: "1700000000000"
 check-app: 'APP CHECK https://github.com/example/app/pull/9 at abc1234
 
+  DEFECTS SEEN: none
+
   Overall: PASS'
+evidence:
+  ok: "true"
+  problems: ""
+  overall: "PASS"
+  checked_at: "1700000100000"
 review:
-  outcome: merged
+  outcome: merge
   pr: https://github.com/example/app/pull/9
+  sha: abc1234
+  delivers: all
+  dispositions: []
+  reason: stub
+land:
+  outcome: merged
   reason: stub
 deploy__resolve:
   revision: 0123456789abcdef0123456789abcdef01234567
@@ -40,8 +61,11 @@ fixture:
   - pick
   - claim
   - build
+  - subject
   - check-app
+  - evidence
   - review
+  - land
   - deploy__verify
   - release
   inputs:

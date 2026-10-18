@@ -34,7 +34,7 @@ yourself.
 
 ## Choose (finish before you start)
 
-1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, or is approved but unmerged. A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
+1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, is approved but unmerged, or whose latest `Loop review:` says `not merged` (the merge gate refused it). A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
 2. Otherwise **start** the next open issue whose dependencies are closed, lowest number first unless the product document's build order says otherwise. Never start an issue that already has an open pull request (search `gh pr list --search "<issue number>"` and the issue's linked pull requests): continue that pull request instead, or skip it if it is not this loop's.
 3. Skip anything labeled `needs-owner`.
 
@@ -56,7 +56,7 @@ Say how confident you are. If you would call it `simple` with low confidence, ro
 
 ## Contract first
 
-Before new work starts on an issue (routes `simple` and `complex`), make sure it has a contract the reviewers can check. If the issue already has a comment headed `Contract`, or its acceptance criteria are concrete and checkable (each one a command, an observable behaviour or a measurable property), leave it. If they are vague, add one comment headed `Contract` that restates each criterion as something checkable, keeping the issue's intent. Never change a criterion the owner wrote as a hard requirement, the product document, or the mission; when making the criteria checkable would change what the owner asked for, label the issue `needs-owner` instead and say what needs deciding.
+Before new work starts on an issue (routes `simple` and `complex`), make sure it has a contract the reviewers can check. If the issue already has a comment headed `Contract`, or its acceptance criteria are concrete and checkable (each one a command, an observable behaviour or a measurable property), leave it. If they are vague, add one comment headed `Contract` that restates each criterion as something checkable, keeping the issue's intent. When you write a `Contract`, end it with a line `States this change creates:` naming each state a user can be in after the change that they could not be in before (a new screen, a closed door, a mode, an empty list); the app check tries every user action in each one. Never change a criterion the owner wrote as a hard requirement, the product document, or the mission; when making the criteria checkable would change what the owner asked for, label the issue `needs-owner` instead and say what needs deciding.
 
 ## Never
 

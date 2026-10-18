@@ -36,10 +36,26 @@ ship__deliver__impl__implement:
   red_cause: ''
   summary: 'stub: criterion 2 cannot be met as written'
 ship__deliver__impl__assert-changed: 2 files changed
+subject:
+  pr: ""
+  head: ""
+  base: ""
+  behind: "0"
+  conflicts: "false"
+  files: ""
+  started: "1700000000000"
 check-app: NO PR the issue has no open pull request; the pipeline stopped before publishing
+evidence:
+  ok: "true"
+  problems: ""
+  overall: "NO PR"
+  checked_at: "1700000100000"
 review:
   outcome: nothing
   pr: ''
+  sha: ''
+  delivers: none
+  dispositions: []
   reason: 'stub: ship stopped at its green gate'
 claim:
   held: "true"
@@ -52,7 +68,9 @@ fixture:
   reached:
   - pick
   - claim
+  - subject
   - check-app
+  - evidence
   - review
   - release
   resolved-text-contains:

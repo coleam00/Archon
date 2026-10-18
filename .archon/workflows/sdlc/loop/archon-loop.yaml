@@ -128,58 +128,146 @@ nodes:
       target: "$pick.output.target"
       publish: "false"
 
-  # Black-box check: runs the app against the contract and the holdout before it
-  # reads any diff. all_done, so a build or ship that failed still gets an agent
-  # to look at what is there and record what happened.
-  - id: check-app
-    command: loop-check-app
-    context: fresh
-    idle_timeout: 2700000
+  # What the app check tests, as facts: the pull request, its head, the files it changes
+  # and how it stands against the current default branch. The builder's report and the
+  # pull request's description are read here only to find the pull request; the app
+  # check never sees them, so it tests what the change does, not what it says it does.
+  - id: subject
+    script: subject
+    runtime: bun
     depends_on: [claim, build, ship]
     trigger_rule: all_done
     when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:
-      route: "$pick.output.route"
       target: "$pick.output.target"
       pr: "$pick.output.pr"
       builder: { from: "$build.output", if_skipped: "" }
       ship: { from: "$ship.output", if_skipped: "" }
+    output_format:
+      type: object
+      properties:
+        pr: { type: string }
+        head: { type: string }
+        base: { type: string }
+        behind: { type: string }
+        conflicts: { type: string }
+        files: { type: string }
+        started: { type: string }
+      required: [pr, head, base, behind, conflicts, files, started]
+
+  # Black-box check: runs the app against the contract and the holdout before it
+  # reads any diff, on the pull request merged with the current default branch.
+  - id: check-app
+    command: loop-check-app
+    context: fresh
+    idle_timeout: 2700000
+    depends_on: [subject]
+    with:
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      pr: "$subject.output.pr"
+      head: "$subject.output.head"
+      base: "$subject.output.base"
+      behind: "$subject.output.behind"
+      conflicts: "$subject.output.conflicts"
+      files: "$subject.output.files"
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
 
-  # White-box review and the merge decision.
+  # No model: every line of the app check's report must cite evidence written during
+  # the check, every cited image must have been opened, and Overall must agree with
+  # the lines. The reviewer and the merge gate both read this verdict.
+  - id: evidence
+    script: evidence
+    runtime: bun
+    depends_on: [subject, check-app]
+    with:
+      report: "$check-app.output"
+      started: "$subject.output.started"
+    output_format:
+      type: object
+      properties:
+        ok: { type: string, enum: ["true", "false"] }
+        problems: { type: string }
+        overall: { type: string }
+        checked_at: { type: string }
+      required: [ok, problems, overall, checked_at]
+
+  # White-box review and the merge decision. The reviewer decides; the merge gate
+  # below merges, so a decision the record does not support never lands.
   - id: review
     command: loop-review
     context: fresh
     idle_timeout: 2700000
-    depends_on: [check-app]
+    depends_on: [check-app, evidence]
     with:
       route: "$pick.output.route"
       target: "$pick.output.target"
-      pr: "$pick.output.pr"
+      pr: "$subject.output.pr"
       builder: { from: "$build.output", if_skipped: "" }
       # A complex lap that stopped short of a pull request still produced a
       # finding (its triage, plan or investigation in this run's artifacts);
       # the reviewer posts it so the next lap starts from it.
       ship: { from: "$ship.output", if_skipped: "" }
       app_check: "$check-app.output"
+      evidence_ok: "$evidence.output.ok"
+      evidence_problems: "$evidence.output.problems"
+      behind: "$subject.output.behind"
       runtime: "$INPUTS.runtime"
       merge: "$INPUTS.merge"
       rejections: "$INPUTS.rejections"
     output_format:
       type: object
       properties:
-        outcome: { type: string, enum: [merged, sent-back, needs-owner, approved, nothing] }
+        outcome: { type: string, enum: [merge, sent-back, needs-owner, approved, nothing] }
         pr: { type: string }
+        sha: { type: string }
+        delivers: { type: string, enum: [all, part, none] }
+        dispositions:
+          type: array
+          items:
+            type: object
+            properties:
+              line: { type: string }
+              action: { type: string, enum: [issue, pre-existing, rechecked, blocks] }
+              ref: { type: string }
+            required: [line, action, ref]
         reason: { type: string }
-      required: [outcome, pr, reason]
+      required: [outcome, pr, sha, delivers, dispositions, reason]
+
+  # The merge gate (no model). Merges the reviewed commit only when the evidence held,
+  # every failing line has the reviewer's re-check or default-branch proof, every
+  # pre-existing failure has an issue, no shipping node failed, and the commit
+  # contains the current default branch. Otherwise it says why on the pull request.
+  - id: land
+    script: land
+    runtime: bun
+    depends_on: [subject, check-app, evidence, review]
+    when: "$review.output.outcome == 'merge' && $INPUTS.merge == 'auto'"
+    with:
+      pr: "$review.output.pr"
+      sha: "$review.output.sha"
+      delivers: "$review.output.delivers"
+      dispositions: "$review.output.dispositions"
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      report: "$check-app.output"
+      evidence_ok: "$evidence.output.ok"
+      evidence_problems: "$evidence.output.problems"
+      review_started: "$evidence.output.checked_at"
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [merged, refused] }
+        reason: { type: string }
+      required: [outcome, reason]
 
   # Merging is not shipping: with a deploy command set, roll the merge out and
   # read the revision back.
   - id: deploy
     include: archon-deploy
-    depends_on: [review]
-    when: "$review.output.outcome == 'merged' && $INPUTS.deploy != ''"
+    depends_on: [land]
+    when: "$land.output.outcome == 'merged' && $INPUTS.deploy != ''"
     with:
       deploy: "$INPUTS.deploy"
       health: "$INPUTS.health"
@@ -190,7 +278,7 @@ nodes:
   - id: release
     script: release
     runtime: bun
-    depends_on: [claim, review, deploy]
+    depends_on: [claim, review, land, deploy]
     trigger_rule: all_done
     when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:

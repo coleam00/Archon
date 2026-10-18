@@ -1,0 +1,45 @@
+# Dry-run fixture (with --exec-code: the evidence check really runs). The app check
+# saw a new defect, wrote it under DEFECTS SEEN, and still claimed Overall: PASS, the
+# way observed defects used to be graded PASS. Its evidence files were never written
+# either. The evidence check refuses the report, and the reviewer is told why before it
+# decides; the merge gate would refuse the same report.
+pick:
+  route: simple
+  target: "https://github.com/example/app/issues/5"
+  pr: ""
+  confidence: high
+  area: app/
+  reason: "stub: next unblocked issue, one module, clear criteria"
+build: "Built the gate.\nPR: https://github.com/example/app/pull/9"
+subject:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  base: main
+  behind: "0"
+  conflicts: "false"
+  files: "app/gate.py"
+  started: "1700000000000"
+check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234 merged with main at abc1234\nC1 PASS  the gate reports why it is shut  the reason is shown  [evidence: c1.txt]\nPROBES\nP1 SURPRISE (D1)  shut gate / walk into it: walked straight through  [evidence: p1.png]\nDEFECTS SEEN\nD1 NEW  walking into the shut gate carries the user through it  [evidence: p1.png]\nOverall: PASS"
+review:
+  outcome: sent-back
+  pr: "https://github.com/example/app/pull/9"
+  sha: abc1234
+  delivers: none
+  dispositions:
+  - line: D1
+    action: blocks
+    ref: ""
+  reason: "stub: D1 is this change's to fix"
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
+fixture:
+  expect: completed
+  reached: [pick, claim, build, subject, check-app, evidence, review, release]
+  resolved-text-contains:
+    review: "Overall says PASS over D1"
+  inputs:
+    runtime: "/private/run-the-app.md"
+exec-code: true

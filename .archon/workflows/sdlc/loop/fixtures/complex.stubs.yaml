@@ -110,6 +110,14 @@ ship__deliver__shape__simplify:
 ship__deliver__review__tests: 0 findings
 ship__deliver__review__review-complete: settled
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
+subject:
+  pr: "https://github.com/example/repo/pull/4"
+  head: "fixturehead"
+  base: main
+  behind: "0"
+  conflicts: "false"
+  files: "app/notes.py"
+  started: "1700000000000"
 check-app: 'APP CHECK https://github.com/example/app/pull/11 at fixturehead
 
   C1 PASS  tag a note  tagged
@@ -117,9 +125,20 @@ check-app: 'APP CHECK https://github.com/example/app/pull/11 at fixturehead
   H1 FAIL  H1  search by tag returns notes from other users
 
   Overall: FAIL (H1)'
+evidence:
+  ok: "true"
+  problems: ""
+  overall: "FAIL"
+  checked_at: "1700000100000"
 review:
   outcome: sent-back
   pr: https://github.com/example/app/pull/11
+  sha: fixturehead
+  delivers: none
+  dispositions:
+  - line: H1
+    action: blocks
+    ref: ''
   reason: 'stub: holdout H1 failed'
 claim:
   held: "true"
@@ -134,7 +153,9 @@ fixture:
   - ship__triage__triage
   - ship__deliver__impl__implement
   - ship__outcome
+  - subject
   - check-app
+  - evidence
   - review
   - release
   resolved-text-contains:
