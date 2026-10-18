@@ -91,6 +91,10 @@ describe('test-suite change decision', () => {
     'packages/docs-web/src/content/docs/deployment/docker.md',
     '.archon/architecture.md',
     'packages/providers/src/codex/protocol/README.md',
+    'packages/docs-web/src/content/docs/reference/api.md',
+    'packages/docs-web/src/content/docs/reference/node-execution.md',
+    'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
+    'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
   ])('runs suite and workspace tests for required Markdown input %s', file => {
     expect(shouldRunTestSuite([file])).toBe(true);
     expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
