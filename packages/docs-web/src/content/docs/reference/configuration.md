@@ -816,9 +816,9 @@ DISCORD_STREAMING_MODE=stream
 
 ### Batch Mode
 
-The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive.
+The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive unless an orchestrator command prefix has already been detected.
 
-Filtering operates on provider text blocks. If Pi flushes a block to deliver a warning before the block is complete, a continuation of an indicator section can remain in the reply.
+Filtering operates on provider text blocks, including continuations split by an immediate warning. Adapters may split long replies into multiple platform messages or comments.
 
 ```ini
 TELEGRAM_STREAMING_MODE=batch
@@ -827,7 +827,7 @@ DISCORD_STREAMING_MODE=batch
 ```
 
 **Pros:**
-- One combined assistant reply/comment
+- One assembled assistant reply before delivery; adapters may split long replies
 - Fewer API calls
 - No spam or clutter
 

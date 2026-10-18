@@ -33,6 +33,7 @@ import {
 } from './command-scan';
 import { registerProject } from './project-commands';
 import * as messageDb from '../db/messages';
+import { filterToolIndicators, type ReplyChunk } from './batch-reply';
 import { dispatchOrchestratorWorkflow } from './workflow-dispatch';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -41,35 +42,6 @@ import { dispatchOrchestratorWorkflow } from './workflow-dispatch';
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
-
-// ─── Batch Mode Helpers ─────────────────────────────────────────────────────
-
-/**
- * Filter emoji tool indicators from Claude Code SDK responses.
- * These prefixed sections (🔧, 💭, 📝, etc.) are useful for streaming UIs
- * but garble batch-mode text output on platforms like Slack/GitHub/CLI.
- */
-export function filterToolIndicators(assistantMessages: string[]): string {
-  const separator = '\n\n---\n\n';
-
-  const toolIndicatorRegex =
-    /^(?:\u{1F527}|\u{1F4AD}|\u{1F4DD}|\u{270F}\u{FE0F}|\u{1F5D1}\u{FE0F}|\u{1F4C2}|\u{1F50D})/u;
-
-  // Filter per message so a message left empty drops out with its separator;
-  // filtering the joined text would keep bare `---` sections as content.
-  const finalMessage = assistantMessages
-    .map(message =>
-      message
-        .split('\n\n')
-        .filter(section => !toolIndicatorRegex.test(section.trim()))
-        .join('\n\n')
-    )
-    .filter(message => message.trim() !== '')
-    .join(separator)
-    .trim();
-
-  return finalMessage || assistantMessages.join(separator);
-}
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
@@ -423,7 +395,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
 export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   const { commandScan, platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
   const allChunks: { type: string; content: string }[] = [];
-  const assistantMessages: string[] = [];
+  const assistantMessages: ReplyChunk[] = [];
   let assistantChunksTruncated = false;
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
@@ -442,7 +414,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
       // only while the command is not yet fully captured (same reason as stream mode).
       allChunks.push({ type: 'assistant', content: msg.text });
       if (!commandFullyParsed) {
-        assistantMessages.push(msg.text);
+        assistantMessages.push(msg);
       }
 
       // Cap assistant-only chunks while no command has been detected.  Once
@@ -463,7 +435,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
       }
 
       if (!commandDetected) {
-        const accumulated = assistantMessages.join('');
+        const accumulated = assistantMessages.map(chunk => chunk.text).join('');
         if (commandScan && hasCommandPrefix(accumulated)) {
           commandDetected = true;
           if (isCommandFullyParsed(accumulated)) {
@@ -471,7 +443,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
           }
         }
       } else if (!commandFullyParsed) {
-        const accumulated = assistantMessages.join('');
+        const accumulated = assistantMessages.map(chunk => chunk.text).join('');
         if (isCommandFullyParsed(accumulated)) {
           commandFullyParsed = true;
         }
@@ -537,7 +509,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   // from filterToolIndicators would break command names and arguments apart.
   const commands = commandScan
     ? parseOrchestratorCommands(
-        assistantMessages.join(''),
+        assistantMessages.map(chunk => chunk.text).join(''),
         input.codebases,
         input.workflows.map(ws => ws.workflow)
       )

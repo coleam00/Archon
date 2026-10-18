@@ -10,20 +10,21 @@ import { providerSettledSchema } from './settled';
  * already use, so one stream has one discriminator.
  *
  * Text events carry a whole block, not a token delta: a provider coalesces deltas and sends
- * the block at a block, tool or turn boundary.
+ * the block at a block, tool or turn boundary. A warning may split a reply block;
+ * later chunks mark continuations.
  */
-
 /** ACP `agent_message_chunk`. */
 export const agentMessageChunkSchema = z.object({
   type: z.literal('agent_message_chunk'),
-  /** One whole block of the agent's reply. ACP wraps it in a `content` block; Archon carries the text. */
+  /** Reply block text. ACP wraps it in a `content` block; Archon carries the text. */
   text: z.string().min(1),
+  /** Archon addition: append to the previous reply block across an immediate warning. */
+  continuesPreviousBlock: z.literal(true).optional(),
 });
 
-/** ACP `agent_thought_chunk`. */
 export const agentThoughtChunkSchema = z.object({
   type: z.literal('agent_thought_chunk'),
-  /** One whole block of the agent's reasoning, as `agent_message_chunk.text`. */
+  /** One whole block of the agent's reasoning. */
   text: z.string().min(1),
 });
 
@@ -117,7 +118,6 @@ export const providerWarningSchema = z.object({
   message: z.string(),
 });
 export type ProviderWarning = z.infer<typeof providerWarningSchema>;
-
 export const warningSchema = providerWarningSchema.extend({ type: z.literal('warning') });
 
 /**

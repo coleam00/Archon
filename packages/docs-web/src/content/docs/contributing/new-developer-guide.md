@@ -407,7 +407,7 @@ Review never edits code. Fixing findings belongs to `archon-implement`, or to `a
 │   ─────────────────────────────────────────────────────────────────    │
 │   ┌──────────────────┐              - Webhook on issues/PRs            │
 │   │  Issue #42       │              - @archon in comments              │
-│   │                  │              - Batch mode (single comment)      │
+│   │                  │              - Batch mode (assembled reply)     │
 │   │  @archon fix     │              - Auto-creates PRs                 │
 │   │  this issue      │              - Good for automation              │
 │   └──────────────────┘                                                  │
@@ -416,6 +416,8 @@ Review never edits code. Fixing findings belongs to `archon-implement`, or to `a
 ```
 
 ---
+
+Batch mode assembles the reply before delivery. Adapters may split long replies into multiple messages or comments.
 
 ## Isolation: Git Worktrees
 
