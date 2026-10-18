@@ -64,7 +64,10 @@ open, so the round ends `threads_open` instead of ready. The next round's
 implementer judges each thread like a blocking finding, fixing it or declining it
 with evidence; `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
-the pull request back. A thread no agent can settle ends the run `needs_human`.
+the pull request back. A thread about code the pull request doesn't change or make
+reachable, such as one that arrived with a merge of the default branch, is settled
+with a reply saying so; it belongs in its own issue. A thread no agent can settle
+ends the run `needs_human`.
 `settle-threads` runs before CI and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
@@ -106,8 +109,10 @@ same shapes from either source:
 The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
 Keep `gh` as the default until a compatible release passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: its gate needs a pull
-request's unresolved review threads, which the forge contract does not report.
+The merge queue reads through `gh` alone and refuses `forge`: its sweep judges a pull
+request's unresolved review threads, which the forge contract does not report. The gate
+itself doesn't refuse over threads; the sweep holds a merge only for a thread that
+raises a defect in code the pull request changes or makes reachable.
 Delivery reads, answers and resolves review threads through `gh` alone for the same
 reason. On the `forge` source it never calls `gh` for them: its `threads` node does
 not run, and the report records `threads_checked: false` and says the threads were
@@ -666,8 +671,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
   [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
-  refuses unless the verdict says Ready at the head, CI is green there and no review
-  thread is unresolved, and the pull request is open, not a draft, into the default
+  refuses unless the verdict says Ready at the head and CI is green there (open review
+  threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
   head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
   writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
