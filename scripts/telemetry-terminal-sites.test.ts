@@ -5,16 +5,16 @@ import { join } from 'node:path';
 /**
  * Terminal run telemetry has one owner: the run store reports each committed terminal
  * transition through packages/workflows/src/run-terminal-telemetry.ts. The only other caller
- * is the executor's report for a run whose row could never be created. A capture added
+ * is run admission's report for a run whose row could never be created. A capture added
  * at any other site would double-count, or fire before its terminal write.
  */
 const ALLOWED = new Set([
   'packages/workflows/src/run-terminal-telemetry.ts',
-  'packages/workflows/src/executor.ts',
+  'packages/workflows/src/run-admission.ts',
 ]);
 
 describe('terminal run telemetry call sites', () => {
-  it('only shared store telemetry and the executor run_not_created report call captureWorkflowTerminal', async () => {
+  it('only shared store telemetry and the run-admission run_not_created report call captureWorkflowTerminal', async () => {
     const repoRoot = join(import.meta.dir, '..');
     const callers: string[] = [];
     for await (const scanned of new Bun.Glob('packages/*/src/**/*.{ts,tsx}').scan(repoRoot)) {
