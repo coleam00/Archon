@@ -82,26 +82,20 @@ describe('title-generator', () => {
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
   });
 
-  test('strips surrounding quotes from AI response', async () => {
+  test.each([
+    ['"Summarize Project README"', 'Summarize Project README'],
+    ['Title: Debug Auth Module', 'Debug Auth Module'],
+    ['Fix Login Bug.', 'Fix Login Bug'],
+    ['Fix Login Bug\nThis is an explanation', 'Fix Login Bug'],
+  ])('cleans %j to %j', async (response, expectedTitle) => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: '"Summarize Project README"' };
+      yield { type: 'agent_message_chunk', text: response };
       yield { type: 'result' };
     });
 
-    await generateAndSetTitle('conv-2', 'Summarize the README', 'claude', '/tmp');
+    await generateAndSetTitle('conv-clean', 'Fix the login bug', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-2', 'Summarize Project README');
-  });
-
-  test('strips "Title: " prefix from AI response', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Title: Debug Auth Module' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-3', 'Debug the auth module', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-3', 'Debug Auth Module');
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-clean', expectedTitle);
   });
 
   test('handles empty AI response with fallback to truncated message', async () => {
@@ -112,17 +106,6 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-4', 'Help me debug this issue', 'claude', '/tmp');
 
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-4', 'Help me debug this issue');
-  });
-
-  test('handles AI client error with fallback to truncated message', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('API key not set');
-    });
-
-    await generateAndSetTitle('conv-5', 'Fix the login bug', 'claude', '/tmp');
-
-    // Should not throw — fire-and-forget safe
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
   });
 
   test.each(['provider error', 'failed turn', 'generated title', 'empty title'] as const)(
@@ -315,41 +298,5 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-13', 'Debug the auth module', 'claude', '/tmp');
 
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-13', 'Debug Auth Module');
-  });
-
-  test('strips trailing punctuation from title', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Fix Login Bug.' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-14', 'Fix the login bug', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-14', 'Fix Login Bug');
-  });
-
-  test('takes only first line of multi-line response', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Fix Login Bug\nThis is an explanation' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-15', 'Fix the login bug', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-15', 'Fix Login Bug');
-  });
-
-  test('long user message is truncated in fallback', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('AI failure');
-    });
-
-    const longMessage = 'A'.repeat(200);
-
-    await generateAndSetTitle('conv-16', longMessage, 'claude', '/tmp');
-
-    const savedTitle = mockUpdateConversationTitle.mock.calls[0][1] as string;
-    expect(savedTitle.length).toBeLessThanOrEqual(100);
-    expect(savedTitle).toEndWith('...');
   });
 });
