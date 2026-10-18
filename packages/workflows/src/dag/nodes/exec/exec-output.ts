@@ -87,8 +87,9 @@ export function certifyExecOutput(
     );
   }
   if (!validation.valid) {
+    const schemaErrors = redactCredentialValues(validation.errors.join('; '), credentialValues);
     throw new ExecOutputContractError(
-      `${label}: stdout did not satisfy its declared output_format: ${validation.errors.join('; ')}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
+      `${label}: stdout did not satisfy its declared output_format: ${schemaErrors}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
     );
   }
 

@@ -1453,6 +1453,38 @@ describe('exec result contracts (#2453)', () => {
     }
   );
 
+  it.each([
+    ['bash', bashEmitting],
+    ['script', scriptEmitting],
+  ] as const)(
+    'a %s contract failure redacts credentials in schema-error paths',
+    async (kind, emitting) => {
+      const secret = 'SCHEMA_PATH_SECRET_123';
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(`contract-schema-redaction-${kind}`),
+          workflow: contractWorkflow({
+            ...emitting(JSON.stringify({ [secret]: 'invalid' })),
+            output_format: { type: 'object', additionalProperties: { type: 'integer' } },
+          }),
+          config: { ...minimalConfig, protectedCredentialValues: [secret] },
+        })
+      );
+      const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+        (call: unknown[]) => call[0] as PersistedEvent
+      );
+      const error = String(producerFailure(events)?.data?.error);
+      expect(error).toContain('did not satisfy its declared output_format');
+      expect(error).toContain('/[REDACTED]: must be integer');
+      expect(error).not.toContain(secret);
+      expect(producerCompletion(events)).toBeUndefined();
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    }
+  );
+
   it('a certified exec value survives cold resume identically', async () => {
     const freshPrompts: string[] = [];
     captureConsumerPrompts(freshPrompts);
