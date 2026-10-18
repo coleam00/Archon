@@ -20,7 +20,7 @@ import { getLog } from './log';
  * Emit + persist a container-lifecycle event (fire-and-forget DB write), so the
  * create/stop/resume/write-back phases surface in all three logging layers.
  */
-export function emitContainerLifecycleEvent(
+function emitContainerLifecycleEvent(
   deps: WorkflowDeps,
   runId: string,
   phase: ContainerLifecyclePhase,
@@ -407,4 +407,46 @@ async function raiseWriteBackGate(
     'container',
     message
   );
+}
+
+/**
+ * Announce a run's live container in all three logging layers. A resume (the caller
+ * rediscovered and restarted the container) announces `container_resumed` rather than
+ * `container_created`, so the timeline is honest.
+ */
+export async function announceContainerRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  containerCtx: ContainerRunContext | undefined,
+  isResume: boolean
+): Promise<void> {
+  // H4 — native overlay mode grants CAP_SYS_ADMIN, so an adversarial in-container
+  // agent can remount the read-only lower read-write and bypass the write-back
+  // gate. Warn LOUDLY at run start (console/platform + the lifecycle event) so the
+  // operator knows the isolation is accident-protection, not a hostile-agent
+  // sandbox, in this mode. Warning-only in v1 (see SECURITY.md).
+  const nativeOverlay = containerCtx?.overlayMode === 'native';
+  emitContainerLifecycleEvent(
+    deps,
+    runId,
+    isResume ? 'resumed' : 'created',
+    isResume ? 'container_resumed' : 'container_created',
+    execContext.containerId,
+    nativeOverlay ? { overlayMode: 'native', gateBypassable: true } : {}
+  );
+
+  if (nativeOverlay) {
+    await safeSendMessage(
+      platform,
+      conversationId,
+      '⚠️ Container is running in NATIVE overlay mode (CAP_SYS_ADMIN). An adversarial ' +
+        'agent could bypass the write-back review by remounting the project root — treat ' +
+        'this run as accident-protection, not a sandbox against hostile code. (See SECURITY.md.)',
+      { workflowId: runId }
+    );
+    getLog().warn({ workflowRunId: runId }, 'dag.container_native_mode_gate_bypassable');
+  }
 }

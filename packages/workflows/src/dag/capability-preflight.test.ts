@@ -5,13 +5,21 @@ import { tmpdir } from 'os';
 import { mkdir } from 'fs/promises';
 import { providerRegistry, getProviderCapabilities } from '@archon/providers';
 import { removeTempTree } from '@archon/paths/test-utils';
-import type { DagNode, AgentNode, LoopGroupNode, GateNode, IncludeDirective } from '../schemas';
+import type {
+  DagNode,
+  AgentNode,
+  LoopGroupNode,
+  GateNode,
+  IncludeDirective,
+  ResolvedWorkflow,
+} from '../schemas';
 import { dagNodeSchema } from '../schemas';
 import { makeTestResolvedWorkflow } from '../test-utils';
 import { buildAiProfile } from '../model-validation';
 import { settlingProvider } from '../test-settling-provider';
 import { executeDagWorkflow } from '../dag-executor';
 import {
+  assertRunCapabilities,
   collectContainerIncompatibleProviders,
   visitProviderInvokingNodes,
   collectStrictSchemaViolations,
@@ -504,6 +512,35 @@ describe('executeDagWorkflow -- strict-schema preflight', () => {
     } finally {
       await removeTempTree(testDir);
     }
+  });
+});
+
+describe('assertRunCapabilities', () => {
+  it('names the properties a strict provider needs listed in required', () => {
+    const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+      name: 'preflight',
+      nodes: [
+        {
+          id: 'work',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Do the work' },
+          output_format: {
+            type: 'object',
+            properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+            required: ['ready'],
+          },
+        },
+      ],
+    };
+    const host = { kind: 'host' } as const;
+    expect(() =>
+      assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, host)
+    ).toThrow(
+      "output_format schema strict-mode violation: workflow 'preflight', node 'work', output_format declares note not in 'required'"
+    );
+    expect(() =>
+      assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, host)
+    ).not.toThrow();
   });
 });
 
