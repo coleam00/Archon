@@ -1,7 +1,7 @@
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
-import { sampleCheckout, type CheckoutSample } from './checkout-observation';
+import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import { gatherDescendantRunIds } from './child-runs';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { attentionAnswerLines, spellWorkflowCommand } from './deps';
@@ -579,4 +579,53 @@ function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: Workf
     `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
     `(${stateLine}).\n${actionLines}`
   );
+}
+
+/** Persist the baseline sampled at claim time, now that the run's artifacts directory exists. */
+export async function recordRunCheckoutBaseline(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  checkoutBaselineSample: CheckoutSample,
+  artifactsDir: string,
+  cutFromCommit: string | undefined
+): Promise<WorkflowExecutionResult | undefined> {
+  // Persisting the baseline is run infrastructure: a run that cannot record where it
+  // started fails before its first node. An unobservable checkout is not a
+  // failure — it is recorded as an `unavailable` observation.
+  try {
+    workflowRun.checkout_baseline = await deps.store.recordWorkflowRunCheckoutBaseline(
+      workflowRun.id,
+      await recordCheckoutSample(
+        checkoutBaselineSample,
+        { runId: workflowRun.id, artifactsDir },
+        cutFromCommit !== undefined ? { cutFromCommit } : {}
+      )
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, workflowRunId: workflowRun.id },
+      'workflow.checkout_baseline_persist_failed'
+    );
+    await sendCriticalMessage(
+      platform,
+      conversationId,
+      '❌ **Workflow failed**: Unable to record the run checkout baseline.'
+    );
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(
+        workflowRun.id,
+        `Checkout baseline could not be recorded: ${err.message}`
+      ),
+      { workflowRunId: workflowRun.id, site: 'workflow.checkout_baseline_fail_db_record_failed' }
+    );
+    return {
+      success: false,
+      workflowRunId: workflowRun.id,
+      error: `Checkout baseline could not be recorded: ${err.message}`,
+    };
+  }
+  return undefined;
 }

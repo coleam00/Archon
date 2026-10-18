@@ -10,21 +10,21 @@ import {
   resolveUserProviderEnvForWorkflow,
   resolveWorkflowGithubEnvironment,
 } from './run-credential-env';
-import { admitWorkflowRun } from './run-admission';
+import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
 import { resolveRunDispatch } from './run-dispatch';
-import { resolveProjectPaths, resolveScopeArtifactsDir } from './run-paths';
+import { prepareRunPaths, resolveAdoptedRunDir } from './run-paths';
 import {
   assertRunCredentials,
   effectiveDbCredentialValues,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
+  establishRunSource,
   prepareWorkflowSource,
-  preparedWorkflowSourceRecord,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
 } from './run-source';
-import { isContainerRun, type OwnedWorktree, type WorkflowRunOrigin } from './schemas/workflow-run';
+import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 export type {
   ChildIsolationRequest,
   ChildIsolationResolver,
@@ -37,16 +37,13 @@ export type { ContainerRunContext, ContainerWriteBackBackend } from './container
 import * as archonPaths from '@archon/paths';
 import { captureWorkflowInvoked, createLogger } from '@archon/paths';
 import type { ExecutionContext } from '@archon/provider-contract';
-import { mkdir, rename, rm } from 'fs/promises';
-import { dirname } from 'path';
-import { recordCheckoutSample } from './checkout-observation';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { ContainerRunContext } from './container-context';
 import { executeDagWorkflow, type PriorRunUsage } from './dag-executor';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
 import { formatDeprecationNotice } from './deprecation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
-import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
+import { spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
 import {
   runWithAdoptedRunDir,
@@ -63,44 +60,24 @@ import type {
   WorkflowSource,
 } from './schemas';
 import {
-  RUN_METADATA_KEYS,
   SUBRUN_METADATA_KEYS,
-  WORKFLOW_SOURCE_METADATA_KEY,
   isApprovalContext,
   isExecNode,
   isGateNode,
   isLoopGroupNode,
   isLoopNode,
   pendingWorkflowWaitDeadline,
-  persistScopeKey,
-  readContinuationMode,
-  readIdentityUnresolved,
   readSubrunMetadata,
-  readWorkflowSourceState,
   runMayPersistSessions,
   type ContinuationMode,
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { maybeWarnLegacyArtifactsPath, maybeWarnLegacyStatePath } from './state-migration';
-import {
-  CONTINUATION_RETRY_MS,
-  deadlineWaitCursor,
-  executionClaim,
-  type PersistedNodeOutput,
-} from './store';
+import { deadlineWaitCursor, type PersistedNodeOutput } from './store';
 import { workflowTelemetryShape } from './telemetry-shape';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
-import {
-  WorkflowSourceUnavailableError,
-  capturedSourceRoots,
-  isSourceReadFailure,
-  resolveRunSourceCapture,
-  type WorkflowSourceCapture,
-  type WorkflowSourceRoots,
-} from './workflow-source';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -306,9 +283,6 @@ export async function executeWorkflow(
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
-    preparedSource,
-    adoptedFromRunId,
-    continuationMode,
     cutFromCommit,
   } = opts;
 
@@ -350,467 +324,44 @@ export async function executeWorkflow(
   if (admitted.stopped) return admitted.result;
   const { workflowRun, checkoutBaselineSample } = admitted.value;
 
-  // Resolve external artifact, log, and state directories. A resumed run
-  // carries its `output_root` and short-circuits identity resolution entirely.
-  const {
-    artifactsDir,
-    workflowSourceDir,
-    logDir,
-    artifactsRoot,
-    stateDir,
-    outputRoot,
-    identityResolution,
-  } = await resolveProjectPaths(deps, cwd, workflowRun.id, codebaseId, {
-    persistedOutputRoot: workflowRun.output_root,
-  });
-
-  // Record the resolved root ONCE, so every later reader (artifact routes, CLI)
-  // addresses this run's output by a durable pointer instead of re-deriving it
-  // from a codebase name that may since have been renamed (#1192). Never
-  // overwritten — a resumed run already has one, and the store additionally
-  // enforces write-once via COALESCE.
-  //
-  // Faulted-identity exception (#2304): when `resolveProjectPaths` returned the
-  // cwd fallback BECAUSE both `getCodebase` attempts threw (not because a registered
-  // codebase simply lacked an owner/repo or `_local` identity), the cwd location is
-  // fault-shaped — persisting it here would pin this run's `output_root` AND
-  // `$STATE_DIR` to that empty, fault-derived tree for the run's whole life. We
-  // instead leave `output_root` NULL and stamp `metadata.identity_unresolved = true`,
-  // so:
-  //   • a later resume re-derives once the registry is healthy and the
-  //     `!workflowRun.output_root` guard above writes the now-correct root;
-  //   • anyone reading the row can tell "unregistered" apart from "we could not
-  //     tell";
-  //   • the write-once invariant is preserved everywhere else (a row with a
-  //     resolved or unregistered identity is still protected across a #1192
-  //     rename — only the empty faulted shape is scoped differently).
-  //
-  // A failure to persist here is NOT retried: the guard is `if (!output_root)`, so
-  // this run keeps a NULL pointer for its whole lifetime and permanently stays on
-  // the re-derive path — the exact orphaning #1192 makes possible. That does not
-  // justify failing an otherwise healthy run (re-derivation works today), but it
-  // is a durable per-run degradation, so the healed-arm persist failure below
-  // (`workflow.output_root_persist_failed`) logs at ERROR rather than WARN. The
-  // faulted arm's two logs stay at WARN by design: the underlying fault was
-  // already logged at ERROR inside `resolveProjectPaths`, so these only report a
-  // secondary bookkeeping failure (stamping the flag, noting the skipped persist),
-  // not the fault itself.
-  if (!workflowRun.output_root) {
-    if (identityResolution === 'faulted') {
-      workflowRun.metadata = {
-        ...workflowRun.metadata,
-        [RUN_METADATA_KEYS.identityUnresolved]: true,
-      };
-      try {
-        await deps.store.updateWorkflowRun(workflowRun.id, {
-          metadata: { [RUN_METADATA_KEYS.identityUnresolved]: true },
-        });
-      } catch (err) {
-        getLog().warn(
-          { err: err as Error, workflowRunId: workflowRun.id },
-          'workflow.identity_unresolved_flag_persist_failed'
-        );
-      }
-      getLog().warn(
-        { workflowRunId: workflowRun.id, outputRoot },
-        'workflow.output_root_not_persisted_identity_faulted'
-      );
-    } else {
-      const updates: Parameters<typeof deps.store.updateWorkflowRun>[1] = {
-        output_root: outputRoot,
-      };
-      // The faulted arm stamped `identity_unresolved = true`; this is the heal
-      // half of the same write — once a later resume's identity lookup succeeds,
-      // a row that has healed must stop reading as faulted. The `false` rides the
-      // same atomic metadata merge as the faulted arm's `true`.
-      if (readIdentityUnresolved(workflowRun.metadata) === true) {
-        updates.metadata = { [RUN_METADATA_KEYS.identityUnresolved]: false };
-      }
-      await deps.store
-        .updateWorkflowRun(workflowRun.id, updates)
-        .then(() => {
-          // Keep the in-memory row in step with the write, exactly as the faulted arm
-          // does for `identity_unresolved`. Every in-run reader of `output_root` — the
-          // artifact-pointer gate (#2453) is the first — would otherwise see NULL on the
-          // very run that just recorded its own location, and only agree with the
-          // database after a resume reloaded the row.
-          workflowRun.output_root = outputRoot;
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, outputRoot },
-            'workflow.output_root_persist_failed'
-          );
-        });
-    }
-  }
-
-  // Detect (never move) legacy repo-local `.archon/` output directories. State was a
-  // prompt convention; artifacts/logs the engine wrote itself on the unregistered-cwd
-  // fallback (#2311) — the case Archon caused must not be the quieter of the two.
-  // The run's ACTUAL posture, not the workflow's declared policy. `worktree.enabled`
-  // is only one input to the real decision (`pinnedEnabled ?? (!resume && !noWorktree)`,
-  // resolved in the CLI), so a workflow that leaves `worktree` unset and is run with
-  // `--no-worktree` executes IN PLACE while the declared policy still reads as isolated.
-  // That is the one case where this warning is actionable — the legacy files are sitting
-  // in the user's real repository — and it is exactly the case the declared policy gets
-  // backwards. A managed worktree always lives under ARCHON_HOME; an in-place checkout
-  // never does, so the cwd answers the question the policy cannot.
-  const isolated = archonPaths.isInsideArchonHome(cwd);
-  await maybeWarnLegacyStatePath(cwd, stateDir, isolated);
-  await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
-
-  // Stable cross-invocation artifact scope (#1846): only for persist_session
-  // workflows, keyed like the session store. Undefined otherwise — zero new dirs.
-  const scopeArtifactsDir = resolveScopeArtifactsDir(
+  const paths = await prepareRunPaths(
+    deps,
+    platform,
+    conversationId,
+    cwd,
     workflow,
-    persistScopeKey(workflowRun),
-    artifactsRoot
+    workflowRun,
+    codebaseId
   );
-
-  // Pre-create the artifacts directory so commands can write to it immediately
-  // (and the durable scope dir, when the workflow opted into one — same disk,
-  // same failure mode, same fatal treatment). `stateDir` is pre-created here
-  // too so `$STATE_DIR` is usable from the first node without an mkdir, and an
-  // unwritable state dir fails the run rather than silently degrading.
-  try {
-    await mkdir(artifactsDir, { recursive: true });
-    await mkdir(stateDir, { recursive: true });
-    if (scopeArtifactsDir) await mkdir(scopeArtifactsDir, { recursive: true });
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    getLog().error(
-      { err, artifactsDir, stateDir, workflowRunId: workflowRun.id },
-      'workflow.artifacts_dir_create_failed'
-    );
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      `❌ **Workflow failed**: Could not create artifacts directory \`${artifactsDir}\`: ${err.message}`
-    );
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(
-        workflowRun.id,
-        `Artifacts directory creation failed: ${err.message}`
-      ),
-      { workflowRunId: workflowRun.id, site: 'workflow.artifacts_dir_fail_db_record_failed' }
-    );
-    return {
-      success: false,
-      workflowRunId: workflowRun.id,
-      error: `Artifacts directory creation failed: ${err.message}`,
-    };
-  }
-  getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
+  if (paths.stopped) return paths.result;
+  const { artifactsDir, workflowSourceDir, logDir, stateDir, outputRoot, scopeArtifactsDir } =
+    paths.value;
 
   if (checkoutBaselineSample !== undefined) {
-    // Persisting the baseline is run infrastructure: a run that cannot record where it
-    // started fails here, before its first node. An unobservable checkout is not a
-    // failure — it is recorded as an `unavailable` observation.
-    try {
-      workflowRun.checkout_baseline = await deps.store.recordWorkflowRunCheckoutBaseline(
-        workflowRun.id,
-        await recordCheckoutSample(
-          checkoutBaselineSample,
-          { runId: workflowRun.id, artifactsDir },
-          cutFromCommit !== undefined ? { cutFromCommit } : {}
-        )
-      );
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, workflowRunId: workflowRun.id },
-        'workflow.checkout_baseline_persist_failed'
-      );
-      await sendCriticalMessage(
-        platform,
-        conversationId,
-        '❌ **Workflow failed**: Unable to record the run checkout baseline.'
-      );
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(
-          workflowRun.id,
-          `Checkout baseline could not be recorded: ${err.message}`
-        ),
-        { workflowRunId: workflowRun.id, site: 'workflow.checkout_baseline_fail_db_record_failed' }
-      );
-      return {
-        success: false,
-        workflowRunId: workflowRun.id,
-        error: `Checkout baseline could not be recorded: ${err.message}`,
-      };
-    }
-  }
-
-  // Between-run continuation (#2747): resolve $ADOPTED_RUN_DIR through the
-  // adopted run's persisted `output_root` (rename-safe per #2200) and announce
-  // the continuation on THIS run's own event log so the chain renders without a
-  // column join. Read-only by contract — this run writes to its own artifacts;
-  // stores are never merged, so evidence stays attributable per run.
-  // Resolution also runs on resume: a resumed run carries no caller-supplied id,
-  // but its row still records the continuation, and every remaining node may
-  // reference $ADOPTED_RUN_DIR (only for adoption; supersession has no estate).
-  // Only the announcement event stays creation-only — it was written once when
-  // the continuation was made.
-  const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
-  // On a fresh invocation the caller supplies the mode alongside the id. On
-  // resume neither is in opts — the executor reads the row's metadata stamp.
-  const effectiveContinuationMode =
-    continuationMode ?? readContinuationMode(workflowRun.metadata) ?? 'adopt';
-  let adoptedRunDir: string | undefined;
-  if (effectiveAdoptedFromRunId) {
-    // Supersession is metadata-only (#3064): no estate, so skip the output_root
-    // gate and the $ADOPTED_RUN_DIR resolution that only adoption needs.
-    if (effectiveContinuationMode !== 'supersede') {
-      const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
-      // Deliberately precedes the resolver below: a missing persisted root is
-      // corruption, not relocation, so adoption refuses rather than re-deriving
-      // from a codebase row the way the display-only CLI/server readers would.
-      if (!adopted?.output_root) {
-        throw new Error(
-          `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
-            'artifact directory cannot be addressed.'
-        );
-      }
-      // #3097 — route the adopted run's persisted output_root through the
-      // shared resolver so the same ARCHON_HOME containment check every other
-      // persisted-root reader (CLI leave-behind, server artifact route) already
-      // applies here. An out-of-tree value is refused unless the adopted run's
-      // codebase row can re-derive a root under the current ARCHON_HOME.
-      const adoptedCodebase = adopted.codebase_id
-        ? await deps.store.getCodebase(adopted.codebase_id)
-        : null;
-      const adoptedRoot = archonPaths.resolveRunStorageRoot(adopted, adoptedCodebase);
-      if (!adoptedRoot) {
-        throw new Error(
-          `Cannot adopt run '${effectiveAdoptedFromRunId}': its persisted output root is outside ARCHON_HOME and cannot be re-derived, so its artifact directory cannot be addressed.`
-        );
-      }
-      adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(adoptedRoot, effectiveAdoptedFromRunId);
-    }
-    if (!isContinuation) {
-      try {
-        await deps.store.createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'workflow.run_adopted',
-          data: {
-            adopted_from_run_id: effectiveAdoptedFromRunId,
-            mode: effectiveContinuationMode,
-          },
-        });
-      } catch (err) {
-        getLog().warn(
-          { err: err as Error, workflowRunId: workflowRun.id, adoptedFromRunId },
-          'workflow.run_adopted_event_persist_failed'
-        );
-      }
-    }
-  }
-
-  // ── Executable source ──────────────────────────────────────────────────────
-  //
-  // Freeze the workflow's own commands and scripts into this run's artifacts, and
-  // resolve them from there for the rest of the run. Two things follow: the target
-  // workspace never receives authoring files (it used to get a whole `.archon` copy,
-  // `.env` and all), and the run stops changing shape when the authoring checkout is
-  // edited, moved, or deleted underneath it.
-  //
-  // Order matters. A run that already RECORDED a source uses it, always — that is what
-  // makes a resume deterministic. Only a run with no record captures, so a resume can
-  // never recapture and quietly pull in edits made since it paused.
-  //
-  // This path FAILS CLOSED. A capture that cannot be taken, recorded, or verified means
-  // the run's executable source cannot be established, and running anyway would execute
-  // something other than what the run is supposed to be — the exact drift the capture
-  // exists to remove. The sole exception is a run created before captures existed, which
-  // has no record to honor.
-  const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
-  const isResume = priorCompletedNodes !== undefined;
-  let workflowSourceRoots: WorkflowSourceRoots | undefined;
-
-  const failRunOnSource = async (message: string): Promise<WorkflowExecutionResult> => {
-    getLog().error({ workflowRunId: workflowRun.id, message }, 'workflow.source_unavailable');
-    await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, message, { exitReason: 'source_unavailable' }),
-      {
-        workflowRunId: workflowRun.id,
-        site: 'workflow.source_fail_db_record_failed',
-      }
-    );
-    return { success: false, workflowRunId: workflowRun.id, error: message };
-  };
-
-  if (recordedSourceState.kind === 'unreadable') {
-    // The run recorded SOMETHING this build cannot parse. Not the legacy case: treating
-    // it as one would resume against whatever is on disk now.
-    return await failRunOnSource(
-      "This run's workflow source record cannot be read by this build " +
-        `(${recordedSourceState.detail}). It may have been written by a newer Archon. ` +
-        'Start a fresh run to execute the current workflow.'
-    );
-  } else if (recordedSourceState.kind === 'recorded') {
-    const recordedSource = recordedSourceState.record;
-    // Verifies the digest against the one the RUN recorded — not merely that the
-    // directory exists, and not merely that the capture agrees with itself.
-    let loaded: WorkflowSourceCapture;
-    try {
-      const capture = await resolveRunSourceCapture(workflowRun.metadata);
-      if (!capture) throw new Error('workflow source record disappeared during resolution');
-      loaded = capture;
-    } catch (error) {
-      if (isSourceReadFailure(error)) {
-        const path =
-          error instanceof WorkflowSourceUnavailableError ? error.path : recordedSource.root;
-        getLog().warn(
-          { workflowRunId: workflowRun.id, path, err: error },
-          'workflow.source_restore_unreadable'
-        );
-        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-          claimId: executionClaim(workflowRun.metadata),
-          nodeId: 'workflow-source',
-          path,
-          error: error instanceof Error ? error.message : String(error),
-          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-        });
-        if (released) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            sourceReleaseNotice(platform, workflowRun.id, {
-              path,
-              container: isContainerRun(workflowRun),
-            })
-          );
-          return { success: true, paused: true, workflowRunId: workflowRun.id };
-        }
-        const current = await deps.store.getWorkflowRun(workflowRun.id);
-        if (current?.status === 'paused') {
-          return { success: true, paused: true, workflowRunId: workflowRun.id };
-        }
-        if (current?.status === 'completed') {
-          return { success: true, workflowRunId: workflowRun.id };
-        }
-        return {
-          success: false,
-          workflowRunId: workflowRun.id,
-          error: 'Workflow status changed before source release',
-        };
-      }
-      return await failRunOnSource(
-        `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
-          `(${(error as Error).message}). The run cannot be resumed against different source; ` +
-          'start a fresh run to execute the current workflow.'
-      );
-    }
-    workflowSourceRoots = capturedSourceRoots(loaded.anchor);
-    getLog().debug(
-      { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-      'workflow.source_restored'
-    );
-    if (recordedSource.source_config === undefined) {
-      // A run from before the row carried `source_config`. The manifest sits outside
-      // the digest, so nothing can prove these settings are the ones the run started
-      // with; what pinning them now buys is closing the window. From here on they are
-      // held beside the digest, and a later edit to the manifest is refused like any
-      // other drift instead of being re-read on every resume for the life of the run.
-      const pinned = { ...recordedSource, source_config: loaded.anchor.config };
-      workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
-      await deps.store.updateWorkflowRun(workflowRun.id, {
-        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
-      });
-      getLog().warn(
-        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-        'workflow.source_config_pinned_from_manifest'
-      );
-    }
-  } else if (isResume) {
-    // Created before source capture existed. Its original bytes were never recorded and
-    // cannot be reconstructed, so it resumes the way it always did — against live source.
-    // This is the ONLY warning-and-continue path, and it retires with those runs.
-    getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.source_legacy_live');
-    await safeSendMessage(
+    const baselineFailure = await recordRunCheckoutBaseline(
+      deps,
       platform,
       conversationId,
-      '⚠️ This run started before Archon captured workflow source, so there is nothing ' +
-        'recorded to resume from. Continuing against the current source on disk, which may ' +
-        'differ from what the run originally executed.'
+      workflowRun,
+      checkoutBaselineSample,
+      artifactsDir,
+      cutFromCommit
     );
-  } else if (preparedSource) {
-    // The normal fresh path: the caller captured BEFORE selecting a workflow and
-    // discovered from that capture, so the YAML being executed and the commands and
-    // scripts beside it are one consistent set of bytes.
-    //
-    // Move the staged capture to this run's own source directory, so it stops
-    // accumulating in a staging directory nothing reclaims. That directory sits BESIDE
-    // the run's artifacts, not inside them: `$ARTIFACTS_DIR` is handed to every node and
-    // listed as the run's output, and the frozen pack is neither an output nor something
-    // a node should reach by that path. Same filesystem, so this is a rename.
-    const finalCaptureRoot = workflowSourceDir;
-    try {
-      if (preparedSource.anchor.root !== finalCaptureRoot) {
-        // Unlike `artifactsDir`, nothing earlier in the run creates this parent.
-        await mkdir(dirname(finalCaptureRoot), { recursive: true });
-        await rm(finalCaptureRoot, { recursive: true, force: true });
-        await rename(preparedSource.anchor.root, finalCaptureRoot);
-      }
-      // The staged capture is now at the run's own source path — the run owns the
-      // bytes from this point on. Adopting here (not earlier, at the call site) is
-      // what closes the race in #2690: a rename failure above returns without reaching
-      // this line, so the wrap's `finally` reclaims the staged directory instead of
-      // leaving it to the hourly age-based sweep.
-      opts.capturedSourceOwner?.adopt();
-    } catch (error) {
-      return await failRunOnSource(
-        `Could not move this run's captured workflow source into place: ${(error as Error).message}`
-      );
-    }
-    const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
-    workflowSourceRoots = capturedSourceRoots(sourceAnchor);
-    const sourceRecord = preparedWorkflowSourceRecord({
-      ...preparedSource,
-      anchor: sourceAnchor,
-    });
-    // Mirror the record onto the IN-MEMORY run as well as the row. `workflowRun` is what
-    // gets handed to child, fan-out, and `workflow:` dispatch, and those read the record
-    // to find the parent's authoring origin — a stale in-memory copy sends them to the
-    // target `cwd`, where the authoring workflows may not exist at all. Mutated rather
-    // than reassigned so the row object stays one identity for the rest of the run; the
-    // value written here is the same one the row is about to receive.
-    workflowRun.metadata = {
-      ...workflowRun.metadata,
-      [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
-    };
-    try {
-      await deps.store.updateWorkflowRun(workflowRun.id, {
-        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord },
-      });
-    } catch (error) {
-      // Without the pointer the run is unresumable in the only way that matters: a later
-      // resume would find no record and fall through the legacy branch, executing live
-      // source. Fail now, while the failure is attributable.
-      return await failRunOnSource(
-        `Could not record this run's workflow source: ${(error as Error).message}`
-      );
-    }
-    getLog().info(
-      {
-        workflowRunId: workflowRun.id,
-        origin: preparedSource.origin,
-        captureRoot: finalCaptureRoot,
-        digest: preparedSource.manifest.digest.slice(0, 12),
-        fileCount: preparedSource.manifest.file_count,
-        byteCount: preparedSource.manifest.byte_count,
-      },
-      'workflow.source_captured'
-    );
-  } else {
-    // A fresh run whose caller did not prepare a capture. In-process callers that hand
-    // the executor a definition they built themselves (tests, programmatic embedders)
-    // land here; they have no on-disk source to freeze, so there is nothing to record
-    // and nothing that can drift. Resolution stays live under `cwd`, unchanged.
-    getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
+    if (baselineFailure) return baselineFailure;
   }
+
+  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
+
+  const sourced = await establishRunSource(
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    workflowSourceDir,
+    opts
+  );
+  if (sourced.stopped) return sourced.result;
+  const workflowSourceRoots = sourced.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
