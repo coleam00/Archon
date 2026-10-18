@@ -1,4 +1,3 @@
-import { requireProvider } from '@archon/provider-contract';
 import {
   continueBlockedRun,
   gatherDescendantRunIds,
@@ -13,11 +12,11 @@ import {
   resolveUserProviderEnvForWorkflow,
   resolveWorkflowGithubEnvironment,
 } from './run-credential-env';
-import { isFolderCodebase, resolveProjectPaths, resolveScopeArtifactsDir } from './run-paths';
+import { resolveRunDispatch } from './run-dispatch';
+import { resolveProjectPaths, resolveScopeArtifactsDir } from './run-paths';
 import {
   assertRunCredentials,
   effectiveDbCredentialValues,
-  prepareRunAiConfiguration,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
@@ -37,7 +36,6 @@ export type { ContainerRunContext, ContainerWriteBackBackend } from './container
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import * as archonPaths from '@archon/paths';
 import { captureWorkflowInvoked, captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { formatDuration } from '@archon/paths/duration';
@@ -55,17 +53,10 @@ import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from '.
 import { attentionAnswerLines, sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { runWithAdoptedRunDir, safeSendMessage, type SendMessageContext } from './executor-shared';
-import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
 import { logWorkflowError, logWorkflowResume, logWorkflowStart } from './logger';
-import {
-  RUN_MODEL_BINDINGS_METADATA_KEY,
-  hasRunModelOverrides,
-  runOverrideAppliesToRef,
-} from './model-validation';
+import { RUN_MODEL_BINDINGS_METADATA_KEY } from './model-validation';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from './run-config';
 import type {
-  DagNode,
-  IncludeDirective,
   ResolvedWorkflow,
   WorkflowExecutionResult,
   WorkflowRun,
@@ -82,22 +73,18 @@ import {
   isApprovalContext,
   isExecNode,
   isGateNode,
-  isIncludeDirective,
   isLoopGroupNode,
   isLoopNode,
-  isWaitNode,
   pendingWorkflowWaitDeadline,
   persistScopeKey,
   readContinuationMode,
   readIdentityUnresolved,
-  readRunDispatchMetadata,
   readSubrunMetadata,
   readWorkflowSourceState,
   runAttention,
   runMayPersistSessions,
   type ContinuationMode,
   type ExecutionOwnerRecord,
-  type RunDispatchMetadata,
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
@@ -374,15 +361,6 @@ export async function executeWorkflow(
   origin?: WorkflowRunOrigin,
   opts: ExecuteWorkflowOptions = {}
 ): Promise<WorkflowExecutionResult> {
-  const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
-  if (outcomeDeclarationError !== null) {
-    throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
-  }
-  const runBudgetShapeError = validateRunBudgetShape(workflow);
-  if (runBudgetShapeError !== null) {
-    throw new Error(`Invalid workflow '${workflow.name}': ${runBudgetShapeError}`);
-  }
-
   const {
     codebaseId,
     issueContext,
@@ -391,116 +369,36 @@ export async function executeWorkflow(
     priorCompletedNodes,
     priorUsage,
     priorNodeSessions,
-    source,
     parseWarnings,
-    baseBranch: callerBaseBranch,
-    baseOverride: callerBaseOverride,
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
     inputs: suppliedInputs,
-    modelOverrideLayer,
-    runConfig: callerRunConfig,
     preparedSource,
     adoptedFromRunId,
     continuationMode,
     cutFromCommit,
   } = opts;
 
-  const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : origin?.userId;
-  const modelOverrides =
-    modelOverrideLayer?.kind === 'raw' ? modelOverrideLayer.overrides : undefined;
-  const isContinuation =
-    preCreatedRun !== undefined &&
-    (priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
-  if (isContinuation && modelOverrides !== undefined) {
-    throw new Error('Cannot supply model overrides when resuming an existing workflow run.');
-  }
-  if (isContinuation && callerRunConfig !== undefined) {
-    throw new Error('Cannot supply a run config when resuming an existing workflow run.');
-  }
-
-  const containsWait = (nodes: readonly (DagNode | IncludeDirective)[]): boolean =>
-    nodes.some(node => {
-      if (isIncludeDirective(node)) return false;
-      if (isWaitNode(node)) return true;
-      return isLoopGroupNode(node) && containsWait(node.loop_group.nodes);
-    });
-  // Fresh dispatch only — a resume of a run that already committed to this shape has
-  // nothing left to refuse. `isContinuation`, not `preCreatedRun === undefined`: a row
-  // pre-created by a launching process (#2872) is still a fresh dispatch and must meet
-  // the same refusal.
-  if (!isContinuation && execContext.kind === 'container' && containsWait(workflow.nodes)) {
-    throw new Error(
-      `Workflow '${workflow.name}' contains a durable wait, which is not supported in container isolation because server continuation cannot rewire the container. Run it without container isolation.`
-    );
-  }
-
-  if (preCreatedRun !== undefined) {
-    const foreignPriorNodeSession = priorNodeSessions?.find(
-      row => row.workflow_run_id !== preCreatedRun.id
-    );
-    if (foreignPriorNodeSession !== undefined) {
-      throw new Error(
-        `Cannot resume workflow run '${preCreatedRun.id}' with session state from run '${foreignPriorNodeSession.workflow_run_id}' (node '${foreignPriorNodeSession.node_id}')`
-      );
-    }
-  }
-
-  // Guard: a container run MUST be resumed with its container rewired (the CLI does
-  // this via backend.resumeEnv, threading a `container` context). A resume that
-  // reaches here for a container run WITHOUT that context — e.g. approving a
-  // --container run from chat/web, which has no docker backend wired — would run
-  // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
-  // the CLI can rediscover the container and apply.
-  if (preCreatedRun?.metadata?.isolation === 'container' && !containerCtx) {
-    const msg =
-      `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
-      'CLI in the same project (`archon workflow approve/reject/resume <id>`), where the ' +
-      'container is rediscovered — chat/web resume cannot rewire it.';
-    getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
-    await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(preCreatedRun.id, msg), {
-      workflowRunId: preCreatedRun.id,
-      site: 'workflow.container_resume_guard_fail_failed',
-    });
-    return { success: false, workflowRunId: preCreatedRun.id, error: msg };
-  }
-
-  let prepared: PreparedRunAiConfiguration;
-  try {
-    const recorded =
-      preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    const aiAncestorId = adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-    const aiContinuationMode = continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
-    const adoptedAiRun =
-      !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
-        ? await deps.store.getWorkflowRun(aiAncestorId)
-        : undefined;
-    const inherited =
-      adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    prepared =
-      !recorded && !inherited && opts.preparedAiConfiguration
-        ? opts.preparedAiConfiguration
-        : await prepareRunAiConfiguration(deps, workflow, cwd, {
-            codebaseId,
-            userId: executionUserId,
-            runConfig: callerRunConfig,
-            modelOverrideLayer,
-            ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-            aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-            ...(recorded ? { inheritAiConfiguration: true } : {}),
-          });
-  } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
-    if (preCreatedRun)
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
-      );
-    throw error;
-  }
+  const dispatched = await resolveRunDispatch(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    origin,
+    opts
+  );
+  if (dispatched.stopped) return dispatched.result;
+  const {
+    executionUserId,
+    isContinuation,
+    prepared,
+    baseBranch,
+    runSource,
+    dispatchMetadata,
+    docsDir,
+  } = dispatched.value;
   const {
     config,
     dbEnvVars,
@@ -513,149 +411,7 @@ export async function executeWorkflow(
     runConfigMetadata,
   } = prepared;
   const configuredCommandFolder = config.commands.folder;
-
-  // What the run recorded when it started (#2454). A continuation re-enters with whatever
-  // the resuming surface happens to hold — and the in-process auto-resume after a child
-  // gate holds nothing — so without the record the run's second half resolves against the
-  // environment it is being resumed in rather than the one it started in.
-  const recordedDispatch = isContinuation
-    ? readRunDispatchMetadata(preCreatedRun.metadata)
-    : undefined;
-  if (isContinuation && recordedDispatch === undefined) {
-    // Started before this build recorded it, died before the stamp landed, or carries a
-    // record this build cannot read. Re-resolving is the behavior such a run has always
-    // had; say so rather than let a re-derived value pass for a restored one.
-    getLog().warn(
-      { workflowRunId: preCreatedRun.id },
-      'workflow.dispatch_not_recorded_resolving_live'
-    );
-  }
-
-  // Resolve base branch: the per-dispatch override takes priority, then what this run
-  // recorded at its start, then repo config, then the caller-provided codebase default,
-  // then git auto-detection.
-  // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
-  // record, because re-passing `--base` to a resume is a deliberate retarget of THIS
-  // continuation (the CLI warns that only that half of it applies).
-  // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
-  const overrideBaseBranch = callerBaseOverride?.trim();
-  const fallbackBaseBranch = callerBaseBranch?.trim();
-  let baseBranch: string;
-  if (overrideBaseBranch) {
-    baseBranch = overrideBaseBranch;
-  } else if (recordedDispatch) {
-    baseBranch = recordedDispatch.base_branch;
-  } else if (config.baseBranch) {
-    baseBranch = config.baseBranch;
-  } else if (fallbackBaseBranch) {
-    baseBranch = fallbackBaseBranch;
-  } else if (await isFolderCodebase(deps, codebaseId)) {
-    // Folder projects leave git to the user and agent. $BASE_BRANCH stays
-    // unresolved and throws only if a prompt actually references it.
-    baseBranch = '';
-  } else {
-    try {
-      const repoPath = toRepoPath(cwd);
-      const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
-      if (!remote) throw new Error('Set worktree.remote to select a git remote.');
-      baseBranch = await getDefaultBranch(repoPath, remote);
-    } catch (error) {
-      // Intentional fallback: auto-detection failure is non-fatal.
-      // substituteWorkflowVariables throws if $BASE_BRANCH is actually referenced in a prompt.
-      getLog().warn(
-        { err: error as Error, errorType: (error as Error).constructor.name, cwd },
-        'workflow.base_branch_auto_detect_failed'
-      );
-      baseBranch = '';
-    }
-  }
-
-  /**
-   * Discovery source of the workflow this run started from — telemetry attribution.
-   * A record is authoritative even when it holds no source: that dispatch never knew one,
-   * and a source the resuming surface resolves now would be a guess passed off as the
-   * original. Only a run with no record at all (warned above) takes the live value.
-   */
-  const runSource = recordedDispatch ? recordedDispatch.source : source;
-  const dispatchMetadata: RunDispatchMetadata = {
-    base_branch: baseBranch,
-    ...(runSource ? { source: runSource } : {}),
-  };
-
-  const docsDir = config.docsPath ?? 'docs/';
-
-  if (hasRunModelOverrides(resolvedModelOverrides)) {
-    getLog().info(
-      {
-        workflowName: workflow.name,
-        tierKeys: Object.keys(resolvedModelOverrides.tiers ?? {}),
-        aliasKeys: Object.keys(resolvedModelOverrides.aliases ?? {}),
-        effective: modelBindingsMetadata.effective.aliases,
-      },
-      'workflow.run_model_overrides_applied'
-    );
-  }
-
-  // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
-  // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
-  // what the run does. Everything the pure function must not do — warn the user, throw —
-  // stays here, mirroring how `resolveNodeProviderAndModel` wraps `resolveNodeModel` one
-  // level down.
-  //
-  // Note that a workflow which came through discovery carries NO workflow-level provider
-  // or model: composition collapses them onto its own nodes and removes the layer (#1764),
-  // so this normally resolves to `config.assistant`. It still has to behave correctly for
-  // a programmatic caller that hands over an unexpanded definition.
-  const resolvedProvider = scope.provider;
-  const resolvedModel = scope.model;
-  const workflowPreset = scope.preset;
-  const providerSource = runOverrideAppliesToRef(resolvedModelOverrides, workflow.model)
-    ? 'run-override'
-    : scope.providerOrigin === 'model ref'
-      ? `model preset '${workflow.model ?? ''}'`
-      : scope.providerOrigin === 'workflow'
-        ? 'workflow definition'
-        : 'config';
-
-  if (workflow.provider && workflowPreset && workflow.provider !== workflowPreset.provider) {
-    getLog().warn(
-      {
-        workflowName: workflow.name,
-        configuredProvider: workflow.provider,
-        resolvedProvider: workflowPreset.provider,
-        modelRef: workflow.model,
-      },
-      'workflow.model_provider_conflict'
-    );
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
-    );
-    if (!delivered) {
-      getLog().error(
-        { workflowName: workflow.name, conversationId },
-        'workflow.model_provider_conflict_warning_delivery_failed'
-      );
-    }
-  }
-
-  if (resolvedProvider !== undefined) requireProvider(deps.providers, resolvedProvider);
-
-  getLog().info(
-    {
-      workflowName: workflow.name,
-      provider: resolvedProvider,
-      providerSource,
-      model: resolvedModel,
-    },
-    'workflow_provider_resolved'
-  );
-
-  if (configuredCommandFolder) {
-    getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
-  }
+  const { provider: resolvedProvider, model: resolvedModel, preset: workflowPreset } = scope;
 
   // Workflow run + resume state. Caller decides whether to resume by passing
   // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.

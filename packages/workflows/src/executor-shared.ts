@@ -23,7 +23,7 @@ import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
-import type { LoadCommandResult } from './schemas';
+import type { LoadCommandResult, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import {
@@ -996,3 +996,8 @@ export async function safeSendMessage(
     return false;
   }
 }
+
+/** A phase of `executeWorkflow` either hands its value on or ends the execution with a result. */
+export type RunPhase<T> =
+  | { stopped: false; value: T }
+  | { stopped: true; result: WorkflowExecutionResult };
