@@ -2,11 +2,13 @@
  * Check the sweep's decisions, read back what it did, and record one decision per item.
  *
  * Every claimed pull request gets exactly one decision, and the forge, not the sweep,
- * says which were merged: a pull request reads back merged or it was not. The gate's
- * receipts say which merges this run made: a pull request with one must be declared
- * merged at the receipt's head, and one declared merged must have one, or the record
- * refuses before it writes anything. A run whose gate merged must have checked the
- * default branch after its batch, and one that merged nothing raises nothing about it. A
+ * says which were merged: a pull request that reads back merged is recorded merged at
+ * the head the forge merged, whatever the sweep declared, and one that does not is never
+ * recorded merged. The gate's receipts say which merges this run made; a merge without
+ * one is marked as made outside this run. A sweep that claims a merge the forge does not
+ * show fails the record, but only after every decision is written, that pull request's
+ * as waiting for the next sweep. A run whose gate merged must have checked the default
+ * branch after its batch, and one that merged nothing raises nothing about it. A
  * `return` hands the item back to the build queue with its brief. A run raises at most
  * one attention item: a red default branch first, because it holds every merge,
  * otherwise the first pull request the sweep asked about, in its order. That item keeps
@@ -107,13 +109,6 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
     }
     if (mode === 'eval') continue;
     if (item.item === null) throw new Error(`${name} has no work item`);
-    const receipt = receipts.get(decision.number) ?? null;
-    if (decision.action === 'merged' && receipt?.head !== decision.head) {
-      throw new Error(`${name}: the sweep says it merged at ${decision.head}, but the gate wrote no receipt at that head`);
-    }
-    if (decision.action !== 'merged' && receipt !== null) {
-      throw new Error(`${name}: the gate merged it at ${receipt.head}, but the sweep declared ${decision.action}`);
-    }
     const reranBefore = item.record?.decisions.some(entry => entry.reran && entry.head === decision.head) ?? false;
     if (decision.reran && reranBefore) {
       throw new Error(`${name}: the queue already re-ran the failed checks at ${decision.head}; red again counts as the change's`);
@@ -123,10 +118,6 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
   if (missing.length > 0) throw new Error(`the sweep left PR ${missing.join(', ')} undecided`);
   const strays = [...receipts.keys()].filter(number => !wanted.has(number));
   if (strays.length > 0) throw new Error(`the gate merged PR ${strays.join(', ')}, which this run did not claim`);
-  if (sweep.review_url !== '') {
-    const reviewed = sweep.decisions.find(decision => items.find(item => item.pr.number === decision.number)?.url === sweep.review_url);
-    if (reviewed?.action !== 'review') throw new Error(`the delta review names ${sweep.review_url}, which the sweep did not send to review`);
-  }
   if ((sweep.dev.state === 'red') !== (sweep.dev.attention !== null)) {
     throw new Error('an attention item on the default branch comes with a red one and only with one');
   }
@@ -138,7 +129,8 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
   if (receipts.size > 0 && sweep.dev.state === 'unchecked') {
     throw new Error("the sweep merged but did not check the default branch's CI after its batch");
   }
-  if (receipts.size === 0 && sweep.dev.state !== 'unchecked') {
+  const declaredMerge = sweep.decisions.some(decision => decision.action === 'merged');
+  if (receipts.size === 0 && !declaredMerge && sweep.dev.state !== 'unchecked') {
     throw new Error('the sweep merged nothing, so it has no batch to judge the default branch after');
   }
 }
@@ -157,28 +149,36 @@ function readReceipts(): Receipts {
 interface Outcome {
   readonly status: MergeStatus;
   readonly reason: string;
+  readonly head: string;
+  /** Set when the sweep claimed a merge the forge does not show. */
+  readonly contradiction: string | null;
 }
 
-/** The status and reason the forge's read-back supports for one decision. */
+/** The status, reason and head the forge's read-back supports for one decision. */
 function settle(decision: Decision, after: PrFacts, receipts: Receipts): Outcome {
   if (after.state === 'merged') {
-    if (decision.action === 'merged' && receipts.get(decision.number)?.head !== after.head_revision) {
-      throw new Error(`the sweep says it merged ${after.url}, but it merged at ${after.head_revision}, not the head the gate passed`);
-    }
-    const outside = decision.action === 'merged' ? '' : '; merged outside this run';
-    return { status: 'merged', reason: `${decision.reason} (merged ${after.merge_commit ?? ''} at ${after.head_revision}${outside})` };
+    const outside = receipts.has(decision.number) ? '' : '; merged outside this run';
+    return {
+      status: 'merged',
+      reason: `${decision.reason} (merged ${after.merge_commit ?? ''} at ${after.head_revision}${outside})`,
+      head: after.head_revision,
+      contradiction: null,
+    };
   }
-  if (decision.action === 'merged') {
-    throw new Error(`the sweep says it merged ${after.url}, but it reads back ${after.state}`);
+  const head = decision.head;
+  const claimed = `the sweep says it merged ${after.url}, but it reads back ${after.state}`;
+  if (after.state === 'closed') {
+    const contradiction = decision.action === 'merged' ? claimed : null;
+    return { status: 'parked', reason: `${after.url} was closed during the sweep`, head, contradiction };
   }
-  if (after.state === 'closed') return { status: 'parked', reason: `${after.url} was closed during the sweep` };
+  if (decision.action === 'merged') return { status: 'waiting', reason: claimed, head, contradiction: claimed };
   const status: Record<Exclude<SweepAction, 'merged'>, MergeStatus> = {
     review: 'waiting',
     return: 'returned',
     ask: 'waiting',
     wait: 'waiting',
   };
-  return { status: status[decision.action], reason: decision.reason };
+  return { status: status[decision.action], reason: decision.reason, head, contradiction: null };
 }
 
 /**
@@ -190,7 +190,7 @@ function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<strin
   try {
     after = readPr(item.pr, maintainers).facts;
   } catch (error) {
-    return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}` };
+    return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}`, head: decision.head, contradiction: null };
   }
   return settle(decision, after, receipts);
 }
@@ -269,8 +269,11 @@ function main(): void {
   const merged: number[] = [];
   const lines: string[] = [];
 
-  // Every read and check happens before the first write, so a refusal writes nothing.
+  // Every read and check happens before the first write, so a check that refuses writes nothing.
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers, receipts) }));
+  const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
+  // A failed record runs no ask node, so it raises nothing and an ask waits for the next sweep.
+  if (contradictions.length > 0) asked = null;
   const write = (subject: QualifiedPr, label: string, change: (doc: WorkItem) => WorkItem): boolean => {
     try {
       updateClaimed(subject, runId, change);
@@ -283,21 +286,29 @@ function main(): void {
     }
   };
 
-  for (const { decision, status, reason } of outcomes) {
+  for (const { decision, status, reason, head, contradiction } of outcomes) {
     const item = itemOf(decision.number);
     const name = `PR ${String(decision.number)}`;
     const isAsked = asked?.by === 'pr' && asked.pr.number === decision.number;
     const raised = isAsked && status === 'waiting';
     // The pull request was merged or closed under the question: there is nothing to ask.
     if (isAsked && !raised) asked = null;
-    const label = raised ? 'ask' : decision.action === 'ask' ? 'ask (not raised this run)' : status === 'merged' ? 'merged' : decision.action;
+    const label = raised
+      ? 'ask'
+      : decision.action === 'ask'
+        ? 'ask (not raised this run)'
+        : status === 'merged'
+          ? 'merged'
+          : contradiction !== null
+            ? 'claimed merged, not merged'
+            : decision.action;
     const entry: MergeDecisionEntry = {
       at,
       run_id: runId,
       decision: `${label} (${[decision.class, ...(decision.synced ? ['synced'] : [])].join(', ')})`,
       reason,
       links: [item.url, ...(decision.attention?.links ?? [])],
-      head: decision.head,
+      head,
       reran: decision.reran,
     };
     const written = write(item.item as QualifiedPr, name, doc => {
@@ -342,6 +353,7 @@ function main(): void {
     );
     if (written) lines.push(`${name}: ${done.status}`);
   }
+  if (contradictions.length > 0) throw new Error(`${contradictions.join('; ')}; every other decision is recorded`);
 
   emit({
     merged,

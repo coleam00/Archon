@@ -503,49 +503,75 @@ describe('the merge queue scripts', () => {
     expect(mergeWaits(parked)).toBe(false);
   }, 60_000);
 
-  test('a merge the forge reads back is recorded and released; one it does not is refused before any write', () => {
+  test('a merge the forge reads back is recorded and released; a claimed one it does not fails after the rest is recorded', () => {
     const at = install();
+    const other = { repo: PR.repo, number: 8 };
+    const otherPr = { repo: PR.repo, number: 43 };
+    const otherUrl = PR_URL.replace(/42$/, '43');
     seed(at, item(BUILT, undefined, CLAIMED));
-    const before = stored(at).revision;
-    const unmerged = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { artifacts: RECEIPT });
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: other });
+    const items = JSON.stringify([
+      { item: other, pr: otherPr, url: otherUrl, facts: { ...FACTS, pr: otherPr, url: otherUrl }, record: null, prior_report: '', recorded: null },
+      { item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, prior_report: '', recorded: null },
+    ]);
+    const inputs = { ...recordInputs([decision({ number: 43 }), decision({})], DEV_GREEN), INPUTS_ITEMS: items };
+    const receipt = { 'merge/receipts/43.json': JSON.stringify({ pr: otherUrl, head: HEAD, at: AT }) };
+    const unmerged = run(at, 'record', inputs, { pr: { merged: [43] }, artifacts: receipt });
     expect(unmerged.code).not.toBe(0);
-    expect(unmerged.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back open`);
-    expect(stored(at).revision).toBe(before);
+    expect(unmerged.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back open; every other decision is recorded`);
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)' }] } } });
+    const claimed = stored(at).value as WorkItem;
+    expect(claimed).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ decision: 'claimed merged, not merged (clear)' }] } } });
+    expect(mergeWaits(claimed)).toBe(true);
 
+    seed(at, item(BUILT, undefined, CLAIMED));
     const recorded = ok(run(at, 'record', recordInputs([decision({})], DEV_GREEN), { pr: { state: 'MERGED' }, artifacts: RECEIPT }));
     expect(recorded).toMatchObject({ merged: [42], attention: '', class: '', asked: null });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)' }] } } });
-    expect(doc.facts.merge?.decisions[0]?.reason).not.toContain('no gate receipt');
+    expect(doc.facts.merge?.decisions[0]?.reason).not.toContain('merged outside this run');
     expect(mergeWaits(doc)).toBe(false);
   }, 60_000);
 
-  test('a merge without the gate\'s receipt at its head is refused before any write; one the sweep did not make is marked', () => {
+  test('the forge decides a merge the receipts and the sweep disagree about', () => {
     const at = install();
+    const merged = { state: 'MERGED' } as const;
+    const recordedMerge = () => (stored(at).value as WorkItem).facts.merge;
+
+    // Merged by hand while the sweep ran: the gate wrote no receipt.
+    seed(at, item(BUILT, undefined, CLAIMED));
+    expect(ok(run(at, 'record', recordInputs([decision({})], DEV_GREEN), { pr: merged }))).toMatchObject({ merged: [42] });
+    expect(recordedMerge()).toMatchObject({ status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] });
+    expect(recordedMerge()?.decisions[0]?.reason).toContain('merged outside this run');
+
+    // The gate's receipt and the sweep's head differ from the head the forge merged.
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const elsewhere = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: OLD, at: AT }) };
+    ok(run(at, 'record', recordInputs([decision({ head: OLD })], DEV_GREEN), { pr: merged, artifacts: elsewhere }));
+    expect(recordedMerge()).toMatchObject({ status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] });
+    expect(recordedMerge()?.decisions[0]?.reason).toContain(`at ${HEAD})`);
+
+    // An earlier sweep sent it to review; this one found the finished review and merged it.
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const sweep = { decisions: [decision({})], review_url: PR_URL, review_prior: '/runs/r/report.md', dev: DEV_GREEN, summary: 'swept' };
+    ok(run(at, 'record', { ...recordInputs([]), INPUTS_SWEEP: JSON.stringify(sweep) }, { pr: merged, artifacts: RECEIPT }));
+    expect(recordedMerge()).toMatchObject({ status: 'merged' });
+
+    // The gate merged it and the sweep declared otherwise, or the sweep saw it merged by hand.
+    for (const [artifacts, dev] of [[RECEIPT, DEV_GREEN], [undefined, DEV_UNCHECKED]] as const) {
+      seed(at, item(BUILT, undefined, CLAIMED));
+      ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI pending' })], dev), { pr: merged, artifacts }));
+      expect(recordedMerge()).toMatchObject({ status: 'merged', decisions: [{ decision: 'merged (clear)' }] });
+      expect(recordedMerge()?.decisions[0]?.reason.includes('merged outside this run')).toBe(artifacts === undefined);
+    }
+
     seed(at, item(BUILT, undefined, CLAIMED));
     const before = stored(at).revision;
-    const merged = { pr: { state: 'MERGED' } } as const;
-    const bypassed = run(at, 'record', recordInputs([decision({})], DEV_GREEN), merged);
-    expect(bypassed.stderr).toContain(`the sweep says it merged at ${HEAD}, but the gate wrote no receipt at that head`);
-    const elsewhere = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: OLD, at: AT }) };
-    const moved = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...merged, artifacts: elsewhere });
-    expect(moved.stderr).toContain('the gate wrote no receipt at that head');
-    const sweptAt = run(at, 'record', recordInputs([decision({ head: OLD })], DEV_GREEN), { ...merged, artifacts: elsewhere });
-    expect(sweptAt.stderr).toContain(`but it merged at ${HEAD}, not the head the gate passed`);
-    for (const result of [bypassed, moved, sweptAt]) expect(result.code).not.toBe(0);
-    expect(stored(at).revision).toBe(before);
-
-    const undeclared = run(at, 'record', recordInputs([decision({ action: 'wait' })]), { ...merged, artifacts: RECEIPT });
-    expect(undeclared.stderr).toContain(`PR 42: the gate merged it at ${HEAD}, but the sweep declared wait`);
     const stray = { ...RECEIPT, 'merge/receipts/99.json': JSON.stringify({ pr: `${PR_URL.replace(/42$/, '')}99`, head: HEAD, at: AT }) };
-    const unclaimed = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { ...merged, artifacts: stray });
+    const unclaimed = run(at, 'record', recordInputs([decision({})], DEV_GREEN), { pr: merged, artifacts: stray });
+    expect(unclaimed.code).not.toBe(0);
     expect(unclaimed.stderr).toContain('the gate merged PR 99, which this run did not claim');
-    for (const result of [undeclared, unclaimed]) expect(result.code).not.toBe(0);
     expect(stored(at).revision).toBe(before);
-
-    ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), merged));
-    expect((stored(at).value as WorkItem).facts.merge).toMatchObject({ status: 'merged' });
-    expect((stored(at).value as WorkItem).facts.merge?.decisions[0]?.reason).toContain('merged outside this run');
   }, 60_000);
 
   test('a pull request that cannot be read back waits for the next sweep, a merge the gate made included', () => {
