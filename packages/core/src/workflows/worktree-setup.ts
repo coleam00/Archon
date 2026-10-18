@@ -1,3 +1,4 @@
+import type { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
 import {
@@ -18,11 +19,7 @@ import {
   retainStreamTail,
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
-import type {
-  CapturedSourceOwner,
-  PreparedWorkflowSource,
-  resolveWorkflowGithubEnvironment,
-} from '@archon/workflows/executor';
+import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/executor';
 import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
@@ -162,8 +159,9 @@ export function createRunWorktreeSetupExecutor(
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
-    const { resolveProjectPaths, resolveWorkflowGithubEnvironment } = await import(
-      '@archon/workflows/executor'
+    const { resolveProjectPaths } = await import('@archon/workflows/executor');
+    const { resolveWorkflowGithubEnvironment } = await import(
+      '@archon/workflows/run-credential-env'
     );
     const effectiveEnvironment = await resolveWorkflowGithubEnvironment(
       deps,

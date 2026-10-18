@@ -6,6 +6,7 @@
     "./schemas/*": "./src/schemas/*.ts",
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
+    "./run-credential-env": "./src/run-credential-env.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
