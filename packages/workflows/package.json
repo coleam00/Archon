@@ -8,6 +8,7 @@
     "./run-preflight": "./src/run-preflight.ts",
     "./run-credential-env": "./src/run-credential-env.ts",
     "./run-paths": "./src/run-paths.ts",
+    "./run-source": "./src/run-source.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",

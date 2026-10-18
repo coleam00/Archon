@@ -46,7 +46,7 @@ import {
 } from './schemas/workflow-run';
 import { discoverScriptsForCwd } from './script-discovery';
 import { loadCommandPrompt } from './executor-shared';
-import { withCapturedSource } from './executor';
+import { withCapturedSource } from './run-source';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';

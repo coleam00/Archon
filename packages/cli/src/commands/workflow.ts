@@ -137,7 +137,7 @@ import {
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
   type ResolvedContinuation,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import {
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,

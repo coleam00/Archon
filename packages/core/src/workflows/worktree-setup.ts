@@ -19,7 +19,7 @@ import {
   retainStreamTail,
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
-import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/executor';
+import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/run-source';
 import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
@@ -223,7 +223,7 @@ export async function retainSetupRunSource(
   cwd: string,
   codebaseId?: string
 ): Promise<PreparedWorkflowSource> {
-  const { finalizeWorkflowSource } = await import('@archon/workflows/executor');
+  const { finalizeWorkflowSource } = await import('@archon/workflows/run-source');
   const finalized = await finalizeWorkflowSource(deps, source, { cwd, codebaseId });
   owner.hold(finalized);
   await recordSetupRunSource(deps, run, finalized);
@@ -241,7 +241,7 @@ export async function recordSetupRunSource(
   run: WorkflowRun,
   source: PreparedWorkflowSource
 ): Promise<void> {
-  const { preparedWorkflowSourceRecord } = await import('@archon/workflows/executor');
+  const { preparedWorkflowSourceRecord } = await import('@archon/workflows/run-source');
   const record = preparedWorkflowSourceRecord(source);
   await deps.store.updateWorkflowRun(run.id, {
     metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: record },
