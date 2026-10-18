@@ -6,7 +6,10 @@ import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { mock, beforeEach } from 'bun:test';
 import { createMockLogger } from './mocks/logger';
-import { withObservableCapturedSource } from '@archon/workflows/test-utils';
+import {
+  makeTestWorkflowWithSource,
+  withObservableCapturedSource,
+} from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, IPlatformAdapter } from '../types';
 import type { MergedConfig } from '../config/config-types';
 import type { MessageRow } from '../schemas/message';
@@ -958,4 +961,90 @@ export function makeIsolationEnvironment(
 /** The sync suites need a codebase with a remote; nothing else differs. */
 export function makeCodebaseForSync(): Codebase {
   return makeCodebase({ repository_url: 'https://github.com/test/repo' });
+}
+
+// ─── Helpers for workflow dispatch tests ──────────────────────────────────────
+
+export function makeDispatchConversation(overrides: Partial<Conversation> = {}) {
+  return makeConversation({ codebase_id: 'codebase-1', ...overrides });
+}
+
+/** A chat-style adapter that runs fresh workflows in the foreground. */
+export function makeForegroundPlatform() {
+  return {
+    ...makePlatform(),
+    capabilities: {
+      messagePersistence: 'adapter',
+      defaultWorkflowDispatch: 'foreground',
+    } as const,
+  };
+}
+
+const resumableRuns = new Map<string, WorkflowRun>();
+
+export function makeResumableRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  const run = makeRun({
+    id: 'resumable-run-1',
+    origin: { conversationId: 'conv-1', parentConversationId: 'conv-1' },
+    parent_conversation_id: 'conv-1',
+    status: 'failed',
+    user_message: 'old failed prompt',
+    working_path: '/repos/test-repo/worktrees/feature',
+    ...overrides,
+  });
+  resumableRuns.set(run.id, run);
+  return run;
+}
+
+/** Mock resets shared by the dispatch-routing and typed-chat-tool suites. */
+export function resetDispatchMocks(): void {
+  resumableRuns.clear();
+  mockGetWorkflowRunDb.mockReset();
+  mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
+  capturedSourceOwnerCalls.length = 0;
+  mockFailPreparedRun.mockReset();
+  mockFailPreparedRun.mockResolvedValue({ failed: true });
+  mockExecuteWorkflow.mockClear();
+  mockDispatchBackgroundWorkflow.mockClear();
+  mockFindResumableRunByParentConversation.mockClear();
+  mockHydrateResumableRun.mockClear();
+  mockInspectResumableRun.mockReset();
+  mockInspectResumableRun.mockImplementation(() =>
+    Promise.resolve({
+      priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+      priorUsage: { costUsd: 0 },
+    })
+  );
+  mockUpdateWorkflowRun.mockClear();
+  mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
+  mockResolveApprovalGate.mockClear();
+  mockResolveApprovalGate.mockImplementation(() => Promise.resolve({ resolved: true }));
+  mockHandleCommand.mockReset();
+  mockHandleCommand.mockImplementation(() =>
+    Promise.resolve({ success: true, message: 'ok', workflow: undefined })
+  );
+  mockParseCommand.mockClear();
+  mockStartWorkflow.mockClear();
+  mockGetOrCreateConversation.mockReset();
+  mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+  mockGetCodebase.mockReset();
+  mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+  mockValidateAndResolveIsolation.mockReset();
+  mockValidateAndResolveIsolation.mockResolvedValue({
+    status: 'none',
+    cwd: '/test/cwd',
+    env: null,
+  });
+  mockResolveWorkflowAdoption.mockClear();
+  mockUpdateConversation.mockClear();
+  mockResolveWorkflowSourceRoot.mockClear();
+  mockResolveWorkflowSourceRoot.mockResolvedValue(undefined);
+  mockDiscoverWorkflowsWithConfig.mockReset();
+  mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+    workflows: [makeTestWorkflowWithSource({ name: 'test-workflow' })],
+    errors: [],
+  });
+  mockStartRunLiveOwner.mockClear();
+  mockWithRunLiveOwner.mockClear();
+  mockCloseRunLiveOwner.mockClear();
 }

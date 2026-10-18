@@ -948,7 +948,7 @@ function assertWorkflowNotWorktreePinnedForFolder(
  * Capability gate for the CLI run path.
  *
  * Mirrors the orchestrator's `requires: [github]` enforcement
- * (orchestrator-agent.ts `dispatchOrchestratorWorkflow`) so a workflow that
+ * (workflow-dispatch.ts `dispatchOrchestratorWorkflow`) so a workflow that
  * declares `requires: [github]` is hard-blocked BEFORE any worktree/clone/AI
  * cost — and before the `--detach` fork — when the acting CLI user hasn't
  * connected their GitHub identity. Throws WorkflowRequirementError, surfaced by
