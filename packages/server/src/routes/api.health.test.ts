@@ -105,11 +105,7 @@ mock.module('@archon/workflows/loader', makeLoaderMock);
 mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
-  BUNDLED_COMMANDS: {
-    'archon-investigate': '# archon-investigate command',
-    plan: '# plan command',
-    implement: '# implement command',
-  },
+  BUNDLED_COMMANDS: {},
   isBinaryBuild: mock(() => false),
 }));
 
@@ -176,10 +172,6 @@ mock.module('@archon/core/db/messages', () => ({
     created_at: new Date().toISOString(),
   })),
   listMessages: mock(async () => []),
-}));
-
-mock.module('@archon/core/utils/commands', () => ({
-  findCommandFiles: mock(async () => []),
 }));
 
 import { registerApiRoutes } from './api';
@@ -498,57 +490,6 @@ describe('GET /api/config', () => {
 
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Failed to get config');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: GET /api/commands
-// ---------------------------------------------------------------------------
-
-describe('GET /api/commands', () => {
-  test('returns commands array with bundled commands', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    expect(Array.isArray(body.commands)).toBe(true);
-
-    // BUNDLED_COMMANDS mock has 3 entries
-    const bundledCommands = body.commands.filter(c => c.source === 'bundled');
-    expect(bundledCommands.length).toBeGreaterThan(0);
-  });
-
-  test('includes archon-investigate as bundled command', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    const archonAssist = body.commands.find(c => c.name === 'archon-investigate');
-    expect(archonAssist).toBeDefined();
-    expect(archonAssist?.source).toBe('bundled');
-  });
-
-  test('includes plan and implement as bundled commands', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    const names = body.commands.map(c => c.name);
-    expect(names).toContain('plan');
-    expect(names).toContain('implement');
-  });
-
-  test('returns commands with cwd query param without error', async () => {
-    const app = makeApp();
-    // Use the registered codebase path (/tmp/project from the mock) so validateCwd passes
-    const response = await app.request('/api/commands?cwd=/tmp/project');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string }> };
-    expect(Array.isArray(body.commands)).toBe(true);
   });
 });
 
