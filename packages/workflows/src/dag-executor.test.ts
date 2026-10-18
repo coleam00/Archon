@@ -95,13 +95,12 @@ import {
   collectContainerIncompatibleProviders,
   visitProviderInvokingNodes,
   collectStrictSchemaViolations,
-  childOutcomeFromRun,
   resolveNodeBindings,
   type LoopBodyScope,
   type ShellInputContext,
   type ExecuteDagWorkflowOptions,
-  type RunChildWorkflowFn,
 } from './dag-executor';
+import { childOutcomeFromRun, type RunChildWorkflowFn } from './dag/child-run';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import { nodeArtifactsListingSchema } from './schemas/node-artifact';
@@ -35128,68 +35127,6 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
     expect(conflictMessages).toHaveLength(1);
     // All three nodes still RESOLVED to codex — only the reporting is de-duplicated.
     expect(mockSendQueryDag.mock.calls).toHaveLength(3);
-  });
-});
-
-describe('childOutcomeFromRun cache reporting', () => {
-  const settledRun = (metadata: Record<string, unknown>) =>
-    makeWorkflowRun('child-1', { status: 'completed', metadata });
-
-  it('carries a child run total that is only a floor up to its parent', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_in: 100,
-        total_tokens_out: 10,
-        total_cache_read_tokens: 60,
-        total_cache_write_tokens: 0,
-        total_cache_partial: true,
-      })
-    );
-
-    // Reading the numbers but not the flag let a parent merge a child's floor as
-    // though it were exact, which is the same defect one run boundary up.
-    expect(outcome.tokens).toEqual({
-      input: 100,
-      output: 10,
-      cacheRead: 60,
-      cacheWrite: 0,
-      cachePartial: true,
-    });
-  });
-
-  it('keeps an explicitly unknown child total unavailable despite older numeric metadata', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_unknown: true,
-        total_tokens_in: 170,
-        total_tokens_out: 20,
-        total_cost_usd: 0.3,
-      })
-    );
-    expect(outcome.tokens).toBeUndefined();
-    expect(outcome.tokensUnknown).toBe(true);
-    expect(outcome.costUsd).toBe(0.3);
-  });
-
-  it('leaves a complete child total unflagged', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_in: 100,
-        total_tokens_out: 10,
-        total_cache_read_tokens: 60,
-        total_cache_write_tokens: 0,
-      })
-    );
-
-    expect(outcome.tokens).toEqual({
-      input: 100,
-      output: 10,
-      cacheRead: 60,
-      cacheWrite: 0,
-    });
-    // toEqual alone would still pass on `cachePartial: undefined`; the key must be absent,
-    // because absence is what every reader treats as "this total is exact".
-    expect(outcome.tokens).not.toHaveProperty('cachePartial');
   });
 });
 
