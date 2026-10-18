@@ -15,6 +15,7 @@ import {
   mockGetCodebaseEnvVars,
   mockGetDefaultRemote,
   mockGetOrCreateConversation,
+  mockGetRecentWorkflowResultMessages,
   mockListCodebases,
   mockLoadConfig,
   mockLoadRepoConfig,
@@ -406,5 +407,86 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
       'conv-1',
       expect.stringContaining('tiers.medium.thinking')
     );
+  });
+});
+
+// ─── handleMessage — workflow context injection ───────────────────────────────
+
+describe('handleMessage — workflow context injection', () => {
+  beforeEach(() => {
+    mockGetRecentWorkflowResultMessages.mockClear();
+    mockGetOrCreateConversation.mockReset();
+    mockListCodebases.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockLogger.warn.mockClear();
+
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+  });
+
+  test('calls getRecentWorkflowResultMessages for the conversation', async () => {
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What happened?', { actor: operator });
+
+    expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1-db', 3);
+  });
+
+  test('does not throw when getRecentWorkflowResultMessages returns empty array', async () => {
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([]);
+    const platform = makePlatform();
+
+    await expect(
+      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
+    ).resolves.toBeUndefined();
+  });
+
+  test('handles malformed metadata JSON without throwing', async () => {
+    const badRow = {
+      id: 'msg-1',
+      conversation_id: 'conv-1',
+      role: 'assistant' as const,
+      content: 'Summary.',
+      metadata: 'not-valid-json',
+      user_id: null,
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([badRow]);
+    const platform = makePlatform();
+
+    await expect(
+      handleMessage(platform, 'conv-1', 'What did the workflow do?', { actor: operator })
+    ).resolves.toBeUndefined();
+  });
+
+  test('handles metadata with missing workflowResult key gracefully', async () => {
+    const rowNoWorkflowResult = {
+      id: 'msg-2',
+      conversation_id: 'conv-1',
+      role: 'assistant' as const,
+      content: 'Summary.',
+      metadata: '{"someOtherKey":"value"}',
+      user_id: null,
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([rowNoWorkflowResult]);
+    const platform = makePlatform();
+
+    await expect(
+      handleMessage(platform, 'conv-1', 'Follow-up', { actor: operator })
+    ).resolves.toBeUndefined();
+  });
+
+  test('continues without workflow context when outer fetch throws', async () => {
+    mockGetRecentWorkflowResultMessages.mockRejectedValueOnce(new Error('unexpected'));
+    const platform = makePlatform();
+
+    // Non-critical path — must not block message handling
+    await expect(
+      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
+    ).resolves.toBeUndefined();
   });
 });

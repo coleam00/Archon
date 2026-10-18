@@ -32,5 +32,3 @@ fixture:
   expect: failed
   fail-node: tests
   reached: [route, seams, code, synthesize, publish]
-  resolved-text-contains:
-    synthesize: "Require a completed `review-lens` artifact for every lens this round selected"

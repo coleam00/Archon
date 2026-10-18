@@ -5,8 +5,8 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
 
 /**
  * Workflow-facing code that reaches persistence only through the workflow host contract.
- * Each listed file must exist: a renamed consumer fails the check instead of silently
- * dropping out of it.
+ * This is the only list of these files. Each listed file must exist: a renamed consumer
+ * fails the check instead of silently dropping out of it.
  */
 export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/operations/workflow-operations.ts',
@@ -27,6 +27,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
   'packages/cli/src/utils/owned-run-termination.ts',
+  'packages/cli/src/utils/cli-user.ts',
   'packages/server/src/services/resource-start-hosting.ts',
   'packages/server/src/services/webhook-source-plugins.ts',
 ];
@@ -34,10 +35,26 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
 const SQL_COMPOSITION = new Set([
   'packages/core/src/workflows/sql-host.ts',
   'packages/core/src/workflows/store-adapter.ts',
+  'packages/core/src/handlers/sql-registration.ts',
+]);
+
+/**
+ * `@archon/core` and `@archon/core/workflows` re-export SQL-backed operations next to the
+ * contract, so a consumer takes no runtime import from them even of a symbol that is safe.
+ */
+const CORE_BARRELS = new Set([
+  'packages/core/src/index.ts',
+  'packages/core/src/workflows/index.ts',
 ]);
 
 function isPersistence(path: string): boolean {
   return path.startsWith('packages/core/src/db/') || SQL_COMPOSITION.has(path);
+}
+
+/** `names` is `[]` for an import of inline types only, which Bun erases; `import {}` loads. */
+function bannedModule(path: string, names?: readonly ts.Node[]): string | undefined {
+  if (isPersistence(path)) return 'SQL persistence';
+  return CORE_BARRELS.has(path) && names?.length !== 0 ? 'Core barrel' : undefined;
 }
 
 function loadOptions(configPath: string): ts.CompilerOptions {
@@ -57,10 +74,10 @@ function loadOptions(configPath: string): ts.CompilerOptions {
 
 /**
  * Returns one `file:line:column message` entry per runtime import, re-export, dynamic
- * `import()` or `require()` in `consumers` that reaches persistence. The type checker
- * follows aliases and barrel re-exports, so a persistence symbol re-exported through
- * `@archon/core` is caught. Type-only imports are allowed. Each consumer is resolved
- * with the tsconfig that owns it, the same resolution type-check uses.
+ * `import()` or `require()` in `consumers` that reaches persistence or a core barrel. The
+ * type checker follows aliases and barrel re-exports, so a persistence symbol re-exported
+ * through `@archon/core` is caught. Type-only imports are allowed. Each consumer is
+ * resolved with the tsconfig that owns it, the same resolution type-check uses.
  */
 export function findPersistenceImports(root: string, consumers: readonly string[]): string[] {
   const groups = new Map<string, string[]>();
@@ -111,23 +128,17 @@ export function findPersistenceImports(root: string, consumers: readonly string[
     for (const file of files) {
       const source = program.getSourceFile(file);
       if (source === undefined) throw new Error(`TypeScript did not load ${pathOf(file)}`);
-      const report = (node: ts.Node, specifier: string): void => {
+      const report = (node: ts.Node, specifier: string, what = 'SQL persistence'): void => {
         const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
         violations.push(
-          `${pathOf(file)}:${line + 1}:${character + 1} SQL persistence import from '${specifier}'; use the workflow host contract.`
+          `${pathOf(file)}:${line + 1}:${character + 1} ${what} import from '${specifier}'; use the workflow host contract.`
         );
       };
       const checkModule = (specifier: ts.StringLiteralLike, names?: ts.Node[]): void => {
-        const resolved = ts.resolveModuleName(
-          specifier.text,
-          source.fileName,
-          program.getCompilerOptions(),
-          ts.sys
-        ).resolvedModule;
-        if (resolved && isPersistence(pathOf(resolved.resolvedFileName))) {
-          report(specifier, specifier.text);
-          return;
-        }
+        const target = ts.resolveModuleName(specifier.text, source.fileName, options, ts.sys)
+          .resolvedModule?.resolvedFileName;
+        const banned = target && bannedModule(pathOf(target), names);
+        if (banned) return report(specifier, specifier.text, banned);
         for (const node of names ?? [specifier]) {
           const symbol = checker.getSymbolAtLocation(node);
           if (symbol && reachesPersistence(symbol)) report(node, specifier.text);
@@ -137,20 +148,12 @@ export function findPersistenceImports(root: string, consumers: readonly string[
         if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
           const clause = node.importClause;
           if (clause?.isTypeOnly) return;
-          const names: ts.Node[] = [];
+          const bindings = clause?.namedBindings;
+          const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
+          const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
           if (clause?.name) names.push(clause.name);
-          if (clause?.namedBindings) {
-            if (ts.isNamespaceImport(clause.namedBindings)) names.push(clause.namedBindings.name);
-            else {
-              names.push(
-                ...clause.namedBindings.elements
-                  .filter(item => !item.isTypeOnly)
-                  .map(item => item.name)
-              );
-            }
-          }
-          checkModule(node.moduleSpecifier, clause ? names : undefined);
-          return;
+          if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
+          return checkModule(node.moduleSpecifier, names.length + named.length ? names : undefined);
         }
         if (
           ts.isExportDeclaration(node) &&
@@ -158,21 +161,15 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           ts.isStringLiteral(node.moduleSpecifier) &&
           !node.isTypeOnly
         ) {
-          checkModule(node.moduleSpecifier);
-          return;
+          return checkModule(node.moduleSpecifier);
         }
         if (
           ts.isCallExpression(node) &&
           (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
             (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
         ) {
-          const argument = node.arguments[0];
-          if (
-            argument &&
-            (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
-          ) {
-            checkModule(argument);
-          }
+          const [argument] = node.arguments;
+          if (argument && ts.isStringLiteralLike(argument)) checkModule(argument);
         }
         ts.forEachChild(node, visit);
       };
