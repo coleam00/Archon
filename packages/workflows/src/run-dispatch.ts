@@ -4,7 +4,7 @@ import { requireProvider } from '@archon/provider-contract';
 import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, type RunPhase } from './executor-shared';
-import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader';
+import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader/contracts';
 import { hasRunModelOverrides, runOverrideAppliesToRef } from './model-validation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
