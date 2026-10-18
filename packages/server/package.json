@@ -76,6 +76,9 @@
       "src/routes/api.run-control.test.ts"
     ],
     [
+      "src/routes/api.run-gates.test.ts"
+    ],
+    [
       "src/routes/api.providers.test.ts"
     ],
     [
