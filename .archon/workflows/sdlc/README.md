@@ -857,11 +857,3 @@ pass every few hours:
   "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
 }
 ```
-
-## Composition validation
-
-[archon-validate](validate/README.md) accepts an explicit composition request to run
-the same project gate on two pinned parts and their composed tree. Its `interaction`
-result remains red; delivery holds it rather than treating it as inherited or
-environmental. The report retains revision, tree and check evidence for an existing
-merger to consume. It does not install a queue or authorize a merge.
