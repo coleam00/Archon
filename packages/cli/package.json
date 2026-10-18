@@ -192,6 +192,9 @@
       "src/commands/trigger-store.integration.spec.ts"
     ],
     [
+      "src/commands/trigger-poll.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-store.integration.spec.ts"
     ],
     [
