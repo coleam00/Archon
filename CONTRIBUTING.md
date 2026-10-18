@@ -81,8 +81,9 @@ root `scripts/` files that no package test or CI entry point reads skips them, t
 said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`. Workflow fixtures run
-when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or
-`packages/cli/src/commands/workflow.ts` changes; both fixture jobs still report success
+when `.archon/workflows/sdlc/`, `packages/workflows/src/`,
+`packages/cli/src/commands/workflow.ts`, or `packages/cli/src/commands/workflow-list.ts`
+changes; both fixture jobs still report success
 when their execution steps skip. Dispatch runs fixtures regardless of paths.
 
 CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) on pull
