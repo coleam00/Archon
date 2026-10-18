@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { delimiter } from 'path';
 import { resolveWorkflowGithubEnvironment } from './run-credential-env';
 const mockLogFn = mock(() => {});
+const actualPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
-  createLogger: () => ({ debug: mockLogFn, warn: mockLogFn }),
+  ...actualPaths,
+  createLogger: () => ({ debug: mockLogFn, info: mockLogFn, warn: mockLogFn, error: mockLogFn }),
 }));
 
 describe('gh shim activation', () => {
