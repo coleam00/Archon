@@ -28,7 +28,6 @@ import {
  */
 
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import * as archonPaths from '@archon/paths';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -37,11 +36,7 @@ import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows
 import { WorkflowResourceBusyError, resumeCursorMatches } from '@archon/workflows/store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import {
-  loadWorkflowRunConfigFile,
-  normalizeRunConfigSemantics,
-  sealWorkflowRunConfig,
-} from '@archon/core/config';
+import { loadWorkflowRunConfigFile, normalizeRunConfigSemantics } from '@archon/core/config';
 import {
   WORKFLOW_EVENT_TYPES,
   isDurableWorkflowEventType,
@@ -116,10 +111,7 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import {
-  adoptRegisteredWorktree,
-  resolveWorkflowAdoption,
-} from '@archon/core/operations/workflow-adoption';
+import { adoptRegisteredWorktree } from '@archon/core/operations/workflow-adoption';
 import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import {
   countAttentionQueue,
@@ -197,8 +189,8 @@ import {
   workflowAttentionWatch,
 } from './workflow-attention';
 import {
-  spawnDetachedWorkflowRun,
   recordDetachedChildStartupFailure,
+  launchDetachedRun,
   runDetachedControlCommand,
 } from './workflow-detach';
 import {
@@ -214,7 +206,7 @@ import {
 import {
   buildNoResumableRunError,
   buildResumeLookupFailureError,
-  resolveSupersededRun,
+  resolveContinuationDeclaration,
   resolveCliUserRecordId,
   assertCliWorkflowRequirementsMet,
   maybePrintTierNotice,
@@ -960,8 +952,6 @@ async function runWorkflowWithOwnedSource(
   // to decide folder-vs-repo branch pinning before forking.
   if (options.detach) {
     const childDestination = await resolveRunDestination(host, options, continuationRun);
-    const extraArgs: string[] = [];
-    let pinnedBranch: string | undefined;
 
     // Everything from here to the fork is the pre-flight (#2872). It exists because
     // a detached launch used to print `Started` before anything that can be refused
@@ -1004,51 +994,9 @@ async function runWorkflowWithOwnedSource(
     // pure resolution with no filesystem or database mutation, so running it as a
     // pre-flight costs nothing and the child still re-resolves it against the live
     // checkout when it starts (its lane binds a worktree this process never touches).
-    let detachedAdoptionLane:
-      | Awaited<ReturnType<typeof resolveWorkflowAdoption>>['lane']
-      | undefined;
-    let adoptedRunId: string | undefined;
-    let supersededRunId: string | undefined;
-    if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
-      if (!detachCodebase) {
-        throw new Error(
-          'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
-        );
-      }
-      if (options.adoptRunId !== undefined) {
-        adoptedRunId = await resolveRunIdArg(
-          host,
-          options.adoptRunId,
-          cwd,
-          false,
-          detachCodebase.id
-        );
-        const adoption = await resolveWorkflowAdoption({
-          deps: {
-            getRun: id => host.deps.store.getWorkflowRun(id),
-            getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
-            findEnvironmentByPath: (...args) =>
-              host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
-          },
-          adoptedRunId,
-          codebaseId: detachCodebase.id,
-          codebasePath: detachCodebase.default_cwd,
-          codebaseKind: detachCodebase.kind,
-          containerRequested: options.container === true,
-        });
-        detachedAdoptionLane = adoption.lane;
-        aiConfigurationRun = adoption.adoptedRun;
-      } else if (options.supersedesRunId !== undefined) {
-        supersededRunId = await resolveRunIdArg(
-          host,
-          options.supersedesRunId,
-          cwd,
-          false,
-          detachCodebase.id
-        );
-        await resolveSupersededRun(host, supersededRunId);
-      }
-    }
+    const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
+    const detachedAdoptionLane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+    if (declaration?.mode === 'adopt') aiConfigurationRun = declaration.adoptedRun;
 
     let detachedPrepared: PreparedRunAiConfiguration;
     if (detachedAdoptionLane?.kind === 'checkout-branch' && detachCodebase) {
@@ -1072,189 +1020,26 @@ async function runWorkflowWithOwnedSource(
       detachedPrepared = await prepareCredentialPreflight(configCwd, detachCodebase?.id);
     }
 
-    // The run id the ack hands back. A continuation already has one; a fresh launch
-    // gets a row written below, before the fork.
-    let detachedRunId: string;
-    // Only a row THIS process created may be failed when the child never takes it.
-    // A continuation's row belongs to its own run.
-    let launchedRunId: string | undefined;
-    if (isContinuation) {
-      if (resumeLookupError) throw buildResumeLookupFailureError(resumeLookupError);
-      if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
-      detachedRunId = continuationRun.id;
-    } else {
-      // `Started` must mean a queryable run, so the row is written before the fork and
-      // the child executes it rather than creating its own. Modeled on the
-      // orchestrator's pre-created row (dispatchBackgroundWorkflowOwned), including
-      // the stamps the executor only writes when IT creates the row. `working_path` is
-      // the one field this process cannot know — the child cuts the worktree — so it
-      // stays null until the child fills it in (write-once in the store).
-      const detachedUserId = cliUserId;
-      const continuationDeclaration =
-        adoptedRunId !== undefined
-          ? { mode: 'adopt' as const, runId: adoptedRunId }
-          : supersededRunId !== undefined
-            ? { mode: 'supersede' as const, runId: supersededRunId }
-            : undefined;
-      try {
-        // No reserved id: this process's own capture is discarded on the way out, and
-        // reusing its id would point the child's capture at a directory this process is
-        // about to reclaim. The row's generated id is what the child files under.
-        const created = await host.deps.store.createWorkflowRun({
-          workflow_name: workflow.name,
-          origin: {
-            userId: detachedUserId,
-          },
-          ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
-          user_message: userMessage,
-          metadata: {
-            [RUN_AI_CONFIGURATION_METADATA_KEY]: detachedPrepared.aiConfigurationSnapshot,
-            ...(detachedPrepared.runConfigMetadata
-              ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: detachedPrepared.runConfigMetadata }
-              : {}),
-            // Declared inputs (#2554): `$INPUTS` is read off the row, so a pre-created
-            // row that omits them starts a run whose inputs silently disappeared.
-            ...(resolvedInputs && Object.keys(resolvedInputs).length > 0
-              ? { [SUBRUN_METADATA_KEYS.inputs]: { ...resolvedInputs } }
-              : {}),
-            ...(continuationDeclaration
-              ? { [CONTINUATION_METADATA_KEY]: { mode: continuationDeclaration.mode } }
-              : {}),
-          },
-          ...(continuationDeclaration
-            ? { adopted_from_run_id: continuationDeclaration.runId }
-            : {}),
-        });
-        detachedRunId = created.id;
-        launchedRunId = created.id;
-      } catch (error) {
-        throw new Error(
-          `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
-        );
-      }
-    }
-    // Pin a generated branch only when isolating AND the caller didn't pass
-    // --branch (an explicit --branch is already in argv). Without this, the child
-    // would generate its own timestamped branch and fork a second worktree.
-    // Never pin a branch for folder projects — they run in place with no worktree.
-    if (
-      wantsIsolation &&
-      !detachIsFolder &&
-      options.branchName === undefined &&
-      options.adoptRunId === undefined
-    ) {
-      pinnedBranch = `${workflowName}-${String(Date.now())}`;
-      extraArgs.push('--branch', pinnedBranch);
-    }
-    // A continued chat run retains its transport thread across the fork.
-    if (options.conversationId === undefined && childDestination.kind === 'conversation') {
-      extraArgs.push('--conversation-id', destinationCorrelationId(childDestination));
-    }
-    // Between-run continuation (#2747) — the child re-resolves the adoption
-    // against the live filesystem/database, so pass the declaration through.
-    if (adoptedRunId !== undefined) extraArgs.push('--adopt', adoptedRunId);
-    if (supersededRunId !== undefined) extraArgs.push('--supersedes', supersededRunId);
-    // Re-pin the source as an ABSOLUTE path (parseArgs is last-wins, same as --cwd).
-    // The original argv may hold a relative `--workflow-source`, and the child is
-    // spawned with a different working directory, so passing it through unresolved
-    // would silently point the child at another directory — or at nothing.
-    if (options.discoveryCwd !== undefined) {
-      extraArgs.push('--workflow-source', options.discoveryCwd);
-    }
-    // Only a row THIS process created is handed over: the child executes it and files
-    // its own source capture under that id, so the row and the capture still agree. A
-    // continuation resolves its own run by the id already in the child's argv. This
-    // process's capture is dead weight — never adopted, so the owner reclaims it on the
-    // way out.
-    if (launchedRunId !== undefined) {
-      extraArgs.push('--internal-detached-run-id', launchedRunId);
-    }
-    let transcriptPath: string | null;
-    if (isContinuation) {
-      if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
-      try {
-        transcriptPath = await resolveRunTranscriptPath(host, continuationRun);
-      } catch (error) {
-        transcriptPath = null;
-        getLog().warn(
-          { err: error as Error, workflowRunId: detachedRunId },
-          'cli.detached_transcript_path_resolve_failed'
-        );
-      }
-    } else {
-      try {
-        const storage = archonPaths.getProjectStoragePaths(
-          archonPaths.resolveProjectStorageKey(detachCodebase, cwd)
-        );
-        transcriptPath = archonPaths.getRunLogPathForRoot(storage.root, detachedRunId);
-      } catch (error) {
-        transcriptPath = null;
-        getLog().warn(
-          { err: error as Error, workflowRunId: detachedRunId },
-          'cli.detached_transcript_path_resolve_failed'
-        );
-      }
-    }
-    const runConfigPayload = runConfig
-      ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
-      : undefined;
-    let logPath: string | null;
-    try {
-      logPath = await spawnDetachedWorkflowRun(
-        cwd,
-        destinationCorrelationId(childDestination),
-        extraArgs,
-        runConfigPayload
-      );
-    } catch (error) {
-      // The child never took the run — it failed to spawn, or died inside the startup
-      // window. This process is the row's only owner until the child claims it, so it
-      // records why instead of leaving a `pending` row nobody can explain.
-      if (launchedRunId !== undefined) {
-        await host.deps.store
-          .failWorkflowRun(launchedRunId, `Detached launch failed: ${(error as Error).message}`, {
-            exitReason: 'launch_failed',
-          })
-          .catch((dbError: Error) => {
-            getLog().error(
-              { err: dbError, workflowRunId: launchedRunId },
-              'cli.detached_launch_failure_record_failed'
-            );
-          });
-      }
-      throw error;
-    }
-
-    if (options.json) {
-      await writeJsonLine({
-        ok: true,
-        action: 'run',
-        detached: true,
-        // The handle the launch promised (#2872). Its row already exists, so a caller
-        // can query or wait on it without polling for the run to appear.
-        runId: detachedRunId,
-        workflow: workflow.name,
-        branch: pinnedBranch ?? options.branchName ?? null,
-        conversationId:
-          childDestination.kind === 'conversation'
-            ? destinationCorrelationId(childDestination)
-            : null,
-        transcriptPath,
-        logPath,
-      });
-    } else {
-      console.log(`Started '${workflow.name}' in the background.`);
-      console.log(`Run id: ${detachedRunId}`);
-      console.log(`Track it with: archon workflow get ${detachedRunId}`);
-      console.log(`Transcript: ${transcriptPath ?? '(unavailable)'}`);
-      if (logPath) {
-        console.log(`Child output: ${logPath}`);
-      } else {
-        // Log file couldn't be opened — the child runs with its output discarded, so a
-        // failure after the startup window leaves no trail beyond the run row itself.
-        console.warn('Warning: could not open a log file — child output will not be captured.');
-      }
-    }
+    await launchDetachedRun({
+      host,
+      cwd,
+      workflowName,
+      userMessage,
+      options,
+      workflow,
+      isContinuation,
+      continuationRun,
+      resumeLookupError,
+      cliUserId,
+      codebase: detachCodebase,
+      isFolder: detachIsFolder,
+      wantsIsolation,
+      destination: childDestination,
+      declaration,
+      prepared: detachedPrepared,
+      resolvedInputs,
+      runConfig,
+    });
     return undefined;
   }
 
@@ -1315,77 +1100,40 @@ async function runWorkflowWithOwnedSource(
   // Set when the adopt lane executes inside a checkout whose `.archon` may differ from
   // this process's cwd — the trigger for recaptureForLane once the path is final.
   let adoptLaneRunsIsolatedCheckout = false;
-  if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
-    if (!codebase) {
-      throw new Error(
-        'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
+  const declaration = await resolveContinuationDeclaration(host, cwd, options, codebase);
+  if (declaration !== undefined) {
+    continuationMode = declaration.mode;
+    adoptedFromRunId = declaration.runId;
+  }
+  if (declaration?.mode === 'adopt' && codebase) {
+    const { adoptedRun, lane } = declaration;
+    aiConfigurationRun = adoptedRun;
+    if (lane.kind === 'reuse-worktree') {
+      const env = await adoptRegisteredWorktree(host.records.isolation, lane, codebase.default_cwd);
+      workingCwd = env.working_path;
+      isolationEnvId = env.id;
+      adoptLaneRunsIsolatedCheckout = true;
+      // The reuse lane IS the isolation: run in the inherited worktree as-is.
+      // Leaving wantsIsolation set would fall through to worktree creation below
+      // and silently cut a fresh worktree from base over the inherited one.
+      wantsIsolation = false;
+      console.log(
+        `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
       );
-    }
-    // Narrowed by construction: the flag-conflict gate above guarantees exactly
-    // one of the two ids is present.
-    if (options.adoptRunId !== undefined) {
-      continuationMode = 'adopt';
-      adoptedFromRunId = await resolveRunIdArg(host, options.adoptRunId, cwd, false, codebase.id);
-    } else if (options.supersedesRunId !== undefined) {
-      continuationMode = 'supersede';
-      adoptedFromRunId = await resolveRunIdArg(
-        host,
-        options.supersedesRunId,
-        cwd,
-        false,
-        codebase.id
+    } else if (lane.kind === 'checkout-branch') {
+      adoptedTaskBranch = lane.taskBranch;
+      wantsIsolation = true;
+      adoptLaneRunsIsolatedCheckout = true;
+      console.log(
+        `Adopting run ${adoptedRun.id} — its worktree is gone; checking out its existing branch '${lane.taskBranch.branch}'.`
       );
     } else {
-      throw new Error('--adopt/--supersedes requires a run id.');
+      console.log(
+        `Adopting run ${adoptedRun.id} — folder projects run in place; adoption carries provenance and $ADOPTED_RUN_DIR access only.`
+      );
     }
-
-    if (continuationMode === 'adopt') {
-      const { adoptedRun, lane } = await resolveWorkflowAdoption({
-        deps: {
-          getRun: id => host.deps.store.getWorkflowRun(id),
-          getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
-          findEnvironmentByPath: (...args) =>
-            host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
-        },
-        adoptedRunId: adoptedFromRunId,
-        codebaseId: codebase.id,
-        codebasePath: codebase.default_cwd,
-        codebaseKind: codebase.kind,
-        containerRequested: options.container === true,
-      });
-      aiConfigurationRun = adoptedRun;
-      if (lane.kind === 'reuse-worktree') {
-        const env = await adoptRegisteredWorktree(
-          host.records.isolation,
-          lane,
-          codebase.default_cwd
-        );
-        workingCwd = env.working_path;
-        isolationEnvId = env.id;
-        adoptLaneRunsIsolatedCheckout = true;
-        // The reuse lane IS the isolation: run in the inherited worktree as-is.
-        // Leaving wantsIsolation set would fall through to worktree creation below
-        // and silently cut a fresh worktree from base over the inherited one.
-        wantsIsolation = false;
-        console.log(
-          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.environment.working_path} (dirty state inherited as-is).`
-        );
-      } else if (lane.kind === 'checkout-branch') {
-        adoptedTaskBranch = lane.taskBranch;
-        wantsIsolation = true;
-        adoptLaneRunsIsolatedCheckout = true;
-        console.log(
-          `Adopting run ${adoptedRun.id} — its worktree is gone; checking out its existing branch '${lane.taskBranch.branch}'.`
-        );
-      } else {
-        console.log(
-          `Adopting run ${adoptedRun.id} — folder projects run in place; adoption carries provenance and $ADOPTED_RUN_DIR access only.`
-        );
-      }
-    } else {
-      const superseded = await resolveSupersededRun(host, adoptedFromRunId);
-      console.log(`Superseding run ${superseded.id} — fresh lane, provenance recorded.`);
-    }
+  } else if (declaration?.mode === 'supersede') {
+    console.log(`Superseding run ${declaration.superseded.id} — fresh lane, provenance recorded.`);
   }
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand

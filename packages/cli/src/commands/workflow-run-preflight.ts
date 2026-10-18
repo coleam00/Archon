@@ -1,4 +1,9 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { Codebase } from '@archon/core/schemas/codebase';
+import {
+  resolveWorkflowAdoption,
+  type AdoptionLane,
+} from '@archon/core/operations/workflow-adoption';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import {
   isTierName,
@@ -19,7 +24,7 @@ import type {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { resolveCliUserId } from '../utils/cli-user';
-import { getLog } from './workflow-shared';
+import { getLog, resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /** The refusal when `--resume` finds nothing to continue. */
 export function buildNoResumableRunError(workflowName: string, cwd: string): Error {
@@ -39,8 +44,8 @@ export function buildResumeLookupFailureError(error: Error): Error {
  * Validate a `--supersedes` declaration (#2747): the run must exist and be terminal.
  * Supersede inherits nothing, so existence and terminality are the whole contract.
  *
- * One owner for the refusals because two callers need them: the `--detach` pre-flight,
- * which refuses before forking (#2872), and the run path that records the provenance.
+ * The `--detach` pre-flight, which refuses before forking (#2872), and the run path that
+ * records the provenance both reach it through `resolveContinuationDeclaration`.
  */
 export async function resolveSupersededRun(
   host: WorkflowHost,
@@ -54,6 +59,55 @@ export async function resolveSupersededRun(
     throw new Error(`Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`);
   }
   return superseded;
+}
+
+/** A resolved between-run continuation declaration (#2747): `--adopt` or `--supersedes`. */
+export type ContinuationDeclaration =
+  | { mode: 'adopt'; runId: string; adoptedRun: WorkflowRun; lane: AdoptionLane }
+  | { mode: 'supersede'; runId: string; superseded: WorkflowRun };
+
+/**
+ * Resolve `--adopt` or `--supersedes` to the run it names, or `undefined` when neither is
+ * set. Adoption resolves the lane it dictates; supersede validates the prior run only. Both
+ * the `--detach` pre-flight and the run path call this, so a declaration the run path would
+ * refuse is refused before the fork too.
+ */
+export async function resolveContinuationDeclaration(
+  host: WorkflowHost,
+  cwd: string,
+  options: Pick<WorkflowRunOptions, 'adoptRunId' | 'supersedesRunId' | 'container'>,
+  codebase: Codebase | null | undefined
+): Promise<ContinuationDeclaration | undefined> {
+  const declared =
+    options.adoptRunId !== undefined
+      ? { mode: 'adopt' as const, ref: options.adoptRunId }
+      : options.supersedesRunId !== undefined
+        ? { mode: 'supersede' as const, ref: options.supersedesRunId }
+        : undefined;
+  if (!declared) return undefined;
+  if (!codebase) {
+    throw new Error(
+      'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
+    );
+  }
+  const runId = await resolveRunIdArg(host, declared.ref, cwd, false, codebase.id);
+  if (declared.mode === 'adopt') {
+    const { adoptedRun, lane } = await resolveWorkflowAdoption({
+      deps: {
+        getRun: id => host.deps.store.getWorkflowRun(id),
+        getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
+        findEnvironmentByPath: (...args) =>
+          host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
+      },
+      adoptedRunId: runId,
+      codebaseId: codebase.id,
+      codebasePath: codebase.default_cwd,
+      codebaseKind: codebase.kind,
+      containerRequested: options.container === true,
+    });
+    return { mode: 'adopt', runId, adoptedRun, lane };
+  }
+  return { mode: 'supersede', runId, superseded: await resolveSupersededRun(host, runId) };
 }
 
 /**
