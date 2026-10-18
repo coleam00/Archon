@@ -16,7 +16,6 @@ import {
   buildBranch,
   buildWaits,
   countedRounds,
-  GIVE_UP_DECISIONS,
   itemPullRequest,
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
@@ -130,7 +129,7 @@ describe('the build record', () => {
     expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
-  test('the rounds since a re-triage or a maintainer answer count toward the give-up decision', () => {
+  test('the rounds since a re-triage or a maintainer answer count toward the round cap', () => {
     const rounds = [round('a', '2026-10-16T00:30:00.000Z'), round('b', '2026-10-16T01:30:00.000Z'), round('c', '2026-10-16T02:30:00.000Z')];
     expect(countedRounds(triaged({}, record({ rounds })))).toBe(3);
     const answered = record({
@@ -179,11 +178,10 @@ describe('the build record', () => {
     expect(field('facts', 'path')?.enum).toEqual([...BUILD_PATHS]);
     expect(field('route', 'decision')?.enum).toEqual([...ROUTE_DECISIONS]);
     expect(field('answer', 'decision')?.enum).toEqual([...ANSWER_DECISIONS]);
-    expect(field('give-up', 'decision')?.enum).toEqual([...GIVE_UP_DECISIONS]);
     expect(field('apply', 'decision')?.enum).toEqual([...APPLY_DECISIONS]);
     expect(field('apply', 'class')?.enum).toEqual(['', ...ASKED_BY]);
     expect(field('ruling', 'decision')?.enum).toEqual([...BUILD_EFFECTS]);
-    for (const id of ['route', 'answer', 'give-up']) {
+    for (const id of ['route', 'answer']) {
       const attention = field(id, 'attention')?.properties;
       expect(attention?.choices.items.properties.effect.enum).toEqual([...BUILD_EFFECTS]);
       expect(attention?.recommendation.properties.confidence.enum).toEqual([...CONFIDENCES]);
@@ -283,7 +281,7 @@ function ok(result: ScriptRun): Record<string, unknown> {
 const ENDING = { delivered: false, reason: 'review_open', pr_url: 'https://ghe.example.com/example/repo/pull/42', summary: 'Not ready: one finding' };
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 
-function applyInputs(answer: Record<string, unknown>, giveUp: Record<string, unknown> | null = null): Record<string, string> {
+function applyInputs(answer: Record<string, unknown>, atCap = false): Record<string, string> {
   return {
     INPUTS_PATH: 'route',
     INPUTS_ITEM: JSON.stringify(SUBJECT),
@@ -291,7 +289,7 @@ function applyInputs(answer: Record<string, unknown>, giveUp: Record<string, unk
     INPUTS_ROUTE: JSON.stringify({ decision: 'launch', brief: 'deliver 7', reason: 'a contract', attention: null }),
     INPUTS_ENDING: JSON.stringify(ENDING),
     INPUTS_ANSWER: JSON.stringify(answer),
-    INPUTS_GIVE_UP: giveUp === null ? 'null' : JSON.stringify(giveUp),
+    INPUTS_AT_CAP: String(atCap),
   };
 }
 
@@ -386,7 +384,7 @@ describe('the build queue scripts', () => {
         INPUTS_ROUTE: 'null',
         INPUTS_ENDING: 'null',
         INPUTS_ANSWER: 'null',
-        INPUTS_GIVE_UP: 'null',
+        INPUTS_AT_CAP: 'false',
       })
     );
     expect(applied).toMatchObject({ decision: 'parked', attention: '' });
@@ -445,12 +443,10 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
-  test("give-up's scope question replaces another round", () => {
+  test("at the round cap an answer's question is the scope question", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
-    const applied = ok(
-      run(at, 'apply', applyInputs(CONTINUE, { decision: 'ask', reason: 'each review found new defects', attention: ATTENTION }))
-    );
+    const applied = ok(run(at, 'apply', applyInputs({ ...ASK, brief: 'continue PR 42 on R1', reason: 'each review found new defects' }, true)));
     expect(applied).toMatchObject({ decision: 'asked', class: 'scope', asked: { brief: 'continue PR 42 on R1', by: 'scope' } });
     expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask scope' }] });
   }, 60_000);
