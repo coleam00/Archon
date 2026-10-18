@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,7 +35,7 @@ mock.module('@archon/git', () => ({
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
 // (or the workflow engine) before the mock.module() calls below take effect.
 import type { WorkflowRoutingContext } from './orchestrator';
-import type { PreparedWorkflowSource } from '@archon/workflows/executor';
+import type { PreparedWorkflowSource } from '@archon/workflows/run-source';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
@@ -283,7 +284,7 @@ const mockExecuteWorkflow = mock<typeof WorkflowExecutor.executeWorkflow>(async 
   if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
   return { success: true, paused: true, workflowRunId: 'run-1' };
 });
-const mockPrepareWorkflowSource = mock<typeof WorkflowExecutor.prepareWorkflowSource>(
+const mockPrepareWorkflowSource = mock<typeof WorkflowRunSource.prepareWorkflowSource>(
   (): Promise<PreparedWorkflowSource> =>
     Promise.resolve({
       runId: 'prepared-run-id',
@@ -330,18 +331,20 @@ const mockPrepareWorkflowSource = mock<typeof WorkflowExecutor.prepareWorkflowSo
       },
     })
 );
-const mockRecordSelectedWorkflow = mock<typeof WorkflowExecutor.recordSelectedWorkflow>(() =>
+const mockRecordSelectedWorkflow = mock<typeof WorkflowRunSource.recordSelectedWorkflow>(() =>
   Promise.resolve()
 );
-/** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
+}));
+mock.module('@archon/workflows/run-source', () => ({
   finalizeWorkflowSource: mock(
-    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+    async (_deps: unknown, source: WorkflowRunSource.PreparedWorkflowSource) => source
   ),
-  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+  preparedWorkflowSourceRecord: (source: WorkflowRunSource.PreparedWorkflowSource) => ({
     version: 1,
     root: source.anchor.root,
     origin: source.origin,
@@ -351,9 +354,7 @@ mock.module('@archon/workflows/executor', () => ({
     file_count: source.manifest.file_count,
     byte_count: source.manifest.byte_count,
   }),
-  // Source capture runs before dispatch and does real filesystem work; stub it so these
-  // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
-  // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
+  // Bun merges module mocks: stub each capture export to avoid real I/O.
   prepareWorkflowSource: mockPrepareWorkflowSource,
   recordSelectedWorkflow: mockRecordSelectedWorkflow,
   disposeWorkflowSource: mock(() => Promise.resolve()),
@@ -361,10 +362,6 @@ mock.module('@archon/workflows/executor', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
-  // Statically imported (transitively, via `InProcessWorkflowEngine`) by the dispatch
-  // path; a named import must link even when these tests never exercise
-  // the resume path.
-  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mock(() => undefined),

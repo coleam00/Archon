@@ -12,7 +12,7 @@ import type {
 } from './schemas/workflow';
 import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
-import type { CapturedSourceOwner } from './executor';
+import type { CapturedSourceOwner } from './run-source';
 import type { WorkflowEventInput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };

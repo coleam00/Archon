@@ -1121,7 +1121,7 @@ describe('workflow dispatch routing', () => {
     // "keeps holding the capture when the dispatch refuses after taking it" test
     // above — that one runs `prepareWorkflowSource` cleanly and trips a gate AFTER
     // the hold.
-    const { prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { prepareWorkflowSource } = await import('@archon/workflows/run-source');
     (prepareWorkflowSource as ReturnType<typeof mock>).mockImplementationOnce(() =>
       Promise.reject(new Error('disk full'))
     );
@@ -1164,7 +1164,7 @@ describe('workflow dispatch routing', () => {
     // Before the fix, the outer `if (!willContinueExistingRun)` block was skipped because
     // `willContinueExistingRun` was true, leaving `preparedSource` undefined and the
     // executor in `source_unprepared_live` mode against the prior run's frozen graph.
-    const { prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { prepareWorkflowSource } = await import('@archon/workflows/run-source');
     const freshWorkflow = makeTestResolvedWorkflow({
       name: 'test-workflow',
       description: 'freshly captured from disk',
@@ -1516,7 +1516,7 @@ describe('workflow dispatch routing', () => {
   test('a continuation takes no capture at all', async () => {
     // It executes the source its run already froze. Capturing here would freeze current
     // bytes the run never agreed to AND leave a staged tree nothing adopts.
-    const { prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { prepareWorkflowSource } = await import('@archon/workflows/run-source');
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));

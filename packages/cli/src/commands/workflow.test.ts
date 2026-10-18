@@ -45,6 +45,8 @@ import {
   setFailTestFeedReads,
   resetCommittedTestEvents,
 } from '../test-support/workflow-command-harness';
+import { prepareWorkflowSource } from '@archon/workflows/run-source';
+import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import type { AdoptionLane } from '@archon/core/operations/workflow-adoption';
 import { toBranchName } from '@archon/git';
 import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
@@ -98,7 +100,6 @@ import {
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import type * as WorkflowExecutor from '@archon/workflows/executor';
 import {
   makeTestComposedWorkflow,
   makeTestResolvedWorkflow,
@@ -1188,7 +1189,7 @@ describe('workflowRunCommand — sparse model bindings (#2481)', () => {
   });
 
   it('rejects bare and duplicate mappings before execution', async () => {
-    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
     const prepareCallsBefore = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls.length;
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'bench', 'go', {
@@ -1294,7 +1295,7 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
   it('rejects an ineffective key before source capture or execution', async () => {
     const path = join(tempRoot, 'bad.yaml');
     appendFileSync(path, 'commands:\n  folder: custom\n');
-    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
     const prepareCallsBefore = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls.length;
 
     await expect(
@@ -1455,7 +1456,7 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
 
   it('reclaims the finalized container capture when backend preparation fails', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { finalizeWorkflowSource } = await import('@archon/workflows/executor');
+    const { finalizeWorkflowSource } = await import('@archon/workflows/run-source');
     const codebaseDb = await import('@archon/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1627,8 +1628,8 @@ describe('workflowRunCommand', () => {
 
     // The source is captured from the discovery root; discovery then reads that capture,
     // so the call carries the target cwd plus the capture's roots.
-    const executorDiag = await import('@archon/workflows/executor');
-    expect(executorDiag.prepareWorkflowSource as ReturnType<typeof mock>).toHaveBeenCalledWith(
+    const sourceDiag = await import('@archon/workflows/run-source');
+    expect(sourceDiag.prepareWorkflowSource as ReturnType<typeof mock>).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ sourceRoot: '/repo/source' })
     );
@@ -7528,7 +7529,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
 
   it('executes the launcher’s row and files its capture under that id', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -11854,7 +11855,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   ): void {
     const discoverMock = require('@archon/workflows/workflow-discovery')
       .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
-    const prepareMock = require('@archon/workflows/executor').prepareWorkflowSource as ReturnType<
+    const prepareMock = require('@archon/workflows/run-source').prepareWorkflowSource as ReturnType<
       typeof mock
     >;
     discoverMock.mockReset();
@@ -11908,7 +11909,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   async function stageRealCapture(
     tempRoot: string,
     opts: { sourceRoot: string; runId?: string }
-  ): Promise<WorkflowExecutor.PreparedWorkflowSource> {
+  ): Promise<WorkflowRunSource.PreparedWorkflowSource> {
     const runId = opts.runId ?? randomUUID();
     const captureRoot = join(tempRoot, 'staged-source', runId);
     await removeTempTree(captureRoot);
@@ -11930,7 +11931,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       source_config: anchor.config,
     };
     writeFileSync(join(captureRoot, 'manifest.json'), JSON.stringify(manifest));
-    const roots: WorkflowExecutor.WorkflowSourceRoots = {
+    const roots: WorkflowRunSource.WorkflowSourceRoots = {
       project: join(captureRoot, 'project'),
       globalWorkflows: join(captureRoot, 'global', 'workflows'),
       globalCommands: join(captureRoot, 'global', 'commands'),
@@ -12043,7 +12044,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
               }
       );
       (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
-      const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+      const { executeWorkflow } = await import('@archon/workflows/executor');
       (executeWorkflow as ReturnType<typeof mock>).mockClear();
       await expect(
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
@@ -12071,7 +12072,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     setupAdoptMocks();
     const isolationDb = await import('@archon/core/db/isolation-environments');
     (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
-    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
       adoptRunId: 'run-old',
@@ -12145,7 +12146,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       taskBranch: { kind: 'existing', branch: toBranchName('feature/live-pr') },
     });
     const isolation = await import('@archon/isolation');
-    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
     (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
       create: mock(() =>
         Promise.resolve({
@@ -12222,7 +12223,6 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         workflow_name: 'assist',
         status: 'pending',
       });
-      const { prepareWorkflowSource } = await import('@archon/workflows/executor');
       const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
 
       const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-same-root-')));
@@ -12267,7 +12267,6 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   it('still cleans up the superseded staged capture when the replacement lands at a different root', async () => {
     // Ordinary adoption uses separate roots and must reclaim the first capture.
     setupAdoptMocks();
-    const { prepareWorkflowSource } = await import('@archon/workflows/executor');
     const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
 
     const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-distinctroot-')));
