@@ -187,7 +187,8 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 
-import { executeWorkflow, hydrateResumableRun } from './executor';
+import { executeWorkflow } from './executor';
+import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
 import { discoverWorkflows } from './workflow-discovery';

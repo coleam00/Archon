@@ -444,6 +444,8 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+}));
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/run-source', () => ({

@@ -4,7 +4,7 @@ import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent } from './node-record-reader';
 import { foldDagResumeSnapshot } from './dag-resume-snapshot';
-import { inspectResumableRun } from './executor';
+import { inspectResumableRun } from './run-resume';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';

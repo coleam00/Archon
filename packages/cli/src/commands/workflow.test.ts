@@ -869,7 +869,8 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     // CLI resume of a required-input workflow throw instead — this is what catches it.
     // (The `--input` + `--resume` test below cannot: it fails on the mutual-exclusion
     // check before ever reaching the gate.)
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
@@ -936,7 +937,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   beforeEach(async () => {
     tempRoot = mkdtempSync(join(tmpdir(), 'archon-cli-resume-empty-'));
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     (executeWorkflow as ReturnType<typeof mock>).mockClear();
     (hydrateResumableRun as ReturnType<typeof mock>).mockClear();
   });
@@ -989,7 +991,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   }
 
   it('refuses and names the same-branch relaunch with --supersedes', async () => {
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     await stubFailedPriorRun();
     mockStartRunLiveOwner.mockClear();
     mockRunLiveOwnerClose.mockClear();
@@ -1023,7 +1026,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   });
 
   it('suggests a fresh in-place relaunch when no isolation record matched', async () => {
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     await stubFailedPriorRun('failed', []);
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -1041,7 +1045,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   });
 
   it('reports a resume refused for capacity as a busy resource, not lost state', async () => {
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     await stubFailedPriorRun('paused');
     (hydrateResumableRun as ReturnType<typeof mock>).mockRejectedValueOnce(
       new WorkflowResourceBusyError('run-dead', { kind: 'run', id: 'holder-1' }, 'paused')
@@ -1058,7 +1063,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   });
 
   it('names the abandon step for a stale-running orphan before the relaunch', async () => {
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     await stubFailedPriorRun('running');
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -1075,7 +1081,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
 
   for (const brokenPipe of [false, true]) {
     it(`notifies accepted resume before settlement (broken pipe: ${String(brokenPipe)})`, async () => {
-      const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
       await stubFailedPriorRun();
       (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
@@ -1123,7 +1130,8 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   }
 
   it('still resumes when the prior run has completed nodes', async () => {
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     await stubFailedPriorRun();
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
@@ -1339,7 +1347,8 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
     // after the graph was already chosen from live discovery — while the executor still
     // fed that graph the frozen commands and scripts. Two vintages in one run, on the one
     // resume form that never carried a run object.
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
@@ -3116,7 +3125,8 @@ describe('workflowRunCommand', () => {
 
   it('warns that --base did not change the cut-from when resuming a run', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');

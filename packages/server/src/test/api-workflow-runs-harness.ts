@@ -483,7 +483,7 @@ mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
 }));
 
 export const mockHydrateResumableRun = mock<
-  typeof import('@archon/workflows/executor')['hydrateResumableRun']
+  typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
 >(async (_deps, run) => ({
   preCreatedRun: { ...run, status: 'running' },
   priorCompletedNodes: new Map(),
@@ -493,8 +493,10 @@ export const mockHydrateResumableRun = mock<
 export const mockExecuteWorkflow = mock<
   typeof import('@archon/workflows/executor')['executeWorkflow']
 >(async () => ({ success: true, workflowRunId: 'run-1' }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
+}));
+mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 

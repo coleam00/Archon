@@ -27,6 +27,7 @@ import type * as SessionDb from '../db/sessions';
 import type * as CommandHandler from '../handlers/command-handler';
 import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
+import type * as WorkflowRunResume from '@archon/workflows/run-resume';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowAdoption from '../operations/workflow-adoption';
@@ -303,7 +304,7 @@ mock.module('@archon/workflows/router', () => ({
     workflows.find(w => w.name === name)
   ),
 }));
-export const mockHydrateResumableRun = mock<typeof WorkflowExecutor.hydrateResumableRun>(
+export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResumableRun>(
   async (_deps, candidate) => ({
     preCreatedRun: { ...candidate, status: 'running' },
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
@@ -311,7 +312,7 @@ export const mockHydrateResumableRun = mock<typeof WorkflowExecutor.hydrateResum
     priorNodeSessions: [],
   })
 );
-export const mockInspectResumableRun = mock<typeof WorkflowExecutor.inspectResumableRun>(() =>
+export const mockInspectResumableRun = mock<typeof WorkflowRunResume.inspectResumableRun>(() =>
   Promise.resolve({
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
     priorUsage: { costUsd: 0 },
@@ -367,6 +368,8 @@ export const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+}));
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
   inspectResumableRun: mockInspectResumableRun,
 }));

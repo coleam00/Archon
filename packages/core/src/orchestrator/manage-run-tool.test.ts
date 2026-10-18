@@ -11,7 +11,9 @@ import type {
 
 const operator: RunActor = { kind: 'operator' };
 
-const { hydrateResumableRun: realHydrateResumableRun } = await import('@archon/workflows/executor');
+const { hydrateResumableRun: realHydrateResumableRun } = await import(
+  '@archon/workflows/run-resume'
+);
 const { createWorkflowDeps: realCreateWorkflowDeps } = await import('../workflows/store-adapter');
 
 const CODEBASE_ID = 'proj-1';
