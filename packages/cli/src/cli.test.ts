@@ -2502,7 +2502,7 @@ describe('setup provider selection dispatch', () => {
 import { mock } from 'bun:test';
 mock.module('@archon/core/providers/register-host-providers', () => ({ registerHostProviders: async () => {} }));
 const setupPath = ${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/setup.ts'))};
-const { selectSetupProviders } = await import(setupPath);
+const { selectSetupProviders } = await import(${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/setup-ai.ts'))});
 mock.module(setupPath, () => ({
   setupCommand: async options => {
     let prompts = 0;
