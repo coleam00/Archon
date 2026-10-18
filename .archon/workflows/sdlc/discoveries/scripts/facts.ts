@@ -49,9 +49,10 @@ function parseTime(name: string, value: string): number | undefined {
   return at;
 }
 
-/** Every drained run's document, by run id, in one read. */
-function readRunDocuments(): Map<string, RunDocument> {
+/** Every drained run's document, by run id, in one read; none in eval, which decides settled records again. */
+function readRunDocuments(mode: string): Map<string, RunDocument> {
   const documents = new Map<string, RunDocument>();
+  if (mode !== 'live') return documents;
   for (const { name, value } of stateDocuments(RUNS_PREFIX)) {
     const document = parseRunDocument(name, value);
     if (document !== null) documents.set(name.slice(RUNS_PREFIX.length), document);
@@ -100,7 +101,7 @@ function main(): void {
 
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
-  const documents = mode === 'live' ? readRunDocuments() : new Map<string, RunDocument>();
+  const documents = readRunDocuments(mode);
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);

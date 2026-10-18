@@ -82,24 +82,29 @@ function question(value: unknown): Question | undefined {
   };
 }
 
+function claimOf(value: unknown): RunDocument['claim'] | undefined {
+  if (value === null) return null;
+  return isObject(value) && text(value.run_id) && text(value.at) ? { run_id: value.run_id, at: value.at } : undefined;
+}
+
+/** The questions field: absent, or every entry a question; undefined when it is neither. */
+function questionsOf(value: unknown): { questions?: Question[] } | undefined {
+  if (value === undefined) return {};
+  if (!Array.isArray(value)) return undefined;
+  const questions = value.map(question);
+  return questions.every(entry => entry !== undefined) ? { questions: questions as Question[] } : undefined;
+}
+
 /** A drained run's document; null when there is none yet. */
 export function parseRunDocument(name: string, value: unknown): RunDocument | null {
   if (value === null) return null;
-  const fail = (): never => {
+  const claim = isObject(value) && value.version === 1 ? claimOf(value.claim) : undefined;
+  const questions = isObject(value) ? questionsOf(value.questions) : undefined;
+  const decided = isObject(value) ? value.decided : undefined;
+  if (claim === undefined || questions === undefined || (decided !== undefined && !strings(decided))) {
     throw new Error(`${name} is not a drained-run document`);
-  };
-  if (!isObject(value) || value.version !== 1) return fail();
-  const claim = value.claim;
-  if (!(claim === null || (isObject(claim) && text(claim.run_id) && text(claim.at)))) return fail();
-  if (value.decided !== undefined && !strings(value.decided)) return fail();
-  const questions = value.questions === undefined ? undefined : Array.isArray(value.questions) ? value.questions.map(question) : null;
-  if (questions === null || questions?.some(entry => entry === undefined)) return fail();
-  return {
-    version: 1,
-    claim: claim === null ? null : { run_id: claim.run_id as string, at: claim.at as string },
-    ...(value.decided === undefined ? {} : { decided: value.decided }),
-    ...(questions === undefined ? {} : { questions: questions as Question[] }),
-  };
+  }
+  return { version: 1, claim, ...(decided === undefined ? {} : { decided }), ...questions };
 }
 
 // --- one pass -------------------------------------------------------------------
