@@ -25,9 +25,7 @@ import {
   intro,
   outro,
   text,
-  password,
   select,
-  multiselect,
   confirm,
   note,
   spinner,
@@ -37,29 +35,23 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import { copyArchonSkill } from './skill';
-import { randomBytes, createPrivateKey } from 'crypto';
-import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import { execFileAsync } from '@archon/git';
+import { spawn, type ChildProcess } from 'child_process';
 import {
   GITHUB_APP_CREDENTIAL_KEYS,
   GITHUB_PAT_KEYS,
   selectGitHubAuthMode,
 } from '@archon/core/utils/github-auth-mode';
 import { isMaintainedProvider } from '@archon/provider-contract';
-import { expandTilde } from '@archon/paths';
 import {
   SetupExit,
   cancelSetup,
   exitSetup,
   getLog,
-  type GitHubConfig,
   type SetupConfig,
   type SetupOptions,
-  type SlackConfig,
-  type TelegramConfig,
 } from './setup-shared';
 import { writeHomePiModelConfig } from './setup-provider-auth';
 import {
@@ -71,6 +63,13 @@ import {
   writeScopedEnv,
 } from './setup-env';
 import { collectAIConfig, confirmModelTiers, writeInstallDefaults } from './setup-ai';
+import { collectGitHubConfig } from './setup-github';
+import {
+  collectBotDisplayName,
+  collectPlatforms,
+  collectSlackConfig,
+  collectTelegramConfig,
+} from './setup-platforms';
 
 // =============================================================================
 // Types
@@ -79,400 +78,6 @@ import { collectAIConfig, confirmModelTiers, writeInstallDefaults } from './setu
 interface SpawnResult {
   success: boolean;
   error?: string;
-}
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-/**
- * Generate a cryptographically secure webhook secret
- */
-export function generateWebhookSecret(): string {
-  return randomBytes(32).toString('hex');
-}
-
-// =============================================================================
-// Data Collection Functions
-// =============================================================================
-
-/**
- * Collect platform selection
- */
-async function collectPlatforms(): Promise<SetupConfig['platforms']> {
-  const platforms = await multiselect({
-    message:
-      'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
-      { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
-      { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
-    ],
-    required: false,
-  });
-
-  if (isCancel(platforms)) cancelSetup();
-
-  return {
-    github: platforms.includes('github'),
-    telegram: platforms.includes('telegram'),
-    slack: platforms.includes('slack'),
-  };
-}
-
-/**
- * Collect GitHub credentials
- */
-async function collectGitHubConfig(): Promise<GitHubConfig> {
-  const mode = await select({
-    message: 'GitHub authentication mode?',
-    initialValue: 'pat',
-    options: [
-      { value: 'pat', label: 'Personal access token', hint: 'Default for solo use' },
-      { value: 'app', label: 'GitHub App', hint: 'Recommended for teams' },
-    ],
-  });
-  if (isCancel(mode)) cancelSetup();
-  return mode === 'app' ? collectGitHubAppConfig() : collectGitHubPatConfig();
-}
-
-async function collectGitHubAppConfig(): Promise<GitHubConfig> {
-  note(
-    'Follow the GitHub App guide for registration, permissions, webhook events, and installation:\n' +
-      'https://archon.diy/adapters/github-app-setup/',
-    'GitHub App Setup'
-  );
-  const appId = await text({
-    message: 'GitHub App ID:',
-    validate: value =>
-      value && /^[0-9]+$/.test(value.trim()) && /[1-9]/.test(value)
-        ? undefined
-        : 'Enter a positive decimal App ID',
-  });
-  if (isCancel(appId)) cancelSetup();
-  const source = await select({
-    message: 'GitHub App private key source?',
-    options: [
-      { value: 'path', label: 'Path to a PEM file' },
-      { value: 'inline', label: 'Inline PEM', hint: 'Use literal \\n for line breaks' },
-    ],
-  });
-  if (isCancel(source)) cancelSetup();
-  const resolveKeyPath = (value: string): string => resolve(expandTilde(value.trim()));
-  const validateKey = (value: string | undefined): string | undefined => {
-    if (!value?.trim()) return 'A private key is required';
-    try {
-      const pem =
-        source === 'path'
-          ? readFileSync(resolveKeyPath(value), 'utf8')
-          : value.replace(/\\r\\n|\\n/g, '\n');
-      if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') return 'Use an RSA PEM private key';
-    } catch {
-      return 'Enter a readable RSA PEM private key';
-    }
-    return undefined;
-  };
-  const key =
-    source === 'path'
-      ? await text({ message: 'GitHub App private key path:', validate: validateKey })
-      : await password({ message: 'GitHub App private key (PEM):', validate: validateKey });
-  if (isCancel(key)) cancelSetup();
-  const webhookSecret = await password({
-    message: 'GitHub webhook secret:',
-    validate: value =>
-      value?.trim() ? undefined : 'Enter the secret configured on your GitHub App',
-  });
-  if (isCancel(webhookSecret)) cancelSetup();
-  const slug = await text({ message: 'GitHub App slug (optional):' });
-  if (isCancel(slug)) cancelSetup();
-  return {
-    mode: 'app',
-    appId: appId.trim(),
-    privateKey:
-      source === 'path'
-        ? { source: 'path', value: resolveKeyPath(key) }
-        : { source: 'inline', value: key.replace(/\\r\\n|\\n/g, '\n') },
-    webhookSecret,
-    slug: slug.trim() || undefined,
-    allowedUsers: await collectGitHubAllowedUsers(),
-  };
-}
-
-async function collectGitHubAllowedUsers(): Promise<string> {
-  const allowedUsers = await text({
-    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
-    placeholder: 'username1,username2',
-  });
-
-  if (isCancel(allowedUsers)) cancelSetup();
-  return allowedUsers;
-}
-
-async function collectGitHubPatConfig(): Promise<GitHubConfig> {
-  note(
-    'GitHub Personal Access Token Setup\n\n' +
-      '1. Go to github.com/settings/tokens\n' +
-      '2. Click "Generate new token" -> "Generate new token (classic)"\n' +
-      '3. Set an expiration and select these scopes:\n' +
-      '   - repo (clone and push, issues, pull requests, and reading CI check\n' +
-      '     state, which gh queries through GraphQL statusCheckRollup)\n' +
-      '   - workflow (only if runs may change .github/workflows/ files)\n' +
-      '4. Generate and copy the token\n\n' +
-      'A fine-grained token cannot read GitHub Actions check runs: GitHub exposes\n' +
-      'no Checks permission to them, so a workflow that waits on CI stops there.\n' +
-      'The repo scope is broad, so prefer GitHub App mode when you want access\n' +
-      'granted per repository (docs: adapters/github-app-setup).',
-    'GitHub Setup'
-  );
-
-  const token = await password({
-    message: 'Enter your GitHub Personal Access Token:',
-    validate: value => {
-      if (!value || value.length < 10) {
-        return 'Please enter a valid token';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(token)) cancelSetup();
-
-  // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
-  // create`, `gh pr edit`) need this even if the PAT is set, because they call
-  // the local `gh` binary, not the API directly.
-  const ghSpin = spinner();
-  ghSpin.start('Checking gh CLI authentication...');
-  let ghAuthOk = false;
-  let ghAuthError: string | undefined;
-  try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    ghAuthOk = true;
-    ghSpin.stop('gh CLI is authenticated');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    ghAuthError =
-      e.code === 'ENOENT'
-        ? 'gh not found in PATH — install it first (https://cli.github.com)'
-        : (e.message ?? 'unknown error');
-    ghSpin.stop('gh CLI check failed');
-  }
-
-  if (!ghAuthOk) {
-    log.warning(
-      `gh auth check failed: ${ghAuthError}\n` +
-        (ghAuthError?.includes('not found') ? '' : 'Run: gh auth login')
-    );
-    // gh auth login is an interactive OAuth flow — only offer it from a TTY.
-    if (process.stdout.isTTY) {
-      const runGhLogin = await confirm({
-        message: 'Run `gh auth login` now?',
-        initialValue: true,
-      });
-      if (!isCancel(runGhLogin) && runGhLogin) {
-        // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
-        const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
-        if (ghLoginResult.error) {
-          log.warning(
-            `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
-              'Install the gh CLI from https://cli.github.com/ and run it manually.'
-          );
-        } else if (ghLoginResult.status !== 0) {
-          // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
-          // .error is only set on spawn failure, so without this the wizard
-          // would proceed as if auth succeeded.
-          log.warning(
-            `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
-              'Authentication may not have completed — re-run `gh auth login` manually if needed.'
-          );
-        }
-      }
-    }
-  }
-
-  const allowedUsers = await collectGitHubAllowedUsers();
-
-  const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: archon)',
-  });
-
-  if (isCancel(customMention)) cancelSetup();
-
-  let botMention: string | undefined;
-  if (customMention) {
-    const mention = await text({
-      message: 'Enter the @mention name (without @):',
-      placeholder: 'archon',
-      validate: value => {
-        if (!value) return 'Mention name is required';
-        if (value.includes('@')) return 'Do not include @ symbol';
-        return undefined;
-      },
-    });
-
-    if (isCancel(mention)) cancelSetup();
-
-    botMention = mention;
-  }
-
-  // Auto-generate webhook secret
-  const webhookSecret = generateWebhookSecret();
-  log.success('Generated webhook secret (will be saved as WEBHOOK_SECRET in the env file)');
-
-  return {
-    mode: 'pat',
-    token,
-    webhookSecret,
-    allowedUsers: allowedUsers || '',
-    botMention,
-  };
-}
-
-/**
- * Collect Telegram credentials
- */
-async function collectTelegramConfig(): Promise<TelegramConfig> {
-  note(
-    'SECURITY: Telegram bots are public by default — anyone can DM your bot.\n' +
-      'Set TELEGRAM_ALLOWED_USER_IDS to restrict access to your user ID only.\n\n' +
-      'To find your user ID:\n' +
-      '1. Open Telegram and search for @userinfobot\n' +
-      '2. Send any message — it replies with your user ID (a number)',
-    'Telegram Security'
-  );
-
-  note(
-    'Telegram Bot Setup\n\n' +
-      'Step 1: Create your bot\n' +
-      '1. Open Telegram and search for @BotFather\n' +
-      '2. Send /newbot\n' +
-      '3. Choose a display name (e.g., "My Archon Bot")\n' +
-      '4. Choose a username (must end in "bot")\n' +
-      '5. Copy the token BotFather gives you',
-    'Telegram Setup'
-  );
-
-  const botToken = await password({
-    message: 'Enter your Telegram Bot Token:',
-    validate: value => {
-      if (!value?.includes(':')) {
-        return 'Please enter a valid bot token (format: 123456:ABC...)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(botToken)) cancelSetup();
-
-  // Do NOT set required: true — clack's text() blocks the enter key when
-  // required is true and the value is empty, which traps the user. Validate
-  // post-hoc with a warning instead.
-  const allowedUserIds = await text({
-    message: 'Enter allowed Telegram user IDs (comma-separated):',
-    placeholder: '123456789,987654321',
-  });
-
-  if (isCancel(allowedUserIds)) cancelSetup();
-
-  if (!allowedUserIds?.trim()) {
-    log.warning(
-      'No allowlist set — your Telegram bot will accept messages from ANYONE.\n' +
-        'Add TELEGRAM_ALLOWED_USER_IDS to ~/.archon/.env after setup to restrict access.'
-    );
-  }
-
-  return {
-    botToken,
-    allowedUserIds: allowedUserIds || '',
-  };
-}
-
-/**
- * Collect Slack credentials
- */
-async function collectSlackConfig(): Promise<SlackConfig> {
-  note(
-    'Slack App Setup\n\n' +
-      'Slack setup requires creating an app at api.slack.com/apps\n\n' +
-      '1. Create a new app "From scratch"\n' +
-      '2. Enable Socket Mode:\n' +
-      '   - Settings -> Socket Mode -> Enable\n' +
-      '   - Generate an App-Level Token (xapp-...)\n' +
-      '3. Add Bot Token Scopes (OAuth & Permissions):\n' +
-      '   - app_mentions:read, chat:write, channels:history\n' +
-      '   - channels:join, im:history, im:write, im:read\n' +
-      '4. Subscribe to Bot Events (Event Subscriptions):\n' +
-      '   - app_mention, message.im\n' +
-      '5. Install to Workspace\n' +
-      '   - Copy the Bot User OAuth Token (xoxb-...)\n' +
-      '6. Invite bot to your channel: /invite @YourBotName\n\n' +
-      'Get your user ID: Click profile -> ... -> Copy member ID',
-    'Slack Setup'
-  );
-
-  const botToken = await password({
-    message: 'Enter your Slack Bot Token (xoxb-...):',
-    validate: value => {
-      if (!value?.startsWith('xoxb-')) {
-        return 'Please enter a valid bot token (starts with xoxb-)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(botToken)) cancelSetup();
-
-  const appToken = await password({
-    message: 'Enter your Slack App Token (xapp-...):',
-    validate: value => {
-      if (!value?.startsWith('xapp-')) {
-        return 'Please enter a valid app token (starts with xapp-)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(appToken)) cancelSetup();
-
-  const allowedUserIds = await text({
-    message: 'Enter allowed Slack user IDs (comma-separated, or leave empty for all):',
-    placeholder: 'U12345678,U87654321',
-  });
-
-  if (isCancel(allowedUserIds)) cancelSetup();
-
-  return {
-    botToken,
-    appToken,
-    allowedUserIds: allowedUserIds || '',
-  };
-}
-
-/**
- * Collect bot display name
- */
-async function collectBotDisplayName(): Promise<string> {
-  const customName = await confirm({
-    message: 'Do you want to set a custom bot display name? (Default: Archon)',
-  });
-
-  if (isCancel(customName)) cancelSetup();
-
-  if (!customName) {
-    return 'Archon';
-  }
-
-  const name = await text({
-    message: 'Enter the bot display name:',
-    placeholder: 'Archon',
-    validate: value => {
-      if (!value) return 'Name is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(name)) cancelSetup();
-
-  return name;
 }
 
 // =============================================================================
