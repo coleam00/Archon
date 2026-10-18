@@ -153,7 +153,7 @@ archon workflow attention --watch --json --all
 
 A stream starts with one `attention` line per open item, with `snapshot: true`, then a
 `ready` line. The lines before `ready` are the complete open set: on every connect, an item
-you held that is not among them is gone. After `ready`, a line arrives for every change the
+you held that is not among them is gone. After `ready`, the stream follows changes the
 store commits, whichever process made it: a detached run, a trigger, the server, another
 host on the same database.
 
@@ -167,6 +167,7 @@ host on the same database.
 | `owner_lost` | A running run's owner process is gone | `cursor`, `project`, `runId`, `observedStatus` |
 | `ready` | The snapshot is complete | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
+| `degraded` | Repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
 | `error` | The store cannot read the stream's cursor: `--after` named one this install did not issue, or the store no longer reads the stream's own position. The last line; the command exits 4 | `error: "cursor_invalid"` |
 
 - **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's
@@ -188,6 +189,16 @@ host on the same database.
   the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
   succeeds, so no line for well over 30 seconds means the stream is not reading. If the
   cursor is rejected, rerun without `--after`.
+- **Degraded coverage needs repair.** A failed run projection retries on the next poll.
+  If it fails again, `degraded` warns without exposing the run's identity or project;
+  the operator log names the run. Once a fresh projection of an independent run succeeds,
+  the stream retries the failed run once more and may omit its deliveries to let other
+  runs continue. If every projection fails, the stream retains its cursor and retries.
+  The warning's cursor is the last handled position, safe to retry from. Later lifecycle
+  or bookmark cursors can pass omitted deliveries; a bookmark means the feed head was
+  reached, not that coverage was repaired. After repairing the read failure, reconnect
+  to refresh the open set. Replay from a cursor before the gap to recover historical
+  transitions. The stream sends no recovered or complete signal.
 - **`--label` filters `attention` and `resolved`.** `terminal`, `resumed`, and `owner_lost` arrive for
   every run in scope. A label write that leaves an open item outside the filter sends
   `unmatched`, even for an item the stream never sent.

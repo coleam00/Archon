@@ -9,6 +9,8 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import { workflowEventCursor } from '@archon/workflows/store';
+import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { AttentionQueueItem } from '@archon/workflows/attention-queue';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
@@ -295,11 +297,16 @@ async function streamed(
     return true;
   }) as typeof process.stdout.write);
   try {
-    const running = command();
+    let finished = false;
+    const running = command().then(code => {
+      finished = true;
+      return code;
+    });
     for (let waited = 0; !stopWhen(lines); waited += 5) {
       if (waited > 5000) throw new Error(`stream never satisfied: ${JSON.stringify(lines)}`);
       await Bun.sleep(5);
     }
+    expect(finished).toBe(false);
     process.emit('SIGTERM');
     return { code: await running, lines };
   } finally {
@@ -399,3 +406,90 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
     )
   ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid' } });
 });
+
+async function streamedText(
+  command: () => Promise<number>,
+  stopWhen: (text: string) => boolean
+): Promise<{ code: number; text: string }> {
+  let text = '';
+  const write = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: string,
+    done?: (error?: Error | null) => void
+  ) => {
+    text += String(chunk);
+    done?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    let finished = false;
+    const running = command().then(code => {
+      finished = true;
+      return code;
+    });
+    for (let waited = 0; !stopWhen(text); waited += 5) {
+      if (waited > 5000) throw new Error(`stream never satisfied: ${text}`);
+      await Bun.sleep(5);
+    }
+    expect(finished).toBe(false);
+    process.emit('SIGTERM');
+    return { code: await running, text };
+  } finally {
+    write.mockRestore();
+  }
+}
+
+test.each([true, false])(
+  'watch forwards degradation and continues until a signal (json=%s)',
+  async json => {
+    const host = createHost();
+    const lines: AttentionStreamLine[] = [
+      { type: 'ready', cursor: workflowEventCursor('fixture:0') },
+      { type: 'degraded', reason: 'run_unreadable', cursor: workflowEventCursor('fixture:0') },
+      {
+        type: 'resumed',
+        runId: 'healthy',
+        project: null,
+        status: 'running',
+        cursor: workflowEventCursor('fixture:2'),
+      },
+    ];
+    let closed = false;
+    const watch = spyOn(host.engine, 'watchAttention').mockImplementation(async listener => {
+      for (const line of lines) await listener(line);
+      return {
+        close: async () => {
+          closed = true;
+        },
+      };
+    });
+    const command = () =>
+      workflowAttentionCommand(host, process.cwd(), undefined, {
+        json,
+        all: true,
+        labels: [],
+        watch: true,
+      });
+    try {
+      if (json) {
+        const result = await streamed(command, output =>
+          output.some(line => line.type === 'resumed')
+        );
+        expect(result).toEqual({ code: 0, lines });
+      } else {
+        const result = await streamedText(command, text =>
+          text.includes('Run healthy resumed (running).')
+        );
+        expect(result.code).toBe(0);
+        expect(result.text).toContain(
+          'Attention stream coverage may be incomplete because a run could not be read. Check the operator log; reconnect after repairing the read failure.'
+        );
+        expect(result.text.indexOf('coverage may be incomplete')).toBeLessThan(
+          result.text.indexOf('Run healthy resumed')
+        );
+      }
+      expect(closed).toBe(true);
+    } finally {
+      watch.mockRestore();
+    }
+  }
+);

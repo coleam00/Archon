@@ -1,10 +1,11 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readAttentionQueueItem } from './attention-queue';
 import {
@@ -27,8 +28,16 @@ async function makeStore(): Promise<IWorkflowStore> {
   });
 }
 
-async function running(store: IWorkflowStore, project = 'alpha'): Promise<string> {
-  const run = await store.createWorkflowRun({ workflow_name: 'wf', user_message: '' });
+async function running(
+  store: IWorkflowStore,
+  project = 'alpha',
+  codebaseId?: string
+): Promise<string> {
+  const run = await store.createWorkflowRun({
+    workflow_name: 'wf',
+    user_message: '',
+    codebase_id: codebaseId,
+  });
   await store.claimPendingWorkflowRun(run.id);
   await store.updateWorkflowRun(run.id, {
     output_root: join(getArchonWorkspacesPath(), '_cwd', project),
@@ -121,6 +130,341 @@ const attentionOf =
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
+  test.each(['all', 'project'] as const)(
+    'an unreadable run cannot block independent lifecycle lines (%s)',
+    async kind => {
+      const store = await makeStore();
+      const a = await running(store, 'secret');
+      const b = await running(store);
+      const failing: IWorkflowStore = Object.create(store);
+      let broken = false;
+      failing.getWorkflowRun = id =>
+        broken && id === a
+          ? Promise.reject(new Error('private read failure'))
+          : store.getWorkflowRun(id);
+      const logger = paths.createLogger('test');
+      const warnings: unknown[] = [];
+      const warn = spyOn(logger, 'warn').mockImplementation(
+        (...args: Parameters<typeof logger.warn>) => {
+          warnings.push(args);
+        }
+      );
+      const error = spyOn(logger, 'error').mockImplementation(() => {});
+      const log = spyOn(paths, 'createLogger').mockReturnValue(logger);
+      const stream = await watch(failing, {
+        scope:
+          kind === 'all'
+            ? { kind }
+            : {
+                kind,
+                project: { key: '_cwd/alpha', codebaseId: null, name: 'alpha' },
+              },
+      });
+      const start = await store.getWorkflowEventHead();
+      try {
+        broken = true;
+        await store.failWorkflowRun(a, 'failed');
+        await store.failWorkflowRun(b, 'failed');
+        await store.resumeWorkflowRun(b);
+        const terminal = await stream.next(ofRun(b, 'terminal'));
+        const resumed = await stream.next(ofRun(b, 'resumed'));
+        const degraded = await stream.next(line => line.type === 'degraded');
+        expect(degraded).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: start });
+        expect(JSON.stringify(stream.lines)).not.toContain(a);
+        expect(JSON.stringify(stream.lines)).not.toContain('private read failure');
+        expect(JSON.stringify(warnings)).toContain(a);
+        expect(stream.lines.indexOf(terminal)).toBeLessThan(stream.lines.indexOf(resumed));
+        broken = false;
+        const replay = await watch(store, { after: start });
+        try {
+          await replay.next(ofRun(b, 'resumed'));
+          expect(replay.lines.filter(ofRun(a, 'terminal'))).toHaveLength(1);
+          expect(replay.lines.filter(ofRun(b, 'terminal'))).toEqual([terminal]);
+          expect(replay.lines.filter(ofRun(b, 'resumed'))).toEqual([resumed]);
+        } finally {
+          await replay.close();
+        }
+        if (terminal.type !== 'terminal') throw new Error('expected terminal');
+        const after = await watch(store, { after: terminal.cursor });
+        try {
+          expect(await after.next(ofRun(b, 'resumed'))).toEqual(resumed);
+          expect(after.lines.filter(ofRun(b, 'terminal'))).toEqual([]);
+        } finally {
+          await after.close();
+        }
+      } finally {
+        await stream.close();
+        log.mockRestore();
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    }
+  );
+
+  test.each(['run', 'codebase', 'branch'] as const)(
+    'projection faults retry once and isolate repeated failures at the %s boundary',
+    async boundary => {
+      for (const persistent of [false, true]) {
+        const store = await makeStore();
+        const a = await running(store, 'alpha', boundary === 'codebase' ? 'cb-a' : undefined);
+        const b = await running(store);
+        const failing: IWorkflowStore = Object.create(store);
+        let active = false;
+        let failures = 0;
+        let held = true;
+        failing.readWorkflowEventsAfter = (cursor, opts) =>
+          held
+            ? Promise.resolve({ events: [], next: cursor })
+            : store.readWorkflowEventsAfter(cursor, opts);
+        const fault = (): void => {
+          if (active && (persistent || failures === 0)) {
+            failures++;
+            throw new Error('projection unavailable');
+          }
+        };
+        failing.getWorkflowRun = async id => {
+          if (boundary === 'run' && id === a) fault();
+          return store.getWorkflowRun(id);
+        };
+        failing.getCodebase = async id => {
+          if (boundary === 'codebase') fault();
+          return { id, name: 'alpha', repository_url: null, default_cwd: '/alpha', kind: 'repo' };
+        };
+        const stream = await watch(
+          failing,
+          {},
+          {
+            branchOf: async run => {
+              if (boundary === 'branch' && run.id === a) fault();
+              return null;
+            },
+          }
+        );
+        try {
+          active = true;
+          await store.pauseWorkflowRunForWait(a, ask(), { kind: 'started', stepName: 'ask' });
+          await store.failWorkflowRun(b, 'failed');
+          await store.resumeWorkflowRun(b);
+          held = false;
+          await stream.next(ofRun(b, 'resumed'));
+          if (persistent) {
+            expect(stream.lines.some(line => line.type === 'degraded')).toBe(true);
+            expect(stream.lines.filter(attentionOf(a))).toEqual([]);
+          } else {
+            expect(stream.lines.filter(attentionOf(a))).toHaveLength(1);
+            expect(stream.lines.some(line => line.type === 'degraded')).toBe(false);
+          }
+          expect(failures).toBe(persistent ? 3 : 1);
+        } finally {
+          await stream.close();
+        }
+      }
+    }
+  );
+
+  test('lookahead crosses follower pages and isolates repeated deliveries within each page', async () => {
+    const store = await makeStore();
+    const a = await running(store);
+    const b = await running(store);
+    const start = await store.getWorkflowEventHead();
+    await store.failWorkflowRun(a, 'failed');
+    await store.failWorkflowRun(b, 'failed');
+    await store.resumeWorkflowRun(b);
+    const original = await store.readWorkflowEventsAfter(start, { limit: 100 });
+    const events = [
+      ...Array.from({ length: 501 }, () => original.events[0]),
+      ...original.events.slice(1),
+    ].map((delivery, index) => ({
+      ...delivery,
+      cursor: workflowEventCursor(`fixture:${index + 1}`),
+    }));
+    const first = workflowEventCursor('fixture:0');
+    const feed: IWorkflowStore = Object.create(store);
+    feed.getWorkflowEventHead = async () => first;
+    feed.readWorkflowEventsAfter = async (cursor, { limit }) => {
+      const offset = cursor === first ? 0 : events.findIndex(event => event.cursor === cursor) + 1;
+      const page = events.slice(offset, offset + limit);
+      return { events: page, next: page.at(-1)?.cursor ?? cursor };
+    };
+    let failures = 0;
+    feed.getWorkflowRun = async id => {
+      if (id === a) {
+        failures++;
+        throw new Error('unreadable');
+      }
+      return store.getWorkflowRun(id);
+    };
+    const stream = await watch(feed);
+    try {
+      expect(await stream.next(ofRun(b, 'terminal'))).toHaveProperty('cursor', events[501].cursor);
+      expect(await stream.next(ofRun(b, 'resumed'))).toHaveProperty('cursor', events[502].cursor);
+      expect(failures).toBe(6);
+      expect(stream.lines.filter(line => line.type === 'degraded')).toHaveLength(2);
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test.each(['latched', 'during witness'] as const)(
+    'an outage retries without skipping, including a cached earlier success (%s)',
+    async recovery => {
+      const store = await makeStore();
+      const a = await running(store);
+      const b = await running(store);
+      const c = await running(store);
+      const start = await store.getWorkflowEventHead();
+      let held = true;
+      let down = false;
+      let attempts = 0;
+      const feed: IWorkflowStore = Object.create(store);
+      feed.readWorkflowEventsAfter = (cursor, opts) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, opts);
+      feed.getWorkflowRun = async id => {
+        if (id === b && attempts === 0) down = true;
+        if (down) {
+          attempts++;
+          if (recovery === 'during witness' && id === c) down = false;
+          else throw new Error('store outage');
+        }
+        return store.getWorkflowRun(id);
+      };
+      const stream = await watch(feed, { bookmarkIntervalMs: 0 });
+      try {
+        await store.failWorkflowRun(a, 'failed');
+        const safe = (await store.readWorkflowEventsAfter(start, { limit: 1 })).events[0].cursor;
+        await store.failWorkflowRun(b, 'failed');
+        await store.resumeWorkflowRun(a);
+        await store.failWorkflowRun(c, 'failed');
+        held = false;
+        if (recovery === 'latched') {
+          const warning = await stream.next(line => line.type === 'degraded' && attempts >= 8);
+          expect(warning).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: safe });
+          expect(stream.lines.filter(line => line.type === 'terminal')).toHaveLength(1);
+          expect(stream.lines.filter(line => line.type === 'degraded')).toHaveLength(1);
+          expect(stream.lines.some(line => line.type === 'bookmark' && line.cursor !== start)).toBe(
+            false
+          );
+          down = false;
+        }
+        await stream.next(ofRun(c, 'terminal'));
+        expect(
+          stream.lines.filter(line => line.type === 'terminal' || line.type === 'resumed')
+        ).toMatchObject([
+          { type: 'terminal', runId: a },
+          { type: 'terminal', runId: b },
+          { type: 'resumed', runId: a },
+          { type: 'terminal', runId: c },
+        ]);
+        const expected = await store.readWorkflowEventsAfter(start, { limit: 100 });
+        expect(
+          stream.lines
+            .filter(line => line.type === 'terminal' || line.type === 'resumed')
+            .map(line => ('cursor' in line ? line.cursor : null))
+        ).toEqual(expected.events.map(event => event.cursor));
+      } finally {
+        await stream.close();
+      }
+    }
+  );
+
+  test.each(['invalid cursor', 'close'] as const)('lookahead respects %s', async mode => {
+    const store = await makeStore();
+    const a = await running(store);
+    const start = await store.getWorkflowEventHead();
+    let entered!: () => void;
+    const probing = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const feed: IWorkflowStore = Object.create(store);
+    let projections = 0;
+    feed.getWorkflowRun = async () => {
+      projections++;
+      throw new Error('unreadable');
+    };
+    let probes = 0;
+    feed.readWorkflowEventsAfter = async (cursor, opts) => {
+      if (cursor !== start) {
+        probes++;
+        entered();
+        if (mode === 'invalid cursor') throw new WorkflowEventCursorError();
+        await pending;
+      }
+      return store.readWorkflowEventsAfter(cursor, opts);
+    };
+    const stream = await watch(feed);
+    try {
+      await store.failWorkflowRun(a, 'failed');
+      await probing;
+      if (mode === 'close') {
+        await store.createWorkflowEvent({
+          workflow_run_id: a,
+          event_type: 'workflow_started',
+          data: {},
+        });
+      }
+      if (mode === 'invalid cursor') {
+        expect(await stream.next(line => line.type === 'error')).toEqual({
+          type: 'error',
+          error: 'cursor_invalid',
+        });
+      } else {
+        let closed = false;
+        const closing = stream.close().then(() => {
+          closed = true;
+        });
+        await Bun.sleep(10);
+        expect(closed).toBe(false);
+        release();
+        await closing;
+        expect(stream.lines.map(line => line.type)).toEqual(['ready', 'degraded']);
+      }
+      expect(probes).toBe(1);
+      expect(projections).toBe(2);
+    } finally {
+      release();
+      await stream.close();
+    }
+  });
+
+  test('isolation leaves a previously emitted open item unresolved', async () => {
+    const store = await makeStore();
+    const a = await pausedAtAsk(store);
+    const b = await running(store);
+    let broken = false;
+    const stream = await watch(
+      store,
+      {},
+      {
+        branchOf: async run => {
+          if (broken && run.id === a.runId) throw new Error('branch unavailable');
+          return null;
+        },
+      }
+    );
+    try {
+      broken = true;
+      await store.labelAttentionWait(a.runId, {
+        pauseId: a.wait.pauseId,
+        set: { ci: 'pr' },
+        unset: [],
+        via: 'cli',
+      });
+      await store.failWorkflowRun(b, 'failed');
+      await stream.next(ofRun(b, 'terminal'));
+      expect(stream.lines.filter(attentionOf(a.runId))).toHaveLength(1);
+      expect(stream.lines.filter(ofRun(a.runId, 'resolved'))).toEqual([]);
+      expect(stream.lines.some(line => line.type === 'degraded')).toBe(true);
+    } finally {
+      await stream.close();
+    }
+  });
+
   test('the snapshot is the open set in scope, as the queue builds it, then ready', async () => {
     const store = await makeStore();
     const other = await pausedAtAsk(store, { ci: 'other' });
