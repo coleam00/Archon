@@ -41,7 +41,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # The Test Suite skips a docs-only change, so the docs package's own tests run here.
+      # The Test Suite skips ordinary docs prose, but runs for test inputs listed in
+      # BUILD_INPUTS in scripts/should-run-test-suite.ts. Always test docs here too.
       - name: Docs package tests
         run: bun run --cwd packages/docs-web test
 
