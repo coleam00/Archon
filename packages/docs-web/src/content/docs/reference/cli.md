@@ -1006,7 +1006,7 @@ snapshot, replays readable changes since it. A `degraded` warning means replay m
 gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
 the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
-cannot start, `4` when the store cannot read the stream's cursor, an `--after` cursor this
+cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is
 `{"type":"error","error":"cursor_invalid"}`; rerun without `--after`).
 

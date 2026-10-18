@@ -220,7 +220,7 @@ host on the same database.
   reported lost. Nothing here changes the run: abandon it with `workflow abandon`.
 
 The stream only reads. Stopping it, with a signal or by closing its stdout, affects no run
-and exits 0. A closed stdout is noticed when the stream next writes a line. An answered run continues where a continuation host runs: `archon serve`,
+and exits 0. A closed stdout is noticed when the stream next writes a line. Other output write failures exit 1. An answered run continues where a continuation host runs: `archon serve`,
 `archon workflow wake --watch`, or a CLI answer without `--json`, which continues the run in
 place.
 

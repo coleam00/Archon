@@ -4205,8 +4205,7 @@ function attentionStreamText(
  * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
  * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
  * (from `--after`, or the tail's own position) is not one this install's store can read,
- * so the fix is to rerun without
- * it. Read-only: stopping the stream affects no run.
+ * so the fix is to rerun without it. Read-only: stopping the stream affects no run.
  */
 async function workflowAttentionWatch(
   host: WorkflowHost,

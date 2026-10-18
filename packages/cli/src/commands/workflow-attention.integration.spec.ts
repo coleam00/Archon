@@ -495,11 +495,13 @@ test.each([true, false])(
 );
 
 test.each([
-  { phase: 'startup', json: true },
-  { phase: 'tail', json: true },
-  { phase: 'startup', json: false },
-  { phase: 'tail', json: false },
-])('watch handles output failures (%s)', async ({ phase, json }) => {
+  { phase: 'startup', json: true, type: 'degraded' },
+  { phase: 'tail', json: true, type: 'degraded' },
+  { phase: 'startup', json: false, type: 'degraded' },
+  { phase: 'tail', json: false, type: 'degraded' },
+  { phase: 'startup', json: false, type: 'error' },
+  { phase: 'tail', json: false, type: 'error' },
+])('watch handles output failures (%s)', async ({ phase, json, type }) => {
   for (const code of ['ENOSPC', 'EPIPE', undefined]) {
     const host = createHost();
     const failure = Object.assign(new Error('write failed'), { code });
@@ -509,11 +511,15 @@ test.each([
     const watch = spyOn(host.engine, 'watchAttention').mockImplementation(async listener => {
       const deliver = async (): Promise<void> => {
         try {
-          await listener({
-            type: 'degraded',
-            reason: 'run_unreadable',
-            cursor: workflowEventCursor('fixture:0'),
-          });
+          await listener(
+            type === 'error'
+              ? { type: 'error', error: 'cursor_invalid' }
+              : {
+                  type: 'degraded',
+                  reason: 'run_unreadable',
+                  cursor: workflowEventCursor('fixture:0'),
+                }
+          );
         } catch (error) {
           rejected = error;
         }
@@ -527,12 +533,18 @@ test.each([
         },
       };
     });
-    const write = spyOn(process.stdout, 'write').mockImplementation(((
-      chunk: string,
-      done?: (error?: Error | null) => void
-    ) => {
+    const write = spyOn(
+      type === 'error' ? process.stderr : process.stdout,
+      'write'
+    ).mockImplementation(((chunk: string, done?: (error?: Error | null) => void) => {
       done?.(
-        String(chunk).includes(json ? '"type":"degraded"' : 'coverage may be incomplete')
+        String(chunk).includes(
+          type === 'error'
+            ? 'The stream cursor'
+            : json
+              ? '"type":"degraded"'
+              : 'coverage may be incomplete'
+        )
           ? failure
           : undefined
       );
@@ -545,7 +557,7 @@ test.each([
         labels: [],
         watch: true,
       });
-      expect(result).toBe(code === 'EPIPE' ? 0 : 1);
+      expect(result).toBe(code === 'EPIPE' ? (type === 'error' ? 4 : 0) : 1);
       expect(rejected).toBe(code === 'EPIPE' ? undefined : failure);
       expect(closed).toBe(true);
     } finally {
