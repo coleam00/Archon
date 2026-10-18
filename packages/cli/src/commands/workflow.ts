@@ -32,7 +32,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { OverlayMode } from '@archon/workflows/container-context';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
-import { WorkflowResourceBusyError, resumeCursorMatches } from '@archon/workflows/store';
+import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { loadWorkflowRunConfigFile, normalizeRunConfigSemantics } from '@archon/core/config';
@@ -132,7 +132,6 @@ import {
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
-import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
@@ -152,7 +151,7 @@ import {
 } from './workflow-shared';
 
 import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
-import { type OpenToolCalls, workflowEventLine } from './workflow-run-output';
+import { type OpenToolCalls, presentRunResult, workflowEventLine } from './workflow-run-output';
 import {
   TRANSCRIPT_POLL_INTERVAL_MS,
   type TranscriptFormat,
@@ -202,6 +201,9 @@ import {
   buildNoResumableRunError,
   buildResumeLookupFailureError,
   resolveContinuationDeclaration,
+  assertInvocationFlags,
+  assertExecutionFlags,
+  assertWorktreePolicy,
   resolveCliUserRecordId,
   assertCliWorkflowRequirementsMet,
   maybePrintTierNotice,
@@ -213,7 +215,6 @@ import { runDryRun } from './workflow-dry-run';
 import {
   type PendingWaitContinuation,
   type WaitResumeAttempt,
-  pendingDurableWait,
   awaitDurableWaitDeadline,
   buildWaitResumeAttempt,
   isResumeSuperseded,
@@ -730,99 +731,14 @@ async function runWorkflowWithOwnedSource(
   emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
   emitDeprecationNotice(workflow);
 
-  if (isContinuation && options.modelAssignments && options.modelAssignments.length > 0) {
-    throw new Error(
-      '--resume and --model are mutually exclusive. A resumed run keeps its original model bindings.'
-    );
-  }
-
-  if (options.registrationBaseBranch !== undefined) {
-    if (!options.registrationBaseBranch.trim())
-      throw new Error('--base-branch requires a nonempty branch name.');
-    if (
-      options.resume ||
-      options.adoptRunId !== undefined ||
-      options.supersedesRunId !== undefined ||
-      options.dryRun
-    )
-      throw new Error(
-        '--base-branch applies only to initial registration and cannot be combined with --resume, --adopt, --supersedes, or --dry-run.'
-      );
-  }
-
-  const dryRunOnlyOptions = [
-    ['--stubs', options.stubsPath !== undefined],
-    ['--stubs-init', options.stubsInitPath !== undefined],
-    ['--default-stubs', options.defaultStubs === true],
-    ['--exec-code', options.execCode === true],
-    ['--pause-at-gates', options.pauseAtGates === true],
-  ] as const;
-  const optionWithoutDryRun = dryRunOnlyOptions.find(([, present]) => present)?.[0];
-  if (!options.dryRun && optionWithoutDryRun) {
-    throw new Error(`${optionWithoutDryRun} requires --dry-run.`);
-  }
+  assertInvocationFlags(options, isContinuation);
 
   if (options.dryRun) {
     await runDryRun(host, workflow, cwd, userMessage, options, runConfig, modelOverrides);
     return undefined;
   }
 
-  // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
-  // workflowRunCommand is the authoritative boundary for programmatic callers)
-  if (options.branchName !== undefined && options.noWorktree) {
-    throw new Error(
-      '--branch and --no-worktree are mutually exclusive.\n' +
-        '  --branch creates an isolated worktree (safe).\n' +
-        '  --no-worktree runs directly in your repo (no isolation).\n' +
-        'Use one or the other.'
-    );
-  }
-  if (options.noWorktree && options.fromBranch !== undefined) {
-    throw new Error(
-      '--from/--from-branch has no effect with --no-worktree.\n' +
-        'Remove --from or drop --no-worktree.'
-    );
-  }
-  if (options.noWorktree && options.baseBranch !== undefined) {
-    throw new Error(
-      '--base has no effect with --no-worktree.\n' + 'Remove --base or drop --no-worktree.'
-    );
-  }
-  if (options.resume && options.branchName !== undefined) {
-    throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
-    );
-  }
-  if (options.resume && options.inputs !== undefined && options.inputs.length > 0) {
-    throw new Error(
-      '--resume and --input are mutually exclusive.\n' +
-        "  A resume replays the original invocation's inputs, recorded on the run.\n" +
-        '  Drop --input to resume, or start a fresh run to supply different values.'
-    );
-  }
-
-  // Between-run continuation (#2747): adoption dictates the lane itself, so the
-  // lane-choosing flags are refused rather than silently overridden.
-  if (options.adoptRunId !== undefined) {
-    const conflicts: string[] = [];
-    if (options.resume) conflicts.push('--resume');
-    if (options.branchName !== undefined) conflicts.push('--branch');
-    if (options.fromBranch !== undefined) conflicts.push('--from/--from-branch');
-    if (options.baseBranch !== undefined) conflicts.push('--base');
-    if (options.noWorktree) conflicts.push('--no-worktree');
-    if (conflicts.length > 0) {
-      throw new Error(
-        `--adopt and ${conflicts.join('/')} are mutually exclusive.\n` +
-          '  Adoption resolves its own lane: reuse the adopted worktree, or cut a fresh one from its branch.'
-      );
-    }
-  } else if (options.supersedesRunId !== undefined && options.resume) {
-    throw new Error(
-      '--supersedes records a FRESH-lane rerun as replacing a prior open item; it cannot be combined with --resume.'
-    );
-  }
+  assertExecutionFlags(options);
 
   // Per-dispatch --base override, normalized once. Wins over repo config + the
   // codebase default for both the worktree cut-from (the provider request's
@@ -833,43 +749,8 @@ async function runWorkflowWithOwnedSource(
   // sets `worktree.baseBranch`.
   const flagBase = options.baseBranch?.trim() || undefined;
 
-  // Reconcile workflow-level worktree policy with invocation flags.
-  // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
-  // a mismatch between policy and flags is a user error we surface loudly
-  // rather than silently applying one side and ignoring the other.
   const pinnedEnabled = workflow.worktree?.enabled;
-  if (pinnedEnabled === false) {
-    if (options.branchName !== undefined) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
-          '  --branch requires an isolated worktree.\n' +
-          "  Drop --branch or change the workflow's worktree.enabled."
-      );
-    }
-    if (options.fromBranch !== undefined) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
-          '  --from/--from-branch only applies when a worktree is created.\n' +
-          "  Drop --from or change the workflow's worktree.enabled."
-      );
-    }
-    if (options.baseBranch !== undefined) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
-          '  --base only applies when a worktree is created.\n' +
-          "  Drop --base or change the workflow's worktree.enabled."
-      );
-    }
-    // --no-worktree is redundant but not contradictory — silently accept.
-  } else if (pinnedEnabled === true) {
-    if (options.noWorktree) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
-          '  --no-worktree conflicts with the workflow policy.\n' +
-          "  Drop --no-worktree or change the workflow's worktree.enabled."
-      );
-    }
-  }
+  assertWorktreePolicy(workflow, options);
 
   // Default to worktree isolation unless --no-worktree or --resume. Workflow YAML
   // `worktree.enabled` pins the decision — mismatches with CLI flags are rejected
@@ -1746,77 +1627,15 @@ async function runWorkflowWithOwnedSource(
       throw new Error('Workflow did not produce a result.');
     }
 
-    let presentedRun: WorkflowRun | null = null;
-    let outcomeReadUnavailable = false;
-    if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
-      try {
-        presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-        outcomeReadUnavailable = presentedRun === null;
-      } catch (error) {
-        outcomeReadUnavailable = true;
-        getLog().warn(
-          { err: error as Error, workflowRunId: result.workflowRunId },
-          'cli.workflow_outcome_lookup_failed'
-        );
-      }
-    }
-    const presentRunFacts = (lead: string, executionStatus: WorkflowRunStatus): boolean => {
-      if (outcomeReadUnavailable) {
-        console.log(
-          `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
-        );
-        return true;
-      }
-      if (presentedRun?.outcome == null) return false;
-      console.log(
-        `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
-      );
-      return true;
-    };
-
-    // Check result and exit appropriately
-    if (result.success && 'paused' in result && result.paused) {
-      // A durable wait with a deadline (time, event or usage limit) is this process's own
-      // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
-      if (result.waitCursor !== undefined) {
-        const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-        if (pausedRun === null || !resumeCursorMatches(pausedRun, result.waitCursor)) return;
-        const wait = pendingDurableWait(pausedRun);
-        if (wait === undefined) return;
-        console.log(
-          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
-            'this process resumes the run at its deadline.'
-        );
-        return { run: pausedRun, wait: { ...wait, cursor: result.waitCursor }, destination };
-      }
-      if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
-        console.log('\nWorkflow paused — waiting for approval.');
-      }
-    } else if (result.success) {
-      // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
-      // Paused workflows are handled in the branch above and intentionally do not get a result card.
-      if ('summary' in result && result.summary) {
-        try {
-          await adapter.sendMessage(conversationId, result.summary, {
-            category: 'workflow_result',
-            segment: 'new',
-            workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
-          });
-        } catch (surfaceError) {
-          getLog().warn(
-            { err: surfaceError as Error, conversationId },
-            'cli.workflow_result_surface_failed'
-          );
-        }
-      }
-      if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
-        console.log('\nWorkflow completed successfully.');
-      }
-    } else {
-      presentRunFacts('\nWorkflow finished.', 'failed');
-      throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
-    }
-    return undefined;
+    return await presentRunResult({
+      host,
+      workflow,
+      result,
+      adapter,
+      conversationId,
+      destination,
+      detachedProcessOwner,
+    });
   } catch (error) {
     if (setupPreparedRun && !executionSubmitted && !(error instanceof TerminalStatusWriteError))
       await requireTerminalStatusWrite(
