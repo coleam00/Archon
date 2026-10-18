@@ -47,9 +47,16 @@ describe('filterToolIndicators', () => {
     expect(filterToolIndicators([])).toBe('');
   });
 
-  test('preserves non-tool-indicator text unchanged', () => {
-    const result = filterToolIndicators(['This is a regular message.']);
-    expect(result).toBe('This is a regular message.');
+  test.each([
+    [['This is a regular message.'], 'This is a regular message.'],
+    [['  Regular text with leading spaces.  '], 'Regular text with leading spaces.'],
+    [['', 'Actual content here.', ''], 'Actual content here.'],
+    [
+      ['Here is the example:', '    print("hello")\n    print("bye")'],
+      'Here is the example:\n\n---\n\n    print("hello")\n    print("bye")',
+    ],
+  ])('preserves retained text and trims only the joined reply: %j', (messages, expected) => {
+    expect(filterToolIndicators(messages)).toBe(expected);
   });
 
   test('filters 🔧 (U+1F527) tool usage indicator', () => {
@@ -130,16 +137,6 @@ describe('filterToolIndicators', () => {
     expect(result).toContain('Normal text.');
     expect(result).toContain('More normal text.');
     expect(result).not.toContain('🔧');
-  });
-
-  test('trims whitespace from the final output', () => {
-    const result = filterToolIndicators(['  Regular text with leading spaces.  ']);
-    expect(result).toBe('Regular text with leading spaces.');
-  });
-
-  test('handles empty strings in message array', () => {
-    const result = filterToolIndicators(['', 'Actual content here.', '']);
-    expect(result).toContain('Actual content here.');
   });
 });
 

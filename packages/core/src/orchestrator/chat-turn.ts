@@ -63,10 +63,10 @@ export function filterToolIndicators(assistantMessages: string[]): string {
         .split('\n\n')
         .filter(section => !toolIndicatorRegex.test(section.trim()))
         .join('\n\n')
-        .trim()
     )
-    .filter(message => message !== '')
-    .join(separator);
+    .filter(message => message.trim() !== '')
+    .join(separator)
+    .trim();
 
   return finalMessage || assistantMessages.join(separator);
 }
@@ -417,7 +417,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
 
 /**
- * Batch mode: accumulate all chunks, filter tool indicators, send final clean summary.
+ * Batch mode: accumulate chunks and filter tool indicators, falling back to the originals.
  * Used by Slack, GitHub, Discord (batch), and CLI.
  */
 export async function handleBatchMode(input: ChatTurnInput): Promise<void> {

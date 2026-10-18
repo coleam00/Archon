@@ -114,7 +114,7 @@ The Gitea adapter is a webhook-based forge adapter, similar to the GitHub adapte
 
 - **Transport**: Receives HTTP POST webhooks from Gitea
 - **Signature verification**: HMAC SHA-256 over the exact received bytes, using the `X-Gitea-Signature` header
-- **Streaming mode**: Always batch (single coherent comment per response, no comment spam)
+- **Streaming mode**: Always batch (one combined assistant reply comment after processing; see [batch mode](/reference/configuration/#batch-mode) for filtering and fallback behavior)
 - **Conversation ID format**: `owner/repo#number` for issues, `owner/repo!number` for PRs
 - **Self-loop prevention**: Bot comments include a hidden HTML marker (`<!-- archon-bot-response -->`) to avoid re-triggering on its own messages
 - **Retry logic**: Transient network errors (timeouts, connection resets) are retried up to 3 times with exponential backoff
