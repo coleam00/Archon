@@ -1,5 +1,4 @@
 import { runSubprocess, isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
-export { containerCommandName, buildSubprocessDockerArgs } from './subprocess';
 import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';

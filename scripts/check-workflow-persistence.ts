@@ -20,6 +20,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/workflows/headless-platform.ts',
   'packages/core/src/handlers/clone.ts',
   'packages/cli/src/commands/workflow.ts',
+  'packages/cli/src/commands/workflow-shared.ts',
   'packages/cli/src/commands/workflow-continuations.ts',
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
