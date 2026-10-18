@@ -1,6 +1,5 @@
 import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { recordWorktreeAdoption } from '@archon/isolation';
-import { canonicalizeProjectPath } from '@archon/paths';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -29,15 +28,8 @@ import {
  */
 
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import { statSync } from 'node:fs';
 import * as archonPaths from '@archon/paths';
-import {
-  registerRepository,
-  registerFolder,
-  ProjectRegistrationError,
-} from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
-import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
@@ -49,7 +41,6 @@ import {
   deadlineWaitCursor,
   resumeCursorMatches,
 } from '@archon/workflows/store';
-import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import {
@@ -63,30 +54,20 @@ import {
   type WorkflowEventType,
 } from '@archon/workflows/store';
 import {
-  isTierName,
   applyResolvedRunModelOverrides,
   buildAiProfile,
   parseRunModelAssignments,
   resolveRunModelOverrides,
-  TIER_NAMES,
   type BuildAiProfileOptions,
   type ResolvedAiProfile,
-  type TierName,
-  type RawTiersConfig,
 } from '@archon/workflows/model-validation';
 import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
 } from '@archon/isolation';
-import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
-import {
-  getArchonHome,
-  BUNDLED_VERSION,
-  readTierNoticeState,
-  markTierNoticeShown,
-} from '@archon/paths';
 import { isAbsolute, join } from 'node:path';
 import {
   applyWorkflowRunConfigLayer,
@@ -95,10 +76,7 @@ import {
 import { rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
-import {
-  findCodebaseForCheckoutPath,
-  resolveCodebaseForPath,
-} from '@archon/core/services/codebase-checkout-resolver';
+import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import {
@@ -119,13 +97,8 @@ import {
   type PreparedWorkflowSource,
   type ResolvedContinuation,
 } from '@archon/workflows/run-source';
-import {
-  assertWorkflowRequirementsMet,
-  resolveTopLevelInputs,
-} from '@archon/workflows/utils/workflow-requirements';
-import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflow-requirements';
+import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
-import { formatDeprecationNotice } from '@archon/workflows/deprecation';
 import {
   dryRunWorkflow,
   formatDryRunTrace,
@@ -136,9 +109,7 @@ import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runn
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import {
   findWorkflowLoadError,
-  type WorkflowDefinition,
   type WorkflowLoadError,
-  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
@@ -259,292 +230,27 @@ import {
   recordDetachedChildStartupFailure,
   runDetachedControlCommand,
 } from './workflow-detach';
-
-/**
- * Default runner image when `.archon/config.yaml > container.image` is unset.
- * The build script (`bun run build:runner-image`) tags both
- * `archon-runner:<version>` and `archon-runner:latest`; defaulting to `latest`
- * always matches the most recently built image without coupling to the
- * dev-vs-binary version string. Operators pin `container.image` for reproducibility.
- */
-const DEFAULT_RUNNER_IMAGE = 'archon-runner:latest';
-
-/**
- * Resolve the container backend config from the merged `container` config,
- * applying Phase B defaults (bridge network, 4 GiB memory, 512 pids).
- *
- * `container.*` comes from hand-parsed YAML (not Zod), so the values are
- * untrusted at runtime despite their static types — validate them here. In
- * particular `network` must be `bridge`/`none`: a stray `host` would otherwise
- * flow straight to `docker run --network host` and drop the network isolation.
- */
-export function resolveContainerBackendConfig(
-  cfg: { image?: string; network?: string; memoryMb?: number; pidsLimit?: number } | undefined
-): ContainerBackendConfig {
-  const network = cfg?.network;
-  if (network !== undefined && network !== 'bridge' && network !== 'none') {
-    throw new Error(
-      `Invalid container.network '${network}' in .archon/config.yaml — must be ` +
-        "'bridge' or 'none'. Host networking is not allowed for container isolation."
-    );
-  }
-  // Positive INTEGERS — `docker run --memory`/`--pids-limit` reject fractions,
-  // and Number.isFinite alone would let `512.5` through to a runtime docker error.
-  const memoryMb = cfg?.memoryMb;
-  if (memoryMb !== undefined && (!Number.isInteger(memoryMb) || memoryMb <= 0)) {
-    throw new Error(
-      `Invalid container.memoryMb '${String(memoryMb)}' — must be a positive integer (MiB).`
-    );
-  }
-  const pidsLimit = cfg?.pidsLimit;
-  if (pidsLimit !== undefined && (!Number.isInteger(pidsLimit) || pidsLimit <= 0)) {
-    throw new Error(
-      `Invalid container.pidsLimit '${String(pidsLimit)}' — must be a positive integer.`
-    );
-  }
-  return {
-    image: cfg?.image?.trim() || DEFAULT_RUNNER_IMAGE,
-    network: network ?? 'bridge',
-    memoryMb: memoryMb ?? 4096,
-    pidsLimit: pidsLimit ?? 512,
-  };
-}
-
-/**
- * H2 — a container run has an UNRESOLVED write-back when its overlay diff was raised
- * for review (`pending_writeback` set) but never applied or discarded
- * (`writeback_resolved !== true`). This happens on a failed/partial apply. The CLI
- * teardown must PRESERVE the container+volume in this state (the overlay is the only
- * copy of the changes) rather than destroy it. Pure so the decision is unit-testable.
- */
-export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
-  if (!metadata) return false;
-  return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
-}
-
-/**
- * Wraps a codebase auto-registration failure. Preserves the original error message;
- * a refusal already says what to do, other failures get a workspace-root pointer.
- */
-function buildRegistrationFailureError(error: Error): Error {
-  let hint = '';
-  if (!(error instanceof ProjectRegistrationError)) {
-    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
-    // the registration error we're wrapping is the load-bearing one — we'd
-    // rather lose the exact path in the hint than replace it with a secondary
-    // home-resolution error that masks the root cause.
-    try {
-      const workspacesPath = join(getArchonHome(), 'workspaces');
-      hint = `\nHint: Check your Archon workspace registration under ${workspacesPath} and retry.`;
-    } catch {
-      hint = '\nHint: Check your Archon workspace registration and retry.';
-    }
-  }
-
-  return new Error(
-    `Cannot run workflow: project registration failed.\nError: ${error.message}${hint}`
-  );
-}
-
-/** Error for --branch/--from/--base used against a folder project (no worktree). */
-function folderWorktreeOptionError(): Error {
-  return new Error(
-    'Worktree options require a git-repo project.\n' +
-      '  --branch/--from/--base act on an isolated git worktree, which folder projects do not use.\n' +
-      '  Drop --branch/--from/--base — folder projects always run in place.'
-  );
-}
-
-/**
- * Warn that `--base` is only HALF applied when an existing worktree is adopted
- * (`--branch` reuse or `--resume`): its cut-from is already fixed, but the
- * override still reaches `$BASE_BRANCH` and retargets the PR.
- *
- * Deliberately not `--from`'s "was not applied" wording — that is accurate for
- * `--from`, which is wholly inert on reuse, and would understate this case.
- */
-function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
-  getLog().warn(
-    { path: workingPath, baseBranch: flagBase },
-    'worktree.reuse_base_override_partial'
-  );
-  console.warn(
-    `Warning: Reusing existing worktree at ${workingPath}. ` +
-      `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
-      'it still applies to the PR target.'
-  );
-}
-
-/** Error for a worktree-pinned workflow run against a folder project. */
-function folderWorktreePolicyError(workflowName: string): Error {
-  return new Error(
-    `Workflow '${workflowName}' requires a worktree (worktree.enabled: true), ` +
-      'which is not available for folder projects (no Archon-managed worktree).\n' +
-      '  Run this workflow against a git-repo project, or change its worktree policy.'
-  );
-}
-
-/**
- * Error for a failed `--folder` project registration. Distinct from
- * {@link buildRegistrationFailureError} because a folder project has no workspace
- * `source` link, so its workspace hints would be misleading here.
- */
-function buildFolderRegistrationFailureError(error: Error): Error {
-  return new Error(
-    'Cannot register folder project.\n' +
-      `Error: ${error.message}\n` +
-      'Hint: Check that the directory is readable and your Archon home ' +
-      '(~/.archon) is writable, then retry.'
-  );
-}
-
-/**
- * Refuse an isolated run that has no project to isolate, naming which step failed.
- *
- * One owner because two callers enforce the same policy at different times: the
- * `--detach` pre-flight, which must refuse before the fork (#2872), and the isolation
- * block, which is where a foreground run reaches it. Two copies of this decision is
- * exactly how the detached path came to skip it.
- *
- * A no-op once a codebase resolved — the isolation block only reaches it with none, and
- * the pre-flight calls it unconditionally for an isolating run.
- */
-function assertCodebaseResolvedForIsolation(resolved: { codebase: Codebase | null }): void {
-  if (resolved.codebase) return;
-  throw new Error(
-    'Cannot create worktree: not in a git repository.\n' +
-      'Run from within a git repo, or use --no-worktree to skip isolation.'
-  );
-}
-
-/** The refusal when `--resume` finds nothing to continue. */
-function buildNoResumableRunError(workflowName: string, cwd: string): Error {
-  return new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
-}
-
-/** The refusal when the resumable-run lookup itself could not answer. */
-function buildResumeLookupFailureError(error: Error): Error {
-  return new Error(
-    'Cannot resume: Database lookup failed.\n' +
-      `Error: ${error.message}\n` +
-      'Hint: Check your database connection before using --resume.'
-  );
-}
-
-/**
- * Validate a `--supersedes` declaration (#2747): the run must exist and be terminal.
- * Supersede inherits nothing, so existence and terminality are the whole contract.
- *
- * One owner for the refusals because two callers need them: the `--detach` pre-flight,
- * which refuses before forking (#2872), and the run path that records the provenance.
- */
-async function resolveSupersededRun(host: WorkflowHost, runId: string): Promise<WorkflowRun> {
-  const superseded = await host.deps.store.getWorkflowRun(runId);
-  if (!superseded) {
-    throw new Error(`Cannot supersede: no workflow run '${runId}' exists.`);
-  }
-  if (!TERMINAL_WORKFLOW_STATUSES.includes(superseded.status)) {
-    throw new Error(`Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`);
-  }
-  return superseded;
-}
-
-/**
- * The acting CLI user's Archon id, or undefined when `ARCHON_USER_ID`/`$USER` is unset
- * or the identity cannot be resolved. Attribution is best-effort by design — a run must
- * not fail because the user table could not be reached.
- */
-async function resolveCliUserRecordId(host: WorkflowHost): Promise<string | undefined> {
-  const cliId = resolveCliUserId();
-  if (!cliId) return undefined;
-  try {
-    const cliUser = await host.records.users.findOrCreateUserByPlatformIdentity(
-      'cli',
-      cliId,
-      cliId
-    );
-    return cliUser?.id;
-  } catch (error) {
-    getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
-    return undefined;
-  }
-}
-
-/**
- * Fail fast if `--branch`/`--from`/`--base` (git-worktree-only options) are used
- * against a folder project. Called at three sites — flag-declared (pre-detach), the
- * detach fast-path, and post-lookup (authoritative) — so the check lives in one place.
- *
- * `--base` belongs here even though a folder run creates no worktree for it to
- * redirect: it would still reach `$BASE_BRANCH`, giving the run a PR target with
- * no worktree behind it.
- */
-function assertNoWorktreeOptionsForFolder(
-  isFolderProject: boolean,
-  options: WorkflowRunOptions
-): void {
-  if (
-    isFolderProject &&
-    (options.branchName !== undefined ||
-      options.fromBranch !== undefined ||
-      options.baseBranch !== undefined)
-  ) {
-    throw folderWorktreeOptionError();
-  }
-}
-
-/** Fail fast if a `worktree.enabled: true` workflow is run against a folder project. */
-function assertWorkflowNotWorktreePinnedForFolder(
-  isFolderProject: boolean,
-  pinnedEnabled: boolean | undefined,
-  workflowName: string
-): void {
-  if (isFolderProject && pinnedEnabled === true) {
-    throw folderWorktreePolicyError(workflowName);
-  }
-}
-
-/**
- * Capability gate for the CLI run path.
- *
- * Mirrors the orchestrator's `requires: [github]` enforcement
- * (workflow-dispatch.ts `dispatchOrchestratorWorkflow`) so a workflow that
- * declares `requires: [github]` is hard-blocked BEFORE any worktree/clone/AI
- * cost — and before the `--detach` fork — when the acting CLI user hasn't
- * connected their GitHub identity. Throws WorkflowRequirementError, surfaced by
- * the CLI top-level handler (cli.ts) as a clean, actionable `Error: ...` line.
- *
- * No-op on solo PAT installs: `host.deps.isPerUserGitHubEnabled?.()` is false unless the
- * GitHub App + TOKEN_ENCRYPTION_KEY are both configured — identical semantics
- * to the orchestrator gate.
- */
-async function assertCliWorkflowRequirementsMet(
-  host: WorkflowHost,
-  workflow: RequirementBearingWorkflow
-): Promise<void> {
-  if (!host.deps.isPerUserGitHubEnabled?.() || !workflow.requires?.length) return;
-
-  // Resolve the acting CLI user (ARCHON_USER_ID, else $USER/$USERNAME) → Archon
-  // user id, then check for a stored GitHub connection. An unresolvable user or
-  // a lookup failure means "not connected" — fail closed, never silently allow.
-  const cliId = resolveCliUserId();
-  let githubConnected = false;
-  if (cliId) {
-    try {
-      const cliUser = await host.records.users.findOrCreateUserByPlatformIdentity(
-        'cli',
-        cliId,
-        cliId
-      );
-      githubConnected =
-        cliUser !== null && Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
-    } catch (error) {
-      getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
-    }
-  }
-
-  assertWorkflowRequirementsMet(workflow, { githubConnected });
-}
+import {
+  resolveContainerBackendConfig,
+  hasUnresolvedWriteback,
+  warnBaseOverrideOnReuse,
+  assertCodebaseResolvedForIsolation,
+  assertNoWorktreeOptionsForFolder,
+  assertWorkflowNotWorktreePinnedForFolder,
+  resolveRunCodebase,
+  assertResumeWorkingPathExists,
+} from './workflow-isolation';
+import {
+  buildNoResumableRunError,
+  buildResumeLookupFailureError,
+  resolveSupersededRun,
+  resolveCliUserRecordId,
+  assertCliWorkflowRequirementsMet,
+  maybePrintTierNotice,
+  emitParseWarnings,
+  emitDeprecationNotice,
+  countWorkflowSources,
+} from './workflow-run-preflight';
 
 async function resolveCliDryRunAiPrefs(
   host: WorkflowHost
@@ -562,164 +268,6 @@ async function resolveCliDryRunAiPrefs(
     getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
     return {};
   }
-}
-
-/**
- * Print a one-time per-version tier notice to stderr when the workflow uses
- * unconfigured tier-keyword nodes (small/medium/large resolving via built-in
- * defaults). Suppressed under --quiet. Uses the same 7-char tier column as
- * `archon ai tier list`.
- */
-export async function maybePrintTierNotice(
-  host: WorkflowHost,
-  workflow: Pick<WorkflowDefinition, 'model'> & {
-    readonly nodes: readonly WorkflowDefinition['nodes'][number][];
-  },
-  cwd: string,
-  cliUserId: string | undefined,
-  quiet: boolean | undefined
-): Promise<void> {
-  if (quiet) return;
-
-  // Collect tier keywords used by the workflow — check the workflow-level default
-  // first (model: large at the top level applies to all nodes without overrides),
-  // then per-node overrides.
-  const usedTiers = new Set<TierName>();
-  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
-    usedTiers.add(workflow.model);
-  }
-  for (const node of workflow.nodes) {
-    if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
-      usedTiers.add(node.model);
-    }
-  }
-  if (usedTiers.size === 0) return;
-
-  // Load install config to see which tiers are explicitly configured.
-  let config: Awaited<ReturnType<WorkflowDeps['loadConfig']>>;
-  try {
-    config = await host.deps.loadConfig(cwd);
-  } catch (err) {
-    getLog().debug({ err }, 'tier_notice.config_load_failed');
-    return;
-  }
-  const configuredTiers: RawTiersConfig = config.tiers ?? {};
-
-  // Layer in the CLI user's personal tier prefs (best-effort, non-fatal).
-  let userTiers: RawTiersConfig = {};
-  let userDefaultProvider: string | undefined;
-  if (cliUserId) {
-    try {
-      const prefs = (await host.deps.getUserAiPrefs?.(cliUserId)) ?? {};
-      userTiers = prefs.tiers ?? {};
-      userDefaultProvider = prefs.defaultProvider;
-    } catch {
-      // Non-fatal — proceed without user tier info.
-    }
-  }
-
-  // Only notify when at least one used tier is unconfigured (built-in default).
-  const hasUnconfigured = [...usedTiers].some(t => !configuredTiers[t] && !userTiers[t]);
-  if (!hasUnconfigured) return;
-
-  // One-time per Archon version (a version bump may ship new tier defaults).
-  const version = BUNDLED_VERSION;
-  if (readTierNoticeState()?.shownForVersion === version) return;
-
-  // Build the resolved profile for the effective default assistant.
-  const effectiveAssistant = userDefaultProvider ?? config.assistant;
-  let aliases: ReturnType<typeof buildAiProfile>['aliases'];
-  try {
-    aliases = buildAiProfile(effectiveAssistant, {
-      globalTiers: configuredTiers,
-      userTiers,
-    }).aliases;
-  } catch (err) {
-    // Non-fatal: a corrupt tier/alias config can make buildAiProfile throw —
-    // skip the notice rather than blocking the run.
-    getLog().debug({ err }, 'tier_notice.build_profile_failed');
-    return;
-  }
-
-  const tierLines: string[] = [];
-  for (const t of TIER_NAMES) {
-    const preset = aliases[t];
-    if (preset) tierLines.push(`     ${t.padEnd(7)} → ${preset.provider}/${preset.model}`);
-  }
-  // Only claude and codex ship built-in tier defaults. With none for this
-  // provider there is nothing truthful to announce — the run's tier
-  // resolution fails loudly with the full configuration guidance, and this
-  // notice must not claim defaults are in play. Not marked shown: once the
-  // operator configures tiers for a provider WITH built-ins, the one-time
-  // notice should still fire.
-  if (tierLines.length === 0) return;
-  const lines: string[] = [
-    "ℹ️  This workflow uses model tiers (small/medium/large). You haven't configured them —",
-    `   using built-in defaults for '${effectiveAssistant}':`,
-    ...tierLines,
-  ];
-  // Plan-dependent 1M note for the large→opus row (the CLI can't detect the plan).
-  const largePreset = aliases.large;
-  if (largePreset?.provider === 'claude' && largePreset.model === 'opus') {
-    lines.push(
-      '   (Opus runs a 1M context window on API keys and Max/Team/Enterprise;',
-      "    on Pro it's 200K unless you set the `large` tier to `opus[1m]`.)"
-    );
-  }
-  lines.push(
-    '   Customize: `archon ai tier set <tier> <provider> <model>`',
-    '              or `tiers:` in .archon/config.yaml',
-    '   See anytime: `archon ai tier list`           (shown once per version)',
-    ''
-  );
-  process.stderr.write(lines.join('\n') + '\n');
-
-  markTierNoticeShown(version);
-}
-
-/**
- * Print a workflow's parse warnings (keys the engine silently drops) to stderr.
- *
- * stderr rather than stdout so `--json` callers keep a parseable payload while
- * still being told; `console.warn` rather than the logger because `--json` sets
- * the log level to silent, which is exactly the case this has to survive.
- */
-export function emitParseWarnings(
-  parseWarnings: readonly string[] | undefined,
-  workflowName: string
-): void {
-  if (!parseWarnings || parseWarnings.length === 0) return;
-  console.warn(`Warning: '${workflowName}' declares keys the engine ignores:`);
-  for (const warning of parseWarnings) {
-    console.warn(`  - ${warning}`);
-  }
-}
-
-/**
- * Print a deprecated workflow's removal notice (#2781) to stderr.
- *
- * Same channel as emitParseWarnings: stderr keeps `--json` stdout parseable,
- * and `console.warn` survives `--json`'s log silencing. Not gated on --quiet —
- * a user driving runs programmatically still has to learn the default they
- * picked is scheduled for removal.
- */
-export function emitDeprecationNotice(
-  workflow: Pick<WorkflowDefinition, 'name' | 'deprecated'>
-): void {
-  const notice = formatDeprecationNotice(workflow);
-  if (notice) console.warn(notice);
-}
-
-function countWorkflowSources(
-  workflows: readonly WorkflowWithSource[]
-): Record<WorkflowSource, number> {
-  return workflows.reduce<Record<WorkflowSource, number>>(
-    (counts, entry) => {
-      counts[entry.source] += 1;
-      return counts;
-    },
-    { bundled: 0, global: 0, project: 0, installed: 0 }
-  );
 }
 
 export interface WorkflowListOptions {
@@ -932,127 +480,6 @@ export async function workflowListCommand(
       console.log(`  ${e.filename}: ${e.error}`);
     }
     console.log('');
-  }
-}
-
-/**
- * Resolve the project this run belongs to: look it up, else register it.
- *
- * Registered folders own descendants unless a nested repository starts inside
- * them. Repository checkouts resolve through Git identity.
- *
- * One implementation because two callers need the same answer: the `--detach`
- * pre-flight, which must resolve the project before it can create the run row or
- * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
- * so the detached child's own call finds what the parent registered.
- *
- * Explicit folder selection fails on unknown or conflicting registration. Any lookup
- * or registration failure is fatal. First-time folder registration is returned too,
- * because detached JSON output cannot include a prose notice.
- */
-async function resolveRunCodebase(
-  host: WorkflowHost,
-  cwd: string,
-  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
-): Promise<{
-  codebase: Codebase | null;
-  /** Set only when THIS call registered a new folder project. */
-  registeredFolder?: { name: string; defaultCwd: string };
-}> {
-  let codebase: Codebase | null = null;
-  let registeredFolder: { name: string; defaultCwd: string } | undefined;
-  cwd = await canonicalizeProjectPath(cwd);
-  let repoRoot: string | null = null;
-  try {
-    if (options.codebaseId) {
-      codebase = await host.records.codebases.getCodebase(options.codebaseId);
-    } else if (options.folder) {
-      codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
-    } else {
-      ({ codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases));
-    }
-  } catch (error) {
-    if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-    const err = error as Error;
-    getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
-    if (
-      err.message.includes('connect') ||
-      err.message.includes('ECONNREFUSED') ||
-      err.message.includes('ETIMEDOUT')
-    ) {
-      getLog().warn(
-        { hint: 'Check DATABASE_URL and that the database is running.' },
-        'cli.db_connection_hint'
-      );
-    }
-    throw new Error(`Cannot run workflow: project lookup failed.\nError: ${err.message}`, {
-      cause: err,
-    });
-  }
-  if (options.codebaseId && !codebase)
-    throw new Error(`Project "${options.codebaseId}" no longer exists.`);
-
-  if (options.registrationBaseBranch !== undefined) {
-    if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
-      throw new Error('Folder projects have no base branch; remove --base-branch.');
-    if (codebase)
-      throw new Error(
-        '--base-branch applies only to initial registration. This project is already registered; use --base for a run override.'
-      );
-  }
-
-  if (options.folder) {
-    if (codebase && codebase.kind !== 'folder') {
-      throw new Error(
-        `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
-      );
-    }
-  }
-
-  if (!codebase && (options.folder || repoRoot)) {
-    try {
-      const result = options.folder
-        ? await registerFolder(host.records.codebases, cwd)
-        : await registerRepository(host.records.codebases, repoRoot ?? cwd, {
-            baseBranch: options.registrationBaseBranch,
-          });
-      codebase = await host.records.codebases.getCodebase(result.codebaseId);
-      if (!codebase)
-        throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
-      if (!result.alreadyExisted) {
-        if (options.folder) registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
-        getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
-      }
-    } catch (error) {
-      if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-      const err = error as Error;
-      if (options.registrationBaseBranch !== undefined) throw err;
-      // Running unregistered would file the run under `_cwd/<folder name>`, storage
-      // and state that every checkout with the same folder name shares (#1192).
-      throw options.folder
-        ? buildFolderRegistrationFailureError(err)
-        : buildRegistrationFailureError(err);
-    }
-  }
-
-  return { codebase, registeredFolder };
-}
-
-/**
- * A resume continues in the run's own checkout. Cleanup removes a failed run's
- * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
- */
-function assertResumeWorkingPathExists(workingPath: string): void {
-  try {
-    statSync(workingPath);
-  } catch (error) {
-    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-    throw new Error(
-      `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
-        'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-    );
   }
 }
 
