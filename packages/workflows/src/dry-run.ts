@@ -6,7 +6,8 @@ import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { checkComposedBlockBoundaries, checkTriggerRule, certifyExecOutput } from './dag-executor';
+import { certifyExecOutput } from './dag-executor';
+import { checkComposedBlockBoundaries, checkTriggerRule } from './dag/trigger-rule';
 import {
   loopBodyScope,
   inputEnvVars,

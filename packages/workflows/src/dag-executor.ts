@@ -44,8 +44,8 @@ import {
 } from './node-event-write';
 import { existsSync } from 'fs';
 import { readFile } from 'node:fs/promises';
-import { join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync, resolveBashPath } from '@archon/git';
+import { join as joinPath } from 'path';
+import { resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
 import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -108,7 +108,6 @@ import type {
   FanOutConfig,
   NodeOutput,
   SkipCause,
-  TriggerRule,
   WorkflowRun,
   EffortLevel,
   ResolvedWorkflow,
@@ -129,7 +128,6 @@ import {
 } from './schemas';
 import {
   isExecNode,
-  isAgentNode,
   isLoopGroupNode,
   definedOutputPaths,
   loopGroupOutputNodes,
@@ -183,7 +181,6 @@ import {
   createProviderEventHandler,
   type ProviderEventHandler,
 } from './provider-events';
-import { isPathInside } from '@archon/paths';
 import {
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
@@ -318,6 +315,14 @@ import {
   runDeterministicNodeWithRetry,
   runNodeRetryLoop,
 } from './dag/retry';
+import {
+  isInsideAny,
+  isCheckoutGuarded,
+  checkoutSnapshotExcludes,
+  snapshotGuardedNode,
+  assertCheckoutUntouched,
+} from './dag/checkout-guard';
+import { checkComposedBlockBoundaries, checkTriggerRule } from './dag/trigger-rule';
 
 interface WatchdogReset {
   type: MessageChunk['type'];
@@ -478,149 +483,6 @@ function structuredOutputPass(
 ): { resumeSessionId: string | undefined; threadsSession: boolean } {
   const threadsSession = forksNamedSource || reaskAttempt === 0;
   return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
-}
-
-/**
- * Absolute directories a run writes into by engine design (artifacts, state, logs).
- * Changes under them never count against a node's `mutates_checkout: false`
- * assertion (#2771) — extend here if another engine-write root appears.
- */
-function checkoutSnapshotExcludes(
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string
-): readonly string[] {
-  return [artifactsDir, stateDir, logDir].map(d => resolvePath(d));
-}
-
-function isInsideAny(absPath: string, dirs: readonly string[]): boolean {
-  return dirs.some(d => isPathInside(d, absPath, { includeRoot: true, lexical: true }));
-}
-
-/** Path operands of one `git status --porcelain` line (`XY path` or `XY old -> new`). */
-function porcelainPaths(line: string): string[] {
-  const body = line.slice(3);
-  const unquote = (p: string): string =>
-    p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p;
-  return (body.includes(' -> ') ? body.split(' -> ') : [body]).map(unquote);
-}
-
-/**
- * Snapshot the working tree's dirty state (`git status --porcelain`) for a node's
- * `mutates_checkout: false` assertion (#2771), dropping entries under `excludeDirs`.
- * Returns `undefined` when the check cannot run — cwd outside a repo, or git failing
- * — so a broken assertion degrades to no check rather than breaking unrelated runs.
- */
-async function snapshotCheckout(
-  cwd: string,
-  excludeDirs: readonly string[]
-): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      // core.quotePath=false keeps non-ASCII paths literal instead of C-escaped, so
-      // exclusion matching against real directory names cannot miss them.
-      ['-c', 'core.quotePath=false', 'status', '--porcelain', '--untracked-files=normal'],
-      { cwd, timeout: 10_000 }
-    );
-    const relevant = stdout
-      .split('\n')
-      .filter(line => line.length > 3)
-      .filter(
-        line => !porcelainPaths(line).some(p => isInsideAny(resolvePath(cwd, p), excludeDirs))
-      );
-    return relevant.join('\n');
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Take a `mutates_checkout: false` node's pre-run snapshot and record it in its
- * concurrent layer's snapshot set, so a sibling's violation can name it. Returns
- * `undefined` for an undeclared node: nothing to assert.
- */
-async function snapshotGuardedNode(
-  ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
-  node: DagNode,
-  excludeDirs: readonly string[]
-): Promise<string | undefined> {
-  if (node.mutates_checkout !== false) return undefined;
-  ctx.guardedLayerSnapshots?.add(node.id);
-  return snapshotCheckout(ctx.cwd, excludeDirs);
-}
-
-/**
- * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
- * Every other node may write to the checkout as far as layer scheduling knows.
- */
-function isCheckoutGuarded(node: DagNode): boolean {
-  return node.mutates_checkout === false && (isExecNode(node) || isAgentNode(node));
-}
-
-/**
- * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
- * successfully but the pre-run snapshot changed, rewrite its result to a failure that
- * names the node and lists what moved, and persist the standard `node_failed` event so
- * the violation surfaces like any other node failure. Applied OUTSIDE the retry loop so
- * the failure is non-retryable by construction — retrying a node that provably mutates
- * would only multiply the damage. A node that already failed keeps its own attributable
- * outcome; an absent snapshot (`undefined`) means the check could not run and is skipped.
- */
-async function assertCheckoutUntouched(
-  node: DagNode,
-  cwd: string,
-  excludeDirs: readonly string[],
-  before: string | undefined,
-  result: NodeExecutionResult,
-  deps: WorkflowDeps,
-  logDir: string,
-  guardedLayerSnapshots: ReadonlySet<string> | undefined
-): Promise<NodeExecutionResult> {
-  if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
-    return result;
-  }
-  const after = await snapshotCheckout(cwd, excludeDirs);
-  if (after === undefined || after === before) {
-    return result;
-  }
-  const changedPaths = after
-    .split('\n')
-    .filter(Boolean)
-    .flatMap(porcelainPaths)
-    .slice(0, 10)
-    .join(', ');
-  const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
-  const error =
-    concurrentGuardedSiblings.length === 0
-      ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
-      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed; the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')} also ran in this parallel layer, so the change may not be this node's alone: ${changedPaths}`;
-  getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
-  if (result.execution === undefined) {
-    throw new Error(`Node '${node.id}' completed without its execution record`);
-  }
-  // This amends an already-recorded attempt. Keep its facts without charging its spend twice.
-  const amended = await recordNodeState(
-    { store: deps.store, logDir },
-    finishNodeExecution(
-      { ...result.execution, accounting: 'amendment' },
-      { status: 'failed', error, failureKind: 'output_contract' },
-      {
-        output: {
-          text: result.output,
-          structured: result.structuredOutput,
-          declaredOutputPaths: result.declaredOutputPaths,
-        },
-      }
-    )
-  );
-  // Retry accounting is the accumulated cost of all attempts, not only the amended last one.
-  return {
-    ...amended,
-    costUsd: result.costUsd,
-    tokens: result.tokens,
-    tokensUnknown: result.tokensUnknown,
-  };
 }
 
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
@@ -923,145 +785,6 @@ async function resolveNodeProviderAndModel(
     effort: resolvedEffort,
     preset: effectivePreset,
   };
-}
-
-export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
-
-interface TriggerRuleUpstream {
-  id: string;
-  output: NodeOutput;
-}
-
-function triggerSkipCause(upstreams: readonly TriggerRuleUpstream[]): SkipCause {
-  for (const upstream of upstreams) {
-    if (upstream.output.state === 'failed') {
-      return { kind: 'upstream_failed', origin: upstream.id };
-    }
-    if (upstream.output.state === 'skipped' && upstream.output.cause.kind === 'upstream_failed') {
-      return { kind: 'upstream_failed', origin: upstream.output.cause.origin };
-    }
-  }
-
-  const skipped = upstreams.find(upstream => upstream.output.state === 'skipped');
-  if (skipped?.output.state === 'skipped') {
-    return {
-      kind: 'upstream_skipped',
-      origin:
-        skipped.output.cause.kind === 'upstream_skipped' ? skipped.output.cause.origin : skipped.id,
-    };
-  }
-
-  const unsettled = upstreams[0];
-  if (unsettled === undefined) {
-    throw new Error('Cannot determine a skip cause without a blocking dependency');
-  }
-  return { kind: 'upstream_skipped', origin: unsettled.id };
-}
-
-/** Evaluate trigger rule for a node given its upstream states. */
-export function checkTriggerRule(
-  node: DagNode,
-  nodeOutputs: Map<string, NodeOutput>
-): TriggerRuleDecision {
-  const nodeDeps = node.depends_on ?? [];
-  return checkTriggerRuleForDependencies(nodeDeps, node.trigger_rule ?? 'all_success', nodeOutputs);
-}
-
-function checkTriggerRuleForDependencies(
-  nodeDeps: readonly string[],
-  rule: TriggerRule,
-  nodeOutputs: Map<string, NodeOutput>
-): TriggerRuleDecision {
-  if (nodeDeps.length === 0) return { decision: 'run' };
-
-  const upstreams = nodeDeps.map(id => ({
-    id,
-    output: nodeOutputs.get(id) ?? {
-      state: 'failed',
-      output: '',
-      error: `upstream '${id}' missing from outputs`,
-    },
-  }));
-  let blocking: TriggerRuleUpstream[];
-  switch (rule) {
-    case 'all_success':
-      blocking = upstreams.filter(upstream => upstream.output.state !== 'completed');
-      break;
-    case 'one_success':
-      blocking = upstreams.some(upstream => upstream.output.state === 'completed') ? [] : upstreams;
-      break;
-    case 'none_failed_min_one_success': {
-      const failed = upstreams.filter(
-        upstream =>
-          upstream.output.state === 'failed' ||
-          (upstream.output.state === 'skipped' && upstream.output.cause.kind === 'upstream_failed')
-      );
-      const anySucceeded = upstreams.some(upstream => upstream.output.state === 'completed');
-      blocking = failed.length > 0 ? failed : anySucceeded ? [] : upstreams;
-      break;
-    }
-    case 'all_done':
-      blocking = upstreams.filter(
-        upstream => upstream.output.state === 'pending' || upstream.output.state === 'running'
-      );
-      break;
-  }
-
-  return blocking.length === 0
-    ? { decision: 'run' }
-    : { decision: 'skip', cause: triggerSkipCause(blocking) };
-}
-
-/**
- * Enforce caller-level include predicates that load-time flattening attached to every
- * descendant. Entry nodes normally keep using their ordinary trigger/when fields so they
- * retain the existing diagnostics. A cached entry is the exception: resume would otherwise
- * return its prior output before those fields run, so its boundary must be checked here too.
- */
-export function checkComposedBlockBoundaries(
-  node: DagNode,
-  nodeOutputs: Map<string, NodeOutput>,
-  inputs?: Record<string, JsonValue>,
-  evaluateEntryBoundary = false
-): TriggerRuleDecision {
-  for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
-    if (boundary.isEntry && !evaluateEntryBoundary) continue;
-
-    const triggerRules =
-      boundary.isEntry && evaluateEntryBoundary
-        ? [boundary.entryTriggerRule]
-        : boundary.entryTriggerRules;
-    const triggerDecisions = triggerRules.map(rule =>
-      checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs)
-    );
-    if (!triggerDecisions.some(decision => decision.decision === 'run')) {
-      return triggerDecisions[0];
-    }
-
-    if (boundary.when !== undefined) {
-      try {
-        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs);
-        if (!condition.parsed) {
-          return {
-            decision: 'skip',
-            cause: { kind: 'condition_parse_error', expr: boundary.when },
-          };
-        }
-        if (!condition.result) {
-          return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
-        }
-      } catch (error) {
-        if (boundary.isEntry && evaluateEntryBoundary) throw error;
-        // Entry nodes own the actionable missing-ref error. Descendants only need to stay
-        // inside the failed boundary, without repeating the same failure for every node.
-        return {
-          decision: 'skip',
-          cause: { kind: 'condition_parse_error', expr: boundary.when },
-        };
-      }
-    }
-  }
-  return { decision: 'run' };
 }
 
 async function executeNodeInternal(
