@@ -1,5 +1,5 @@
 import { FileStoreUnsupportedError } from './file-store/errors';
-import { gateReworkNode } from './gate-rework';
+import { providerInvocation } from './dag/capability-preflight';
 import {
   type ProviderRegistry,
   type StoredCredentialKind,
@@ -17,7 +17,6 @@ import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration'
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { StoredProviderCredential, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
-import { isAgentNode, isLoopNode, isLoopGroupNode, isGateNode } from './schemas';
 import { resolvedBodyNodes } from './graph-plan';
 import {
   assistantModelDefaults,
@@ -303,15 +302,12 @@ export function collectRunCredentialRequirements(
   const models = assistantModelDefaults(prepared.config);
   const visit = (nodes: readonly DagNode[], scope: WorkflowModelScope): void => {
     for (const node of nodes) {
-      if (isGateNode(node)) {
-        const rework = node.decisions.find(decision => decision.rework !== undefined)?.rework;
-        if (rework) visit([gateReworkNode(node, rework.prompt)], scope);
-        continue;
-      }
-      if (!isAgentNode(node) && !isLoopNode(node) && !isLoopGroupNode(node)) continue;
-      if (isLoopGroupNode(node)) {
-        const resolved = resolveNodeModelScope(node, scope, models, prepared.aiProfile);
-        visit(resolvedBodyNodes(node.loop_group), {
+      const invocation = providerInvocation(node);
+      if (invocation.kind === 'none') continue;
+      if (invocation.kind === 'group') {
+        const group = invocation.node;
+        const resolved = resolveNodeModelScope(group, scope, models, prepared.aiProfile);
+        visit(resolvedBodyNodes(group.loop_group), {
           ...scope,
           provider: resolved.provider,
           model: resolved.model,
@@ -319,15 +315,15 @@ export function collectRunCredentialRequirements(
           tier: resolved.tier,
           providerOrigin: resolved.providerOrigin,
         });
-      } else {
-        const resolved = resolveNodeModel(node, scope, models, prepared.aiProfile);
-        const { provider, model } = resolved;
-        requirements.set(JSON.stringify([provider, model]), {
-          provider,
-          model,
-          vendor: requireProvider(providers, provider).credentials.vendorFor(model),
-        });
+        continue;
       }
+      const invoked = invocation.kind === 'gate_rework' ? invocation.rework : invocation.node;
+      const { provider, model } = resolveNodeModel(invoked, scope, models, prepared.aiProfile);
+      requirements.set(JSON.stringify([provider, model]), {
+        provider,
+        model,
+        vendor: requireProvider(providers, provider).credentials.vendorFor(model),
+      });
     }
   };
   visit(workflow.nodes, prepared.scope);

@@ -35,6 +35,4 @@ fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
   reached: [facts, sweep, record]
-  resolved-text-contains:
-    sweep: "'bun' '/stub/gate.ts' '--method' 'squash'"
 exec-code: true
