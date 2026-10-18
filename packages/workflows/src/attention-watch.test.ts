@@ -419,6 +419,66 @@ describe('watchAttentionQueue', () => {
     }
   });
 
+  test('outage scans probe each run once across pages and retry on recovery', async () => {
+    const store = await makeStore();
+    const a = await running(store);
+    const b = await running(store);
+    const c = await running(store);
+    const start = await store.getWorkflowEventHead();
+    for (const id of [a, b, c]) await store.failWorkflowRun(id, 'failed');
+    await store.resumeWorkflowRun(b);
+    const original = await store.readWorkflowEventsAfter(start, { limit: 100 });
+    const events = [
+      original.events[0],
+      ...Array.from({ length: 201 }, () => original.events[1]),
+      ...original.events.slice(2),
+    ].map((delivery, index) => ({
+      ...delivery,
+      cursor: workflowEventCursor(`fixture:${index + 1}`),
+    }));
+    const first = workflowEventCursor('fixture:0');
+    let down = true;
+    let probes = new Map<string, number>();
+    const scans: Map<string, number>[] = [];
+    const feed: IWorkflowStore = Object.create(store);
+    feed.getWorkflowEventHead = async () => first;
+    feed.readWorkflowEventsAfter = async (cursor, { limit }) => {
+      const offset = cursor === first ? 0 : events.findIndex(event => event.cursor === cursor) + 1;
+      const page = events.slice(offset, offset + limit);
+      if (down && limit === 100 && page.length === 0) {
+        scans.push(probes);
+        probes = new Map();
+      }
+      return { events: page, next: page.at(-1)?.cursor ?? cursor };
+    };
+    feed.getWorkflowRun = async id => {
+      if (down) {
+        probes.set(id, (probes.get(id) ?? 0) + 1);
+        throw new Error('store outage');
+      }
+      return store.getWorkflowRun(id);
+    };
+    const stream = await watch(feed, { bookmarkIntervalMs: 0 });
+    try {
+      await stream.next(line => line.type === 'degraded' && scans.length >= 2);
+      expect(scans.slice(0, 2).map(scan => [scan.get(a), scan.get(b), scan.get(c)])).toEqual([
+        [2, 1, 1],
+        [1, 1, 1],
+      ]);
+      expect(stream.lines.some(line => line.type === 'terminal')).toBe(false);
+      expect(stream.lines.some(line => line.type === 'bookmark')).toBe(false);
+      down = false;
+      await stream.next(ofRun(b, 'resumed'));
+      expect(
+        stream.lines
+          .filter(line => line.type === 'terminal' || line.type === 'resumed')
+          .map(line => line.cursor)
+      ).toEqual(events.map(event => event.cursor));
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['latched', 'during witness'] as const)(
     'an outage retries without skipping, including a cached earlier success (%s)',
     async recovery => {

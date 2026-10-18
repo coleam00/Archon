@@ -409,12 +409,14 @@ export async function watchAttentionQueue(
 
   const hasReadableWitness = async (delivery: WorkflowRunDelivery): Promise<boolean> => {
     let cursor = delivery.cursor;
+    const probed = new Set([delivery.event.workflow_run_id]);
     while (!closed) {
       const page = await store.readWorkflowEventsAfter(cursor, { limit: 100 });
       if (closed || page.events.length === 0) return false;
       for (const { event } of page.events) {
         if (closed) return false;
-        if (event.workflow_run_id === delivery.event.workflow_run_id) continue;
+        if (probed.has(event.workflow_run_id)) continue;
+        probed.add(event.workflow_run_id);
         try {
           // A cached success says nothing about whether reads work now.
           await projectRun(event.workflow_run_id);
