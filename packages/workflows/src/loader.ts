@@ -57,9 +57,6 @@ export type ParseResult =
   | { workflow: WorkflowDefinition; error: null; warnings: string[] }
   | { workflow: null; error: WorkflowLoadError; warnings?: never };
 
-/**
- * Parse and validate a workflow YAML file
- */
 interface WorkflowHeader {
   readonly name: string;
   readonly description: string;
