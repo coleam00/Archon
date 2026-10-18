@@ -72,6 +72,9 @@ holder, fails the operation with `ProcessOwnerRecordError` naming its source; it
 read as a dead owner. `archon ai capacity` lists such a provider-attempt holder with the
 error, and `archon ai capacity release <attempt-id>` removes it. Each operation under the store lock removes `.lock-*` and
 `.probe-*` scratch files left by a crashed process once their owner is provably gone.
+New scratch names carry owner identity, allowing cleanup even when a crash leaves empty
+or torn contents. Older UUID-only scratch files still require readable owner contents;
+unreadable legacy residue stays and logs a warning on each locked operation.
 
 The intent and file synchronization protect against process crashes. Power-loss durability
 is limited by the platform's `fsync` guarantees; macOS does not force drive caches with

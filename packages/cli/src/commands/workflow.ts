@@ -508,7 +508,7 @@ async function spawnDetachedWorkflowRun(
     // group so it survives the parent's exit. Bun.spawn + unref() does NOT
     // detach on Windows — the child was killed ~1s in (at worktree_creating)
     // when the launching shell/console tore down. `detached: true` is the
-    // standard fix, also used by setup.ts's trySpawn(); if a kill-on-close Job
+    // standard fix, also used by setup-spawn.ts's trySpawn(); if a kill-on-close Job
     // Object wrapper ever defeats it, a `start /b` breakaway fallback is the
     // next step. `windowsHide` keeps the child headless.
     const child = spawn(cmd[0], cmd.slice(1), {
@@ -544,7 +544,7 @@ async function spawnDetachedWorkflowRun(
       );
     });
     // pid is set synchronously iff the OS-level spawn succeeded (same check as
-    // setup.ts's trySpawn) — fail fast instead of acking a run that never started.
+    // setup-spawn.ts's trySpawn) — fail fast instead of acking a run that never started.
     if (child.pid === undefined) {
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }

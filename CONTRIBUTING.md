@@ -64,7 +64,7 @@ is excluded with the provider package; `generate:codex-protocol` owns it.
 bun run validate                            # optional local checks
 bun run validate --only generated-files     # generated artifacts
 bun run validate --only format              # formatting, also run by the staged-file hook
-bun run validate --only workflow-fixtures   # when changing pack or fixture execution
+bun run validate --only workflow-fixtures   # when changing a workflow or its fixtures
 bun run test --plan pack                    # when changing .archon/workflows or .archon/scripts
 ```
 
@@ -80,18 +80,15 @@ root `scripts/` files that no package test or CI entry point reads skips them, t
 `test-scripts` job still runs, and the `test-suite` check accepts the skip because the gate
 said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
-prose change's test-visible effects are checked on `dev`. Workflow fixtures run
-when `.archon/workflows/sdlc/`, `packages/workflows/src/`,
-`packages/cli/src/commands/workflow.ts`, or `packages/cli/src/commands/workflow-list.ts`
-changes; both fixture jobs still report success
-when their execution steps skip. Dispatch runs fixtures regardless of paths.
+prose change's test-visible effects are checked on `dev`.
 
-CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) on pull
-requests or pushes. Run them with `bun run test --plan pack` when you change
-`.archon/workflows/` or `.archon/scripts/`; a single file runs with
+CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) or the
+workflow fixtures on pull requests or pushes. Run them with `bun run test --plan pack` and
+`bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
+`.archon/scripts/`; a single test file runs with
 `bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
-Test Suite workflow with `pack-tests` set:
-`gh workflow run test.yml --ref <branch> -f pack-tests=true`.
+Test Suite workflow with `pack-tests` or `pack-fixtures` set:
+`gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine
 load matters. The audit for [#3985](https://github.com/coleam00/Archon/issues/3985)
