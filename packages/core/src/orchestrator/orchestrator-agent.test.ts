@@ -1,3 +1,5 @@
+// @archon-test-isolated
+/** Covers `handleMessage` in orchestrator-agent.ts; shared mocks live in `../test/orchestrator-agent-harness`. */
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { IPlatformAdapter } from '../types';
