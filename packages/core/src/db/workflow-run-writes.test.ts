@@ -24,9 +24,9 @@ import {
   updateWorkflowActivity,
   deleteOldWorkflowRuns,
   deleteWorkflowRun,
-} from './workflows';
+} from './workflow-run-writes';
 
-describe('workflows database', () => {
+describe('workflow run writes', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
@@ -178,10 +178,8 @@ describe('workflows database', () => {
 
       expect(mockQuery).not.toHaveBeenCalled();
     });
-  });
 
-  describe('error handling', () => {
-    test('updateWorkflowRun throws on database error', async () => {
+    test('throws on database error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('Update failed'));
 
       await expect(updateWorkflowRun('test-id', { status: 'running' })).rejects.toThrow(
