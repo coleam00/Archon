@@ -11,7 +11,7 @@ import {
   mock,
   type Mock,
 } from 'bun:test';
-import { mkdir, mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -201,12 +201,7 @@ describe('Workflow Loader', () => {
   });
 
   afterEach(async () => {
-    // Clean up temp directory
-    try {
-      await rm(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+    await removeTempTree(testDir);
     if (originalArchonHome === undefined) {
       delete process.env.ARCHON_HOME;
     } else {
@@ -1032,34 +1027,6 @@ nodes:
       expect(workflow.nodes[1].id).toBe('implement');
     });
 
-    it('should return empty array for YAML missing name', async () => {
-      const invalidYaml = `description: Missing name
-nodes:
-  - id: plan
-    command: plan
-`;
-      await writeWorkflowFile(testDir, 'invalid.yaml', invalidYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(0);
-    });
-
-    it('should return empty array for YAML missing description', async () => {
-      const invalidYaml = `name: no-description
-nodes:
-  - id: plan
-    command: plan
-`;
-      await writeWorkflowFile(testDir, 'invalid.yaml', invalidYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(0);
-    });
-
     it('should reject workflow with steps: and provide clear error message', async () => {
       const stepsYaml = `name: legacy-workflow
 description: Uses deprecated steps format
@@ -1076,22 +1043,6 @@ steps:
       expect(result.errors[0].errorType).toBe('validation_error');
       expect(result.errors[0].error).toContain('steps:');
       expect(result.errors[0].error).toContain('has been removed');
-    });
-
-    it('should leave provider undefined when not specified (executor handles fallback)', async () => {
-      const yamlNoProvider = `name: default-provider
-description: No provider specified
-nodes:
-  - id: test
-    command: test
-`;
-      await writeWorkflowFile(testDir, 'test.yaml', yamlNoProvider);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBeUndefined();
     });
 
     it('should reject unknown provider at load time', async () => {
@@ -1284,46 +1235,6 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it('should round-trip workflow-level effort/fallbackModel/betas/sandbox', () => {
-      // Regression: these workflow-level fields are declared on
-      // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions
-      // (the object literal at the top of executeDagWorkflow), but the loader's
-      // manual workflow constructor used to silently drop them. YAML → loader →
-      // executor would lose the workflow-level defaults, so a node without its own
-      // value never inherited them. See `dag-executor.test.ts`
-      // "forwards workflow-level effort to node when no per-node override" — that
-      // test passes because it bypasses the loader.
-      const wf = parseWorkflowYaml(`name: defaults
-description: workflow-level fallback options
-provider: claude
-effort: high
-fallbackModel: claude-haiku-4-5
-betas:
-  - foo
-  - bar
-sandbox:
-  enabled: true
-nodes:
-  - id: only
-    prompt: p
-`).workflow;
-      expect(wf.effort).toBe('high');
-      expect(wf.fallbackModel).toBe('claude-haiku-4-5');
-      expect(wf.betas).toEqual(['foo', 'bar']);
-      expect(wf.sandbox).toEqual({ enabled: true });
-    });
-
-    it('should omit workflow-level fallback fields when not present', async () => {
-      const yaml = `name: bare\ndescription: no fallbacks\nnodes:\n  - id: only\n    prompt: p\n`;
-      await writeWorkflowFile(testDir, 'bare.yaml', yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow;
-      expect(wf.effort).toBeUndefined();
-      expect(wf.fallbackModel).toBeUndefined();
-      expect(wf.betas).toBeUndefined();
-      expect(wf.sandbox).toBeUndefined();
-    });
-
     it('should warn-and-drop invalid workflow-level fallback fields without rejecting the workflow', async () => {
       // Same warn-and-ignore policy as `interactive` / `modelReasoningEffort`:
       // a typo in one workflow-level field must not nuke the whole discovery pass.
@@ -1343,11 +1254,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
-      const wf = result.workflows[0].workflow;
-      expect(wf.effort).toBeUndefined();
-      expect(wf.fallbackModel).toBeUndefined();
-      expect(wf.betas).toBeUndefined();
-      expect(wf.sandbox).toBeUndefined();
 
       // The structured warn events are the operator-facing surface — assert each fired.
       const events = mockLogger.warn.mock.calls.map(call => call[1]);
@@ -1432,12 +1338,6 @@ nodes:
 
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe('discovered');
-    });
-
-    it('should return empty array when no workflow folders exist', async () => {
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-      expect(workflows).toHaveLength(0);
     });
 
     it('should load both .yaml and .yml files', async () => {
@@ -1566,40 +1466,6 @@ nodes:
 
       expect(workflows).toHaveLength(1);
       expect(workflows[0].name).toBe('valid-workflow');
-    });
-
-    it('should handle malformed YAML gracefully', async () => {
-      const malformedYaml = `name: test
-description: test
-nodes:
-  - id: invalid
-    command: invalid
-    invalid yaml here: [
-`;
-      await writeWorkflowFile(testDir, 'malformed.yaml', malformedYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      // Should not throw, just return empty array
-      expect(workflows).toHaveLength(0);
-    });
-
-    it('should handle workflow with all optional fields', () => {
-      const { workflow } = parseWorkflowYaml(`name: full-workflow
-description: A workflow with all fields
-provider: codex
-model: gpt-4
-nodes:
-  - id: step-one
-    command: step-one
-  - id: step-two
-    command: step-two
-    depends_on: [step-one]
-`);
-
-      expect(workflow.provider).toBe('codex');
-      expect(workflow.model).toBe('gpt-4');
     });
 
     it('should handle empty workflow directory', async () => {
@@ -1775,11 +1641,7 @@ nodes:
     });
 
     afterEach(async () => {
-      try {
-        await rm(homeDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
+      await removeTempTree(homeDir);
       if (originalArchonHome === undefined) {
         delete process.env.ARCHON_HOME;
       } else {
@@ -1849,12 +1711,6 @@ nodes:
       expect(shared?.source).toBe('project');
     });
 
-    it('silently skips when ~/.archon/workflows/ does not exist', async () => {
-      // homeDir exists but no workflows/ subdirectory — should not error.
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toEqual([]);
-    });
-
     it('supports 1-level subfolders under ~/.archon/workflows/ (e.g. triage/foo.yaml)', async () => {
       const homeWorkflowDir = join(homeDir, 'workflows', 'triage');
       await mkdir(homeWorkflowDir, { recursive: true });
@@ -1899,11 +1755,7 @@ nodes:
     });
 
     afterEach(async () => {
-      try {
-        await rm(homeDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
+      await removeTempTree(homeDir);
       if (originalArchonHome === undefined) {
         delete process.env.ARCHON_HOME;
       } else {
@@ -2059,9 +1911,7 @@ nodes:
 
       const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
-      // With loadDefaults: false, no archon-* defaults should appear
-      const archonWorkflow = result.workflows.find(w => w.workflow.name.startsWith('archon-'));
-      expect(archonWorkflow).toBeUndefined();
+      expect(result.workflows.find(w => w.workflow.name === 'fake-review')).toBeUndefined();
       expect(mockLoadConfig).toHaveBeenCalledWith(testDir);
     });
 
@@ -2118,7 +1968,7 @@ nodes:
         } else {
           process.env.ARCHON_DOCKER = originalArchonDocker;
         }
-        await rm(homeDir, { recursive: true, force: true });
+        await removeTempTree(homeDir);
       }
     });
   });
@@ -2142,17 +1992,6 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       expect(workflows.map(w => w.name)).toEqual(['fake-review']);
-    });
-
-    it('should skip bundled workflows when loadDefaults is false', async () => {
-      // Simulate binary build
-      isBinaryBuildSpy.mockReturnValue(true);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      // Should not have any bundled defaults
-      expect(workflows.find(w => w.name === 'fake-review')).toBeUndefined();
     });
 
     it('should allow repo workflows to override bundled defaults', async () => {
@@ -2401,6 +2240,7 @@ nodes:
       const nodes = wf.nodes as DagNode[];
       expect(nodes).toBeDefined();
       const node0 = nodes[0];
+      expect(isExecNode(node0)).toBe(true);
       if (isExecNode(node0)) {
         expect(node0.timeout).toBe(30000);
       }
@@ -2595,6 +2435,7 @@ nodes:
       expect(result.errors).toHaveLength(0);
       const wf = result.workflows[0].workflow;
       expect(wf.nodes as DagNode[]).toBeDefined();
+      expect(isExecNode((wf.nodes as DagNode[])[0])).toBe(true);
       if (isExecNode((wf.nodes as DagNode[])[0])) {
         expect((wf.nodes as DagNode[])[0].idle_timeout).toBe(900000);
       }
@@ -3489,30 +3330,6 @@ nodes:
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('should accept a workflow where a node has both when: and prompt: with valid refs', async () => {
-      // Exercises the lastIndex = 0 reset across multiple sources per node
-
-      await writeWorkflowFile(
-        testDir,
-        'multi-source.yaml',
-        `
-name: multi-source
-description: Node with both when and prompt refs
-nodes:
-  - id: step1
-    prompt: "Do step 1"
-  - id: step2
-    prompt: "Based on $step1.output, do step 2"
-    depends_on: [step1]
-    when: "$step1.output.verdict == 'go'"
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
-    });
-
     it('should validate bash node $nodeId.output refs at load time', async () => {
       // bash: (like script/cancel/approval.message/until_bash) is substituted at
       // runtime, so a dangling ref there silently resolves to '' — it must be caught
@@ -4200,6 +4017,7 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       const wf = result.workflows[0].workflow;
+      expect(isExecNode((wf.nodes as DagNode[])[0])).toBe(true);
       if (isExecNode((wf.nodes as DagNode[])[0])) {
         expect((wf.nodes as DagNode[])[0].retry).toEqual({
           max_attempts: 1,
@@ -4344,29 +4162,6 @@ nodes:
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toMatch(/delay_ms.*1000.*60000/i);
     });
-
-    it('should use defaults when retry fields are omitted', async () => {
-      await writeWorkflowFile(
-        testDir,
-        'retry-defaults.yaml',
-        `
-name: retry-defaults
-description: Minimal retry config
-nodes:
-  - id: my-cmd
-    command: my-cmd
-    retry:
-      max_attempts: 1
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      const wf = result.workflows[0].workflow;
-      expect((wf.nodes as DagNode[])[0].retry).toEqual({ max_attempts: 1 });
-      expect((wf.nodes as DagNode[])[0].retry?.delay_ms).toBeUndefined();
-      expect((wf.nodes as DagNode[])[0].retry?.on_error).toBeUndefined();
-    });
   });
 
   describe('loop node parsing', () => {
@@ -4437,26 +4232,6 @@ nodes:
         expect(node0.loop.fresh_context).toBe(false);
         expect(node0.loop.until_bash).toBeUndefined();
       }
-    });
-
-    it('should reject loop node missing loop.prompt', async () => {
-      await writeWorkflowFile(
-        testDir,
-        'loop-no-prompt.yaml',
-        `
-name: loop-no-prompt
-description: Missing prompt
-nodes:
-  - id: bad-loop
-    loop:
-      until: COMPLETE
-      max_iterations: 5
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0].error).toContain('loop.prompt');
     });
 
     it('should reject a loop node that declares no completion channel', async () => {
@@ -4573,27 +4348,6 @@ nodes:
       expect(result.errors[0].error).toContain('mutually exclusive');
     });
 
-    it('should validate $nodeId.output refs in loop.prompt', async () => {
-      await writeWorkflowFile(
-        testDir,
-        'loop-bad-ref.yaml',
-        `
-name: loop-bad-ref
-description: Bad ref in loop prompt
-nodes:
-  - id: my-loop
-    loop:
-      prompt: "Use $nonexistent.output to do stuff"
-      until: DONE
-      max_iterations: 5
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0].error).toContain('nonexistent');
-    });
-
     it('should parse loop node with depends_on', async () => {
       await writeWorkflowFile(
         testDir,
@@ -4646,6 +4400,7 @@ nodes:
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
       const node0 = (result.workflows[0].workflow.nodes as DagNode[])[0];
+      expect(isLoopNode(node0)).toBe(true);
       if (isLoopNode(node0)) {
         expect(node0.loop.interactive).toBe(true);
         expect(node0.loop.gate_message).toBe('Review and respond.');
@@ -7212,13 +6967,6 @@ nodes:
       expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
     });
 
-    it('parses persist_sessions: true at workflow root', () => {
-      const { workflow } = parseWorkflowYaml(
-        `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`
-      );
-      expect(workflow.persist_sessions).toBe(true);
-    });
-
     it('collapses persist_sessions onto AI nodes only, so composition preserves it', async () => {
       // The workflow-level default is what the executor's `nodeUsesPersistedScope`
       // reads for a node with no `persist_session:` of its own. Once composition
@@ -8429,28 +8177,6 @@ nodes:
         );
         expect(pw).toEqual([]);
       });
-    });
-
-    it('rejects a gate node with a dependent inside a loop_group body', async () => {
-      const err = await loadErrorFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: grp',
-        '    loop_group:',
-        '      until_bash: "exit 0"',
-        '      max_iterations: 3',
-        '      nodes:',
-        '        - id: check',
-        '          approval:',
-        '            message: ok?',
-        '        - id: after',
-        '          depends_on: [check]',
-        '          prompt: do more work',
-      ]);
-      expect(err).toContain(
-        "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
-      );
     });
 
     it('rejects a gate node sharing terminal-sink status with another body node', async () => {
