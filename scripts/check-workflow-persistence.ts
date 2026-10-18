@@ -28,6 +28,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/commands/workflow-transcript.ts',
   'packages/cli/src/commands/workflow-inspect.ts',
   'packages/cli/src/commands/workflow-attention.ts',
+  'packages/cli/src/commands/workflow-detach.ts',
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
   'packages/cli/src/utils/owned-run-termination.ts',

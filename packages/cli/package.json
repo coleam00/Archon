@@ -82,6 +82,9 @@
       "src/commands/workflow-wait.test.ts"
     ],
     [
+      "src/commands/workflow-detach.test.ts"
+    ],
+    [
       "src/commands/doctor-dispatch.test.ts",
       "src/commands/doctor-forge-parity.test.ts"
     ],
