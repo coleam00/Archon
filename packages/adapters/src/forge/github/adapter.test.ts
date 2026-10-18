@@ -142,7 +142,6 @@ const mockSyncRepository = mock<typeof import('@archon/git')['syncRepository']>(
   value: undefined,
 }));
 const mockAddSafeDirectory = mock(async () => undefined);
-const mockIsWorktreePath = mock(async () => false);
 
 // execFileAsync is exported by @archon/git and must exist on the mocked
 // namespace rather than be `undefined` (which would TypeError if reached).
@@ -155,7 +154,8 @@ mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,
   syncRepository: mockSyncRepository,
   addSafeDirectory: mockAddSafeDirectory,
-  isWorktreePath: mockIsWorktreePath,
+  findRepoRoot: mock(async () => null),
+  isWorktreePath: mock(async () => false),
   toRepoPath: (p: string) => p,
   toBranchName: (n: string) => n,
   toWorktreePath: (p: string) => p,
