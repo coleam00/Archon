@@ -5,8 +5,7 @@
  * Both sources prove the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or
  * closed as the issue.
- * `issueBodyAt` recovers the body at a past moment the same way, and `appendSection`
- * adds a dated section to the body, the one body write the pack makes.
+ * `appendSection` adds a dated section to the body, the one body write the pack makes.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -291,77 +290,6 @@ export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
   if (after.state !== 'closed' || after.state_reason !== reason) {
     throw new Error(`${after.html_url} does not read back closed as ${reason}; it may be closed`);
   }
-}
-
-function graphql(item: QualifiedPr, query: string, what: string): Record<string, unknown> | undefined {
-  const slash = item.repo.path.indexOf('/');
-  const result = Bun.spawnSync(
-    [
-      'gh',
-      'api',
-      'graphql',
-      '--hostname',
-      item.repo.host,
-      '-f',
-      `query=${query}`,
-      '-f',
-      `owner=${item.repo.path.slice(0, slash)}`,
-      '-f',
-      `name=${item.repo.path.slice(slash + 1)}`,
-      '-F',
-      `number=${String(item.number)}`,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (result.exitCode !== 0) {
-    throw new Error(`gh api graphql (${what}) failed: ${result.stderr.toString().trim()}`);
-  }
-  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
-  return record(record(data?.repository)?.issue);
-}
-
-const EDITS_QUERY = [
-  'query($owner: String!, $name: String!, $number: Int!) {',
-  'repository(owner: $owner, name: $name) { issue(number: $number) {',
-  'createdAt body',
-  'userContentEdits(first: 100) { totalCount nodes { editedAt diff } }',
-  '} } }',
-].join(' ');
-
-/**
- * The issue's body as it was at `at`, from GitHub's edit history. Edits are newest
- * first and each holds the whole body at that revision. A history it cannot read
- * whole, a deleted revision, or a time before the issue existed refuses: a replay must
- * never judge text the issue did not have at that moment.
- */
-export function issueBodyAt(item: QualifiedPr, at: string): string {
-  if (forgeSource() === 'forge') {
-    throw new Error('the forge source has no edit history, so the body at a past time is unknown');
-  }
-  const when = Date.parse(at);
-  if (Number.isNaN(when)) throw new Error(`"${at}" is not a time`);
-  const issue = graphql(item, EDITS_QUERY, `issue ${String(item.number)} history`);
-  const edits = record(issue?.userContentEdits);
-  if (
-    typeof issue?.createdAt !== 'string' ||
-    typeof issue.body !== 'string' ||
-    typeof edits?.totalCount !== 'number' ||
-    !Array.isArray(edits.nodes)
-  ) {
-    throw new Error(`issue ${String(item.number)} has no edit history to read`);
-  }
-  if (when < Date.parse(issue.createdAt)) throw new Error(`issue ${String(item.number)} did not exist at ${at}`);
-  if (edits.totalCount === 0) return issue.body;
-  if (edits.totalCount > edits.nodes.length) {
-    throw new Error(`issue ${String(item.number)} has more edits than one history read returns`);
-  }
-  const revision = edits.nodes.map(record).find(
-    edit => typeof edit?.editedAt === 'string' && Date.parse(edit.editedAt) <= when
-  );
-  if (typeof revision?.diff !== 'string') {
-    throw new Error(`issue ${String(item.number)} has no readable revision at ${at}`);
-  }
-  return revision.diff;
 }
 
 /**

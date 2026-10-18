@@ -7,7 +7,6 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 ## The round
 
 - This round's ending, as `archon-ship`'s report declared it: `$INPUTS.ending`. Its artifacts are in `$ARTIFACTS_DIR`: `triage.md`, then `plan.md` or `investigation.md` when they exist, `implementation.md`, and `review/report.md`.
-- In a replay the ending above is null, and the round is `$INPUTS.recorded`: its report fields and its own `artifacts` directory. Judge it as the round that just ended, from what was true when it ended.
 - The earlier rounds, oldest first, each with its own `artifacts` directory: `$INPUTS.rounds`.
 - The item's work item: `$INPUTS.record`. Under `facts.build` is every decision the queue made on it, with any maintainer's answer. Null means no queue has recorded it.
 
@@ -21,7 +20,7 @@ Read the report's `reason` and summary, then the artifact that explains it: the 
 - `continue`: another round can finish the work without a person, because the contract already answers what stopped it. A correctable review finding, CI red the change caused, and a conflict with the base continue. A stop whose question the issue body's dated sections, the project's steering documents or the rulings answer continues, and the brief gives that answer with its source. When the round's pull request stands and only that question stopped it, the brief says to finish that pull request with the answer: the next round continues it, and does not plan the work again. Only a review that asked for a different design (`replan`) sends the next round back to planning. A stop that names as a blocker work a later step owns, such as a review, CI, marking the pull request ready or the maintainer's merge, is a false blocker: continue, and say in the brief that those steps follow.
 - `ask`: the contract does not answer it. A planning question that would relax a constraint the maintainer stated, scope the contract does not name, a choice between designs the documents do not settle, a check only a person can make, or a failure you cannot explain.
 
-When the round left commits that are on the checkout but not on its pull request's head, declare that pull request in `push` with its repository and number, whatever you decide; otherwise `push` is null. Compare `git rev-parse HEAD` with the pull request's head commit to know. In a replay the checkout is not the round's: judge from the commits the round's `implementation.md` names and the head its report shows, and know that nothing is pushed.
+When the round left commits that are on the checkout but not on its pull request's head, declare that pull request in `push` with its repository and number, whatever you decide; otherwise `push` is null. Compare `git rev-parse HEAD` with the pull request's head commit to know.
 
 ## The brief
 

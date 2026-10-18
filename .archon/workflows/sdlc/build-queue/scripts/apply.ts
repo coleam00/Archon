@@ -5,12 +5,11 @@
  * route's. A route that launched is answered after its round, so its own decision is
  * recorded only when it asked. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
- * asked about it. In live the push comes first, then the work item, in
- * one conditional write that also releases the claim unless a person is asked; a run
- * that asks keeps its claim until the ruling node records the answer. Eval writes
- * nothing and returns the decision, with the writes live would make, as `evaluation`.
+ * asked about it. The push comes first, then the work item, in one conditional
+ * write that also releases the claim unless a person is asked; a run that asks keeps
+ * its claim until the ruling node records the answer.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_RECORDED from facts; INPUTS_ROUTE,
+ * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report), INPUTS_ANSWER and INPUTS_GIVE_UP, each the
  * whole output of its node, "null" when it was skipped.
  */
@@ -23,7 +22,7 @@ import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.
 import { viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
-import { parseMode, updateClaimed } from '../../.shared/workitem.ts';
+import { updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
   readonly decision: 'launch' | 'ask';
@@ -91,7 +90,7 @@ function decide(
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
   if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
-  // Live answers every launch; only eval, which never launches, ends on one.
+  // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
 }
 
@@ -117,7 +116,6 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 function main(): void {
-  const mode = parseMode(text(process.env.INPUTS_MODE));
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
     emit({
@@ -127,7 +125,6 @@ function main(): void {
       options: [],
       class: '',
       asked: null,
-      evaluation: null,
     });
     return;
   }
@@ -137,9 +134,7 @@ function main(): void {
   const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
   const at = new Date().toISOString();
   const round: BuildRound | null =
-    ending === null
-      ? (nullableJson(process.env.INPUTS_RECORDED) as BuildRound | null)
-      : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
+    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const decision = decide(
     path,
@@ -167,23 +162,7 @@ function main(): void {
       asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },
   };
 
-  if (mode === 'eval') {
-    emit({
-      ...result,
-      attention: '',
-      options: [],
-      class: '',
-      asked: null,
-      evaluation: {
-        decision,
-        round,
-        attention,
-        push,
-      },
-    });
-    return;
-  }
-  if (decision.kind === 'launch') throw new Error('a live launch reached apply without its round');
+  if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
 
   const pushed = push === null ? null : pushTo(push);
   const entry: DecisionEntry = {
@@ -204,7 +183,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: pushed === null ? result.summary : `${result.summary} (${pushed})`, evaluation: null });
+  emit({ ...result, summary: pushed === null ? result.summary : `${result.summary} (${pushed})` });
 }
 
 try {

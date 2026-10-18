@@ -20,7 +20,7 @@ export type BuildAttention = Attention<BuildEffect>;
 export const ROUTE_DECISIONS = ['launch', 'ask'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
 export const GIVE_UP_DECISIONS = ['continue', 'ask'] as const;
-export const BUILD_PATHS = ['idle', 'closed', 'route', 'answer'] as const;
+export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
 /** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
 export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;

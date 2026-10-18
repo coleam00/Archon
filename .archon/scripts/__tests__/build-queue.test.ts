@@ -266,10 +266,6 @@ function run(
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_ORDER: '',
       INPUTS_ROUND_LIMIT: '3',
-      INPUTS_MODE: 'live',
-      INPUTS_NUMBER: '',
-      INPUTS_REPLAY: '[]',
-      INPUTS_AS_OF: '',
       ...inputs,
     },
   });
@@ -287,7 +283,6 @@ function applyInputs(answer: Record<string, unknown>, giveUp: Record<string, unk
   return {
     INPUTS_PATH: 'route',
     INPUTS_ITEM: JSON.stringify(SUBJECT),
-    INPUTS_RECORDED: 'null',
     INPUTS_ROUTE: JSON.stringify({ decision: 'launch', brief: 'deliver 7', reason: 'a contract', attention: null }),
     INPUTS_ENDING: JSON.stringify(ENDING),
     INPUTS_ANSWER: JSON.stringify(answer),
@@ -382,7 +377,6 @@ describe('the build queue scripts', () => {
       run(at, 'apply', {
         INPUTS_PATH: 'closed',
         INPUTS_ITEM: JSON.stringify(SUBJECT),
-        INPUTS_RECORDED: 'null',
         INPUTS_ROUTE: 'null',
         INPUTS_ENDING: 'null',
         INPUTS_ANSWER: 'null',
@@ -588,66 +582,5 @@ describe('the build queue scripts', () => {
     expect(lost.code).not.toBe(0);
     expect(lost.stderr).toContain('does not read back with the section');
     expect(stored(at).revision).toBe(before);
-  }, 60_000);
-});
-
-describe('eval mode', () => {
-  const OLD = 'The contract as it stood when the round ended.';
-  const EDITS = [
-    { editedAt: '2026-10-16T05:26:29Z', diff: 'The contract with the later ruling.' },
-    { editedAt: '2026-10-16T05:23:54Z', diff: OLD },
-    { editedAt: '2026-01-01T00:00:00Z', diff: 'The contract at creation.' },
-  ];
-
-  test('replays the last round on the body as it was then, and claims and writes nothing', () => {
-    const at = install();
-    seed(at, triaged());
-    const before = stored(at).revision;
-    const rounds = [round('r1', '2026-10-16T03:00:00.000Z'), round('r2', '2026-10-16T04:00:00.000Z'), round('r3', '2026-10-16T05:25:31.000Z', 'needs_human')];
-    const decided = run(
-      at,
-      'facts',
-      { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_REPLAY: JSON.stringify(rounds), INPUTS_AS_OF: '2026-10-16T05:25:31Z' },
-      { issue: { body: 'The contract with the later ruling.', history: { edits: EDITS } } }
-    );
-    expect(ok(decided)).toMatchObject({ path: 'answer', recorded: rounds[2], rounds: rounds.slice(0, 2), at_cap: true });
-    const issue = readFileSync(join(decided.artifacts, 'build/issue.md'), 'utf8');
-    expect(issue).toContain(OLD);
-    expect(issue).not.toContain('later ruling');
-
-    const applied = run(at, 'apply', { ...applyInputs(ASK), INPUTS_MODE: 'eval', INPUTS_ENDING: 'null', INPUTS_RECORDED: JSON.stringify(rounds[2]) });
-    expect(ok(applied)).toMatchObject({
-      decision: 'asked',
-      attention: '',
-      options: [],
-      asked: null,
-      evaluation: { decision: { kind: 'asked', by: 'stop' }, round: rounds[2] },
-    });
-    expect(applied.gh.filter(call => !call.startsWith('api repos') && !call.startsWith('api graphql'))).toEqual([]);
-    expect(stored(at).revision).toBe(before);
-  }, 60_000);
-
-  test('a time written with an offset reads the revision at that instant, and text that is not a time refuses', () => {
-    const at = install();
-    const history = { issue: { body: 'The contract with the later ruling.', history: { edits: EDITS } } };
-    // 07:25:31+02:00 is 05:25:31Z: after the old revision, before the later ruling.
-    const offset = run(at, 'facts', { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_AS_OF: '2026-10-16T07:25:31+02:00' }, history);
-    ok(offset);
-    expect(readFileSync(join(offset.artifacts, 'build/issue.md'), 'utf8')).toContain(OLD);
-    const bad = run(at, 'facts', { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_AS_OF: 'yesterday' }, history);
-    expect(bad.code).not.toBe(0);
-    expect(bad.stderr).toContain('"yesterday" is not a time');
-  }, 60_000);
-
-  test('a time before every readable revision refuses rather than judging other text', () => {
-    const at = install();
-    const early = run(
-      at,
-      'facts',
-      { INPUTS_MODE: 'eval', INPUTS_NUMBER: '7', INPUTS_AS_OF: '2025-12-31T00:00:00Z' },
-      { issue: { history: { edits: EDITS } } }
-    );
-    expect(early.code).not.toBe(0);
-    expect(early.stderr).toContain('did not exist at 2025-12-31T00:00:00Z');
   }, 60_000);
 });
