@@ -124,7 +124,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     reason: 'Archon host startup options, not OpenCode server launch options.',
   },
   {
-    file: 'packages/server/src/routes/api.ts',
+    file: 'packages/server/src/routes/api.workflow-runs.ts',
     name: 'WorkflowRunStatus',
     kind: 'independent',
     reason: 'Derived Archon workflow-run schema status, not Copilot workflow status.',
