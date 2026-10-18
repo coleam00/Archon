@@ -168,6 +168,28 @@ function buildFailedRunResumePrompt(
   ].join('\n');
 }
 
+/** The values one dispatch reads everywhere and nothing reassigns. */
+interface DispatchScope {
+  readonly owner: CapturedSourceOwner;
+  readonly platform: IPlatformAdapter;
+  readonly conversationId: string;
+  readonly conversation: Conversation;
+  readonly codebase: Codebase;
+  readonly actor: RunActor;
+  readonly userId: string | undefined;
+  readonly isolationHints: HandleMessageContext['isolationHints'] | undefined;
+  readonly source: WorkflowSource | undefined;
+  readonly options: WorkflowDispatchOptions | undefined;
+  readonly userMessage: string;
+  readonly parseWarnings: readonly string[] | undefined;
+  readonly runCwd: string;
+  readonly codebaseBaseBranch: string | undefined;
+  readonly resolveChildIsolation: ReturnType<typeof createCodebaseChildResolver>;
+}
+
+type CapturedSource = { preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow };
+type DispatchAdoption = Awaited<ReturnType<typeof resolveWorkflowAdoption>>;
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -196,148 +218,45 @@ async function dispatchOrchestratorWorkflowOwned(
   const userMessage = request.kind === 'resume' ? request.run.user_message : request.args;
   const parseWarnings = request.kind === 'start' ? request.parseWarnings : undefined;
   const runCwd = conversation.cwd ?? codebase.default_cwd;
-  let workflow: ResolvedWorkflow;
-  if (request.kind === 'resume') {
-    if (!request.run.working_path) {
-      getLog().warn({ runId: request.run.id }, 'orchestrator.resume_missing_working_path');
-      await platform.sendMessage(
-        conversationId,
-        `Cannot resume ${request.run.id}: missing working path.`
-      );
-      return;
-    }
-    const resolved = await resolveRunWorkflow(createWorkflowDeps(), request.run, runCwd, platform);
-    if (!resolved.ok) {
-      await platform.sendMessage(
-        conversationId,
-        `Cannot continue run \`${request.run.id}\`: ${resolved.message}` +
-          (resolved.resumeHint ? ` ${resolved.resumeHint}` : '')
-      );
-      return;
-    }
-    workflow = resolved.workflow;
-  } else {
-    workflow = request.definition;
-  }
-
   // The codebase's stored default branch — the $BASE_BRANCH fallback for every
   // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
   const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
-
-  // Between-run continuation (#2747): adoption is validated by the ONE resolver,
-  // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
-  // cross-codebase id, or a missing estate refuses here, before any worktree is
-  // cut; the resolved lane then drives where the run actually executes.
-  const adoption = options?.adoptRunId
-    ? await resolveWorkflowAdoption({
-        deps: {
-          getRun: sqlWorkflow.getWorkflowRun,
-          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
-          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
-        },
-        adoptedRunId: options.adoptRunId,
-        codebaseId: codebase.id,
-        codebasePath: codebase.default_cwd,
-        codebaseKind: codebase.kind,
-      })
-    : undefined;
-  const adoptionLane = adoption?.lane;
-
-  // A lane other than in-place inherits a worktree or branch estate; a workflow
-  // that opted out of worktrees runs in the parent checkout and has nothing to
-  // inherit, so honoring the adoption would mean silently dropping the lane.
-  if (
-    options?.adoptRunId !== undefined &&
-    adoptionLane !== undefined &&
-    adoptionLane.kind !== 'in-place' &&
-    workflow.worktree?.enabled === false
-  ) {
-    throw new WorkflowAdoptionError(
-      `Cannot adopt run '${options.adoptRunId}': workflow '${workflow.name}' disables ` +
-        'worktrees, so there is no worktree or branch estate to inherit. ' +
-        'Drop the adoption or run a worktree-isolated workflow.'
-    );
-  }
-
-  // Shared across every dispatch below.
-  const resolveChildIsolation = createCodebaseChildResolver(
-    sqlIsolation.createIsolationStore(),
+  const scope: DispatchScope = {
+    owner,
+    platform,
+    conversationId,
+    conversation,
     codebase,
-    {
-      baseBranch: codebaseBaseBranch,
-      createdByPlatform: platform.getPlatformType(),
-      createdByUserId: userId,
-    },
-    createWorkflowDeps()
-  );
+    actor,
+    userId,
+    isolationHints,
+    source,
+    options,
+    userMessage,
+    parseWarnings,
+    runCwd,
+    codebaseBaseBranch,
+    // Shared across every dispatch below.
+    resolveChildIsolation: createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
+      codebase,
+      {
+        baseBranch: codebaseBaseBranch,
+        createdByPlatform: platform.getPlatformType(),
+        createdByUserId: userId,
+      },
+      createWorkflowDeps()
+    ),
+  };
 
-  // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
-  //
-  // This function continues an existing run in TWO ways: an explicit
-  // `/workflow resume <id>` (which carries one run), and an
-  // IMPLICIT auto-detection that fires for a plain `/workflow run <name>` on every
-  // platform — the lookup that used to live further down, next to the dispatch. An
-  // attention wait is excluded from that implicit path: only the explicit form
-  // may consume it. The gate below still has to know about both continuation forms:
-  // gating only against the explicit form wrongly refused a required-input workflow
-  // that was merely being continued (the run row already holds its validated inputs,
-  // and the caller supplies nothing when they just say "run it" again).
-  //
-  // It has to be hoisted rather than the gate pushed down: `validateAndResolveIsolation`
-  // sits between here and the old lookup site and CREATES WORKTREES, so gating after it
-  // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
-  // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
-  // (`conversation.id`, `codebase.id`) are parameters and nothing below mutates them.
-  const resumeCandidate =
-    request.kind === 'resume'
-      ? request.run
-      : request.force
-        ? null
-        : await workflowDb.findResumableRunByParentConversation(
-            workflow.name,
-            conversation.id,
-            codebase.id
-          );
-  const explicitResumeRequested = request.kind === 'resume';
-  const resumableRun =
-    !explicitResumeRequested &&
-    resumeCandidate !== null &&
-    isWorkflowWaitContext(resumeCandidate.metadata.wait) &&
-    resumeCandidate.metadata.wait.kind === 'attention'
-      ? null
-      : resumeCandidate;
-  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
-  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
-  // below: a candidate that is neither paused nor the explicitly-targeted run does not
-  // continue — it shows that menu and returns. Only a genuine continuation may defer the
-  // signature gate, so an invocation that was never going to continue is still refused
-  // immediately, with the specific input error rather than a generic menu, and before
-  // isolation resolution can create a worktree.
-  const willContinueExistingRun =
-    Boolean(resumableRun?.working_path) &&
-    (resumableRun?.status === 'paused' || explicitResumeRequested);
-
-  if (willContinueExistingRun && resumableRun) {
-    try {
-      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
-    } catch (error) {
-      if (!(error instanceof RunActionForbiddenError)) throw error;
-      await platform.sendMessage(conversationId, error.message);
-      return;
-    }
-  }
-
-  // Adoption and continuation are mutually exclusive: both decide where the run
-  // executes and which estate it inherits, and every continuation path below forwards
-  // only the resume context — an adopted id would be validated above and then silently
-  // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
-  if (options?.adoptRunId !== undefined && willContinueExistingRun && resumableRun) {
-    throw new WorkflowAdoptionError(
-      `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
-        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
-        'first, or declare the adoption from a conversation with no open run.'
-    );
-  }
+  const requested = await resolveRequestedWorkflow(scope, request);
+  if (requested === undefined) return;
+  let workflow = requested;
+  const adoption = await resolveDispatchAdoption(scope, workflow);
+  const adoptionLane = adoption?.lane;
+  const continuation = await detectContinuation(scope, request, workflow);
+  if (continuation === undefined) return;
+  const { resumableRun, explicitResumeRequested, willContinueExistingRun } = continuation;
 
   // ── Executable source ───────────────────────────────────────────────────────
   //
@@ -349,9 +268,7 @@ async function dispatchOrchestratorWorkflowOwned(
   //
   // For a fresh run: freeze, then re-resolve the workflow FROM the frozen copy, so the
   // definition executed and the resources beside it are one consistent set of bytes.
-  let freshCaptured:
-    | { preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow }
-    | undefined;
+  let freshCaptured: CapturedSource | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
     const resolved = await resolveRunWorkflow(createWorkflowDeps(), resumableRun, runCwd, platform);
@@ -434,108 +351,11 @@ async function dispatchOrchestratorWorkflowOwned(
     if (!freshCaptured) return;
   }
 
-  let resolvedInputs: Record<string, string> | undefined;
-  // A contract violation held back because a resume may make it moot. Only the one
-  // branch below that falls through to a FRESH run row (hydration found nothing worth
-  // resuming) still needs it; every other continuation path never reads inputs from
-  // this invocation at all.
-  let deferredInputError: Error | undefined;
+  const gates = await runSignatureGates(scope, workflow, willContinueExistingRun);
+  if (!gates.ok) return;
+  const { resolvedInputs, deferredInputError } = gates;
 
-  // Input signature gate (#2470, #2554) plus capability gate, judged against ONE
-  // workflow definition. A checkout-branch adoption swaps the definition for the
-  // branch's vintage only after isolation resolves its worktree, so these gates must
-  // run AFTER that swap there — otherwise required inputs or `requires:` declared on
-  // the branch would bypass them entirely.
-  const runSignatureGates = async (definition: ResolvedWorkflow): Promise<boolean> => {
-    // Resolve this invocation's declared inputs from the values its channel supplied —
-    // the run route's `inputs` map today; chat platforms supply nothing and so still
-    // refuse a required-input workflow here. The workflow still lists/loads normally.
-    try {
-      resolvedInputs = resolveTopLevelInputs(definition, options?.inputs);
-    } catch (err) {
-      // Both are user-facing contract violations: a missing required input, and — now
-      // that a caller can supply values — a key the workflow does not declare.
-      if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
-        getLog().info(
-          {
-            workflowName: definition.name,
-            // Names only, never values — a supplied value is user content (logging rules).
-            missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-            suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
-            deferred: willContinueExistingRun,
-          },
-          'workflow.required_inputs_unsatisfiable'
-        );
-        if (!willContinueExistingRun) {
-          await platform.sendMessage(conversationId, err.message);
-          return false;
-        }
-        deferredInputError = err;
-      } else {
-        throw err;
-      }
-    }
-
-    // Capability gate: hard-fail before any worktree/clone/AI cost if the
-    // workflow declares `requires: [github]` and the originating user hasn't
-    // connected. No-op when per-user GitHub is disabled (solo PAT installs).
-    if (isPerUserGitHubEnabled() && definition.requires?.length) {
-      const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
-      try {
-        assertWorkflowRequirementsMet(definition, { githubConnected });
-      } catch (err) {
-        if (err instanceof WorkflowRequirementError) {
-          getLog().info(
-            { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
-            'workflow.requirement_unmet'
-          );
-          await platform.sendMessage(conversationId, err.message);
-          return false;
-        }
-        throw err;
-      }
-    }
-    return true;
-  };
-
-  if (!(await runSignatureGates(workflow))) return;
-
-  // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
-  // console run funnels through here, so this is the one place that covers all
-  // of them. Sent before the run starts and independently of the run's own
-  // output, so it lands even when the workflow immediately backgrounds itself.
-  // Best-effort: a delivery failure must not stop the run the user asked for.
-  if (parseWarnings && parseWarnings.length > 0) {
-    const lines = parseWarnings.map(w => `- ${w}`).join('\n');
-    try {
-      await platform.sendMessage(
-        conversationId,
-        `⚠️ \`${workflow.name}\` declares keys the engine ignores:\n${lines}`
-      );
-    } catch (error) {
-      getLog().warn(
-        { err: toError(error), conversationId, workflowName: workflow.name },
-        'workflow.parse_warning_delivery_failed'
-      );
-    }
-  }
-
-  // Deprecated bundled default (#2781). Same reach as the parse warnings above:
-  // every chat and console run funnels through here, before any background split,
-  // so the removal notice lands on each surface the run reports to. Derived from
-  // the definition itself — a copied override in project/global `.archon`
-  // (same filename) drops the marker and the notice with it. Best-effort.
-  const deprecationNotice = formatDeprecationNotice(workflow);
-  if (deprecationNotice) {
-    try {
-      await platform.sendMessage(conversationId, deprecationNotice);
-    } catch (error) {
-      getLog().warn(
-        { err: toError(error), conversationId, workflowName: workflow.name },
-        'workflow.deprecation_notice_delivery_failed'
-      );
-    }
-  }
+  await sendRunStartNotices(scope, workflow);
 
   if (resumableRun?.working_path && resumableRun.status !== 'paused' && !explicitResumeRequested) {
     getLog().info(
@@ -560,8 +380,10 @@ async function dispatchOrchestratorWorkflowOwned(
     adoptionLane?.kind === 'reuse-worktree'
       ? adoptionLane.environment.working_path
       : codebase.default_cwd;
-  const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
-    prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
+  const prepareLaunchAiConfiguration = (
+    definition: ResolvedWorkflow
+  ): ReturnType<typeof prepareRunAiConfiguration> =>
+    prepareRunAiConfiguration(createWorkflowDeps(), definition, launchConfigCwd, {
       codebaseId: codebase.id,
       userId,
       aiConfigurationRun: adoption?.adoptedRun,
@@ -571,7 +393,8 @@ async function dispatchOrchestratorWorkflowOwned(
         : {}),
     });
   const preparedAiConfiguration =
-    branchPrepared ?? (!willContinueExistingRun ? await prepareLaunchAiConfiguration() : undefined);
+    branchPrepared ??
+    (!willContinueExistingRun ? await prepareLaunchAiConfiguration(workflow) : undefined);
   if (preparedAiConfiguration)
     await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
 
@@ -609,6 +432,7 @@ async function dispatchOrchestratorWorkflowOwned(
     return;
   }
 
+  const { resolveChildIsolation } = scope;
   const setupDeps = createWorkflowDeps();
   let setupRun: WorkflowRun | undefined;
   let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
@@ -942,7 +766,7 @@ async function dispatchOrchestratorWorkflowOwned(
           );
           if (!captured) return; // capture failed, message already sent
           workflow = captured.workflow;
-          const freshAiConfiguration = await prepareLaunchAiConfiguration();
+          const freshAiConfiguration = await prepareLaunchAiConfiguration(workflow);
           await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
           await platform.sendMessage(
             conversationId,
@@ -1070,6 +894,278 @@ async function dispatchOrchestratorWorkflowOwned(
   }
 }
 
+/** The workflow the request names; `undefined` after telling the user it cannot run. */
+async function resolveRequestedWorkflow(
+  scope: DispatchScope,
+  request: WorkflowRequest
+): Promise<ResolvedWorkflow | undefined> {
+  const { platform, conversationId, runCwd } = scope;
+  if (request.kind === 'resume') {
+    if (!request.run.working_path) {
+      getLog().warn({ runId: request.run.id }, 'orchestrator.resume_missing_working_path');
+      await platform.sendMessage(
+        conversationId,
+        `Cannot resume ${request.run.id}: missing working path.`
+      );
+      return undefined;
+    }
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), request.run, runCwd, platform);
+    if (!resolved.ok) {
+      await platform.sendMessage(
+        conversationId,
+        `Cannot continue run \`${request.run.id}\`: ${resolved.message}` +
+          (resolved.resumeHint ? ` ${resolved.resumeHint}` : '')
+      );
+      return undefined;
+    }
+    return resolved.workflow;
+  }
+  return request.definition;
+}
+
+async function resolveDispatchAdoption(
+  scope: DispatchScope,
+  workflow: ResolvedWorkflow
+): Promise<DispatchAdoption | undefined> {
+  const { codebase, options } = scope;
+  // Between-run continuation (#2747): adoption is validated by the ONE resolver,
+  // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
+  // cross-codebase id, or a missing estate refuses here, before any worktree is
+  // cut; the resolved lane then drives where the run actually executes.
+  const adoption = options?.adoptRunId
+    ? await resolveWorkflowAdoption({
+        deps: {
+          getRun: sqlWorkflow.getWorkflowRun,
+          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+        },
+        adoptedRunId: options.adoptRunId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+      })
+    : undefined;
+  const adoptionLane = adoption?.lane;
+
+  // A lane other than in-place inherits a worktree or branch estate; a workflow
+  // that opted out of worktrees runs in the parent checkout and has nothing to
+  // inherit, so honoring the adoption would mean silently dropping the lane.
+  if (
+    options?.adoptRunId !== undefined &&
+    adoptionLane !== undefined &&
+    adoptionLane.kind !== 'in-place' &&
+    workflow.worktree?.enabled === false
+  ) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': workflow '${workflow.name}' disables ` +
+        'worktrees, so there is no worktree or branch estate to inherit. ' +
+        'Drop the adoption or run a worktree-isolated workflow.'
+    );
+  }
+  return adoption;
+}
+
+interface Continuation {
+  resumableRun: WorkflowRun | null;
+  explicitResumeRequested: boolean;
+  willContinueExistingRun: boolean;
+}
+
+/** Which existing run this dispatch continues, if any; `undefined` after a refusal was sent. */
+async function detectContinuation(
+  scope: DispatchScope,
+  request: WorkflowRequest,
+  workflow: ResolvedWorkflow
+): Promise<Continuation | undefined> {
+  const { platform, conversationId, conversation, codebase, actor, options } = scope;
+  // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
+  //
+  // This function continues an existing run in TWO ways: an explicit
+  // `/workflow resume <id>` (which carries one run), and an
+  // IMPLICIT auto-detection that fires for a plain `/workflow run <name>` on every
+  // platform — the lookup that used to live further down, next to the dispatch. An
+  // attention wait is excluded from that implicit path: only the explicit form
+  // may consume it. The gate below still has to know about both continuation forms:
+  // gating only against the explicit form wrongly refused a required-input workflow
+  // that was merely being continued (the run row already holds its validated inputs,
+  // and the caller supplies nothing when they just say "run it" again).
+  //
+  // It has to be hoisted rather than the gate pushed down: `validateAndResolveIsolation`
+  // sits between here and the old lookup site and CREATES WORKTREES, so gating after it
+  // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
+  // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
+  // (`conversation.id`, `codebase.id`) are parameters and nothing below mutates them.
+  const resumeCandidate =
+    request.kind === 'resume'
+      ? request.run
+      : request.force
+        ? null
+        : await workflowDb.findResumableRunByParentConversation(
+            workflow.name,
+            conversation.id,
+            codebase.id
+          );
+  const explicitResumeRequested = request.kind === 'resume';
+  const resumableRun =
+    !explicitResumeRequested &&
+    resumeCandidate !== null &&
+    isWorkflowWaitContext(resumeCandidate.metadata.wait) &&
+    resumeCandidate.metadata.wait.kind === 'attention'
+      ? null
+      : resumeCandidate;
+  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
+  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
+  // below: a candidate that is neither paused nor the explicitly-targeted run does not
+  // continue — it shows that menu and returns. Only a genuine continuation may defer the
+  // signature gate, so an invocation that was never going to continue is still refused
+  // immediately, with the specific input error rather than a generic menu, and before
+  // isolation resolution can create a worktree.
+  const willContinueExistingRun =
+    Boolean(resumableRun?.working_path) &&
+    (resumableRun?.status === 'paused' || explicitResumeRequested);
+
+  if (willContinueExistingRun && resumableRun) {
+    try {
+      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
+    } catch (error) {
+      if (!(error instanceof RunActionForbiddenError)) throw error;
+      await platform.sendMessage(conversationId, error.message);
+      return undefined;
+    }
+  }
+
+  // Adoption and continuation are mutually exclusive: both decide where the run
+  // executes and which estate it inherits, and every continuation path below forwards
+  // only the resume context — an adopted id would be validated above and then silently
+  // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
+  if (options?.adoptRunId !== undefined && willContinueExistingRun && resumableRun) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
+        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
+        'first, or declare the adoption from a conversation with no open run.'
+    );
+  }
+  return { resumableRun, explicitResumeRequested, willContinueExistingRun };
+}
+
+type SignatureGates =
+  | { ok: false }
+  | { ok: true; resolvedInputs?: Record<string, string>; deferredInputError?: Error };
+
+/**
+ * Input signature gate (#2470, #2554) plus capability gate, judged against ONE
+ * workflow definition. A checkout-branch adoption swaps the definition for the
+ * branch's vintage only after isolation resolves its worktree, so these gates must
+ * run AFTER that swap there — otherwise required inputs or `requires:` declared on
+ * the branch would bypass them entirely.
+ */
+async function runSignatureGates(
+  scope: DispatchScope,
+  definition: ResolvedWorkflow,
+  willContinueExistingRun: boolean
+): Promise<SignatureGates> {
+  const { platform, conversationId, userId, options } = scope;
+  let resolvedInputs: Record<string, string> | undefined;
+  // A contract violation held back because a resume may make it moot. Only the one
+  // branch below that falls through to a FRESH run row (hydration found nothing worth
+  // resuming) still needs it; every other continuation path never reads inputs from
+  // this invocation at all.
+  let deferredInputError: Error | undefined;
+
+  // Resolve this invocation's declared inputs from the values its channel supplied —
+  // the run route's `inputs` map today; chat platforms supply nothing and so still
+  // refuse a required-input workflow here. The workflow still lists/loads normally.
+  try {
+    resolvedInputs = resolveTopLevelInputs(definition, options?.inputs);
+  } catch (err) {
+    // Both are user-facing contract violations: a missing required input, and — now
+    // that a caller can supply values — a key the workflow does not declare.
+    if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
+      getLog().info(
+        {
+          workflowName: definition.name,
+          // Names only, never values — a supplied value is user content (logging rules).
+          missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
+          suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+          deferred: willContinueExistingRun,
+        },
+        'workflow.required_inputs_unsatisfiable'
+      );
+      if (!willContinueExistingRun) {
+        await platform.sendMessage(conversationId, err.message);
+        return { ok: false };
+      }
+      deferredInputError = err;
+    } else {
+      throw err;
+    }
+  }
+
+  // Capability gate: hard-fail before any worktree/clone/AI cost if the
+  // workflow declares `requires: [github]` and the originating user hasn't
+  // connected. No-op when per-user GitHub is disabled (solo PAT installs).
+  if (isPerUserGitHubEnabled() && definition.requires?.length) {
+    const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+    try {
+      assertWorkflowRequirementsMet(definition, { githubConnected });
+    } catch (err) {
+      if (err instanceof WorkflowRequirementError) {
+        getLog().info(
+          { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
+          'workflow.requirement_unmet'
+        );
+        await platform.sendMessage(conversationId, err.message);
+        return { ok: false };
+      }
+      throw err;
+    }
+  }
+  return { ok: true, resolvedInputs, deferredInputError };
+}
+
+async function sendRunStartNotices(
+  scope: DispatchScope,
+  workflow: ResolvedWorkflow
+): Promise<void> {
+  const { platform, conversationId, parseWarnings } = scope;
+  // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
+  // console run funnels through here, so this is the one place that covers all
+  // of them. Sent before the run starts and independently of the run's own
+  // output, so it lands even when the workflow immediately backgrounds itself.
+  // Best-effort: a delivery failure must not stop the run the user asked for.
+  if (parseWarnings && parseWarnings.length > 0) {
+    const lines = parseWarnings.map(w => `- ${w}`).join('\n');
+    try {
+      await platform.sendMessage(
+        conversationId,
+        `⚠️ \`${workflow.name}\` declares keys the engine ignores:\n${lines}`
+      );
+    } catch (error) {
+      getLog().warn(
+        { err: toError(error), conversationId, workflowName: workflow.name },
+        'workflow.parse_warning_delivery_failed'
+      );
+    }
+  }
+
+  // Deprecated bundled default (#2781). Same reach as the parse warnings above:
+  // every chat and console run funnels through here, before any background split,
+  // so the removal notice lands on each surface the run reports to. Derived from
+  // the definition itself — a copied override in project/global `.archon`
+  // (same filename) drops the marker and the notice with it. Best-effort.
+  const deprecationNotice = formatDeprecationNotice(workflow);
+  if (deprecationNotice) {
+    try {
+      await platform.sendMessage(conversationId, deprecationNotice);
+    } catch (error) {
+      getLog().warn(
+        { err: toError(error), conversationId, workflowName: workflow.name },
+        'workflow.deprecation_notice_delivery_failed'
+      );
+    }
+  }
+}
+
 /**
  * Freeze the workflow source and re-resolve the workflow FROM the freeze.
  *
@@ -1094,7 +1190,7 @@ async function captureFreshSource(
   conversationId: string,
   platform: IPlatformAdapter,
   explicitSourceRoot?: string
-): Promise<{ preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow } | undefined> {
+): Promise<CapturedSource | undefined> {
   try {
     const workflowSourceRoot = explicitSourceRoot ?? (await resolveWorkflowSourceRoot(runCwd));
     const preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
