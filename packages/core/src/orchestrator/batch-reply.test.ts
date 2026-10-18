@@ -101,11 +101,23 @@ describe('filterToolIndicators', () => {
 
 test.each([
   [' tool output\n\nFinal answer', 'Final answer'],
-  [' tool output', '🔧 Running\n\n---\n\n tool output'],
+  [' tool output', '🔧 Running tool output'],
 ])('keeps indicator section identity across a warning flush: %j', (tail, expected) => {
   expect(
     filterToolIndicators([{ text: '🔧 Running' }, { text: tail, continuesPreviousBlock: true }])
   ).toBe(expected);
+});
+
+test('fallback joins warning-split blocks before separating independent indicators', () => {
+  expect(
+    filterToolIndicators([
+      { text: '🔧 Running' },
+      { text: ' tool', continuesPreviousBlock: true },
+      { text: ' output', continuesPreviousBlock: true },
+      { text: '💭 Thinking' },
+      { text: '...', continuesPreviousBlock: true },
+    ])
+  ).toBe('🔧 Running tool output\n\n---\n\n💭 Thinking...');
 });
 
 test('joins continuations before finding section boundaries and preserves later blocks', () => {

@@ -29,7 +29,7 @@ function replyBlocks(chunks: readonly ReplyChunk[]): string[] {
 }
 
 export function filterToolIndicators(input: readonly (ReplyChunk | string)[]): string {
-  const chunks = replyChunks(input);
+  const blocks = replyBlocks(replyChunks(input));
   const separator = '\n\n---\n\n';
 
   const toolIndicatorRegex =
@@ -37,7 +37,7 @@ export function filterToolIndicators(input: readonly (ReplyChunk | string)[]): s
 
   // Filter per message so a message left empty drops out with its separator;
   // filtering the joined text would keep bare `---` sections as content.
-  const finalMessage = replyBlocks(chunks)
+  const finalMessage = blocks
     .map(message =>
       message
         .split('\n\n')
@@ -48,5 +48,5 @@ export function filterToolIndicators(input: readonly (ReplyChunk | string)[]): s
     .join(separator)
     .trim();
 
-  return finalMessage || chunks.map(chunk => chunk.text).join(separator);
+  return finalMessage || blocks.join(separator);
 }

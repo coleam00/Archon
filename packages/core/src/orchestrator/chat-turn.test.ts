@@ -550,7 +550,7 @@ describe('chat turn telemetry', () => {
 
   test.each([
     [' tool output\n\nFinal answer', 'Final answer'],
-    [' tool output', '🔧 Running\n\n---\n\n tool output'],
+    [' tool output', '🔧 Running tool output'],
   ])('batch keeps block identity across a warning: %j', async (tail, expected) => {
     mockSendQuery.mockImplementationOnce(async function* () {
       yield { type: 'agent_message_chunk', text: '🔧 Running' };
