@@ -433,6 +433,30 @@ describe('durable resource starts', () => {
     expect((await getStartReceipt(receipt.id))?.deliveryId).toBe('delivery-1');
   });
 
+  test('keeps every unkeyed receipt from one source', async () => {
+    const receipt = {
+      sourceInstanceId: 'timer:unkeyed',
+      deliveryId: null,
+      contentDigest: 'sha256:same',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    };
+    const ids = ['abababab-0000-4000-8000-000000000001', 'abababab-0000-4000-8000-000000000002'];
+    for (const id of ids) {
+      expect(
+        await acceptStartReceipt({
+          receipt: { ...receipt, id },
+          outcome: 'unmatched',
+          bindings: [],
+        })
+      ).toEqual({ receiptId: id, replay: false });
+    }
+    expect(
+      (await listStartReceipts()).filter(row => row.sourceInstanceId === 'timer:unkeyed')
+    ).toHaveLength(2);
+  });
+
   test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {
     // The keys and strictness of v0.11.1's resourceStartBindingIntentSchema, which parses
     // the `intent` column. A shipped reader, so it is frozen here, not derived from today's.
