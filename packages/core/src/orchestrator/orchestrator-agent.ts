@@ -31,7 +31,13 @@ import type { ResolvedWorkflow, WorkflowWithSource } from '@archon/workflows/sch
 import { loadConfig } from '../config/config-loader';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
 import { getLog } from './agent-log';
-import { type ChatTurn, handleBatchMode, handleStreamMode, reportChatTurn } from './chat-turn';
+import {
+  type ChatTurn,
+  type ChatTurnInput,
+  handleBatchMode,
+  handleStreamMode,
+  reportChatTurn,
+} from './chat-turn';
 import { prepareChatTurnRequest, type ChatTurnRequest } from './chat-request';
 import {
   buildFullPrompt,
@@ -290,45 +296,29 @@ export async function handleMessage(
       failed: false,
       routed: false,
     };
+    const turnInput: ChatTurnInput = {
+      turn,
+      commandScan: !caps.nativeTools,
+      platform,
+      conversationId,
+      originalMessage: message,
+      codebases,
+      workflows: workflowsWithSource,
+      aiClient,
+      fullPrompt,
+      cwd,
+      session,
+      isolationHints,
+      conversation,
+      actor,
+      issueContext,
+      requestOptions,
+    };
     try {
       if (mode === 'stream') {
-        await handleStreamMode(
-          turn,
-          !caps.nativeTools,
-          platform,
-          conversationId,
-          message,
-          codebases,
-          workflowsWithSource,
-          aiClient,
-          fullPrompt,
-          cwd,
-          session,
-          isolationHints,
-          conversation,
-          actor,
-          issueContext,
-          requestOptions
-        );
+        await handleStreamMode(turnInput);
       } else {
-        await handleBatchMode(
-          turn,
-          !caps.nativeTools,
-          platform,
-          conversationId,
-          message,
-          codebases,
-          workflowsWithSource,
-          aiClient,
-          fullPrompt,
-          cwd,
-          session,
-          isolationHints,
-          conversation,
-          actor,
-          issueContext,
-          requestOptions
-        );
+        await handleBatchMode(turnInput);
       }
     } catch (error) {
       // A provider that throws mid-turn never reaches the handler's own report. Count
