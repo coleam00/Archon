@@ -1,3 +1,6 @@
+import { executeApprovalNode } from './dag/nodes/gate/gate';
+import { executeWaitNode } from './dag/nodes/wait/wait';
+import { executeHaltNode } from './dag/nodes/halt/halt';
 /**
  * DAG Workflow Executor
  *
@@ -28,7 +31,6 @@ import {
   snapshotBodySessionCursorAncestry,
 } from './dag/pause';
 import { type RawSubprocessRejection } from './subprocess';
-import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { requireProvider } from '@archon/provider-contract';
@@ -58,7 +60,6 @@ import {
 import {
   NodeEventWriteError,
   persistNodeEvent,
-  recordDerivedNodeState,
   recordDerivedExecution,
   recordNodeState,
 } from './node-event-write';
@@ -77,7 +78,7 @@ import {
 } from './workflow-source';
 import { resolveWorkflowName } from './router';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowCommandSurface } from './deps';
-import { attentionAnswerLines, sourceReleaseNotice, spellWorkflowCommand } from './deps';
+import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   ProviderCapabilities,
@@ -88,15 +89,7 @@ import type {
 import type { OverlayChangeSummary } from './container-context';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
-import {
-  approvalContextSchema,
-  attentionForm,
-  attentionOccurrence,
-  attentionOptions,
-  gateOccurrence,
-  type WorkflowAttentionWaitContext,
-} from './schemas/workflow-run';
-import { waitOutputFormat } from './schemas/dag-node';
+import { gateOccurrence } from './schemas/workflow-run';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import { validateStructuredOutput } from './structured-output';
 import type {
@@ -119,13 +112,11 @@ import type {
   WorkflowRunOutcome,
   WorkflowRunNodeSession,
   WorkflowRunStatus,
-  WorkflowWaitContext,
   WorkflowUsageLimitWaitContext,
 } from './schemas';
 import {
   bodySessionCursorsSchema,
   bodySessionCursorAncestrySchema,
-  type BodySessionCursorAncestry,
   type SessionCursor,
 } from './schemas';
 import {
@@ -143,18 +134,11 @@ import {
   isTerminalRunStatus,
   isNodeContextResume,
   SUBRUN_METADATA_KEYS,
-  waitUntilTimestampSchema,
-  waitCondition,
   persistScopeKey,
 } from './schemas';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import type { RunExitReason } from './schemas/run-terminal-reason';
-import {
-  CONTINUATION_RETRY_MS,
-  executionClaim,
-  FAN_OUT_CANCEL_REASONS,
-  waitCompletionEvents,
-} from './store';
+import { CONTINUATION_RETRY_MS, executionClaim, FAN_OUT_CANCEL_REASONS } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
@@ -185,7 +169,6 @@ import {
   type DeclaredOutputPaths,
   resolveNodeOutputField,
   canonicalValueText,
-  parseWholeInputsRef,
   type JsonValue,
 } from './output-ref';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
@@ -256,9 +239,6 @@ import {
   buildNodeShellEnvironment,
   loopBodyScope,
   type LoopBodyScope,
-  substituteWaitMessage,
-  substituteNodeOutputRefs,
-  resolveAttentionOptions,
   type ShellInputContext,
   resolveWorkflowValue,
 } from './dag/references';
@@ -3068,481 +3048,6 @@ async function executeLoopNode(
   });
 }
 
-interface WaitLoopOwner {
-  groupId: string;
-  iteration: number;
-  sessionId: string | null;
-  sessionProvider: string | null;
-  bodySessionCursors?: Record<string, SessionCursor>;
-  bodySessionCursorAncestry?: BodySessionCursorAncestry;
-}
-
-/** Execute a durable wait without holding a subprocess or provider slot. */
-async function executeWaitNode(
-  ctx: RunLayersContext,
-  node: WaitNode,
-  loopOwner?: WaitLoopOwner
-): Promise<NodeExecutionResult> {
-  const { workflowRun, deps, platform, conversationId, nodeOutputs, stepNamePrefix, logDir } = ctx;
-  const now = new Date();
-  const rawPersisted = workflowRun.metadata?.wait;
-  const persisted =
-    isWorkflowWaitContext(rawPersisted) &&
-    (loopOwner === undefined
-      ? rawPersisted.owner === 'node' && rawPersisted.nodeId === node.id
-      : rawPersisted.owner === 'loop_group' &&
-        rawPersisted.nodeId === loopOwner.groupId &&
-        rawPersisted.bodyWaitId === node.id &&
-        rawPersisted.iteration === loopOwner.iteration)
-      ? rawPersisted
-      : undefined;
-
-  const execution =
-    ctx.unfinishedInvocations?.get(
-      nodeInvocationKey(stepNamePrefix + node.id, ctx.loopGroupPath)
-    ) ?? (persisted === undefined ? beginExecution(ctx, node) : undefined);
-  if (execution !== undefined && persisted === undefined) {
-    await recordNodeState({ store: deps.store, logDir }, execution);
-  }
-
-  const owner =
-    loopOwner === undefined
-      ? ({ owner: 'node', nodeId: node.id } as const)
-      : ({
-          owner: 'loop_group',
-          nodeId: loopOwner.groupId,
-          bodyWaitId: node.id,
-          iteration: loopOwner.iteration,
-          sessionId: loopOwner.sessionId,
-          sessionProvider: loopOwner.sessionProvider,
-          ...(loopOwner.bodySessionCursors !== undefined
-            ? { bodySessionCursors: loopOwner.bodySessionCursors }
-            : {}),
-          ...(loopOwner.bodySessionCursorAncestry !== undefined
-            ? { bodySessionCursorAncestry: loopOwner.bodySessionCursorAncestry }
-            : {}),
-        } as const);
-  const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string =>
-    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
-  let context: WorkflowWaitContext;
-  if (persisted !== undefined) {
-    context = persisted;
-  } else if (condition.kind === 'duration') {
-    context = {
-      ...owner,
-      kind: 'time',
-      pauseId: randomUUID(),
-      waitingSince: now.toISOString(),
-      resumeAt: new Date(now.getTime() + condition.durationMs).toISOString(),
-    };
-  } else if (condition.kind === 'until') {
-    const inputsName = parseWholeInputsRef(condition.timestamp);
-    let rendered: string;
-    if (inputsName !== undefined) {
-      const runInputs = resolveRunInputs(workflowRun);
-      if (!runInputs || !Object.hasOwn(runInputs, inputsName)) {
-        throw new Error(`Wait node '${node.id}' references unknown input '$INPUTS.${inputsName}'`);
-      }
-      rendered = canonicalValueText(runInputs[inputsName]);
-    } else {
-      rendered = substituteNodeOutputRefs(condition.timestamp, nodeOutputs, ctx.loopBodyScopes);
-    }
-    if (!waitUntilTimestampSchema.safeParse(rendered).success) {
-      throw new Error(
-        `Wait node '${node.id}' has an invalid 'until' timestamp after substitution: '${rendered}'`
-      );
-    }
-    const resumeAtMs = Date.parse(rendered);
-    context = {
-      ...owner,
-      kind: 'time',
-      pauseId: randomUUID(),
-      waitingSince: now.toISOString(),
-      resumeAt: new Date(resumeAtMs).toISOString(),
-    };
-  } else if (condition.kind === 'event') {
-    const event = resolveEventText(condition.event).trim();
-    if (event === '') {
-      throw new Error(`Wait node '${node.id}' resolved 'event' to an empty string`);
-    }
-    context = {
-      ...owner,
-      kind: 'event',
-      pauseId: randomUUID(),
-      event,
-      waitingSince: now.toISOString(),
-      resumeAt: new Date(now.getTime() + condition.deadlineMs).toISOString(),
-    };
-  } else {
-    const message = resolveEventText(condition.message).trim();
-    if (message === '') {
-      throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
-    }
-    const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs);
-    const labels =
-      condition.labels === undefined
-        ? undefined
-        : Object.fromEntries(
-            Object.entries(condition.labels).map(([key, value]) => [key, resolveEventText(value)])
-          );
-    context = {
-      ...owner,
-      kind: 'attention',
-      waitingSince: now.toISOString(),
-      message,
-      pauseId: randomUUID(),
-      form: condition.form,
-      ...(options !== undefined ? { options } : {}),
-      ...(labels !== undefined ? { labels } : {}),
-    };
-  }
-
-  const resumeAtMs = context.kind === 'attention' ? undefined : Date.parse(context.resumeAt);
-  const isSignaled = context.kind === 'event' && context.signaledAt !== undefined;
-  const isDue = resumeAtMs !== undefined && now.getTime() >= resumeAtMs;
-  // An answered attention wait completes with its answer. A bare `resume` completes only a
-  // message-form wait, with empty text, which keeps waits paused before answers existed
-  // continuable; any other form pauses again until it is answered.
-  const isAttentionResume =
-    context.kind === 'attention' &&
-    persisted !== undefined &&
-    (context.answer !== undefined || attentionForm(context) === 'message');
-  if (!isSignaled && !isDue && !isAttentionResume) {
-    let paused = false;
-    try {
-      await deps.store.pauseWorkflowRunForWait(
-        workflowRun.id,
-        context,
-        persisted === undefined
-          ? { kind: 'started', stepName: stepNamePrefix + node.id }
-          : { kind: 'continued' }
-      );
-      paused = true;
-    } catch (pauseError) {
-      const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
-      if (status === 'running') throw pauseError;
-      getLog().warn(
-        { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
-        'dag.wait_pause_skipped_external_transition'
-      );
-    }
-    if (paused && context.kind === 'attention') {
-      await sendPauseNotice(
-        deps,
-        platform,
-        conversationId,
-        workflowRun.id,
-        node.id,
-        attentionOccurrence(context),
-        stepNamePrefix + node.id,
-        attentionNotification(platform, workflowRun.id, context)
-      );
-    }
-    return execution === undefined
-      ? { state: 'running', output: '' }
-      : !paused
-        ? serializeNodeOutput(execution)
-        : recordNodeState(
-            { store: deps.store, logDir },
-            finishNodeExecution(
-              execution,
-              { status: 'suspended', point: 'wait' },
-              { output: { text: '' } }
-            )
-          );
-  }
-
-  const status = context.kind === 'event' && !isSignaled ? 'expired' : 'satisfied';
-  const result = {
-    status,
-    waited_ms: Math.max(0, now.getTime() - Date.parse(context.waitingSince)),
-    ...(context.kind === 'event'
-      ? {
-          event: context.event,
-          ...(context.payload !== undefined ? { payload: context.payload } : {}),
-        }
-      : {}),
-  } as const;
-  // An attention wait's node output is its answer; the wait outcome row keeps `result`.
-  const answer = context.kind === 'attention' ? (context.answer ?? { text: '' }) : undefined;
-  const nodeValue = answer ?? result;
-  const output = JSON.stringify(nodeValue);
-  const declaredOutputPaths = declaredOutputPathsFromSchema(waitOutputFormat(node.wait));
-  const stepName = stepNamePrefix + node.id;
-  const completed =
-    execution === undefined
-      ? undefined
-      : finishNodeExecution(
-          execution,
-          { status: 'completed' },
-          {
-            durationMs: result.waited_ms,
-            output: { text: output, structured: nodeValue, declaredOutputPaths },
-          }
-        );
-  if (persisted !== undefined) {
-    const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
-      stepName,
-      result,
-      ...(answer !== undefined ? { answer } : {}),
-      execution: completed,
-    });
-    if (!outcome.cleared) {
-      throw new Error(`Wait node '${node.id}' lost ownership of its persisted wait cursor`);
-    }
-    // The store wrote the node_completed row inside the cursor-clearing transaction and
-    // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
-    await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
-  } else {
-    const rows = waitCompletionEvents(workflowRun.id, {
-      stepName,
-      result,
-      ...(answer !== undefined ? { answer } : {}),
-      execution: completed,
-    });
-    await deps.store.createWorkflowEvent(rows.outcome);
-    await persistNodeEvent(deps.store, rows.node);
-    await recordDerivedNodeState({ logDir }, node, rows.node);
-  }
-  if (completed !== undefined) return serializeNodeOutput(completed);
-  return { state: 'completed', output, structuredOutput: nodeValue, declaredOutputPaths };
-}
-
-/** The message an attention wait sends when it pauses: the question and how to answer it. */
-function attentionNotification(
-  surface: IWorkflowPlatform,
-  runId: string,
-  wait: WorkflowAttentionWaitContext
-): string {
-  const answer = attentionAnswerLines(surface, {
-    runId,
-    form: attentionForm(wait),
-    options: [...attentionOptions(wait)],
-    occurrence: attentionOccurrence(wait),
-  });
-  return [
-    `⏸️ **Workflow run \`${runId}\` needs attention**`,
-    wait.message,
-    [...answer, `Abandon: \`${spellWorkflowCommand(surface, `abandon ${runId}`)}\``].join('\n'),
-  ].join('\n\n');
-}
-
-/**
- * Execute an approval node — pauses workflow for human review.
- * On rejection resume (when on_reject is configured): runs the on_reject prompt via AI,
- * then re-pauses at the approval gate. After max_attempts rejections, cancels normally.
- */
-async function executeApprovalNode(
-  ctx: RunLayersContext,
-  node: GateNode,
-  stepNamePrefix = '',
-  iteration?: number
-): Promise<NodeOutput> {
-  const { workflowRun, deps, platform, conversationId, artifactsDir, nodeOutputs } = ctx;
-  const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
-  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
-  const stepName = stepNamePrefix + node.id;
-  const execution = beginExecution(ctx, node);
-  await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
-
-  // Detect rejection resume — check metadata for rejection_reason set by reject handlers.
-  // Strict `=== 'approval'` excludes `undefined`: a pre-#936 run paused before the
-  // `type` field existed and rejected-with-rework would stage a rework
-  // `rejectWorkflow` treats as equivalent to `type: 'approval'` but this check
-  // won't recognize — legacy-only, pre-existing, not touched by #2489.
-  const rawApproval = workflowRun.metadata?.approval;
-  const approvalMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const rawRejection = workflowRun.metadata?.rejection_reason;
-  const rejectionReason =
-    approvalMeta?.type === 'approval' &&
-    approvalMeta.nodeId === node.id &&
-    typeof rawRejection === 'string' &&
-    rawRejection !== ''
-      ? rawRejection
-      : '';
-
-  // On rejection resume with a rework continuation configured: run its prompt via AI
-  const rejectDecision = node.decisions.find(d => d.id === 'reject');
-  const rework = rejectDecision?.rework;
-  if (rejectionReason !== '' && rework) {
-    const maxAttempts = rework.maxAttempts ?? 3;
-    const rejectionCount = (workflowRun.metadata?.rejection_count as number | undefined) ?? 0;
-
-    // Check if max attempts exhausted
-    if (rejectionCount >= maxAttempts) {
-      const reason = `max_attempts (${String(maxAttempts)}) exhausted`;
-      await requireTerminalStatusWrite(
-        deps.store.cancelWorkflowRun(workflowRun.id, {
-          step_name: stepName,
-          reason,
-          cancel_reason: 'approval_rejected',
-        }),
-        { workflowRunId: workflowRun.id, site: 'dag.approval_exhausted_cancel' }
-      );
-      getWorkflowEventEmitter().emit({
-        type: 'workflow_cancelled',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        reason,
-      });
-      const cancelMsg = `❌ Approval node \`${node.id}\` cancelled after ${String(maxAttempts)} rejections.`;
-      await safeSendMessage(platform, conversationId, cancelMsg, msgContext);
-      return { state: 'completed' as const, output: '' };
-    }
-
-    // Materialize the listing before substitution so a rework prompt may reference
-    // $TYPED_ARTIFACTS_FILE. Fresh per rework attempt: the approval's rework node is an
-    // ordinary agent invocation, so it observes artifacts published before this attempt.
-    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
-
-    // Build a synthetic PromptNode to reuse executeAgentNode.
-    // Use a distinct ID so the node_completed event written by executeAgentNode
-    // does not collide with the approval gate's own ID in the resume snapshot.
-    // If we used node.id here, a resumed run would find the event and treat the
-    // approval gate as already completed, bypassing the human gate entirely.
-    //
-    // Note: executeAgentNode also emits node_started/node_completed WorkflowEmitterEvents
-    // with nodeId = `${node.id}:on_reject`. These flow through SSE into the web UI, where
-    // WorkflowExecution.tsx builds its nodeMap from all node_* events unconditionally.
-    // This means a transient `${node.id}:on_reject` phantom entry may appear in the UI's
-    // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
-    // still re-presents correctly and the human gate contract is preserved. A follow-up can
-    // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
-    //
-    // The synthetic node carries the rework TEMPLATE: executeAgentNode resolves it, with
-    // the rejection reason, in the one pass every agent prompt gets.
-    const syntheticNode = gateReworkNode(node, rework.prompt);
-
-    const {
-      provider,
-      model: resolvedNodeModel,
-      options: nodeOptions,
-      tier: resolvedTier,
-      effort: resolvedEffort,
-    } = await resolveNodeProviderAndModel(ctx, syntheticNode, {
-      // Engine-synthesised from `approval.on_reject.prompt` alone — it carries no
-      // systemPrompt/agents, so there is no AI-configuration text to resolve.
-      resolveAiText: text => text,
-      // Also carries no `model:`, so it cannot raise a provider conflict to de-duplicate.
-      warnedProviderConflicts: undefined,
-    });
-
-    const output = await runBudgetedAttempt(ctx, syntheticNode, reserve =>
-      executeAgentNode(
-        ctx,
-        syntheticNode,
-        reserve,
-        provider,
-        nodeOptions,
-        undefined, // fresh session
-        resolvedNodeModel,
-        resolvedTier,
-        resolvedEffort,
-        stepNamePrefix,
-        iteration,
-        undefined, // synthetic on_reject node never carries a session checkpoint
-        typedArtifactsFile,
-        'ordinary',
-        rejectionReason
-      )
-    );
-
-    if (output.state === 'failed') {
-      return output;
-    }
-    // Fall through to re-pause at the approval gate
-  }
-
-  // Resolve $nodeId.output[.field] references so the human sees concrete values
-  // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
-  const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs, ctx.loopBodyScopes);
-  const choices = node.decisions.map(decision => {
-    const label =
-      decision.label ??
-      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
-    const display = decision.label ? `${label} (${decision.id})` : label;
-    const command =
-      decision.id === 'approve' || decision.id === 'reject'
-        ? `${decision.id} ${workflowRun.id}`
-        : `respond ${workflowRun.id} ${decision.id} [text]`;
-    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
-  });
-  const suspended = finishNodeExecution(
-    execution,
-    { status: 'suspended', point: 'approval' },
-    {
-      output: { text: '' },
-      diagnostics: { iteration },
-    }
-  );
-  const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
-  const approvalContext = approvalContextSchema.parse({
-    execution: executionMetadata(suspended),
-    message: renderedMessage,
-    nodeId: bodyGateOwner?.nodeId ?? node.id,
-    ...(bodyGateOwner
-      ? {
-          bodyGateId: bodyGateOwner.bodyGateId,
-          iteration: bodyGateOwner.iteration,
-          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
-          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
-          ...(ctx.bodySessionCursors !== undefined
-            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
-            : {}),
-          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
-        }
-      : {}),
-    type: 'approval',
-    captureResponse: node.captureResponse,
-    onRejectPrompt: rework?.prompt,
-    onRejectMaxAttempts: rework?.maxAttempts,
-    decisions: node.decisions.map(d => ({
-      id: d.id,
-      ...(d.label !== undefined ? { label: d.label } : {}),
-    })),
-    decisionsAuthored: node.decisionsAuthored,
-  });
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused) return serializeNodeOutput(execution);
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  const approvalMsg =
-    `⏸ **Approval required**: ${renderedMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    choices.join(' | ');
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    stepName,
-    approvalMsg
-  );
-
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: stepName,
-      data: { message: renderedMessage },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'approval_requested' },
-        'workflow.event_persist_failed'
-      );
-    });
-
-  return serializeNodeOutput(suspended);
-}
-
 /**
  * Execute a `workflow:` (sub-run) node (#2121 Phase 2). Starts — or, on parent
  * resume, re-inspects — a CHILD workflow run and threads its terminal output back
@@ -5935,7 +5440,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 
               case 'gate': {
                 // Approval node dispatch — pauses workflow for human review
-                const output = await executeApprovalNode(ctx, node, ctx.stepNamePrefix, iteration);
+                const output = await executeApprovalNode(ctx, node);
                 return { nodeId: node.id, output };
               }
 
@@ -5961,35 +5466,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               }
 
               case 'halt': {
-                const execution = beginExecution(ctx, node);
-                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, execution);
-                // Cancel node dispatch — terminates the workflow run
-                const reason = substituteNodeOutputRefs(
-                  node.reason,
-                  ctx.nodeOutputs,
-                  ctx.loopBodyScopes
-                );
-                const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
-                await safeSendMessage(ctx.platform, ctx.conversationId, cancelMsg, {
-                  workflowId: ctx.workflowRun.id,
-                  nodeName: node.id,
-                });
-                await requireTerminalStatusWrite(
-                  ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
-                    step_name: ctx.stepNamePrefix + node.id,
-                    reason,
-                    cancel_reason: 'halt_node',
-                  }),
-                  { workflowRunId: ctx.workflowRun.id, site: 'dag.halt_cancel' }
-                );
-                getWorkflowEventEmitter().emit({
-                  type: 'workflow_cancelled',
-                  runId: ctx.workflowRun.id,
-                  nodeId: node.id,
-                  reason,
-                });
-                // The cancellation transaction owns terminality; no node completion was committed.
-                return { nodeId: node.id, output: serializeNodeOutput(execution) };
+                return { nodeId: node.id, output: await executeHaltNode(ctx, node) };
               }
 
               case 'workflow': {

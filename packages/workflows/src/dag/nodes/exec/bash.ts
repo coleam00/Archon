@@ -35,9 +35,8 @@ export async function executeBashNode(
   node: ExecNode
 ): Promise<NodeExecutionResult> {
   const { envVars, protectedEnvKeys, protectedCredentialValues } = ctx.config;
-  const { stepNamePrefix } = ctx;
+  const { stepNamePrefix, bodyLoopUserInput: loopUserInput = '' } = ctx;
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
-  const loopUserInput = ctx.bodyLoopUserInput ?? '';
   const {
     deps,
     platform,
