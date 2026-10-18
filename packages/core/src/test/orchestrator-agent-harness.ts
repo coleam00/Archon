@@ -680,7 +680,7 @@ mock.module('@archon/isolation', () => ({
       this.name = 'IsolationBlockedError';
     }
   },
-  // Loaded transitively via orchestrator-agent → child-isolation-resolver (PR-A).
+  // Loaded transitively via workflow-dispatch → child-isolation-resolver.
   getIsolationProvider: mock(() => ({})),
   classifyIsolationError: (err: Error) => err.message,
 }));

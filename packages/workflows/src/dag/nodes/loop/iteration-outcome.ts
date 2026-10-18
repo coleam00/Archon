@@ -197,8 +197,8 @@ async function stoppedDuringStream(
  * single-shot AI node, so it enters the transient retry path instead of consuming an
  * iteration.
  *
- * A structured payload is also exempt (#2563), matching executeAgentNode's
- * `nodeOutputText === '' && structuredOutput === undefined` guard: with
+ * A structured payload is also exempt (#2563), matching the agent node's
+ * empty-output guard, which also requires `structuredOutput === undefined`: with
  * grammar-constrained decoding the assistant prose is routinely EMPTY because the
  * whole answer arrived as the payload. Failing that would make every Claude/Codex
  * structured loop fail on iteration 1.
@@ -260,7 +260,7 @@ export async function gateStructuredAttempt(
 ): Promise<StructuredVerdict> {
   const { ctx, node } = run;
   // An idle timeout or a user abort is a genuine failure, not a validation
-  // miss — never spend a reask on it (mirrors executeAgentNode's canReask).
+  // miss — never spend a reask on it (mirrors the agent node's canReask).
   const canReask =
     reask.attempt < maxReasks && !attempt.idleTimedOut && !attempt.abort.signal.aborted;
 

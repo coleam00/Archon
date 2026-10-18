@@ -7,17 +7,27 @@ import type {
   RunWaitResult,
   UnknownOwnerLiveness,
 } from '@archon/core/services/run-attention-watch';
-import { readRunStopReason } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  isScheduledWorkflowResume,
+  isWorkflowWaitContext,
+  readRunStopReason,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import type { getTerminalRecord } from '@archon/workflows/terminal-record';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
   RunAttention,
   ExecutionOwnerRecord,
+  WorkflowWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { attentionAnswerLines } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeStderr } from '../utils/stdout';
-import { getLog } from './workflow-shared';
+import { formatAge, getLog } from './workflow-shared';
+import { printVerboseNodes } from './workflow-node-summaries';
 
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
   return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
@@ -332,4 +342,180 @@ export function readParseWarningEvents(events: readonly WorkflowEventRow[]): str
     if (Array.isArray(raw)) out.push(...raw.filter((w): w is string => typeof w === 'string'));
   }
   return out;
+}
+
+type TerminalRecord = ReturnType<typeof getTerminalRecord>;
+
+/** The text view of `workflow get`, in its fixed line order. */
+export function printRunDetail(
+  run: WorkflowRun,
+  detail: {
+    transcriptPath: string | null;
+    terminalRecord: TerminalRecord;
+    leaveBehind: LeaveBehind | undefined;
+    events: WorkflowEventRow[];
+    verbose: boolean | undefined;
+  }
+): void {
+  const { transcriptPath, terminalRecord, leaveBehind, events, verbose } = detail;
+  console.log(`  ID:     ${run.id}`);
+  console.log(`  Name:   ${run.workflow_name}`);
+  console.log(`  Path:   ${run.working_path ?? '(none)'}`);
+  console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
+  console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
+  console.log(`  Status: ${run.status}`);
+  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  console.log(`  Age:    ${formatAge(run.started_at)}`);
+  printRunPauseLines(run);
+  // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
+  // with the key still set (cancelWorkflowRun abandons a failed run without touching
+  // metadata), and the console's runStatusLabel applies the same rule.
+  const stopped = run.status === 'failed' ? describeRunStopReason(run.metadata) : null;
+  if (stopped) {
+    console.log(`  Stopped: ${stopped}`);
+  }
+  const runError = typeof run.metadata.error === 'string' ? run.metadata.error : undefined;
+  if (runError) {
+    console.log(`  Error:  ${runError}`);
+  }
+  printTerminalRecord(terminalRecord);
+  if (leaveBehind) printLeaveBehind(leaveBehind);
+  if (verbose) {
+    const parseWarnings = readParseWarningEvents(events);
+    if (parseWarnings.length > 0) {
+      console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
+      for (const w of parseWarnings) console.log(`    - ${w}`);
+    }
+    printVerboseNodes(events);
+  }
+}
+
+/** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */
+function printRunPauseLines(run: WorkflowRun): void {
+  printApprovalGateLines(run);
+  printWaitLines(run);
+  const scheduledResume = run.metadata.scheduled_resume;
+  if (
+    run.status === 'failed' &&
+    isScheduledWorkflowResume(scheduledResume) &&
+    scheduledResume.triggeredAt === undefined
+  ) {
+    console.log(
+      `  Resume: scheduled for ${scheduledResume.resumeAt} (attempt ${String(scheduledResume.attempt)}/${String(scheduledResume.maxAttempts)})`
+    );
+  }
+}
+
+function printApprovalGateLines(run: WorkflowRun): void {
+  // Paused interactive-loop gate: one honest line so a human (or an agent parsing
+  // the plain output) sees whether any declared completion condition completed
+  // the paused iteration (#2074). --json already carries the full metadata.approval.
+  const gateMeta = run.metadata.approval;
+  const waitMeta = run.metadata.wait;
+  if (
+    run.status === 'paused' &&
+    !isWorkflowWaitContext(waitMeta) &&
+    isApprovalContext(gateMeta) &&
+    gateMeta.type === 'interactive_loop'
+  ) {
+    const completionMet = gateMeta.completionSignaled === true ? 'yes' : 'no';
+    console.log(
+      `  Gate:   awaiting approval — completion condition met: ${completionMet} (iteration ${String(gateMeta.iteration ?? '?')})`
+    );
+  }
+  if (
+    run.status === 'paused' &&
+    !isWorkflowWaitContext(waitMeta) &&
+    isApprovalContext(gateMeta) &&
+    gateMeta.type !== 'child_workflow' &&
+    gateMeta.type !== 'fan_out' &&
+    !gateMeta.resolved
+  ) {
+    console.log(`  Choices: ${gateMeta.message}`);
+    for (const decision of getApprovalDecisions(gateMeta)) {
+      const display = decision.label ? `${decision.label} (${decision.id})` : decision.id;
+      console.log(`    ${display}: archon workflow respond ${run.id} ${decision.id} [text]`);
+    }
+  }
+}
+
+function printWaitLines(run: WorkflowRun): void {
+  const waitMeta = run.metadata.wait;
+  if (run.status !== 'paused' || !isWorkflowWaitContext(waitMeta)) return;
+  if (waitMeta.kind === 'attention') {
+    printAttentionWaitLines(run, waitMeta);
+  } else {
+    console.log(
+      waitMeta.kind === 'event'
+        ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
+        : waitMeta.kind === 'quota'
+          ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
+          : `  Wait:   until ${waitMeta.resumeAt}`
+    );
+  }
+}
+
+function printAttentionWaitLines(
+  run: WorkflowRun,
+  waitMeta: Extract<WorkflowWaitContext, { kind: 'attention' }>
+): void {
+  const attention = runAttention(run);
+  console.log(
+    attention?.kind === 'attention'
+      ? `  Wait:   needs attention — ${waitMeta.message} (occurrence ${attention.occurrence})`
+      : `  Wait:   answered via ${String(waitMeta.answeredVia)} at ${String(waitMeta.answeredAt)}; awaiting continuation`
+  );
+  if (attention?.kind === 'attention')
+    for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
+      console.log(`    ${line}`);
+}
+
+function printTerminalRecord(terminalRecord: TerminalRecord): void {
+  if (terminalRecord) {
+    console.log('  Terminal record:');
+    if (terminalRecord.first_failed_node) {
+      console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
+    }
+    console.log(`    Selected return: ${terminalRecord.returns.availability}`);
+    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
+    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
+    for (const limitation of terminalRecord.artifacts.limitations) {
+      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+    }
+  } else {
+    console.log('  Terminal record: (unavailable)');
+  }
+}
+
+function printLeaveBehind(leaveBehind: LeaveBehind): void {
+  console.log('  Leave-behind:');
+  if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
+  if (leaveBehind.worktree) {
+    console.log(
+      `    Worktree: ${leaveBehind.worktree} (${leaveBehind.worktreeLive ? 'live' : 'gone'})`
+    );
+  }
+  if (leaveBehind.adopted_from) console.log(`    Adopted from: ${leaveBehind.adopted_from}`);
+  for (const a of leaveBehind.adopted_by) console.log(`    Adopted by: ${a}`);
+  printLeaveBehindArtifacts(leaveBehind);
+}
+
+function printLeaveBehindArtifacts(leaveBehind: LeaveBehind): void {
+  if (leaveBehind.artifactFiles.length > 0) {
+    console.log(
+      `    Artifacts (${String(leaveBehind.artifactFiles.length)} files under $ARTIFACTS_DIR):`
+    );
+    for (const f of leaveBehind.artifactFiles.slice(0, 20)) console.log(`      - ${f}`);
+    if (leaveBehind.artifactFiles.length > 20) console.log('      …');
+  }
+  const omitted = leaveBehind.artifactFilesOmitted;
+  if (omitted.internalFiles > 0) {
+    console.log(
+      `    Engine-internal artifact files (not listed): ${String(omitted.internalFiles)}`
+    );
+  }
+  if (omitted.truncated) console.log('    Artifact list truncated at the display cap');
+  for (const path of omitted.unreadable) {
+    console.log(`    Unreadable artifact directory: ${path === '' ? '$ARTIFACTS_DIR' : path}`);
+  }
 }
