@@ -1,4 +1,4 @@
-import { runSubprocess, isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
+import { isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
 import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
@@ -171,13 +171,10 @@ import type {
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
-  admitRunBudgetAttempt,
   createRunBudgetLedger,
   describeRunBudgetRefusal,
   runBudgetRefusalEventData,
   runBudgetStartRefusal,
-  runBudgetWorkUnitEvent,
-  settleRunBudgetAttempt,
   type RunBudgetLedger,
   type RunBudgetRefusal,
 } from './run-budget';
@@ -236,7 +233,6 @@ import { buildInstanceSnapshots, composeFanOutScopeSegment } from './fan-out-ide
 import {
   nodeFailureKindOf,
   retryClassOf,
-  type RetryClass,
   currentAdoptedRunDir,
   getRetryDelayMs,
   effectiveRetryMaxRetries,
@@ -307,6 +303,21 @@ import {
   formatPersistedNodeOutput,
   persistedExecutionOutput,
 } from './dag/node-output';
+import {
+  shouldContinueStreamingForStatus,
+  waitForNodeRetry,
+  lastNodeCancelCheck,
+  lastNodeActivityUpdate,
+  CANCEL_CHECK_INTERVAL_MS,
+  ACTIVITY_HEARTBEAT_INTERVAL_MS,
+  runSubprocessUntilRunStops,
+} from './dag/run-control';
+import {
+  getEffectiveNodeRetryConfig,
+  runBudgetedAttempt,
+  runDeterministicNodeWithRetry,
+  runNodeRetryLoop,
+} from './dag/retry';
 
 interface WatchdogReset {
   type: MessageChunk['type'];
@@ -443,117 +454,9 @@ export interface PriorRunUsage {
   costUsd: number;
 }
 
-/** Throttle state for cancel checks (reads — no write contention in WAL mode) */
-const lastNodeCancelCheck = new Map<string, number>();
-const CANCEL_CHECK_INTERVAL_MS = 10_000;
-
-/**
- * Policy for the during-streaming cancel check: should the currently-streaming
- * node be allowed to continue for a given observed run status?
- *
- * - `running`: the normal case → continue.
- * - `paused`: a concurrent approval node in the same topological layer has
- *   transitioned the run to paused. The streaming node should finish its own
- *   output; workflow progression is gated by the approval node, not by tearing
- *   down unrelated in-flight streams. See the doc comment on
- *   `workflowRunStatusSchema` (schemas/workflow-run.ts), where this contract is
- *   also stated on the status type itself.
- * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
- *   state → abort the stream.
- *
- * Exported for unit testing; the full streaming-cancel branch in
- * `executeNodeInternal` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
- * integration-level coverage of the policy is timing-sensitive and flaky.
- */
-export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | null): boolean {
-  return status === 'running' || status === 'paused';
-}
-
-async function waitForNodeRetry(
-  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
-  runId: string,
-  nodeId: string,
-  delayMs: number
-): Promise<void> {
-  for (let remaining = delayMs; remaining > 0; ) {
-    // A failed status read is not a stop signal: keep waiting, as the streaming check does.
-    try {
-      if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
-    } catch (statusErr) {
-      getLog().warn(
-        { err: statusErr as Error, workflowRunId: runId, nodeId },
-        'dag.status_check_failed'
-      );
-    }
-    const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
-    await new Promise(resolve => setTimeout(resolve, sliceMs));
-    remaining -= sliceMs;
-  }
-}
-
-// A subprocess has no message stream to piggyback a check on, so it polls on its own timer,
-// short enough that a cancel stops its tree within about a second.
-const SUBPROCESS_STOP_CHECK_INTERVAL_MS = 1_000;
-
-/**
- * `runSubprocess` for a node of `runId`, ending its tree when that run stops; the
- * rejection is then marked `cancelled`. Only this run's status aborts it, so another
- * run's subprocess is never signalled.
- */
-async function runSubprocessUntilRunStops(
-  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
-  runId: string,
-  nodeId: string,
-  ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
-): ReturnType<typeof runSubprocess> {
-  const controller = new AbortController();
-  let reading = false;
-  const poll = setInterval(() => {
-    if (reading) return;
-    reading = true;
-    store
-      .getWorkflowRunStatus(runId)
-      .then(status => {
-        if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
-        clearInterval(poll);
-        getLog().info(
-          { workflowRunId: runId, nodeId, status },
-          'dag.stop_detected_during_subprocess'
-        );
-        controller.abort();
-      })
-      // A failed status read is not a stop signal: keep polling, as the streaming check does.
-      .catch((statusErr: unknown) => {
-        getLog().warn(
-          { err: statusErr as Error, workflowRunId: runId, nodeId },
-          'dag.status_check_failed'
-        );
-      })
-      .finally(() => {
-        reading = false;
-      });
-  }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
-  try {
-    return await runSubprocess(execContext, cmd, args, {
-      ...options,
-      abortSignal: controller.signal,
-    });
-  } finally {
-    clearInterval(poll);
-  }
-}
-
-/** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
-const lastNodeActivityUpdate = new Map<string, number>();
-const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
-
-/** Default DAG node retry for TRANSIENT errors */
-const DEFAULT_NODE_MAX_RETRIES = 2;
-const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
-
 /**
  * Max validate-and-reask attempts for a `best-effort` provider whose structured
- * output fails schema validation (separate from transient-error retries above).
+ * output fails schema validation (separate from the transient-error retries in dag/retry.ts).
  * Enforced providers don't reask — a validation failure there is a genuine edge
  * (refusal / max_tokens truncation) and fails fast.
  */
@@ -575,269 +478,6 @@ function structuredOutputPass(
 ): { resumeSessionId: string | undefined; threadsSession: boolean } {
   const threadsSession = forksNamedSource || reaskAttempt === 0;
   return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
-}
-
-/**
- * Get effective retry config for a DAG node.
- */
-function getEffectiveNodeRetryConfig(node: DagNode): {
-  maxRetries: number;
-  delayMs: number;
-  onError: 'transient' | 'all';
-} {
-  if ('retry' in node && node.retry) {
-    return {
-      maxRetries: node.retry.max_attempts,
-      delayMs: node.retry.delay_ms ?? DEFAULT_NODE_RETRY_DELAY_MS,
-      onError: node.retry.on_error ?? 'transient',
-    };
-  }
-  return {
-    maxRetries: DEFAULT_NODE_MAX_RETRIES,
-    delayMs: DEFAULT_NODE_RETRY_DELAY_MS,
-    onError: 'transient',
-  };
-}
-
-/**
- * Retry config for a deterministic (bash/script) node.
- *
- * Same field mapping as {@link getEffectiveNodeRetryConfig}, but deterministic
- * nodes get NO default: an absent `retry:` block returns `undefined` (single
- * attempt) rather than the AI-node default of {@link DEFAULT_NODE_MAX_RETRIES}
- * transient retries. Retry is strictly opt-in so side-effectful scripts (deploys,
- * `gh` mutations, external CLIs) are never silently re-run on a transient-looking
- * failure. Delegates so the two configs can't derive the retry block differently.
- */
-function getExplicitNodeRetryConfig(
-  node: DagNode
-): ReturnType<typeof getEffectiveNodeRetryConfig> | undefined {
-  return 'retry' in node && node.retry ? getEffectiveNodeRetryConfig(node) : undefined;
-}
-
-/**
- * The retry class of a failed node output that warrants another attempt, or
- * `undefined` when it does not.
- *
- * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
- * the node failed decides, never its error text. Fatal failures (credentials, quota
- * and spend windows, config errors, cancellation) are never retried, even when
- * `on_error: all`; `unknown` is retried only under `on_error: all`.
- */
-function retryableFailureClass(
-  output: NodeOutput,
-  onError: 'transient' | 'all'
-): RetryClass | undefined {
-  // Only failed outputs carry `error` (discriminated union); a non-failed output
-  // is never retried. Callers already guard on `state === 'failed'`, but narrow
-  // here too so `output.error` type-checks and the helper is safe standalone.
-  if (output.state !== 'failed') return undefined;
-  // A producer that diagnosed its own output (an exec contract failure, #2453) says so
-  // in the type: its stdout is deterministically wrong, so no class re-runs it.
-  if (output.retryable === false) return undefined;
-  const retryClass = retryClassOf(output.failureKind);
-  if (retryClass === 'fatal') return undefined;
-  if (retryClass === 'unknown' && onError !== 'all') return undefined;
-  return retryClass;
-}
-
-/**
- * Run one governed attempt under the run budget: admit and reserve a work unit, write
- * its durable record, run the attempt, then charge its spend. The executor reserves
- * after source preparation and before recording its attempt. Admission is synchronous
- * so parallel siblings cannot share the last unit.
- */
-async function runBudgetedAttempt(
-  ctx: RunLayersContext,
-  node: AgentNode | ExecNode,
-  attempt: (reserve: () => Promise<void>) => Promise<NodeExecutionResult>
-): Promise<NodeExecutionResult> {
-  const ledger = ctx.runBudget;
-  if (ledger === undefined) return attempt(async () => undefined);
-  const path = ctx.stepNamePrefix + node.id;
-  const reserve = async (): Promise<void> => {
-    const refusal = admitRunBudgetAttempt(ledger, path);
-    if (refusal !== undefined) throw new RunBudgetRefusedError(refusal);
-    await persistNodeEvent(ctx.deps.store, runBudgetWorkUnitEvent(ctx.workflowRun.id, path));
-  };
-  const executionBefore = ctx.currentExecution;
-  let result: NodeExecutionResult;
-  try {
-    result = await attempt(reserve);
-  } catch (error) {
-    // An agent attempt that started and then threw never reported its cost. One that
-    // threw before starting made no provider call.
-    if (node.kind === 'agent' && ctx.currentExecution !== executionBefore) {
-      ledger.usage.costUnavailable ??= { path, reason: 'interrupted' };
-    }
-    throw error;
-  }
-  const settlement = settleRunBudgetAttempt(ledger, node.kind, path, result.execution);
-  if (settlement !== undefined) throw new RunBudgetRefusedError(settlement);
-  return result;
-}
-
-/**
- * Run a node executor with the shared retry loop: exponential backoff, FATAL
- * never retried, and a platform notification before each retry. Used by both the
- * AI-node path in {@link runLayers} and {@link runDeterministicNodeWithRetry} so
- * the backoff math and user-facing wording are defined once and can't drift.
- * `initialOutput` seeds `output` for the unreachable zero-iteration case. Usage is
- * accumulated across failed attempts so a later success still reports all paid work.
- *
- * Each attempt also writes its OWN terminal event carrying only that attempt's usage,
- * so the event log and this accumulated total agree rather than double-counting: two
- * attempts costing $0.02 then $0.03 leave two rows summing to $0.05, which is what this
- * returns. That is the "money burned" reading of a run's total — every attempt counts
- * (#2654 made failed rows contribute; see getDagResumeSnapshot for what that means).
- */
-async function runNodeRetryLoop(
-  node: DagNode,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowRun: WorkflowRun,
-  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
-  stepName: string,
-  retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
-  run: () => Promise<NodeExecutionResult>,
-  initialOutput: NodeExecutionResult,
-  iteration?: number
-): Promise<NodeExecutionResult> {
-  let output = initialOutput;
-  let accumulatedCostUsd: number | undefined;
-  let accumulatedTokens: TokenUsage | undefined;
-  let accumulatedTokensUnknown = false;
-  // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
-  // for the rest of the loop (#2706): load-shedding windows are minutes-scale, so the
-  // node's own short maxRetries would exhaust before the provider recovers.
-  let sawRateLimit = false;
-  let attempt = 0;
-  while (true) {
-    if (attempt > 0) {
-      const status = await store.getWorkflowRunStatus(workflowRun.id);
-      if (!shouldContinueStreamingForStatus(status)) {
-        output = {
-          state: 'failed',
-          output: '',
-          error: `Workflow ${status ?? 'deleted'}`,
-          failureKind: 'cancelled',
-        };
-        break;
-      }
-    }
-    output = await run();
-    if (output.costUsd !== undefined) {
-      accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
-    }
-    accumulatedTokensUnknown ||= output.tokensUnknown === true;
-    if (accumulatedTokensUnknown) {
-      accumulatedTokens = undefined;
-    } else if (output.tokens !== undefined) {
-      accumulatedTokens = sumTokenUsage(
-        [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), output.tokens],
-        { nodeId: node.id }
-      );
-    }
-    if (output.state !== 'failed') break;
-
-    const retryClass = retryableFailureClass(output, retryConfig.onError);
-    if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = effectiveRetryMaxRetries(
-      retryConfig.maxRetries,
-      retryClass,
-      sawRateLimit
-    );
-    if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
-
-    const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
-    getLog().warn(
-      {
-        nodeId: node.id,
-        attempt: attempt + 1,
-        maxRetries: effectiveMaxRetries,
-        retryClass,
-        delayMs,
-        error: output.error,
-      },
-      'dag_node_transient_retry'
-    );
-
-    const errorKind =
-      retryClass === 'overloaded'
-        ? 'provider capacity error'
-        : retryClass === 'unknown'
-          ? 'error'
-          : 'transient error';
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `⚠️ Node \`${node.id}\` failed with ${errorKind} (attempt ${String(attempt + 1)}/${String(effectiveMaxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
-      { workflowId: workflowRun.id, nodeName: node.id }
-    );
-
-    await store.createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_retry_scheduled',
-      step_name: stepName,
-      data: {
-        nodeId: node.id,
-        retry_class: retryClass,
-        retry_attempt: attempt + 1,
-        max_retries: effectiveMaxRetries,
-        delay_ms: delayMs,
-        ...(iteration !== undefined ? { iteration } : {}),
-      },
-    });
-    await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
-    attempt++;
-  }
-  output.costUsd = accumulatedCostUsd;
-  output.tokens = accumulatedTokens;
-  output.tokensUnknown = accumulatedTokensUnknown;
-  return output;
-}
-
-/**
- * Run a deterministic (bash/script) node with opt-in retry.
- *
- * Deterministic nodes get exactly one attempt unless they declare an explicit
- * `retry:` block. When they do, transient/all failures are retried via the shared
- * {@link runNodeRetryLoop} (same exponential-backoff + FATAL-never-retried
- * semantics as AI nodes). The single-attempt default is preserved so scripts with
- * side effects aren't silently re-executed (#2088).
- */
-async function runDeterministicNodeWithRetry(
-  node: DagNode,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowRun: WorkflowRun,
-  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
-  stepName: string,
-  run: () => Promise<NodeExecutionResult>,
-  iteration?: number
-): Promise<NodeExecutionResult> {
-  const retryConfig = getExplicitNodeRetryConfig(node);
-  // No explicit retry: preserve the single-attempt deterministic-node default.
-  if (!retryConfig) {
-    return run();
-  }
-  return runNodeRetryLoop(
-    node,
-    platform,
-    conversationId,
-    workflowRun,
-    store,
-    stepName,
-    retryConfig,
-    run,
-    {
-      state: 'failed',
-      output: '',
-      error: 'Node did not execute',
-    },
-    iteration
-  );
 }
 
 /**
