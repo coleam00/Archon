@@ -28,10 +28,12 @@ import {
   ensureProjectStructure,
   getCommandFolderSearchPaths,
   getProjectSourcePath,
+  parseOwnerRepo,
   resolveRepoProjectIdentity,
 } from '@archon/paths';
 import {
   cloneRepository,
+  findRepoRoot,
   githubTokenCredentials,
   syncRepository,
   addSafeDirectory,
@@ -703,7 +705,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready
-   * For new codebases: clone when git metadata is absent
+   * Clone when no checkout exists; managed source/ requires its own git metadata
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
    * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
@@ -754,7 +756,28 @@ export class GitHubAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // Missing git metadata includes the empty source/ left by a failed clone.
+    }
+
+    if (!repositoryExists) {
+      // Unlike the community adapters' nonempty-directory check, discovery preserves
+      // clone refusal for operator files. Managed source/ must not adopt a parent checkout.
+      const identity = parseOwnerRepo(projectName);
+      const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
+      if (!managedSource || resolve(repoPath) !== resolve(managedSource)) {
+        let pathExists = false;
+        try {
+          await access(repoPath);
+          pathExists = true;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            throw new Error(`Cannot access repository at ${repoPath}: ${err.message}`, {
+              cause: error,
+            });
+          }
+        }
+        if (pathExists) repositoryExists = (await findRepoRoot(repoPath)) !== null;
+      }
     }
 
     if (repositoryExists) {

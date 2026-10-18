@@ -142,6 +142,7 @@ const mockSyncRepository = mock<typeof import('@archon/git')['syncRepository']>(
   value: undefined,
 }));
 const mockAddSafeDirectory = mock(async () => undefined);
+const mockFindRepoRoot = mock<typeof import('@archon/git')['findRepoRoot']>(async () => null);
 const mockIsWorktreePath = mock(async () => false);
 
 // execFileAsync is exported by @archon/git and must exist on the mocked
@@ -153,6 +154,7 @@ const mockExecFileAsync = mock(async () => ({ stdout: '', stderr: '' }));
 
 mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,
+  findRepoRoot: mockFindRepoRoot,
   syncRepository: mockSyncRepository,
   addSafeDirectory: mockAddSafeDirectory,
   isWorktreePath: mockIsWorktreePath,
@@ -334,6 +336,8 @@ describe('GitHubAdapter', () => {
   let adapter: GitHubAdapter;
 
   beforeEach(() => {
+    mockFindRepoRoot.mockReset();
+    mockFindRepoRoot.mockResolvedValue(null);
     mockLogger.info.mockClear();
     mockLogger.debug.mockClear();
     mockLogger.warn.mockClear();
@@ -2491,6 +2495,31 @@ describe('GitHubAdapter', () => {
         false
       );
       await expect(promise).rejects.toBeInstanceOf(AppNotInstalledError);
+    });
+
+    test('installs the App credential helper for a discovered checkout subdirectory without syncing', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-app-subdirectory-'));
+      const repoPath = join(root, 'service');
+      const { adapter } = createAppModeAdapter();
+      await mkdir(repoPath);
+      mockFindRepoRoot.mockResolvedValueOnce((await import('@archon/git')).toRepoPath(root));
+      mockSyncRepository.mockClear();
+      try {
+        // @ts-expect-error - calling private readiness boundary
+        await adapter.ensureRepoReady(
+          'owner',
+          'repo',
+          'main',
+          { name: 'owner/repo', default_cwd: repoPath },
+          false
+        );
+        expect(mockFindRepoRoot).toHaveBeenCalledWith(repoPath);
+        expect(installCredentialHelperSpy).toHaveBeenCalledWith(repoPath);
+        expect(mockCloneRepository).not.toHaveBeenCalled();
+        expect(mockSyncRepository).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(root);
+      }
     });
 
     test('credential helper install is attempted after successful App-mode clone', async () => {
