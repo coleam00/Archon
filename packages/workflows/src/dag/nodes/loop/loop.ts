@@ -545,7 +545,6 @@ export async function executeLoopNode(
     // channels, payload serialization) still reads — declared per-iteration but OUTSIDE
     // the attempt loop below, whose passes reassign them.
     let fullOutput = ''; // raw, for signal detection
-    let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
     // Whether this attempt's stream ended on the provider's `settled` (see the AI-node
     // path's streamSettled).
@@ -671,9 +670,9 @@ export async function executeLoopNode(
           configuredMcpServers: new Set(),
           onMessageText: async text => {
             fullOutput += text;
+            if (platform.getStreamingMode() !== 'stream') return;
             const cleaned = stripCompletionTags(text, loop.until);
-            cleanOutput += cleaned;
-            if (platform.getStreamingMode() === 'stream' && cleaned) {
+            if (cleaned) {
               await safeSendMessage(platform, conversationId, cleaned, msgContext);
             }
           },
@@ -722,7 +721,6 @@ export async function executeLoopNode(
         // accumulates or aborts must start clean or a prior attempt's prose would
         // leak into this one's output and signal detection.
         fullOutput = '';
-        cleanOutput = '';
         iterationIdleTimedOut = false;
         iterationSettled = false;
         lastWatchdogReset = undefined;
@@ -909,7 +907,6 @@ export async function executeLoopNode(
                 loopResolvedModel = msg.resolvedModel;
                 if (msg.text !== undefined) {
                   fullOutput = msg.text;
-                  cleanOutput = stripCompletionTags(msg.text, loop.until);
                 }
                 attemptStructured = msg.structuredOutput;
                 if (msg.failure !== undefined) {
@@ -1316,6 +1313,9 @@ export async function executeLoopNode(
       lastIterationStructuredOutput = iterationPayload;
     }
 
+    // Stripped from the whole reply: a completion tag can span reply blocks, and each
+    // block's own whitespace is part of the text.
+    const cleanOutput = stripCompletionTags(fullOutput, loop.until);
     // Batch mode: send accumulated output
     const batchContent = structuredText ?? cleanOutput;
     if (platform.getStreamingMode() === 'batch' && batchContent) {

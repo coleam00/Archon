@@ -1237,6 +1237,46 @@ describe('loop node execution', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(3);
   });
 
+  it('strips completion tags from the whole reply, keeping text across reply blocks', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'All ' };
+      yield { type: 'agent_message_chunk', text: 'done. <promise>COMP' };
+      yield { type: 'agent_message_chunk', text: 'LETE</promise>', continuesPreviousBlock: true };
+      yield { type: 'result', sessionId: 'loop-blocks' };
+    });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-blocks',
+          nodes: [
+            {
+              id: 'my-loop',
+              kind: 'loop',
+              loop: { fresh_context: false, prompt: 'Work.', until: 'COMPLETE', max_iterations: 3 },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const completed = persistedEvents(mockDeps.store).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'my-loop'
+    );
+    expect(completed?.data?.node_output).toBe('All done.');
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(sent).toContain('All done.');
+  });
+
   it('substitutes $LOOP_PREV_OUTPUT with previous iteration output (empty on iter 1)', async () => {
     // Iteration 1 emits a distinctive output, iteration 2 emits the completion signal.
     // We then assert the prompt sent to the AI: iteration 1 strips $LOOP_PREV_OUTPUT
