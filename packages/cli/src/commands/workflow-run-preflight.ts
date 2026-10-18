@@ -1,4 +1,9 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { Codebase } from '@archon/core/schemas/codebase';
+import {
+  resolveWorkflowAdoption,
+  type AdoptionLane,
+} from '@archon/core/operations/workflow-adoption';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import {
   isTierName,
@@ -19,7 +24,7 @@ import type {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { resolveCliUserId } from '../utils/cli-user';
-import { getLog } from './workflow-shared';
+import { getLog, resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /** The refusal when `--resume` finds nothing to continue. */
 export function buildNoResumableRunError(workflowName: string, cwd: string): Error {
@@ -39,8 +44,8 @@ export function buildResumeLookupFailureError(error: Error): Error {
  * Validate a `--supersedes` declaration (#2747): the run must exist and be terminal.
  * Supersede inherits nothing, so existence and terminality are the whole contract.
  *
- * One owner for the refusals because two callers need them: the `--detach` pre-flight,
- * which refuses before forking (#2872), and the run path that records the provenance.
+ * The `--detach` pre-flight, which refuses before forking (#2872), and the run path that
+ * records the provenance both reach it through `resolveContinuationDeclaration`.
  */
 export async function resolveSupersededRun(
   host: WorkflowHost,
@@ -54,6 +59,55 @@ export async function resolveSupersededRun(
     throw new Error(`Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`);
   }
   return superseded;
+}
+
+/** A resolved between-run continuation declaration (#2747): `--adopt` or `--supersedes`. */
+export type ContinuationDeclaration =
+  | { mode: 'adopt'; runId: string; adoptedRun: WorkflowRun; lane: AdoptionLane }
+  | { mode: 'supersede'; runId: string; superseded: WorkflowRun };
+
+/**
+ * Resolve `--adopt` or `--supersedes` to the run it names, or `undefined` when neither is
+ * set. Adoption resolves the lane it dictates; supersede validates the prior run only. Both
+ * the `--detach` pre-flight and the run path call this, so a declaration the run path would
+ * refuse is refused before the fork too.
+ */
+export async function resolveContinuationDeclaration(
+  host: WorkflowHost,
+  cwd: string,
+  options: Pick<WorkflowRunOptions, 'adoptRunId' | 'supersedesRunId' | 'container'>,
+  codebase: Codebase | null | undefined
+): Promise<ContinuationDeclaration | undefined> {
+  const declared =
+    options.adoptRunId !== undefined
+      ? { mode: 'adopt' as const, ref: options.adoptRunId }
+      : options.supersedesRunId !== undefined
+        ? { mode: 'supersede' as const, ref: options.supersedesRunId }
+        : undefined;
+  if (!declared) return undefined;
+  if (!codebase) {
+    throw new Error(
+      'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
+    );
+  }
+  const runId = await resolveRunIdArg(host, declared.ref, cwd, false, codebase.id);
+  if (declared.mode === 'adopt') {
+    const { adoptedRun, lane } = await resolveWorkflowAdoption({
+      deps: {
+        getRun: id => host.deps.store.getWorkflowRun(id),
+        getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
+        findEnvironmentByPath: (...args) =>
+          host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
+      },
+      adoptedRunId: runId,
+      codebaseId: codebase.id,
+      codebasePath: codebase.default_cwd,
+      codebaseKind: codebase.kind,
+      containerRequested: options.container === true,
+    });
+    return { mode: 'adopt', runId, adoptedRun, lane };
+  }
+  return { mode: 'supersede', runId, superseded: await resolveSupersededRun(host, runId) };
 }
 
 /**
@@ -275,4 +329,152 @@ export function countWorkflowSources(
     },
     { bundled: 0, global: 0, project: 0, installed: 0 }
   );
+}
+
+/**
+ * Refusals that depend only on how the run was invoked, checked before the dry-run
+ * branch so a dry run reports them too.
+ */
+export function assertInvocationFlags(options: WorkflowRunOptions, isContinuation: boolean): void {
+  if (isContinuation && options.modelAssignments && options.modelAssignments.length > 0) {
+    throw new Error(
+      '--resume and --model are mutually exclusive. A resumed run keeps its original model bindings.'
+    );
+  }
+
+  if (options.registrationBaseBranch !== undefined) {
+    if (!options.registrationBaseBranch.trim())
+      throw new Error('--base-branch requires a nonempty branch name.');
+    if (
+      options.resume ||
+      options.adoptRunId !== undefined ||
+      options.supersedesRunId !== undefined ||
+      options.dryRun
+    )
+      throw new Error(
+        '--base-branch applies only to initial registration and cannot be combined with --resume, --adopt, --supersedes, or --dry-run.'
+      );
+  }
+
+  const dryRunOnlyOptions = [
+    ['--stubs', options.stubsPath !== undefined],
+    ['--stubs-init', options.stubsInitPath !== undefined],
+    ['--default-stubs', options.defaultStubs === true],
+    ['--exec-code', options.execCode === true],
+    ['--pause-at-gates', options.pauseAtGates === true],
+  ] as const;
+  const optionWithoutDryRun = dryRunOnlyOptions.find(([, present]) => present)?.[0];
+  if (!options.dryRun && optionWithoutDryRun) {
+    throw new Error(`${optionWithoutDryRun} requires --dry-run.`);
+  }
+}
+
+/**
+ * Flag combinations a real run refuses. Defensive — cli.ts checks these for UX, but
+ * workflowRunCommand is the authoritative boundary for programmatic callers.
+ */
+export function assertExecutionFlags(options: WorkflowRunOptions): void {
+  if (options.branchName !== undefined && options.noWorktree) {
+    throw new Error(
+      '--branch and --no-worktree are mutually exclusive.\n' +
+        '  --branch creates an isolated worktree (safe).\n' +
+        '  --no-worktree runs directly in your repo (no isolation).\n' +
+        'Use one or the other.'
+    );
+  }
+  if (options.noWorktree && options.fromBranch !== undefined) {
+    throw new Error(
+      '--from/--from-branch has no effect with --no-worktree.\n' +
+        'Remove --from or drop --no-worktree.'
+    );
+  }
+  if (options.noWorktree && options.baseBranch !== undefined) {
+    throw new Error(
+      '--base has no effect with --no-worktree.\n' + 'Remove --base or drop --no-worktree.'
+    );
+  }
+  if (options.resume && options.branchName !== undefined) {
+    throw new Error(
+      '--resume and --branch are mutually exclusive.\n' +
+        '  --resume reuses the existing worktree from the failed run.\n' +
+        '  Remove --branch when using --resume.'
+    );
+  }
+  if (options.resume && options.inputs !== undefined && options.inputs.length > 0) {
+    throw new Error(
+      '--resume and --input are mutually exclusive.\n' +
+        "  A resume replays the original invocation's inputs, recorded on the run.\n" +
+        '  Drop --input to resume, or start a fresh run to supply different values.'
+    );
+  }
+
+  assertContinuationFlags(options);
+}
+
+/**
+ * Between-run continuation (#2747): adoption dictates the lane itself, so the
+ * lane-choosing flags are refused rather than silently overridden.
+ */
+function assertContinuationFlags(options: WorkflowRunOptions): void {
+  if (options.adoptRunId !== undefined) {
+    const conflicts: string[] = [];
+    if (options.resume) conflicts.push('--resume');
+    if (options.branchName !== undefined) conflicts.push('--branch');
+    if (options.fromBranch !== undefined) conflicts.push('--from/--from-branch');
+    if (options.baseBranch !== undefined) conflicts.push('--base');
+    if (options.noWorktree) conflicts.push('--no-worktree');
+    if (conflicts.length > 0) {
+      throw new Error(
+        `--adopt and ${conflicts.join('/')} are mutually exclusive.\n` +
+          '  Adoption resolves its own lane: reuse the adopted worktree, or cut a fresh one from its branch.'
+      );
+    }
+  } else if (options.supersedesRunId !== undefined && options.resume) {
+    throw new Error(
+      '--supersedes records a FRESH-lane rerun as replacing a prior open item; it cannot be combined with --resume.'
+    );
+  }
+}
+
+/**
+ * Reconcile the workflow YAML's `worktree.enabled` pin with the invocation flags. A
+ * mismatch is a user error surfaced loudly rather than silently applying one side.
+ */
+export function assertWorktreePolicy(
+  workflow: Pick<WorkflowDefinition, 'name' | 'worktree'>,
+  options: WorkflowRunOptions
+): void {
+  const pinnedEnabled = workflow.worktree?.enabled;
+  if (pinnedEnabled === false) {
+    if (options.branchName !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --branch requires an isolated worktree.\n' +
+          "  Drop --branch or change the workflow's worktree.enabled."
+      );
+    }
+    if (options.fromBranch !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --from/--from-branch only applies when a worktree is created.\n' +
+          "  Drop --from or change the workflow's worktree.enabled."
+      );
+    }
+    if (options.baseBranch !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --base only applies when a worktree is created.\n' +
+          "  Drop --base or change the workflow's worktree.enabled."
+      );
+    }
+    // --no-worktree is redundant but not contradictory — silently accept.
+  } else if (pinnedEnabled === true) {
+    if (options.noWorktree) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
+          '  --no-worktree conflicts with the workflow policy.\n' +
+          "  Drop --no-worktree or change the workflow's worktree.enabled."
+      );
+    }
+  }
 }
