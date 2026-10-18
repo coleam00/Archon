@@ -551,13 +551,15 @@ describe('the merge queue scripts', () => {
     const released = { merged: [42], attention: '', class: '', asked: null };
     const elsewhere = { 'merge/receipts/42.json': JSON.stringify({ pr: PR_URL, head: OLD, at: AT }) };
     // The gate merged it as declared; merged by hand during the sweep; the receipt and the sweep's
-    // head differ from the head the forge merged; merged by the gate or by hand, declared wait.
+    // head differ from the head the forge merged; merged by the gate or by hand, declared wait;
+    // merged by hand under an ask.
     const cases = [
       [decision({}), RECEIPT, DEV_GREEN],
       [decision({}), undefined, DEV_GREEN],
       [decision({ head: OLD }), elsewhere, DEV_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), RECEIPT, DEV_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), undefined, DEV_UNCHECKED],
+      [decision({ action: 'ask', attention: ATTENTION }), undefined, DEV_UNCHECKED],
     ] as const;
     for (const [decided, artifacts, dev] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));

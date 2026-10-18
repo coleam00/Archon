@@ -223,8 +223,8 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
 
 function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string {
   if (raised) return 'ask';
-  if (decision.action === 'ask') return 'ask (not raised this run)';
   if (outcome.status === 'merged') return 'merged';
+  if (decision.action === 'ask') return 'ask (not raised this run)';
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
