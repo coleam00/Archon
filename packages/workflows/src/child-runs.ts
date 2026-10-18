@@ -193,7 +193,7 @@ export async function runChildWorkflow(
       // silently delete that capability. Recorded in the constitution's case-law
       // table (.archon/workflow-language-constitution.md) and locked by
       // `describe('workflow: late resolution is a deliberate affordance')` in
-      // subrun.test.ts.
+      // child-runs.late-resolution.test.ts.
       const { workflows } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
