@@ -10,9 +10,8 @@
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
  * receipt as soon as the forge accepts the merge, and reads the merge back. A pull
  * request that reads back unmerged, as on a branch whose merges the forge queues, loses
- * its receipt and fails the gate. The record node holds the sweep to the receipts: a
- * pull request with one was merged by this run, and one the sweep says it merged must
- * have one.
+ * its receipt and fails the gate. A receipt tells the record node this run made the
+ * merge; the forge's read-back, not the receipt, says whether it merged.
  *
  * Prints one JSON document: `{pr, head, refusals, merge_commit}`. A refused merge or a
  * failed one exits nonzero; a merge whose read-back itself failed says it was made.
