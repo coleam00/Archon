@@ -6,12 +6,10 @@ import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { checkComposedBlockBoundaries, checkTriggerRule, certifyExecOutput } from './dag-executor';
 import {
-  checkComposedBlockBoundaries,
-  checkTriggerRule,
   loopBodyScope,
   inputEnvVars,
-  certifyExecOutput,
   nodeTemplateReferences,
   substituteNodeOutputRefs,
   substituteWaitMessage,
@@ -21,7 +19,7 @@ import {
   type LoopBodyScope,
   type ShellInputContext,
   type TextSurface,
-} from './dag-executor';
+} from './dag/references';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { evaluateCondition } from './condition-evaluator';
 import {

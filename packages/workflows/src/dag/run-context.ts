@@ -23,7 +23,7 @@ import type { DagResumeSnapshot, PersistedNodeOutput } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
 import type { ExecutionContext, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
-import type { LoopBodyScope } from '../dag-executor';
+import type { LoopBodyScope } from './references';
 import type { RunChildWorkflowFn } from './child-run';
 
 /** Workflow-level provider options. The provider options have node-level
