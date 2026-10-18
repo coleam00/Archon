@@ -678,14 +678,18 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   not touch once; red after that is raised to a maintainer.
 - **Record.** The `record` script refuses, before it writes anything, a sweep that
   left a claimed pull request undecided, decided one twice, offered an attention item
-  a person could not answer, says it merged a pull request without the gate's receipt
-  at that head, declared anything else for one the gate merged, merged a pull request
-  it did not claim, merged without checking the default branch afterwards, or raised
-  the default branch without merging. It reads every pull request back: the forge, not
-  the sweep, says what merged, and a merge with no receipt is recorded as made outside
-  the run. A pull request that cannot be read waits for the next sweep, and is parked
-  when it could not be read the sweep before either; a work item that cannot be
-  written is reported, so one bad item never loses the rest of the batch's record.
+  a person could not answer, merged a pull request it did not claim, merged without
+  checking the default branch afterwards, or raised the default branch without
+  merging. It reads every pull request back: the forge, not the sweep or the gate's
+  receipts, says what merged, at the head the forge merged, and a merge with no
+  receipt is recorded as made outside the run. A sweep that says it merged a pull
+  request the forge does not show merged fails the record after every other decision
+  is written: that pull request is recorded as waiting, or parked if it was closed,
+  and the failure names a red default branch the run could not raise and any work
+  item it could not write. A pull
+  request that cannot be read waits for the next sweep, and is parked when it could not
+  be read the sweep before either; a work item that cannot be written is reported, so one bad item never loses
+  the rest of the batch's record.
   It runs even when the delta review failed. It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
   approval pinned to the head it approved, and
