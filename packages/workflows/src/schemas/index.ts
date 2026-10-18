@@ -3,7 +3,7 @@
  *
  * All schemas are re-exported from this index.
  * Types are derived from schemas via `z.infer<typeof Schema>` (WorkflowDefinition
- * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader.ts).
+ * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader/node-parse.ts).
  *
  * Import `z` from plain `zod`; name OpenAPI components with `.meta({ id })`.
  */

@@ -3,8 +3,8 @@
  * built from it — for the whole web package.
  *
  * The engine is the authority: `OUTPUT_REF_SOURCE` in
- * `packages/workflows/src/loader.ts`, whose own docblock warns that a second
- * hand-written copy is exactly the drift it is trying to prevent. The web app
+ * `packages/workflows/src/output-ref.ts`, which exists so the engine's scanners share
+ * one grammar instead of hand-written copies that drift. The web app
  * cannot import it — `@archon/web` must never depend on `@archon/workflows`
  * (a server package), and `api.generated.d.ts` is type-only so it cannot carry
  * a runtime value. AGENTS.md records the same exception for `TRIGGER_RULES`.

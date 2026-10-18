@@ -65,7 +65,7 @@ import {
   type JsonValue,
 } from './output-ref';
 import { createLogger } from '@archon/paths';
-import { validateDagStructure } from './loader';
+import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
   validateRunBudgetShape,
