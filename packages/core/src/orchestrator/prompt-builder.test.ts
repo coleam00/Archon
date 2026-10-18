@@ -11,7 +11,13 @@ import {
 import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+
+function invocationWorkflowNames(prompt: string): string[] {
+  return [
+    ...[...prompt.matchAll(/\/invoke-workflow (\S+) --project/g)].map(match => match[1]),
+    ...[...prompt.matchAll(/workflow: "([^"]+)"/g)].map(match => match[1]),
+  ];
+}
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -49,37 +55,46 @@ describe('buildRoutingRulesWithProject', () => {
     }
   });
 
-  test('routing rules never steer work into archon-assist (#3525)', () => {
-    for (const channel of ['tools', 'commands'] as const) {
-      for (const rules of [
-        buildRoutingRulesWithProject(channel),
-        buildRoutingRulesWithProject(channel, 'p'),
-      ]) {
-        expect(rules).not.toContain('archon-assist');
+  for (const channel of ['tools', 'commands'] as const) {
+    test.each([undefined, 'my-project'])(
+      `${channel} examples use illustrative placeholders (project: %s)`,
+      projectName => {
+        const rules = buildRoutingRulesWithProject(channel, projectName);
+        const names = invocationWorkflowNames(rules);
+        expect(names.length).toBeGreaterThan(0);
+        expect(names.every(name => name === '{workflow-name}')).toBe(true);
+        expect(rules).toContain('{workflow-name} is an illustrative placeholder');
+        expect(rules).toContain(
+          'replace it with the exact name of an appropriate workflow from Available Workflows'
+        );
+        expect(rules).toContain('Never invoke the placeholder literally');
+        expect(rules).toContain(
+          'If no listed workflow fits, explain that instead of inventing a name'
+        );
+        expect([...rules.matchAll(/\*\*([^*]+)\*\* workflow/g)]).toEqual([]);
+        expect(rules.split('## Project Setup')[0]).not.toMatch(/\barchon-[\w-]+\b/);
       }
-    }
-  });
+    );
 
-  test.each(['tools', 'commands'] as const)(
-    'every workflow the %s routing examples name is bundled and not deprecated (#3525)',
-    channel => {
+    test(`${channel} examples route actions and answer questions without invoking`, () => {
       const rules = buildRoutingRulesWithProject(channel);
-      // Our own prompt text, not user prose: the examples name workflows as
-      // `/invoke-workflow <name>`, `workflow: "<name>"` and `**<name>** workflow`.
-      const named = [
-        ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
-        ...[...rules.matchAll(/workflow: "([a-z0-9-]+)"/g)].map(m => m[1]),
-        ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
-      ];
-      expect(named.length).toBeGreaterThan(1);
-      for (const name of named) {
-        const yaml = BUNDLED_WORKFLOWS[name];
-        expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
-        const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
-        expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
-      }
-    }
-  );
+      const action = rules.split('Example (clear intent):')[1]?.split('Example (ambiguous')[0];
+      expect(action).toContain('Fix issue #42');
+      expect(invocationWorkflowNames(action ?? '')).toEqual(['{workflow-name}']);
+      const question = rules
+        .split('Example (ambiguous — answer directly):')[1]
+        ?.split('## Project Setup')[0];
+      expect(question).toContain('What do you think about adding dark mode?');
+      expect(question).toContain('[answer the question]');
+      expect(question).toContain('if a suitable workflow is available');
+      expect(invocationWorkflowNames(question ?? '')).toEqual([]);
+      expect(rules).toContain(
+        channel === 'tools'
+          ? 'but do NOT call `invoke_workflow`'
+          : 'but do NOT include /invoke-workflow in your response'
+      );
+    });
+  }
 
   test.each(['tools', 'commands'] as const)(
     '%s rules state prompt must be self-contained with no conversation knowledge',
@@ -177,6 +192,52 @@ describe('buildOrchestratorSystemAppend', () => {
       ],
     },
   ];
+
+  for (const channel of ['tools', 'commands'] as const) {
+    for (const codebaseId of [null, 'cb-1']) {
+      test.each([false, true])(
+        `${channel}, scope ${codebaseId}: routing with custom workflows: %s`,
+        async withWorkflows => {
+          const customWorkflows = withWorkflows
+            ? [
+                { name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] },
+                {
+                  name: 'legacy-delivery',
+                  description: 'Previous delivery workflow',
+                  nodes: [],
+                  deprecated: { message: 'Use custom-delivery instead.' },
+                },
+              ]
+            : [];
+          const result = await buildOrchestratorSystemAppend(
+            makeConversation(codebaseId),
+            codebases,
+            customWorkflows,
+            channel
+          );
+          const available = result.split('## Available Workflows')[1]?.split('## Routing Rules')[0];
+          if (withWorkflows) {
+            expect(available).toContain('**custom-delivery**');
+            expect(available).toContain('Deliver a requested change');
+            expect(available).toContain(
+              '**legacy-delivery**\n  Previous delivery workflow\n  Deprecated: Use custom-delivery instead.'
+            );
+            expect(available).not.toContain(
+              '**custom-delivery**\n  Deliver a requested change\n  Deprecated:'
+            );
+          } else {
+            expect(available).toContain('No workflows available');
+          }
+          const names = invocationWorkflowNames(result);
+          expect(names.length).toBeGreaterThan(0);
+          expect(names.every(name => name === '{workflow-name}')).toBe(true);
+          expect(result).toContain(
+            'Do not recommend deprecated workflows when a non-deprecated workflow fits'
+          );
+        }
+      );
+    }
+  }
 
   test('returns orchestrator prompt when no codebase is scoped', async () => {
     const result = await buildOrchestratorSystemAppend(
