@@ -4203,8 +4203,9 @@ function attentionStreamText(
 
 /**
  * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, and 4 on an `error` line: the stream's cursor (from `--after`, or the tail's
- * own position) is not one this install's store can read, so the fix is to rerun without
+ * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
+ * (from `--after`, or the tail's own position) is not one this install's store can read,
+ * so the fix is to rerun without
  * it. Read-only: stopping the stream affects no run.
  */
 async function workflowAttentionWatch(
@@ -4237,9 +4238,14 @@ async function workflowAttentionWatch(
     try {
       await write(line);
     } catch (error) {
-      // The reader is gone (EPIPE); nothing more can be delivered.
-      getLog().debug({ err: error as Error }, 'cli.workflow_attention_watch_stdout_closed');
       stop();
+      if (error instanceof Error && 'code' in error && error.code === 'EPIPE') {
+        getLog().debug({ err: error }, 'cli.workflow_attention_watch_stdout_closed');
+        return;
+      }
+      exitCode = 1;
+      getLog().error({ err: error as Error }, 'cli.workflow_attention_watch_write_failed');
+      throw error;
     }
   };
   process.on('SIGINT', stop);

@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,6 +131,66 @@ const attentionOf =
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
+  test.each(['attention', 'resolved', 'unmatched', 'terminal', 'resumed'] as const)(
+    'a rejected %s line retries before later cursors are delivered',
+    async type => {
+      const store = await makeStore();
+      const runId = await running(store);
+      const wait = ask({ ci: 'pr' });
+      if (type === 'resolved' || type === 'unmatched')
+        await store.pauseWorkflowRunForWait(runId, wait, { kind: 'started', stepName: 'ask' });
+      if (type === 'resumed') await store.failWorkflowRun(runId, 'failed');
+      const start = await store.getWorkflowEventHead();
+      const accepted: AttentionStreamLine[] = [];
+      const rejected: AttentionStreamLine[] = [];
+      let accepting = false;
+      const stream = await watchAttentionQueue(
+        store,
+        host,
+        async line => {
+          if (line.type === type && !(line.type === 'attention' && line.snapshot) && !accepting) {
+            rejected.push(line);
+            throw new Error('consumer unavailable');
+          }
+          accepted.push(line);
+        },
+        { scope: { kind: 'all' }, labels: { ci: 'pr' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+      );
+      const until = async (condition: () => boolean): Promise<void> => {
+        for (let waited = 0; waited < 1000; waited += 5) {
+          if (condition()) return;
+          await Bun.sleep(5);
+        }
+        throw new Error(`delivery did not retry: ${JSON.stringify({ rejected, accepted })}`);
+      };
+      try {
+        if (type === 'attention')
+          await store.pauseWorkflowRunForWait(runId, wait, { kind: 'started', stepName: 'ask' });
+        if (type === 'resolved' || type === 'resumed') await store.resumeWorkflowRun(runId);
+        if (type === 'unmatched')
+          await store.labelAttentionWait(runId, {
+            pauseId: wait.pauseId,
+            set: { ci: 'other' },
+            unset: [],
+            via: 'cli',
+          });
+        if (type === 'terminal') await store.failWorkflowRun(runId, 'failed');
+        const head = await store.getWorkflowEventHead();
+        await until(() => rejected.length >= 3);
+        expect(rejected.every(line => isDeepStrictEqual(line, rejected[0]))).toBe(true);
+        expect(accepted.some(line => 'cursor' in line && line.cursor === head)).toBe(false);
+        accepting = true;
+        await until(() => accepted.some(line => line.type === 'bookmark' && line.cursor === head));
+        expect(accepted).toContainEqual(rejected[0]);
+        expect(
+          accepted.filter(line => line.type === type && 'cursor' in line && line.cursor !== start)
+        ).toHaveLength(1);
+      } finally {
+        await stream.close();
+      }
+    }
+  );
+
   test('a rejected degradation warning retains the cursor until the consumer accepts it', async () => {
     const store = await makeStore();
     const a = await running(store);

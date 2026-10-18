@@ -493,3 +493,64 @@ test.each([true, false])(
     }
   }
 );
+
+test.each([
+  { phase: 'startup', json: true },
+  { phase: 'tail', json: true },
+  { phase: 'startup', json: false },
+  { phase: 'tail', json: false },
+])('watch handles output failures (%s)', async ({ phase, json }) => {
+  for (const code of ['ENOSPC', 'EPIPE', undefined]) {
+    const host = createHost();
+    const failure = Object.assign(new Error('write failed'), { code });
+    let rejected: unknown;
+    let closed = false;
+    let delivery = Promise.resolve();
+    const watch = spyOn(host.engine, 'watchAttention').mockImplementation(async listener => {
+      const deliver = async (): Promise<void> => {
+        try {
+          await listener({
+            type: 'degraded',
+            reason: 'run_unreadable',
+            cursor: workflowEventCursor('fixture:0'),
+          });
+        } catch (error) {
+          rejected = error;
+        }
+      };
+      if (phase === 'startup') await deliver();
+      else delivery = Bun.sleep(5).then(deliver);
+      return {
+        close: async () => {
+          await delivery;
+          closed = true;
+        },
+      };
+    });
+    const write = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: string,
+      done?: (error?: Error | null) => void
+    ) => {
+      done?.(
+        String(chunk).includes(json ? '"type":"degraded"' : 'coverage may be incomplete')
+          ? failure
+          : undefined
+      );
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const result = await workflowAttentionCommand(host, process.cwd(), undefined, {
+        json,
+        all: true,
+        labels: [],
+        watch: true,
+      });
+      expect(result).toBe(code === 'EPIPE' ? 0 : 1);
+      expect(rejected).toBe(code === 'EPIPE' ? undefined : failure);
+      expect(closed).toBe(true);
+    } finally {
+      write.mockRestore();
+      watch.mockRestore();
+    }
+  }
+});

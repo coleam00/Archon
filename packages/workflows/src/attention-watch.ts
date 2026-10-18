@@ -272,7 +272,7 @@ export async function watchAttentionQueue(
   const position = (): WorkflowEventCursor => follower?.cursor() ?? start;
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
-  // listener sees one line at a time, and the tail awaits it.
+  // listener sees one line at a time. Feed handlers await the original delivery.
   function emit(line: AttentionStreamLine): Promise<void> {
     if (closed) return Promise.resolve();
     lastLineAt = Date.now();
@@ -471,12 +471,12 @@ export async function watchAttentionQueue(
   };
   const reconciled = new Set<string>();
 
-  const resolve = (
+  const resolve = async (
     runId: string,
     prev: AttentionQueueItem,
     cursor: WorkflowEventCursor,
     run: WorkflowRun | null
-  ): void => {
+  ): Promise<void> => {
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const via = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
@@ -485,7 +485,7 @@ export async function watchAttentionQueue(
       (via !== undefined
         ? { reason: 'answered', answeredVia: via, answeredAt: null }
         : { reason: 'withdrawn' });
-    emit({
+    await emit({
       type: 'resolved',
       cursor,
       project: prev.project,
@@ -495,24 +495,28 @@ export async function watchAttentionQueue(
     });
   };
 
-  const reconcile = (runId: string, view: RunView | null, cursor: WorkflowEventCursor): void => {
+  const reconcile = async (
+    runId: string,
+    view: RunView | null,
+    cursor: WorkflowEventCursor
+  ): Promise<void> => {
     const prev = open.get(runId);
     const item = view?.item ?? null;
     if (item !== null && inQuery(item)) {
       const occurrence = occurrenceOf(item);
       const replaced = prev !== undefined && occurrenceOf(prev) !== occurrence;
-      if (replaced) resolve(runId, prev, cursor, view?.run ?? null);
+      if (replaced) await resolve(runId, prev, cursor, view?.run ?? null);
       if (prev === undefined || !isDeepStrictEqual(prev, item))
-        emit({ type: 'attention', cursor, snapshot: false, project: item.project, item });
+        await emit({ type: 'attention', cursor, snapshot: false, project: item.project, item });
       open.set(runId, item);
       return;
     }
     if (prev === undefined) return;
-    open.delete(runId);
     // Still open at the same occurrence but no longer matching the labels: the stream
     // stops tracking it, and `unmatched` tells the consumer.
-    if (item !== null && occurrenceOf(item) === occurrenceOf(prev)) return;
-    resolve(runId, prev, cursor, view?.run ?? null);
+    if (item === null || occurrenceOf(item) !== occurrenceOf(prev))
+      await resolve(runId, prev, cursor, view?.run ?? null);
+    open.delete(runId);
   };
 
   const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
@@ -523,8 +527,8 @@ export async function watchAttentionQueue(
     if (closed || view === undefined) return;
     const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
     if (!reconciled.has(runId)) {
+      await reconcile(runId, view, cursor);
       reconciled.add(runId);
-      reconcile(runId, view, cursor);
     }
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
@@ -535,7 +539,7 @@ export async function watchAttentionQueue(
         isInAttentionScope(item.project, scope) &&
         !matchesAttentionLabels(item, labels)
       )
-        emit({
+        await emit({
           type: 'unmatched',
           cursor,
           project: item.project,
@@ -546,7 +550,7 @@ export async function watchAttentionQueue(
     }
     if (isTerminalEventType(event.event_type) && inScope) {
       const status = TERMINAL_EVENT_STATUS[event.event_type];
-      emit({
+      await emit({
         type: 'terminal',
         cursor,
         project: view?.project ?? null,
@@ -556,11 +560,16 @@ export async function watchAttentionQueue(
       });
     }
     if (event.event_type === 'workflow_resumed' && inScope)
-      emit({ type: 'resumed', cursor, project: view?.project ?? null, runId, status: 'running' });
+      await emit({
+        type: 'resumed',
+        cursor,
+        project: view?.project ?? null,
+        runId,
+        status: 'running',
+      });
     lost.delete(runId);
     if (view?.run.status === 'running' && inScope) arm(runId, view.project);
     else disarm(runId);
-    await chain;
   };
 
   try {
