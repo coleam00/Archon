@@ -2,7 +2,7 @@
  * Strict resolution for `$nodeId.output.<path>` references (no-silent-drop).
  *
  * Shared by both consumers — prompt/script substitution (`substituteNodeOutputRefs`
- * in dag-executor) and `when:` evaluation (`resolveOutputRef` in condition-evaluator)
+ * in dag/references) and `when:` evaluation (`resolveOutputRef` in condition-evaluator)
  * — so the contract is identical in both.
  *
  * A path is one or more object-field segments; a single field is a depth-1 path.
