@@ -33,7 +33,7 @@ import {
 } from './command-scan';
 import { registerProject } from './project-commands';
 import * as messageDb from '../db/messages';
-import { filterToolIndicators, type ReplyChunk } from './batch-reply';
+import { filterToolIndicators, shiftReplyChunk, type ReplyChunk } from './batch-reply';
 import { dispatchOrchestratorWorkflow } from './workflow-dispatch';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -430,7 +430,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
         !commandFullyParsed &&
         assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS
       ) {
-        assistantMessages.shift();
+        shiftReplyChunk(assistantMessages);
         assistantChunksTruncated = true;
       }
 

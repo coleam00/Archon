@@ -564,6 +564,35 @@ describe('chat turn telemetry', () => {
     expect(platform.sendMessage).toHaveBeenLastCalledWith('conv-1', expected);
   });
 
+  test.each([
+    [18, 1],
+    [19, 1],
+    [20, 1],
+    [21, 1],
+    [19, 25],
+  ])(
+    'batch truncation keeps indicator continuations hidden with %i later blocks and %i fragments',
+    async (count, fragments) => {
+      const answers = Array.from({ length: count }, (_, i) => `Answer ${i + 1}`);
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: '🔧 Running' };
+        yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
+        for (let i = 0; i < fragments; i++) {
+          yield { type: 'agent_message_chunk', text: ' tool output', continuesPreviousBlock: true };
+        }
+        for (const text of answers) yield { type: 'agent_message_chunk', text };
+      });
+      const platform = makePlatform();
+      (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+      expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
+      expect(platform.sendMessage).toHaveBeenLastCalledWith(
+        'conv-1',
+        answers.slice(-20).join('\n\n---\n\n')
+      );
+    }
+  );
+
   test('captures exactly one completed chat turn for a plain conversation', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ codebase_id: null }))

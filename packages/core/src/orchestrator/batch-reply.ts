@@ -5,6 +5,15 @@ export type ReplyChunk = Pick<
   'text' | 'continuesPreviousBlock'
 >;
 
+export function shiftReplyChunk(chunks: ReplyChunk[]): void {
+  const oldest = chunks.shift();
+  const next = chunks[0];
+  // A retained continuation needs its opener to classify indicator sections.
+  if (oldest && next?.continuesPreviousBlock) {
+    chunks[0] = { ...oldest, text: oldest.text + next.text };
+  }
+}
+
 function replyChunks(chunks: readonly (ReplyChunk | string)[]): ReplyChunk[] {
   return chunks.map(chunk => (typeof chunk === 'string' ? { text: chunk } : chunk));
 }

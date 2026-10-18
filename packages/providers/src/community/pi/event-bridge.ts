@@ -284,9 +284,9 @@ export { tryParseStructuredOutput };
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.
  *
  * Most Pi events map 1:1 or are skipped. Text and thinking deltas map to one chunk per
- * delta; `bridgeSession` coalesces them into whole blocks before yielding. Tool
- * execution is split across `tool_execution_start` / `tool_execution_end`, matched by
- * Pi's `toolCallId`.
+ * delta; `bridgeSession` coalesces them at block boundaries or immediate warnings,
+ * marking reply continuations after a warning. Tool execution is split across
+ * `tool_execution_start` / `tool_execution_end`, matched by Pi's `toolCallId`.
  *
  * `agent_end` is not mapped here: its result chunk needs every message of the
  * prompt, which only `bridgeSession` holds.
