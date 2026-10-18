@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   collectBundleSources,
   readBundleIndex,
 } from '../packages/workflows/src/defaults/bundle-inventory';
+import { ROOT_TEST_PLAN } from './repo-tests';
 import {
   changedFilesBetween,
   diffRange,
@@ -51,8 +54,338 @@ function runDecision(
   };
 }
 
+/**
+ * Inspects concrete source paths, including local helpers, without executing test modules.
+ * Dynamic inventories (bundled prompts and skills) have their own owner-based guards below.
+ */
+function markdownTestInputs(repo: string): Map<string, Set<string>> {
+  const tracked = new Set(gitIn(repo, 'ls-files', '-z').split('\0').filter(Boolean));
+  const sources = [...tracked].filter(file => /\.tsx?$/.test(file));
+  const tests = sources.filter(file => /\.(?:test|spec)\.tsx?$/.test(file));
+  if (tests.length === 0) throw new Error(`No tracked tests in ${repo}`);
+  const program = ts.createProgram(
+    sources.map(file => resolve(repo, file)),
+    {
+      noResolve: true,
+      noLib: true,
+      target: ts.ScriptTarget.Latest,
+    }
+  );
+  const checker = program.getTypeChecker();
+  const found = new Map<string, Set<string>>();
+  const rootDirectories = ROOT_TEST_PLAN.flatMap(step =>
+    step.kind === 'root' ? step.selectors.map(selector => resolve(repo, selector)) : []
+  );
+  const cwdFor = (file: string): string => {
+    if (rootDirectories.some(root => file.startsWith(`${root}/`) || file.startsWith(`${root}\\`))) {
+      return repo;
+    }
+    const parts = relative(repo, file).split(/[\\/]/);
+    return parts[0] === 'packages' && tracked.has(`packages/${parts[1]}/package.json`)
+      ? join(repo, 'packages', parts[1])
+      : repo;
+  };
+  const sourcePaths = new Set(sources.map(file => resolve(repo, file)));
+  const localSource = (owner: ts.SourceFile, name: string): ts.SourceFile | undefined => {
+    if (!name.startsWith('.')) return undefined;
+    const stem = resolve(dirname(owner.fileName), name);
+    const path = ['', '.ts', '.tsx', '/index.ts', '/index.tsx']
+      .map(suffix => stem + suffix)
+      .find(candidate => sourcePaths.has(candidate));
+    if (path === undefined) return undefined;
+    const source = program.getSourceFile(path);
+    if (!source) throw new Error(`Cannot read tracked source ${path}`);
+    return source;
+  };
+  const declaration = (node: ts.Node): ts.Declaration | undefined =>
+    checker.getSymbolAtLocation(node)?.declarations?.[0];
+  const imported = (node: ts.Expression): { module: string; name: string } | undefined => {
+    const binding = declaration(ts.isPropertyAccessExpression(node) ? node.expression : node);
+    if (binding && ts.isImportSpecifier(binding) && ts.isIdentifier(node)) {
+      const owner = binding.parent.parent.parent;
+      if (ts.isStringLiteral(owner.moduleSpecifier)) {
+        return {
+          module: owner.moduleSpecifier.text,
+          name: (binding.propertyName ?? binding.name).text,
+        };
+      }
+    }
+    if (
+      binding &&
+      (ts.isNamespaceImport(binding) || ts.isImportClause(binding)) &&
+      ts.isPropertyAccessExpression(node)
+    ) {
+      const owner = ts.isNamespaceImport(binding) ? binding.parent.parent : binding.parent;
+      if (ts.isStringLiteral(owner.moduleSpecifier)) {
+        return { module: owner.moduleSpecifier.text, name: node.name.text };
+      }
+    }
+    return undefined;
+  };
+  const active = new Set<ts.Node>();
+  function value(node: ts.Expression | undefined, cwd: string): string | undefined {
+    if (!node || active.has(node)) return undefined;
+    active.add(node);
+    try {
+      if (ts.isStringLiteralLike(node)) return node.text;
+      if (
+        ts.isParenthesizedExpression(node) ||
+        ts.isAsExpression(node) ||
+        ts.isTypeAssertionExpression(node) ||
+        ts.isSatisfiesExpression(node) ||
+        ts.isNonNullExpression(node)
+      )
+        return value(node.expression, cwd);
+      if (ts.isIdentifier(node)) {
+        const binding = declaration(node);
+        if (
+          binding &&
+          ts.isVariableDeclaration(binding) &&
+          ts.isVariableDeclarationList(binding.parent) &&
+          (binding.parent.flags & ts.NodeFlags.Const) !== 0
+        ) {
+          return value(binding.initializer, cwd);
+        }
+      }
+      if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) {
+        const origin = imported(node);
+        const source = origin && localSource(node.getSourceFile(), origin.module);
+        const symbol = source && checker.getSymbolAtLocation(source);
+        const exported =
+          symbol && checker.getExportsOfModule(symbol).find(item => item.name === origin?.name);
+        const target = exported?.valueDeclaration;
+        if (
+          target &&
+          ts.isVariableDeclaration(target) &&
+          ts.isVariableDeclarationList(target.parent) &&
+          (target.parent.flags & ts.NodeFlags.Const) !== 0
+        )
+          return value(target.initializer, cwd);
+      }
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        ts.isMetaProperty(node.expression) &&
+        node.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+        node.expression.name.text === 'meta'
+      ) {
+        if (node.name.text === 'dir') return dirname(node.getSourceFile().fileName);
+        if (node.name.text === 'url') return pathToFileURL(node.getSourceFile().fileName).href;
+      }
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const args: string[] = [];
+        for (const argument of node.arguments ?? []) {
+          const resolved = value(argument, cwd);
+          if (resolved === undefined) return undefined;
+          args.push(resolved);
+        }
+        const origin = imported(node.expression);
+        if (origin?.module === 'node:path' || origin?.module === 'path') {
+          if (origin.name === 'join') return join(...args);
+          if (origin.name === 'resolve') return resolve(cwd, ...args);
+          if (origin.name === 'dirname' && args.length === 1) return dirname(args[0]);
+        }
+        if (origin?.module === 'node:url' || origin?.module === 'url') {
+          if (origin.name === 'fileURLToPath' && args[0]?.startsWith('file:'))
+            return fileURLToPath(args[0]);
+          if (origin.name === 'pathToFileURL' && args.length === 1)
+            return pathToFileURL(resolve(cwd, args[0])).href;
+        }
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'URL' &&
+          !declaration(node.expression) &&
+          (args.length === 1 || args.length === 2)
+        ) {
+          if (!args[0]?.startsWith('file:') && !args[1]?.startsWith('file:')) return undefined;
+          const url = new URL(args[0], args[1]);
+          return url.protocol === 'file:' ? url.href : undefined;
+        }
+      }
+      return undefined;
+    } finally {
+      active.delete(node);
+    }
+  }
+  const pending = tests.map(file => ({
+    file: resolve(repo, file),
+    cwd: cwdFor(resolve(repo, file)),
+  }));
+  const inspected = new Set(pending.map(({ file, cwd }) => JSON.stringify([file, cwd])));
+  for (const { file, cwd } of pending) {
+    const source = program.getSourceFile(file);
+    if (!source) throw new Error(`Cannot read tracked source ${file}`);
+    const errors = program.getSyntacticDiagnostics(source);
+    if (errors.length)
+      throw new Error(
+        ts.formatDiagnosticsWithColorAndContext(errors, {
+          getCanonicalFileName: name => name,
+          getCurrentDirectory: () => repo,
+          getNewLine: () => '\n',
+        })
+      );
+    const record = (candidate: string | undefined): void => {
+      if (candidate === undefined) return;
+      const absolute = candidate.startsWith('file:')
+        ? fileURLToPath(candidate)
+        : resolve(cwd, candidate);
+      const path = relative(repo, absolute).replaceAll('\\', '/');
+      if (!path.endsWith('.md') || !tracked.has(path)) return;
+      const readers = found.get(path) ?? new Set<string>();
+      readers.add(relative(repo, file).replaceAll('\\', '/'));
+      found.set(path, readers);
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) record(value(node, cwd));
+      if (ts.isCallExpression(node)) {
+        const origin = imported(node.expression);
+        const fsRead =
+          origin &&
+          ['node:fs', 'fs', 'node:fs/promises', 'fs/promises'].includes(origin.module) &&
+          ['readFileSync', 'readFile'].includes(origin.name);
+        const bunRead =
+          ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          node.expression.expression.text === 'Bun' &&
+          !declaration(node.expression.expression) &&
+          node.expression.name.text === 'file';
+        if (fsRead || bunRead) record(value(node.arguments[0], cwd));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    for (const statement of source.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+        continue;
+      const target = localSource(source, statement.moduleSpecifier.text);
+      if (target) {
+        const key = JSON.stringify([target.fileName, cwd]);
+        if (!inspected.has(key)) {
+          inspected.add(key);
+          pending.push({ file: target.fileName, cwd });
+        }
+      }
+    }
+  }
+  return found;
+}
+
+function omittedMarkdownInputs(inputs: Map<string, Set<string>>): string[] {
+  return [...inputs]
+    .filter(([path]) => !shouldRunTestSuite([path]))
+    .map(([path, readers]) => `${path} read by ${[...readers].join(', ')}`);
+}
+
+const MARKDOWN_INPUT_CASES = [
+  '.archon/architecture.md',
+  'packages/providers/src/codex/protocol/README.md',
+  'packages/docs-web/src/content/docs/reference/database.md',
+  'packages/docs-web/src/content/docs/reference/api.md',
+  'packages/docs-web/src/content/docs/reference/node-execution.md',
+  'packages/docs-web/src/content/docs/deployment/docker.md',
+  'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
+  'packages/docs-web/src/content/docs/guides/attention-queue.md',
+  'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
+];
+
 describe('test-suite change decision', () => {
   const trackTempRoot = trackTempRoots();
+  const workspaceInputs = workspaceTestInputs(resolve(import.meta.dir, '..'));
+
+  test('every tracked Markdown path constructed by tests runs the suite', () => {
+    const inputs = markdownTestInputs(resolve(import.meta.dir, '..'));
+    expect(inputs.size).toBeGreaterThan(0);
+    expect(omittedMarkdownInputs(inputs)).toEqual([]);
+  });
+
+  test.each(MARKDOWN_INPUT_CASES)('runs suite and workspace tests for Markdown input %s', file => {
+    expect(shouldRunTestSuite([file])).toBe(true);
+    expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
+  });
+
+  test('an unknown source file runs the suite', () => {
+    expect(shouldRunTestSuite(['unknown.ts'])).toBe(true);
+  });
+
+  test('new readers and imported paths are checked without treating fixtures as checkout inputs', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-inputs-')));
+    const files: Record<string, string> = {
+      'docs/url.md': '',
+      'docs/split.md': '',
+      'docs/imported.md': '',
+      'docs/converted.md': '',
+      'docs/direct.md': '',
+      'docs/bun.md': '',
+      'docs/helper-read.md': '',
+      'docs/unread.md': '',
+      'README.md': '',
+      'packages/a/package.json': '{}',
+      'packages/a/docs/relative.md': '',
+      'packages/a/reader.spec.tsx': `
+        import { readFile } from 'node:fs/promises';
+        await readFile('docs/relative.md', 'utf8');
+      `,
+      'scripts/helper.ts': `
+        import * as paths from 'node:path';
+        import { readFileSync } from 'node:fs';
+        export const doc = paths.resolve(import.meta.dir, '..', 'docs', 'imported.md');
+        readFileSync('docs/helper-read.md', 'utf8');
+      `,
+      'scripts/new-reader.test.ts': `
+        import { readFileSync as read } from 'node:fs';
+        import { readFile } from 'node:fs/promises';
+        import { join as assemble, dirname } from 'node:path';
+        import * as urls from 'node:url';
+        import { doc as importedPath } from './helper';
+        import { mkdtempSync } from 'node:fs';
+        import { tmpdir } from 'node:os';
+        const root = dirname(import.meta.dir);
+        const split = assemble(root, 'docs', 'split.md') as string;
+        read(split, 'utf8');
+        read(new URL('../docs/url.md', import.meta.url), 'utf8');
+        await readFile(importedPath, 'utf8');
+        read(urls.fileURLToPath(new URL('../docs/converted.md', import.meta.url)), 'utf8');
+        read('docs/direct.md', 'utf8');
+        Bun.file('docs/bun.md');
+        read(new URL('https://example.com/docs/unread.md'), 'utf8');
+        const temp = mkdtempSync(assemble(tmpdir(), 'test-'));
+        read(assemble(temp, 'README.md'), 'utf8');
+        read(assemble(root, '..', 'outside.md'), 'utf8');
+        const loopA = loopB;
+        const loopB = loopA;
+        read(loopA, 'utf8');
+        function otherJoin(...args: string[]) { return args.join(''); }
+        otherJoin(root, 'docs/unread.md');
+        function shadowed() {
+          const assemble = otherJoin;
+          assemble(root, 'docs/unread.md');
+        }
+        expect('README.md').toBe('README.md');
+      `,
+    };
+    for (const [file, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(repo, file)), { recursive: true });
+      writeFileSync(join(repo, file), content);
+    }
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'add', '.');
+    const inputs = markdownTestInputs(repo);
+    expect([...inputs.keys()].sort()).toEqual([
+      'docs/bun.md',
+      'docs/converted.md',
+      'docs/direct.md',
+      'docs/helper-read.md',
+      'docs/imported.md',
+      'docs/split.md',
+      'docs/url.md',
+      'packages/a/docs/relative.md',
+    ]);
+    expect(inputs.get('docs/imported.md')?.has('scripts/new-reader.test.ts')).toBe(true);
+    expect(omittedMarkdownInputs(inputs)).toContain(
+      'docs/url.md read by scripts/new-reader.test.ts'
+    );
+    expect(omittedMarkdownInputs(inputs)).toHaveLength(inputs.size);
+  });
 
   test.each(['push', 'pull_request'])('%s skips Markdown-only changes', () => {
     expect(shouldRunTestSuite(['README.md', 'packages/core/notes.md'])).toBe(false);
@@ -256,6 +589,32 @@ describe('diff mode', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('false');
+  });
+
+  test.each([
+    ['packages/docs-web/src/content/docs/reference/database.md', 'true'],
+    ['packages/docs-web/src/content/docs/guides/authoring-workflows.md', 'false'],
+  ])('both CI modes classify a change only to %s', (file, expected) => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-decision-')));
+    gitIn(repo, 'init', '-q', '-b', 'main');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    mkdirSync(dirname(join(repo, file)), { recursive: true });
+    const base = commit(repo, file, 'seed');
+    const head = commit(repo, file, 'change only Markdown');
+    expect(changedFilesBetween(base, head, repo)).toEqual([file]);
+    for (const args of [[], ['--workspace-tests']]) {
+      const result = runDecision(
+        trackTempRoot,
+        'pull_request',
+        { pull_request: { base: { sha: base }, head: { sha: head } } },
+        repo,
+        args
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe(expected);
+    }
   });
 
   test.each(

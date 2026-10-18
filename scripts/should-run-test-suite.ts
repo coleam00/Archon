@@ -5,8 +5,8 @@ const DOCS_DIRECTORY = 'packages/docs-web/';
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
 
 /**
- * Paths that read as documentation but are build inputs, so changing one must run
- * the auxiliary build and service jobs. Markdown in bundled prompts and skills is
+ * Paths that read as documentation but are build or test inputs, so changing one must run
+ * the test suite and auxiliary build and service jobs. Markdown in bundled prompts and skills is
  * executable content rather than ordinary prose.
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
@@ -20,9 +20,20 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
+ *   - Concrete Markdown paths read by tests are checked against this gate by
+ *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 const BUILD_INPUTS = [
   '.claude/skills/',
+  '.archon/architecture.md',
+  'packages/providers/src/codex/protocol/README.md',
+  'packages/docs-web/src/content/docs/reference/database.md',
+  'packages/docs-web/src/content/docs/reference/api.md',
+  'packages/docs-web/src/content/docs/reference/node-execution.md',
+  'packages/docs-web/src/content/docs/deployment/docker.md',
+  'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
+  'packages/docs-web/src/content/docs/guides/attention-queue.md',
+  'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',
   'packages/docs-web/package.json',
 ];
