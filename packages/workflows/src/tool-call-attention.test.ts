@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, mock, test } from 'bun:test';
 const warn = mock(() => undefined);
 mock.module('@archon/paths', () => ({ createLogger: () => ({ warn }) }));

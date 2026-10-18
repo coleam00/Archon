@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

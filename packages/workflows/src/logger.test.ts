@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach, mock, jest } from 'bun:test';
 import { mkdir, rm, readFile, readdir, chmod } from 'fs/promises';
 import { join } from 'path';
