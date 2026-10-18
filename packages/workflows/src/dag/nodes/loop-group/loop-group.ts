@@ -60,7 +60,7 @@ import {
 } from '../../../executor-shared';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
-import { runLayers } from '../../../dag-executor';
+import { runLayers } from '../../run-layers';
 import { sumTokenUsage } from '../../usage';
 import { RunSourceUnreadableError } from '../../node-source';
 import {

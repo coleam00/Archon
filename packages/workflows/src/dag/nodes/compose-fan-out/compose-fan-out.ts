@@ -58,7 +58,7 @@ import {
   safeSendMessage,
 } from '../../../executor-shared';
 import { getLog } from '../../log';
-import { runLayers } from '../../../dag-executor';
+import { runLayers } from '../../run-layers';
 import { sumFanOutCost, sumFanOutTokens } from '../../usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
