@@ -117,7 +117,8 @@ describe('the merge record and the gate', () => {
       'CI at its head is pending (test (ubuntu))',
     ]);
     expect(refused({ checks: { state: 'red', failing: ['lint'], pending: [] } })).toEqual(['CI at its head is red (lint)']);
-    expect(refused({ threads: { unresolved: 2, urls: [] } })).toEqual(['2 review threads are unresolved']);
+    // Whether an open thread holds the merge is the sweep's judgment, not the gate's.
+    expect(refused({ threads: { unresolved: 2, urls: [] } })).toEqual([]);
     expect(refused({}, OLD)).toEqual([`its head is ${HEAD}, not ${OLD}`]);
     expect(refused({ behind: 3 })).toEqual([`it lacks 3 commits of dev at ${OLD}`]);
     expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toEqual([
@@ -466,14 +467,13 @@ describe('the merge queue scripts', () => {
     expect(existsSync(join(gated.artifacts, 'merge/receipts/42.json'))).toBe(false);
   }, 60_000);
 
-  test('the gate refuses a head behind the default branch, a red check or an open thread, and merges nothing', () => {
+  test('the gate refuses a head behind the default branch or a red check, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
     expect(JSON.parse(red.stdout).refusals).toEqual([
       `it lacks 2 commits of dev at ${OLD}`,
       'CI at its head is red (test)',
-      '1 review threads are unresolved',
     ]);
     expect(merges(red)).toEqual([]);
     expect(existsSync(join(red.artifacts, 'receipts'))).toBe(false);

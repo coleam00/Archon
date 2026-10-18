@@ -395,8 +395,9 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
 }
 
 /**
- * Why the pull request may not merge at `head`; empty when it may. The three facts the
- * queue's contract names are the verdict, CI and the threads, each at the head; the
+ * Why the pull request may not merge at `head`; empty when it may. The facts the
+ * queue's contract names are the verdict and CI, each at the head. Whether an open review
+ * thread holds the merge is the sweep's judgment, from the thread facts it reads. The
  * rest keep the merge on an open, non-draft pull request into the default branch at
  * exactly the commit that was judged, and that commit containing the default branch's
  * head, so what was judged is what the merge produces.
@@ -420,7 +421,6 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
     const named = [...facts.checks.failing, ...facts.checks.pending];
     refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
   }
-  if (facts.threads.unresolved > 0) refusals.push(`${String(facts.threads.unresolved)} review threads are unresolved`);
   return refusals;
 }
 
