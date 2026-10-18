@@ -12,6 +12,9 @@ import {
   stubMissingContainer,
   dagOptions,
   makeWorkflowRun,
+  mockCodexCapabilities,
+  mockProviderRegistry,
+  withProviderCapabilities,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import type { IWorkflowStore } from '../store';
@@ -527,5 +530,59 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     // The run stays paused — suspend failure must not mark it failed or complete it.
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // A run refused at preflight must not announce a container it will never use.
+  it.each([
+    [
+      'a strict-schema violation',
+      withProviderCapabilities(mockProviderRegistry, 'codex', {
+        ...mockCodexCapabilities(),
+        containerExec: true,
+      }),
+      /output_format schema strict-mode violation/,
+    ],
+    ['a container-incompatible provider', mockProviderRegistry, /cannot run inside a container/],
+  ])('%s refuses the run before the container is announced', async (_, providers, refusal) => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store, providers),
+          platform,
+          cwd: wbTestDir,
+          workflow: {
+            name: 'refused',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Do the work' },
+                output_format: {
+                  type: 'object',
+                  properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+                  required: ['ready'],
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('refused-run'),
+          workflowProvider: 'codex',
+          execContext: CONTAINER_EXEC,
+          containerCtx: {
+            envId: 'env-x',
+            writeBack: 'approve',
+            backend: makeWritebackBackend(),
+            overlayMode: 'native',
+          },
+        })
+      )
+    ).rejects.toThrow(refusal);
+
+    expect(
+      persistedEvents(store).filter(event => event.event_type.startsWith('container_'))
+    ).toEqual([]);
+    expect(platform.sendMessage).not.toHaveBeenCalled();
   });
 });
