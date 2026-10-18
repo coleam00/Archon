@@ -671,8 +671,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
   [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
-  refuses unless the verdict says Ready at the head, CI is green there and no review
-  thread is unresolved, and the pull request is open, not a draft, into the default
+  refuses unless the verdict says Ready at the head and CI is green there (open review
+  threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
   head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
   writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
