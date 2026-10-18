@@ -21,9 +21,10 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { parseAppCheck } from '../../.shared/app-check-report.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
+import { evidenceResolver } from '../../.shared/evidence-files.ts';
 import { parseDispositions, recordRefusals, shipFailuresInLog } from '../../.shared/merge-gate.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
@@ -45,6 +46,7 @@ function run(cmd: string[]): { code: number; out: string; err: string } {
   return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
 }
 
+const resolveReviewerFile = evidenceResolver(artifacts, '');
 const logPath = join(logDir, `${runId}.jsonl`);
 const refusals = recordRefusals({
   report,
@@ -54,9 +56,8 @@ const refusals = recordRefusals({
   shipFailures:
     logDir !== '' && runId !== '' && existsSync(logPath) ? shipFailuresInLog(readFileSync(logPath, 'utf8')) : [],
   reviewerFile: ref => {
-    if (ref === '') return false;
-    const path = isAbsolute(ref) ? ref : join(artifacts, ref);
-    return existsSync(path) && statSync(path).mtimeMs + 2000 >= reviewStarted;
+    const path = resolveReviewerFile(ref);
+    return path !== null && statSync(path).mtimeMs + 2000 >= reviewStarted;
   },
   issueExists: ref => {
     const number = /^#?(\d+)$/.exec(ref)?.[1];

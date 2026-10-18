@@ -116,9 +116,19 @@ export interface GateFacts {
 export function recordRefusals(facts: GateFacts): string[] {
   const refusals: string[] = [];
   if (!facts.evidenceOk) {
-    refusals.push(
-      `the app check's report did not hold up: ${facts.evidenceProblems.replace(/\n/g, '; ') || 'no evidence verdict'}`
-    );
+    // A line the evidence check flagged stands only on the reviewer's own re-check of it,
+    // written during the review. A problem with the report as a whole has no such way out.
+    const problems = facts.evidenceProblems.split('\n').filter(problem => problem.trim() !== '');
+    const unresolved = problems.filter(problem => {
+      const id = /^([CHPD]\d+)\b/.exec(problem)?.[1];
+      const disposition = id === undefined ? undefined : facts.dispositions.get(id);
+      return !(disposition?.action === 'rechecked' && facts.reviewerFile(disposition.ref.split(/\s+/)[0] ?? ''));
+    });
+    if (problems.length === 0 || unresolved.length > 0) {
+      refusals.push(
+        `the app check's report did not hold up: ${(unresolved.length > 0 ? unresolved : problems).join('; ') || 'no evidence verdict'}`
+      );
+    }
   }
   if (facts.report.noPr) refusals.push('the app check found no pull request to test');
   for (const line of facts.report.lines) {

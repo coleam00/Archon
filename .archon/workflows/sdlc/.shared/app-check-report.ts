@@ -43,6 +43,8 @@ export interface AppCheckReport {
   readonly commit: string;
   readonly overall: 'PASS' | 'FAIL' | null;
   readonly defectsNone: boolean;
+  /** The folder the report says its evidence is in (`Evidence directory: ...`), if any. */
+  readonly evidenceDir: string;
   readonly lines: ReportLine[];
 }
 
@@ -57,6 +59,7 @@ export function parseAppCheck(report: string): AppCheckReport {
   let commit = '';
   let overall: AppCheckReport['overall'] = null;
   let defectsNone = false;
+  let evidenceDir = '';
   const lines: ReportLine[] = [];
   for (const raw of textLines) {
     const header = /^\s*APP CHECK\s+(\S+)\s+at\s+([0-9a-f]{7,40})/i.exec(raw);
@@ -68,6 +71,12 @@ export function parseAppCheck(report: string): AppCheckReport {
     const total = /^\s*Overall:\s*(PASS|FAIL)\b/i.exec(raw);
     if (total !== null) {
       overall = total[1].toUpperCase() as 'PASS' | 'FAIL';
+      continue;
+    }
+    // A backticked path, or the first word; prose may follow on the same line (seen live).
+    const declared = /^\s*Evidence directory:\s*(?:`([^`]+)`|(\S+))/i.exec(raw);
+    if (declared !== null) {
+      evidenceDir = (declared[1] ?? declared[2]).trim().replace(/[.,;]$/, '');
       continue;
     }
     if (/^\s*DEFECTS SEEN:\s*none\b/i.test(raw)) {
@@ -99,7 +108,7 @@ export function parseAppCheck(report: string): AppCheckReport {
       carriedFrom: CARRIED.exec(raw)?.[1] ?? null,
     });
   }
-  return { noPr, pr, commit, overall, defectsNone, lines };
+  return { noPr, pr, commit, overall, defectsNone, evidenceDir, lines };
 }
 
 /** A line that says something is wrong: a failed or unfinished check, a surprise, or a defect. */

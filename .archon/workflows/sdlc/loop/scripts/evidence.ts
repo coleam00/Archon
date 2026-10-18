@@ -16,9 +16,10 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, normalize } from 'node:path';
+import { join, normalize } from 'node:path';
 import { parseAppCheck } from '../../.shared/app-check-report.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
+import { evidenceResolver } from '../../.shared/evidence-files.ts';
 import { evidenceProblems, filesReadInLog } from '../../.shared/merge-gate.ts';
 
 const report = parseAppCheck(text(process.env.INPUTS_REPORT));
@@ -39,9 +40,10 @@ const opened =
     ? filesReadInLog(readFileSync(logPath, 'utf8'), 'check-app', key)
     : new Set<string>();
 
+const resolve = evidenceResolver(artifacts, report.evidenceDir);
 const problems = evidenceProblems(report, started, cited => {
-  const path = isAbsolute(cited) ? cited : join(artifacts, cited);
-  if (!existsSync(path)) return { exists: false, mtimeMs: 0, opened: false };
+  const path = resolve(cited);
+  if (path === null) return { exists: false, mtimeMs: 0, opened: false };
   return { exists: true, mtimeMs: statSync(path).mtimeMs, opened: opened.has(key(path)) };
 });
 

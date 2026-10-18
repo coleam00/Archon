@@ -96,8 +96,9 @@ D1 NEW|PRE-EXISTING (<default-branch run or baseline row>)|QUESTION  <what a use
 Overall: PASS | FAIL (<the main reason>)
 ```
 
-Write `DEFECTS SEEN: none` when there are none. Evidence paths are relative to the artifacts
-directory or absolute. A line carried from an earlier check writes `(carried from <sha>)` in place of
+Write `DEFECTS SEEN: none` when there are none. Evidence paths are absolute, or relative to the
+artifacts directory; when you keep evidence in a subfolder, put one line `Evidence directory: <its absolute path>`
+above the report and cite paths relative to it. A pattern (`landmarks-*.txt`) cites the files it matches. A line carried from an earlier check writes `(carried from <sha>)` in place of
 new evidence.
 
 `Overall` is PASS only when every criterion passed, every holdout line passed or failed the same way

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseAppCheck } from '../../workflows/sdlc/.shared/app-check-report';
+import { evidenceResolver } from '../../workflows/sdlc/.shared/evidence-files';
 import {
   evidenceProblems,
   filesReadInLog,
@@ -49,6 +51,29 @@ describe('app check report', () => {
     expect(byId.D1.verdict).toBe('PRE-EXISTING');
     expect(byId.H2.qualifier).toBe('pre-existing: holdout-baseline.md 2026-10-17 row 4');
     expect(byId.C2.carriedFrom).toBe('0123abcd');
+  });
+
+  it('finds cited files where the report says they are (seen live: evidence in a subfolder)', () => {
+    const artifacts = mkdtempSync(join(tmpdir(), 'evidence-'));
+    mkdirSync(join(artifacts, 'appcheck', 'normal'), { recursive: true });
+    writeFileSync(join(artifacts, 'appcheck', 'town.png'), 'x');
+    writeFileSync(join(artifacts, 'appcheck', 'normal', 'spawn.png'), 'x');
+    writeFileSync(join(artifacts, 'top.txt'), 'x');
+    const report = parseAppCheck(`Evidence directory: \`${join(artifacts, 'appcheck')}\`\nC1 PASS  x  y  [evidence: town.png]`);
+    expect(report.evidenceDir).toBe(join(artifacts, 'appcheck'));
+    const withProse = parseAppCheck(
+      `Evidence directory: \`${join(artifacts, 'appcheck')}\`. The game ran in harness mode on port 8770.`
+    );
+    expect(withProse.evidenceDir).toBe(join(artifacts, 'appcheck'));
+    const declared = evidenceResolver(artifacts, report.evidenceDir);
+    expect(declared('town.png')).toBe(join(artifacts, 'appcheck', 'town.png'));
+    expect(declared('top.txt')).toBe(join(artifacts, 'top.txt'));
+    const undeclared = evidenceResolver(artifacts, '');
+    expect(undeclared('normal/spawn.png')).toBe(join(artifacts, 'appcheck', 'normal', 'spawn.png'));
+    expect(undeclared('missing.png')).toBeNull();
+    expect(declared('town*.png')).toBe(join(artifacts, 'appcheck', 'town.png'));
+    expect(declared('nothing-*.txt')).toBeNull();
+    rmSync(artifacts, { recursive: true, force: true });
   });
 
   it('a path annotated by the agent is read as the path (seen live: "drive-diff.txt (0 bytes)")', () => {
@@ -232,6 +257,27 @@ describe('merge gate', () => {
     );
     expect([...quoted.keys()]).toEqual(['D1']);
     expect(parseDispositions(JSON.stringify([{ line: 'D12 NEW x', action: 'issue', ref: '#1' }])).has('D12')).toBe(true);
+  });
+
+  it('a line the evidence check flagged is cleared only by the reviewer’s own re-check', () => {
+    const problems = 'C1 cites town.png, which does not exist\nH1 cites h1.txt, which does not exist';
+    const rechecked = parseDispositions(
+      JSON.stringify([
+        { line: 'C1', action: 'rechecked', ref: 'recheck.md' },
+        { line: 'H1', action: 'rechecked', ref: 'recheck.md' },
+      ])
+    );
+    const base = { evidenceOk: false, evidenceProblems: problems, dispositions: rechecked };
+    expect(gate(CLEAN, { ...base, reviewerFile: () => true })).toEqual([]);
+    expect(gate(CLEAN, { ...base, reviewerFile: () => false })).toHaveLength(1);
+    const half = parseDispositions(JSON.stringify([{ line: 'C1', action: 'rechecked', ref: 'recheck.md' }]));
+    expect(gate(CLEAN, { ...base, dispositions: half, reviewerFile: () => true })).toEqual([
+      "the app check's report did not hold up: H1 cites h1.txt, which does not exist",
+    ]);
+    // A problem with the report as a whole has no re-check that clears it.
+    expect(
+      gate(CLEAN, { ...base, evidenceProblems: 'Overall says PASS over D1', reviewerFile: () => true })
+    ).toHaveLength(1);
   });
 
   it('malformed dispositions are ignored, never trusted', () => {
