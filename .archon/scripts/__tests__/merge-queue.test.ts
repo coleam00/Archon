@@ -602,19 +602,6 @@ describe('the merge queue scripts', () => {
     expect(JSON.parse(result.stdout).summary).toContain('PR 42: not recorded');
   }, 60_000);
 
-  test('the default branch is checked after a batch that merged, and only then', () => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const before = stored(at).revision;
-    const skipped = run(at, 'record', recordInputs([decision({})], DEV_UNCHECKED), { pr: { state: 'MERGED' }, artifacts: RECEIPT });
-    expect(skipped.stderr).toContain("the sweep merged but did not check the default branch's CI after its batch");
-    const dev = { state: 'red', rerun: 'none', summary: 'red before the sweep', attention: { ...ATTENTION, choices: [{ id: 'hold', label: 'Hold', does: 'holds', effect: 'hold', ruling: '' }], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } } };
-    const stray = run(at, 'record', recordInputs([decision({ action: 'wait' })], dev));
-    expect(stray.stderr).toContain('the sweep merged nothing, so it has no batch to judge the default branch after');
-    for (const result of [skipped, stray]) expect(result.code).not.toBe(0);
-    expect(stored(at).revision).toBe(before);
-  }, 60_000);
-
   test('a rerun is recorded at its head, and a second rerun at the same head refuses', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));

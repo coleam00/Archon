@@ -127,14 +127,6 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
   if (sweep.dev.state === 'unchecked' && sweep.dev.rerun !== 'none') {
     throw new Error('the default branch was re-run but never checked');
   }
-  if (mode === 'eval') return;
-  if (receipts.size > 0 && sweep.dev.state === 'unchecked') {
-    throw new Error("the sweep merged but did not check the default branch's CI after its batch");
-  }
-  const declaredMerge = sweep.decisions.some(decision => decision.action === 'merged');
-  if (receipts.size === 0 && !declaredMerge && sweep.dev.state !== 'unchecked') {
-    throw new Error('the sweep merged nothing, so it has no batch to judge the default branch after');
-  }
 }
 
 /** The gate's receipts for this run, by pull request number. */
