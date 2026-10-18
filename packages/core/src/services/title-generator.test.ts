@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import { captureStubLogOutput } from '@archon/paths/test-utils';
 import type { MessageChunk, SendQueryOptions } from '@archon/providers/types';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
@@ -81,26 +82,20 @@ describe('title-generator', () => {
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
   });
 
-  test('strips surrounding quotes from AI response', async () => {
+  test.each([
+    ['"Summarize Project README"', 'Summarize Project README'],
+    ['Title: Debug Auth Module', 'Debug Auth Module'],
+    ['Fix Login Bug.', 'Fix Login Bug'],
+    ['Fix Login Bug\nThis is an explanation', 'Fix Login Bug'],
+  ])('cleans %j to %j', async (response, expectedTitle) => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: '"Summarize Project README"' };
+      yield { type: 'agent_message_chunk', text: response };
       yield { type: 'result' };
     });
 
-    await generateAndSetTitle('conv-2', 'Summarize the README', 'claude', '/tmp');
+    await generateAndSetTitle('conv-clean', 'Fix the login bug', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-2', 'Summarize Project README');
-  });
-
-  test('strips "Title: " prefix from AI response', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Title: Debug Auth Module' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-3', 'Debug the auth module', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-3', 'Debug Auth Module');
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-clean', expectedTitle);
   });
 
   test('handles empty AI response with fallback to truncated message', async () => {
@@ -113,16 +108,48 @@ describe('title-generator', () => {
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-4', 'Help me debug this issue');
   });
 
-  test('handles AI client error with fallback to truncated message', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('API key not set');
-    });
+  test.each(['provider error', 'failed turn', 'generated title', 'empty title'] as const)(
+    '%s never logs message contents',
+    async scenario => {
+      const userMessage =
+        scenario === 'empty title' ? 'Title:' : 'PRIVATE_MESSAGE_4397 '.repeat(10);
+      const expectedTitle =
+        userMessage.length > 100 ? userMessage.slice(0, 97) + '...' : userMessage;
+      mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
+        if (scenario === 'provider error') throw new Error(`Provider rejected: ${userMessage}`);
+        yield { type: 'agent_message_chunk', text: userMessage };
+        yield {
+          type: 'result',
+          ...(scenario === 'failed turn'
+            ? { failure: { class: 'transient' as const, evidence: userMessage } }
+            : {}),
+        };
+      });
 
-    await generateAndSetTitle('conv-5', 'Fix the login bug', 'claude', '/tmp');
+      const logOutput = captureStubLogOutput(mockLogger);
+      try {
+        await generateAndSetTitle('conv-private', userMessage, 'claude', '/tmp');
+      } finally {
+        logOutput.restore();
+      }
 
-    // Should not throw — fire-and-forget safe
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
-  });
+      expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
+      expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-private', expectedTitle);
+      const output = logOutput.output();
+      expect(output).toContain('"conversationDbId":"conv-private"');
+      if (scenario === 'provider error' || scenario === 'failed turn') {
+        expect(output).toContain('"msg":"title.generate_failed"');
+        expect(output).toContain('"msg":"title.fallback_set"');
+      } else if (scenario === 'empty title') {
+        expect(output).toContain('"msg":"title.generate_empty"');
+      } else {
+        expect(output).toContain('"msg":"title.generate_completed"');
+      }
+      expect(output).not.toContain(
+        scenario === 'empty title' ? userMessage : 'PRIVATE_MESSAGE_4397'
+      );
+    }
+  );
 
   test('a failed turn falls back instead of titling the conversation with partial text', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
@@ -237,19 +264,27 @@ describe('title-generator', () => {
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {
+    const userMessage = 'PRIVATE_DOUBLE_FAILURE_4397';
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('AI failure');
+      throw new Error(`AI failure: ${userMessage}`);
     });
 
     mockUpdateConversationTitle.mockImplementation(() =>
-      Promise.reject(new Error('DB write failure'))
+      Promise.reject(new Error(`DB write failure: ${userMessage}`))
     );
 
-    // Should NOT throw despite both failures
-    await generateAndSetTitle('conv-12', 'Some message', 'claude', '/tmp');
+    const logOutput = captureStubLogOutput(mockLogger);
+    try {
+      await generateAndSetTitle('conv-12', userMessage, 'claude', '/tmp');
+    } finally {
+      logOutput.restore();
+    }
 
-    // Verify it attempted the fallback write
-    expect(mockUpdateConversationTitle).toHaveBeenCalled();
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-12', userMessage);
+    const output = logOutput.output();
+    expect(output).toContain('"conversationDbId":"conv-12"');
+    expect(output).toContain('"msg":"title.fallback_also_failed"');
+    expect(output).not.toContain(userMessage);
   });
 
   test('collects text from multiple streaming chunks', async () => {
@@ -263,41 +298,5 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-13', 'Debug the auth module', 'claude', '/tmp');
 
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-13', 'Debug Auth Module');
-  });
-
-  test('strips trailing punctuation from title', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Fix Login Bug.' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-14', 'Fix the login bug', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-14', 'Fix Login Bug');
-  });
-
-  test('takes only first line of multi-line response', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'agent_message_chunk', text: 'Fix Login Bug\nThis is an explanation' };
-      yield { type: 'result' };
-    });
-
-    await generateAndSetTitle('conv-15', 'Fix the login bug', 'claude', '/tmp');
-
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-15', 'Fix Login Bug');
-  });
-
-  test('long user message is truncated in fallback', async () => {
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('AI failure');
-    });
-
-    const longMessage = 'A'.repeat(200);
-
-    await generateAndSetTitle('conv-16', longMessage, 'claude', '/tmp');
-
-    const savedTitle = mockUpdateConversationTitle.mock.calls[0][1] as string;
-    expect(savedTitle.length).toBeLessThanOrEqual(100);
-    expect(savedTitle).toEndWith('...');
   });
 });

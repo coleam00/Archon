@@ -34,17 +34,8 @@ import {
   log,
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { parse as parseDotenv } from 'dotenv';
 import { join } from 'path';
-import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import { copyArchonSkill } from './skill';
-import { spawn, type ChildProcess } from 'child_process';
-import {
-  GITHUB_APP_CREDENTIAL_KEYS,
-  GITHUB_PAT_KEYS,
-  selectGitHubAuthMode,
-} from '@archon/core/utils/github-auth-mode';
-import { isMaintainedProvider } from '@archon/provider-contract';
 import {
   SetupExit,
   cancelSetup,
@@ -57,28 +48,22 @@ import { writeHomePiModelConfig } from './setup-provider-auth';
 import {
   checkExistingConfig,
   generateEnvContent,
-  hasCompleteAppCredential,
-  mergeScopedEnv,
   resolveScopedEnvPath,
   writeScopedEnv,
 } from './setup-env';
 import { collectAIConfig, confirmModelTiers, writeInstallDefaults } from './setup-ai';
-import { collectGitHubConfig } from './setup-github';
+import {
+  assertEffectiveGitHubAuth,
+  collectGitHubConfig,
+  reconcileGitHubAuth,
+} from './setup-github';
 import {
   collectBotDisplayName,
   collectPlatforms,
   collectSlackConfig,
   collectTelegramConfig,
 } from './setup-platforms';
-
-// =============================================================================
-// Types
-// =============================================================================
-
-interface SpawnResult {
-  success: boolean;
-  error?: string;
-}
+import { spawnTerminalWithSetup } from './setup-spawn';
 
 // =============================================================================
 // File Generation and Writing
@@ -138,154 +123,6 @@ export function bootstrapProjectConfig(projectPath: string): BootstrapProjectCon
       path: configPath,
       error: e.message,
     };
-  }
-}
-
-// =============================================================================
-// Terminal Spawning
-// =============================================================================
-
-/**
- * Try to spawn a process, catching both sync and async errors
- * Returns true if spawn succeeded, false if it failed
- */
-function trySpawn(
-  command: string,
-  args: string[],
-  options: { detached: boolean; stdio: 'ignore' }
-): boolean {
-  try {
-    const child: ChildProcess = spawn(command, args, options);
-    // Check if spawn failed immediately (child.pid will be undefined)
-    if (!child.pid) {
-      return false;
-    }
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Spawn a new terminal window with the setup command on Windows
- * Tries: Windows Terminal -> cmd.exe with start
- */
-function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
-  // Try Windows Terminal first (modern Windows 10/11)
-  if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Fallback to cmd.exe with start command (works on all Windows)
-  if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  return { success: false, error: 'Could not open terminal. Please run `archon setup` manually.' };
-}
-
-/**
- * Spawn terminal on macOS
- * Uses osascript to open Terminal.app (works with default terminal)
- */
-function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
-  // Escape single quotes in path for AppleScript
-  const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
-
-  if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
-    return { success: true };
-  }
-
-  return { success: false, error: 'Could not open Terminal. Please run `archon setup` manually.' };
-}
-
-/**
- * Spawn terminal on Linux
- * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
- */
-function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
-  const setupCmd = `${command}; exec bash`;
-
-  // Try x-terminal-emulator first (Debian/Ubuntu default)
-  if (
-    trySpawn(
-      'x-terminal-emulator',
-      ['--working-directory=' + repoPath, '-e', `bash -c "${setupCmd}"`],
-      {
-        detached: true,
-        stdio: 'ignore',
-      }
-    )
-  ) {
-    return { success: true };
-  }
-
-  // Try gnome-terminal (GNOME)
-  if (
-    trySpawn('gnome-terminal', ['--working-directory=' + repoPath, '--', 'bash', '-c', setupCmd], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Try konsole (KDE)
-  if (
-    trySpawn('konsole', ['--workdir', repoPath, '-e', 'bash', '-c', setupCmd], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Try xterm (fallback, available on most systems)
-  if (
-    trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  return {
-    success: false,
-    error: 'Could not find a terminal emulator. Please run `archon setup` manually.',
-  };
-}
-
-/**
- * Spawn a new terminal window with archon setup
- */
-export function spawnTerminalWithSetup(
-  repoPath: string,
-  providers?: readonly string[]
-): SpawnResult {
-  if (providers?.some(id => !isMaintainedProvider(id)))
-    throw new Error('Invalid setup provider selection');
-  const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
-  const platform = process.platform;
-
-  if (platform === 'win32') {
-    return spawnWindowsTerminal(repoPath, command);
-  } else if (platform === 'darwin') {
-    return spawnMacTerminal(repoPath, command);
-  } else {
-    return spawnLinuxTerminal(repoPath, command);
   }
 }
 
@@ -462,51 +299,12 @@ async function runSetup(options: SetupOptions): Promise<void> {
     config.botDisplayName = await collectBotDisplayName();
   }
 
-  let replaceGitHubAuth = false;
-  const otherEnvPath = resolveScopedEnvPath(
-    scope === 'home' ? 'project' : 'home',
-    options.repoPath
-  );
-  const otherGitHubEnv =
-    otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)
-      ? parseDotenv(readFileSync(otherEnvPath, 'utf8'))
-      : {};
-  const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
-  if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
-    cancel(
-      `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
-    );
-    exitSetup(1);
-  }
-  if (config.platforms.github) {
-    const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
-    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
-      const other = otherGitHubEnv;
-      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-      if (conflictingKeys.some(key => other[key])) {
-        cancel(
-          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
-        );
-        exitSetup(1);
-      }
-    }
-    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-    const replacePartialApp =
-      config.github?.mode === 'app' &&
-      !hasCompleteAppCredential(saved) &&
-      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
-    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
-      const approved = await confirm({
-        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
-        initialValue: false,
-      });
-      if (isCancel(approved) || !approved) {
-        cancel('Setup cancelled. Existing configuration was not changed.');
-        exitSetup(0);
-      }
-      replaceGitHubAuth = true;
-    }
-  }
+  const githubAuth = await reconcileGitHubAuth(config, {
+    scope,
+    force,
+    repoPath: options.repoPath,
+    targetEnvPath,
+  });
 
   // Generate and write configuration. Wrap in try/catch so any fs exception
   // (permission denied, read-only FS, backup copy failure, etc.) stops the
@@ -517,49 +315,18 @@ async function runSetup(options: SetupOptions): Promise<void> {
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
     const envContent = generateEnvContent(config);
-    const selected = parseDotenv(
-      !force && existsSync(targetEnvPath)
-        ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth).content
-        : envContent
-    );
-    const inheritedEnv = options.inheritedEnv ?? process.env;
-    const effective = {
-      ...inheritedEnv,
-      ...(scope === 'project' ? otherGitHubEnv : selected),
-      ...(scope === 'project' ? selected : otherGitHubEnv),
-    };
-    const mode = selectGitHubAuthMode(effective);
-    if (config.github?.mode === 'pat' && mode.kind !== 'pat') {
-      throw new Error(
-        mode.kind === 'conflict'
-          ? mode.message
-          : 'Effective GitHub configuration does not activate PAT mode. Check GITHUB_TOKEN and WEBHOOK_SECRET in the environment and both Archon env files.'
-      );
-    }
-    if (
-      config.github?.mode === 'app' ||
-      (!config.github &&
-        mode.kind !== 'pat' &&
-        [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
-          GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
-        ))
-    ) {
-      if (mode.kind !== 'app') {
-        throw new Error(
-          mode.kind === 'conflict'
-            ? mode.message
-            : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
-        );
-      }
-      if (!loadGitHubAppConfig(effective)) {
-        throw new Error('Effective GitHub App configuration could not be loaded.');
-      }
-    }
+    assertEffectiveGitHubAuth(config, envContent, {
+      scope,
+      force,
+      targetEnvPath,
+      inheritedEnv: options.inheritedEnv ?? process.env,
+      ...githubAuth,
+    });
     writeResult = writeScopedEnv(envContent, {
       scope,
       repoPath: options.repoPath,
       force,
-      replaceGitHubAuth,
+      replaceGitHubAuth: githubAuth.replaceGitHubAuth,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -610,83 +377,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
     log.info(`Backup written to ${writeResult.backupPath}`);
   }
 
-  // Offer to install the Archon skill
-  const shouldCopySkill = await confirm({
-    message: 'Install the Archon skill in your project? (recommended)',
-    initialValue: true,
-  });
+  const { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath } =
+    await installProjectSkill(options.repoPath, s);
 
-  if (isCancel(shouldCopySkill)) cancelSetup();
-
-  let skillInstalledPath: string | null = null;
-  let skillInstalledBase: string | null = null;
-  let projectConfigCreatedPath: string | null = null;
-
-  if (shouldCopySkill) {
-    const skillTargetRaw = await text({
-      message: 'Project path to install the skill:',
-      defaultValue: options.repoPath,
-      placeholder: options.repoPath,
-    });
-
-    if (isCancel(skillTargetRaw)) cancelSetup();
-
-    s.start('Installing Archon skill...');
-    try {
-      await copyArchonSkill(skillTargetRaw);
-    } catch (err) {
-      s.stop('Archon skill installation failed');
-      cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
-      exitSetup(1);
-    }
-    s.stop('Archon skill installed');
-    skillInstalledBase = skillTargetRaw;
-    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
-
-    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
-    if (bootstrapResult.state === 'created') {
-      log.info(`Created project config: ${bootstrapResult.path}`);
-      projectConfigCreatedPath = bootstrapResult.path;
-    } else if (bootstrapResult.state === 'failed') {
-      // Non-fatal — log so silent permission errors don't masquerade as a
-      // successful setup. The user can hand-create the file later.
-      log.warn(`Could not create ${bootstrapResult.path}: ${bootstrapResult.error}`);
-    }
-  }
-
-  // Optional: configure docs directory
-  const wantsDocsPath = await confirm({
-    message: 'Configure a non-default docs directory? (default: docs/)',
-    initialValue: false,
-  });
-
-  if (!isCancel(wantsDocsPath) && wantsDocsPath) {
-    const docsPath = await text({
-      message: 'Where are your project docs? (relative to repo root)',
-      placeholder: 'docs/',
-    });
-
-    if (!isCancel(docsPath) && typeof docsPath === 'string' && docsPath.trim()) {
-      try {
-        const archonDir = join(options.repoPath, '.archon');
-        mkdirSync(archonDir, { recursive: true });
-        const configPath = join(archonDir, 'config.yaml');
-        const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        if (!existing.includes('docs:')) {
-          const escaped = docsPath.trim().replace(/"/g, '\\"');
-          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
-        } else {
-          note(
-            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
-            'Docs path not written'
-          );
-        }
-      } catch (err) {
-        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
-        exitSetup(1);
-      }
-    }
-  }
+  await configureDocsPath(options.repoPath);
 
   // Summary
   const configuredPlatforms: string[] = [];
@@ -773,4 +467,98 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   outro('Setup complete!');
+}
+
+/**
+ * Offer to install the Archon skill, and bootstrap `.archon/config.yaml`, in
+ * a project the operator names.
+ */
+async function installProjectSkill(
+  repoPath: string,
+  s: ReturnType<typeof spinner>
+): Promise<{
+  skillInstalledPath: string | null;
+  skillInstalledBase: string | null;
+  projectConfigCreatedPath: string | null;
+}> {
+  const shouldCopySkill = await confirm({
+    message: 'Install the Archon skill in your project? (recommended)',
+    initialValue: true,
+  });
+
+  if (isCancel(shouldCopySkill)) cancelSetup();
+
+  let skillInstalledPath: string | null = null;
+  let skillInstalledBase: string | null = null;
+  let projectConfigCreatedPath: string | null = null;
+
+  if (shouldCopySkill) {
+    const skillTargetRaw = await text({
+      message: 'Project path to install the skill:',
+      defaultValue: repoPath,
+      placeholder: repoPath,
+    });
+
+    if (isCancel(skillTargetRaw)) cancelSetup();
+
+    s.start('Installing Archon skill...');
+    try {
+      await copyArchonSkill(skillTargetRaw);
+    } catch (err) {
+      s.stop('Archon skill installation failed');
+      cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
+      exitSetup(1);
+    }
+    s.stop('Archon skill installed');
+    skillInstalledBase = skillTargetRaw;
+    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
+
+    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
+    if (bootstrapResult.state === 'created') {
+      log.info(`Created project config: ${bootstrapResult.path}`);
+      projectConfigCreatedPath = bootstrapResult.path;
+    } else if (bootstrapResult.state === 'failed') {
+      // Non-fatal — log so silent permission errors don't masquerade as a
+      // successful setup. The user can hand-create the file later.
+      log.warn(`Could not create ${bootstrapResult.path}: ${bootstrapResult.error}`);
+    }
+  }
+
+  return { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath };
+}
+
+/** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
+async function configureDocsPath(repoPath: string): Promise<void> {
+  const wantsDocsPath = await confirm({
+    message: 'Configure a non-default docs directory? (default: docs/)',
+    initialValue: false,
+  });
+
+  if (!isCancel(wantsDocsPath) && wantsDocsPath) {
+    const docsPath = await text({
+      message: 'Where are your project docs? (relative to repo root)',
+      placeholder: 'docs/',
+    });
+
+    if (!isCancel(docsPath) && typeof docsPath === 'string' && docsPath.trim()) {
+      try {
+        const archonDir = join(repoPath, '.archon');
+        mkdirSync(archonDir, { recursive: true });
+        const configPath = join(archonDir, 'config.yaml');
+        const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+        if (!existing.includes('docs:')) {
+          const escaped = docsPath.trim().replace(/"/g, '\\"');
+          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
+        } else {
+          note(
+            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
+            'Docs path not written'
+          );
+        }
+      } catch (err) {
+        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
+        exitSetup(1);
+      }
+    }
+  }
 }
