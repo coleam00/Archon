@@ -76,6 +76,16 @@ describe('app check report', () => {
     rmSync(artifacts, { recursive: true, force: true });
   });
 
+  it('a brace group cites each of its files (seen live: ac/landmarks-{spawn, nw}.txt)', () => {
+    const report = parseAppCheck('C1 PASS  x  y  [evidence: ac/landmarks-{spawn, nw, after-raid}.txt, ac/town.png]');
+    expect(report.lines[0].evidence).toEqual([
+      'ac/landmarks-spawn.txt',
+      'ac/landmarks-nw.txt',
+      'ac/landmarks-after-raid.txt',
+      'ac/town.png',
+    ]);
+  });
+
   it('a path annotated by the agent is read as the path (seen live: "drive-diff.txt (0 bytes)")', () => {
     const report = parseAppCheck('C4 PASS  outputs match  identical  [evidence: drive-diff.txt (0 bytes), `run.log`]');
     expect(report.lines[0].evidence).toEqual(['drive-diff.txt', 'run.log']);

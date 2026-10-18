@@ -52,6 +52,31 @@ const LINE = /^\s*([CHPD])(\d+)\s+([A-Za-z-]+)(?:\s*\(([^)]*)\))?\s*(.*)$/;
 const EVIDENCE = /\[evidence:\s*([^\]]*)\]\s*$/i;
 const CARRIED = /\(carried from ([0-9a-f]{7,40})\)/i;
 
+/**
+ * The paths in an `[evidence: ...]` list. Commas inside a brace group belong to it, and a
+ * group expands the way a shell would: `ac/landmarks-{spawn, nw}.txt` cites two files
+ * (seen live: the group was split at its commas and every piece called missing).
+ */
+export function citations(list: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of list) {
+    if (ch === '{') depth++;
+    if (ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+    } else current += ch;
+  }
+  parts.push(current);
+  return parts.flatMap(part => {
+    const group = /^(.*?)\{([^{}]*)\}(.*)$/.exec(part.trim());
+    if (group === null) return [part];
+    return group[2].split(',').map(choice => `${group[1]}${choice.trim()}${group[3]}`);
+  });
+}
+
 export function parseAppCheck(report: string): AppCheckReport {
   const textLines = report.split(/\r?\n/);
   const noPr = textLines.some(line => /^\s*NO PR\b/.test(line));
@@ -95,8 +120,7 @@ export function parseAppCheck(report: string): AppCheckReport {
       evidence:
         evidence === null
           ? []
-          : evidence[1]
-              .split(',')
+          : citations(evidence[1])
               // An agent annotates a path ("diff.txt (0 bytes)"); the path is what is cited.
               .map(path =>
                 path
