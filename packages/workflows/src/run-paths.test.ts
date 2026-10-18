@@ -1,71 +1,32 @@
 // @archon-test-isolated
-import { describe, expect, it, mock } from 'bun:test';
+import { afterAll, describe, expect, it, mock } from 'bun:test';
 import { join } from 'path';
 import type { WorkflowDeps } from './deps';
 import { resolveProjectPaths, resolveScopeArtifactsDir } from './run-paths';
 import type { WorkflowDefinition } from './schemas';
 
-type FakeStorageKey =
-  | { kind: 'repo'; owner: string; repo: string }
-  | { kind: 'folder'; slug: string }
-  | { kind: 'cwd'; cwd: string };
-function fakeResolveProjectStorageKey(
-  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
-  cwd: string
-): FakeStorageKey {
-  if (codebase) {
-    if (codebase.kind === 'folder') return { kind: 'folder', slug: codebase.name };
-    const [owner, repo] = codebase.name.split('/');
-    if (owner && repo) return { kind: 'repo', owner, repo };
-    const base = codebase.default_cwd.split(/[\\/]/).filter(Boolean).pop();
-    if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
-  }
-  return { kind: 'cwd', cwd };
-}
-/** Root of the fake workspace tree; segments joined so win32 separators match. */
-const WS = join('/tmp', 'ws');
+const originalHome = process.env.ARCHON_HOME;
+process.env.ARCHON_HOME = join('/tmp', 'run-paths-home');
+afterAll(() => {
+  if (originalHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = originalHome;
+});
+
+const WS = join(process.env.ARCHON_HOME, 'workspaces');
 function wsPath(...segments: string[]): string {
   return join(WS, ...segments);
 }
 
-function fakeStoragePathsForRoot(root: string): {
-  root: string;
-  artifactsRoot: string;
-  logsDir: string;
-  stateRoot: string;
-  workflowSourceRoot: string;
-} {
-  // join(), not template literals — production composes these with join(), so a
-  // forward-slash fake would never match on Windows.
-  return {
-    root,
-    artifactsRoot: join(root, 'artifacts'),
-    logsDir: join(root, 'logs'),
-    stateRoot: join(root, 'state'),
-    workflowSourceRoot: join(root, 'workflow-source'),
-  };
-}
-function fakeGetProjectStoragePaths(
-  key: FakeStorageKey
-): ReturnType<typeof fakeStoragePathsForRoot> {
-  const root =
-    key.kind === 'repo'
-      ? wsPath(key.owner, key.repo)
-      : key.kind === 'folder'
-        ? wsPath('_folder', key.slug)
-        : wsPath('_cwd', key.cwd.split(/[\\/]/).filter(Boolean).pop() ?? '_');
-  return fakeStoragePathsForRoot(root);
-}
-
+const actualPaths = await import('@archon/paths');
+const resolveProjectStorageKey = mock(actualPaths.resolveProjectStorageKey);
 mock.module('@archon/paths', () => ({
+  ...actualPaths,
   createLogger: () => ({ warn: mock(() => {}), error: mock(() => {}) }),
-  resolveProjectStorageKey: mock(fakeResolveProjectStorageKey),
-  getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
-  getStoragePathsForRoot: mock(fakeStoragePathsForRoot),
-  isInsideArchonHome: mock((candidate: string) => candidate.startsWith(WS)),
-  getScopeArtifactsPath: mock((root: string, wf: string, scope: string) =>
-    join(root, 'scopes', wf, scope)
-  ),
+  resolveProjectStorageKey,
+  getProjectStoragePaths: mock(actualPaths.getProjectStoragePaths),
+  getStoragePathsForRoot: mock(actualPaths.getStoragePathsForRoot),
+  isInsideArchonHome: mock(actualPaths.isInsideArchonHome),
+  getScopeArtifactsPath: mock(actualPaths.getScopeArtifactsPath),
 }));
 function makeStore(
   overrides: Partial<Pick<WorkflowDeps['store'], 'getCodebase'>> = {}
@@ -94,12 +55,12 @@ describe('resolveProjectPaths', () => {
     const paths = await resolveProjectPaths(deps, '/tmp/platform', RUN_ID, 'cb-folder');
 
     expect(paths.artifactsDir).toBe(
-      wsPath('_folder', 'My Platform', 'artifacts', 'runs', 'run-xyz')
+      wsPath('_folder', 'my-platform', 'artifacts', 'runs', 'run-xyz')
     );
-    expect(paths.logDir).toBe(wsPath('_folder', 'My Platform', 'logs'));
-    expect(paths.artifactsRoot).toBe(wsPath('_folder', 'My Platform', 'artifacts'));
-    expect(paths.stateDir).toBe(wsPath('_folder', 'My Platform', 'state'));
-    expect(paths.outputRoot).toBe(wsPath('_folder', 'My Platform'));
+    expect(paths.logDir).toBe(wsPath('_folder', 'my-platform', 'logs'));
+    expect(paths.artifactsRoot).toBe(wsPath('_folder', 'my-platform', 'artifacts'));
+    expect(paths.stateDir).toBe(wsPath('_folder', 'my-platform', 'state'));
+    expect(paths.outputRoot).toBe(wsPath('_folder', 'my-platform'));
   });
 
   // #2304: a transient lookup fault used to drop the run onto `_cwd/<basename>` and,
@@ -244,7 +205,7 @@ describe('resolveProjectPaths', () => {
       kind: 'repo' as const,
     }));
     const deps = makeDeps(makeStore({ getCodebase }));
-    (paths.resolveProjectStorageKey as ReturnType<typeof mock>).mockClear();
+    resolveProjectStorageKey.mockClear();
 
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo', {
       persistedOutputRoot: wsPath('acme', 'original'),
@@ -348,8 +309,6 @@ describe('resolveProjectPaths', () => {
     });
 
     it('is "unregistered" when the lookup returns a codebase row that resolves to a cwd key (WARN arm)', async () => {
-      // The fake resolver only falls back to { kind: 'cwd', cwd } when the basename
-      // is '.' or '..' (the corner that excludes owner/repo and `_local` derivation).
       const store = makeStore({
         getCodebase: mock(async () => ({
           id: 'cb-noop',
