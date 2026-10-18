@@ -524,6 +524,23 @@ describe('the merge queue scripts', () => {
     expect(claimed).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ decision: 'claimed merged, not merged (clear)' }] } } });
     expect(mergeWaits(claimed)).toBe(true);
 
+    // Closed, not merged, under a batch that left the default branch red.
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: other });
+    const red = {
+      state: 'red',
+      rerun: 'red',
+      summary: 'lint red after the batch',
+      attention: { ...ATTENTION, choices: [{ id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' }], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
+    };
+    const closedInputs = { ...recordInputs([decision({ number: 43 }), decision({})], red), INPUTS_ITEMS: items };
+    const closed = run(at, 'record', closedInputs, { pr: { state: 'CLOSED', merged: [43] }, artifacts: receipt });
+    expect(closed.code).not.toBe(0);
+    expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
+    expect(closed.stderr).toContain('the default branch is red after the batch and was not raised (lint red after the batch)');
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+
     seed(at, item(BUILT, undefined, CLAIMED));
     const recorded = ok(run(at, 'record', recordInputs([decision({})], DEV_GREEN), { pr: { state: 'MERGED' }, artifacts: RECEIPT }));
     expect(recorded).toMatchObject({ merged: [42], attention: '', class: '', asked: null });

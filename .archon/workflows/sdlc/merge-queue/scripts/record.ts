@@ -6,8 +6,9 @@
  * the head the forge merged, whatever the sweep declared, and one that does not is never
  * recorded merged. The gate's receipts say which merges this run made; a merge without
  * one is marked as made outside this run. A sweep that claims a merge the forge does not
- * show fails the record, but only after every decision is written, that pull request's
- * as waiting for the next sweep. A run whose gate merged must have checked the default
+ * show fails the record, but only after every decision is written: that pull request is
+ * recorded as waiting for the next sweep, or parked if it was closed, and a red default
+ * branch the run could not raise is named in the failure. A run whose gate merged must have checked the default
  * branch after its batch, and one that merged nothing raises nothing about it. A
  * `return` hands the item back to the build queue with its brief. A run raises at most
  * one attention item: a red default branch first, because it holds every merge,
@@ -272,7 +273,11 @@ function main(): void {
   // Every read and check happens before the first write, so a check that refuses writes nothing.
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers, receipts) }));
   const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
-  // A failed record runs no ask node, so it raises nothing and an ask waits for the next sweep.
+  // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
+  // the next sweep, and a red default branch is named in the failure instead.
+  if (asked?.by === 'dev' && contradictions.length > 0) {
+    contradictions.push(`the default branch is red after the batch and was not raised (${sweep?.dev.summary ?? ''})`);
+  }
   if (contradictions.length > 0) asked = null;
   const write = (subject: QualifiedPr, label: string, change: (doc: WorkItem) => WorkItem): boolean => {
     try {

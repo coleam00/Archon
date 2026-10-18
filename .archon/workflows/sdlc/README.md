@@ -684,9 +684,10 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   receipts, says what merged, at the head the forge merged, and a merge with no
   receipt is recorded as made outside the run. A sweep that says it merged a pull
   request the forge does not show merged fails the record after every other decision
-  is written, that pull request's as waiting. A pull request that cannot be read
-  waits for the next sweep, and is parked when it could not be read the sweep before
-  either; a work item that cannot be written is reported, so one bad item never loses
+  is written: that pull request is recorded as waiting, or parked if it was closed,
+  and a red default branch the run could not raise is named in the failure. A pull
+  request that cannot be read waits for the next sweep, and is parked when it could not
+  be read the sweep before either; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.
   It runs even when the delta review failed. It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
