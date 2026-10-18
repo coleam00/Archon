@@ -56,6 +56,9 @@ describe('title-generator', () => {
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
+    for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
+      mockLogger[level].mockClear();
+    }
 
     // Reset to default happy-path behavior
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
@@ -123,6 +126,56 @@ describe('title-generator', () => {
     // Should not throw — fire-and-forget safe
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
   });
+
+  test.each(['provider error', 'failed turn', 'generated title', 'empty title'] as const)(
+    '%s never logs message contents',
+    async scenario => {
+      const userMessage =
+        scenario === 'empty title' ? 'Title:' : 'PRIVATE_MESSAGE_4397 '.repeat(10);
+      const expectedTitle =
+        userMessage.length > 100 ? userMessage.slice(0, 97) + '...' : userMessage;
+      mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
+        if (scenario === 'provider error') throw new Error(`Provider rejected: ${userMessage}`);
+        yield { type: 'agent_message_chunk', text: userMessage };
+        yield {
+          type: 'result',
+          ...(scenario === 'failed turn'
+            ? { failure: { class: 'transient' as const, evidence: userMessage } }
+            : {}),
+        };
+      });
+
+      await generateAndSetTitle('conv-private', userMessage, 'claude', '/tmp');
+
+      expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
+      expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-private', expectedTitle);
+      if (scenario === 'provider error' || scenario === 'failed turn') {
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { conversationDbId: 'conv-private' },
+          'title.generate_failed'
+        );
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { conversationDbId: 'conv-private' },
+          'title.fallback_set'
+        );
+      } else if (scenario === 'empty title') {
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { conversationDbId: 'conv-private' },
+          'title.generate_empty'
+        );
+      } else {
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { conversationDbId: 'conv-private' },
+          'title.generate_completed'
+        );
+      }
+      for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
+        expect(Bun.inspect(mockLogger[level].mock.calls)).not.toContain(
+          scenario === 'empty title' ? userMessage : 'PRIVATE_MESSAGE_4397'
+        );
+      }
+    }
+  );
 
   test('a failed turn falls back instead of titling the conversation with partial text', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
