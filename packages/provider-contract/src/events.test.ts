@@ -177,6 +177,7 @@ describe('truncateToolOutput', () => {
   });
 
   test('counts code points, so a character outside the BMP is kept whole', () => {
+    // The emoji is two UTF-16 units and one code point: the last one the cap keeps.
     const text = `${'x'.repeat(TOOL_OUTPUT_MAX_CHARS - 1)}😀tail`;
     expect(truncateToolOutput(text)).toEqual({
       output: `${'x'.repeat(TOOL_OUTPUT_MAX_CHARS - 1)}😀`,

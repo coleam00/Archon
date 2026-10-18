@@ -13,18 +13,20 @@ import { providerSettledSchema } from './settled';
  * the block at a block, tool or turn boundary. A warning may split a reply block;
  * later chunks mark continuations.
  */
+
 /** ACP `agent_message_chunk`. */
 export const agentMessageChunkSchema = z.object({
   type: z.literal('agent_message_chunk'),
-  /** Reply block text. ACP wraps it in a `content` block; Archon carries the text. */
+  /** One whole block of the agent's reply. ACP wraps it in a `content` block; Archon carries the text. */
   text: z.string().min(1),
   /** Archon addition: append to the previous reply block across an immediate warning. */
   continuesPreviousBlock: z.literal(true).optional(),
 });
 
+/** ACP `agent_thought_chunk`. */
 export const agentThoughtChunkSchema = z.object({
   type: z.literal('agent_thought_chunk'),
-  /** One whole block of the agent's reasoning. */
+  /** One whole block of the agent's reasoning, as `agent_message_chunk.text`. */
   text: z.string().min(1),
 });
 
@@ -118,6 +120,7 @@ export const providerWarningSchema = z.object({
   message: z.string(),
 });
 export type ProviderWarning = z.infer<typeof providerWarningSchema>;
+
 export const warningSchema = providerWarningSchema.extend({ type: z.literal('warning') });
 
 /**
