@@ -109,9 +109,8 @@ describe('the merge record and the gate', () => {
   test('the gate passes only a Ready verdict, green CI and no open thread, all at a pinned head that contains the default branch', () => {
     expect(gateRefusals(FACTS, HEAD)).toEqual([]);
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head);
-    expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([
-      `its Ready verdict is for ${OLD}, not its head`,
-    ]);
+    // Which commit the Ready verdict is for is the sweep's judgment, not the gate's.
+    expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([]);
     expect(refused({ verdict: { ...FACTS.verdict, state: 'unstamped' } })).toEqual(['its review verdict is unstamped']);
     expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null } })).toEqual(['its review verdict is not_ready']);
     expect(refused({ checks: { state: 'pending', failing: [], pending: ['test (ubuntu)'] } })).toEqual([
@@ -450,22 +449,17 @@ describe('the merge queue scripts', () => {
     expect(existsSync(join(gated.artifacts, 'merge/receipts/42.json'))).toBe(false);
   }, 60_000);
 
-  test('the gate refuses a verdict on an older commit, a head behind the default branch, a red check or an open thread, and merges nothing', () => {
+  test('the gate refuses a head behind the default branch, a red check or an open thread, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
-    const stale = run(at, 'gate', {}, { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, 'old') }] });
-    expect(stale.code).toBe(1);
-    expect(JSON.parse(stale.stdout)).toMatchObject({ refusals: [`its Ready verdict is for ${OLD}, not its head`], merge_commit: null });
     const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
     expect(JSON.parse(red.stdout).refusals).toEqual([
       `it lacks 2 commits of dev at ${OLD}`,
       'CI at its head is red (test)',
       '1 review threads are unresolved',
     ]);
-    for (const result of [stale, red]) {
-      expect(merges(result)).toEqual([]);
-      expect(existsSync(join(result.artifacts, 'receipts'))).toBe(false);
-    }
+    expect(merges(red)).toEqual([]);
+    expect(existsSync(join(red.artifacts, 'receipts'))).toBe(false);
   }, 60_000);
 
   test('the gate refuses two trusted review comments, or more review threads than it can read, and merges nothing', () => {

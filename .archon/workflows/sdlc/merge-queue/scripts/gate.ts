@@ -4,7 +4,7 @@
  *   gate.ts --method <squash|merge> --receipts <dir> --pr <url> --head <sha> [--merge]
  *
  * It reads the pull request fresh and refuses unless the trusted review verdict says
- * Ready at `head` or at a commit `head` contains, CI is green at `head`, no review thread is unresolved, and the pull
+ * Ready, CI is green at `head`, no review thread is unresolved, and the pull
  * request is open, not a draft, into the default branch, still at `head`, and `head`
  * contains the default branch's head. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
@@ -52,14 +52,7 @@ function main(): void {
   requireGh();
   const pr = prFromUrl(url);
   const maintainers = readMaintainers(pr.repo);
-  const facts = readPr(pr, maintainers).facts;
-  // A Ready verdict on a commit the head contains still counts: the sweep sends a sync
-  // to delta review when what it brought in needs one, and CI at the head always runs.
-  const reviewed = facts.verdict.reviewed;
-  const reviewedInHead =
-    reviewed !== null &&
-    Bun.spawnSync(['git', 'merge-base', '--is-ancestor', reviewed, head], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
-  const refusals = gateRefusals(facts, head, reviewedInHead);
+  const refusals = gateRefusals(readPr(pr, maintainers).facts, head);
   if (!merge || refusals.length > 0) {
     emit({ pr: url, head, refusals, merge_commit: null });
     if (merge) process.exitCode = 1;

@@ -401,7 +401,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
  * exactly the commit that was judged, and that commit containing the default branch's
  * head, so what was judged is what the merge produces.
  */
-export function gateRefusals(facts: PrFacts, head: string, reviewedInHead = false): string[] {
+export function gateRefusals(facts: PrFacts, head: string): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
@@ -413,10 +413,9 @@ export function gateRefusals(facts: PrFacts, head: string, reviewedInHead = fals
     refusals.push(`it lacks ${String(facts.behind)} commits of ${facts.default_branch} at ${facts.default_head}`);
   }
   const { verdict } = facts;
+  // Which commit the verdict is for is the sweep's call: it sends a moved head to delta
+  // review unless only a clean sync moved it. The gate holds the merge to a trusted verdict.
   if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
-  else if (verdict.reviewed !== facts.head_revision && !reviewedInHead) {
-    refusals.push(`its Ready verdict is for ${verdict.reviewed ?? 'no commit'}, not its head`);
-  }
   if (facts.checks.state !== 'green') {
     const named = [...facts.checks.failing, ...facts.checks.pending];
     refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
