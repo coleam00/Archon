@@ -195,7 +195,7 @@ describe('run-checks', () => {
   );
 });
 
-function result(bindings: { comparison?: unknown; run?: unknown; classification?: unknown }): {
+function result(bindings: { run?: unknown; classification?: unknown }): {
   exitCode: number;
   output: unknown;
 } {
@@ -203,7 +203,6 @@ function result(bindings: { comparison?: unknown; run?: unknown; classification?
   const out = Bun.spawnSync([process.execPath, join(PACK, 'result.ts')], {
     cwd: f.cwd,
     env: env(f.artifacts, {
-      INPUTS_COMPARISON: JSON.stringify(bindings.comparison ?? null),
       INPUTS_RUN: JSON.stringify(bindings.run ?? null),
       INPUTS_CLASSIFICATION: JSON.stringify(bindings.classification ?? null),
     }),
@@ -258,7 +257,7 @@ describe("the gate's environment", () => {
 describe('validation result', () => {
   it('reports a gate the timeout stopped as incomplete, never green or red', () => {
     const { output } = result({});
-    expect(output).toMatchObject({ green: false, red_cause: 'incomplete', evidence: null });
+    expect(output).toMatchObject({ green: false, red_cause: 'incomplete' });
   });
 
   it('derives green and incomplete from the run, and takes red causes from classify', () => {
@@ -266,13 +265,11 @@ describe('validation result', () => {
       green: true,
       red_cause: '',
       summary: 'all passed',
-      evidence: null,
     });
     expect(result({ run: { status: 'incomplete', summary: 'x could not start' } }).output).toEqual({
       green: false,
       red_cause: 'incomplete',
       summary: 'x could not start',
-      evidence: null,
     });
     expect(
       result({
@@ -283,7 +280,6 @@ describe('validation result', () => {
       green: false,
       red_cause: 'inherited',
       summary: 'fails on the base too',
-      evidence: null,
     });
   });
 
@@ -291,10 +287,5 @@ describe('validation result', () => {
     const { exitCode, output } = result({ run: { status: 'red', summary: 'tests failed' } });
     expect(exitCode).not.toBe(0);
     expect(output).toBeNull();
-  });
-
-  it('passes the comparison verdict through unchanged', () => {
-    const comparison = { green: false, red_cause: 'interaction', summary: 's', evidence: null };
-    expect(result({ comparison }).output).toEqual(comparison);
   });
 });

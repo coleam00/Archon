@@ -130,7 +130,7 @@ export async function runBudgetedAttempt(
 /**
  * Run a node executor with the shared retry loop: exponential backoff, FATAL
  * never retried, and a platform notification before each retry. Used by both the
- * AI-node path in {@link runLayers} and {@link runDeterministicNodeWithRetry} so
+ * AI-node path in `dispatchAgentNode` and {@link runDeterministicNodeWithRetry} so
  * the backoff math and user-facing wording are defined once and can't drift.
  * `initialOutput` seeds `output` for the unreachable zero-iteration case. Usage is
  * accumulated across failed attempts so a later success still reports all paid work.

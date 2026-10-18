@@ -1,4 +1,5 @@
 import {
+  type ExecutionContext,
   type ProviderRegistry,
   type StrictSchemaIssue,
   findStrictSchemaIssues,
@@ -10,12 +11,17 @@ import {
   type IncludeDirective,
   type LoopGroupNode,
   type LoopNode,
+  type ResolvedWorkflow,
   isOutputFormatEnforced,
 } from '../schemas';
 import type { ResolvedAiProfile } from '../model-validation';
 import { resolveNodeModel, resolveNodeModelScope } from '../node-model-resolution';
 import { gateReworkNode } from '../gate-rework';
-import { type ScopedCapability, unsupportedScopedCapabilities } from './provider-resolution';
+import {
+  type ScopedCapability,
+  scopedCapabilityMismatchMessage,
+  unsupportedScopedCapabilities,
+} from './provider-resolution';
 
 /**
  * How a node can reach a provider. Agent and loop nodes invoke one; a loop_group scopes
@@ -206,4 +212,75 @@ export function collectStrictSchemaViolations(
     }
   });
   return violations;
+}
+
+/**
+ * Refuse a run before ANY node runs, so no node spends (and no container work starts) in
+ * a run that a later node would fail: a node whose MCP servers, skills or plugins cannot
+ * load, a container run whose AI nodes resolve to a provider that cannot spawn in-container
+ * (no silent downgrade to the host: the user asked for isolation and must get it or a
+ * clear error), or an AI node whose `output_format` a strict provider rejects at its first
+ * turn (OpenAI/Codex requires explicit object properties and complete required coverage;
+ * this applies on the host too).
+ */
+export function assertRunCapabilities(
+  providers: ProviderRegistry,
+  workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'>,
+  workflowProvider: string | undefined,
+  aiProfile: ResolvedAiProfile | undefined,
+  execContext: ExecutionContext
+): void {
+  const capabilityMismatches = collectScopedCapabilityMismatches(
+    providers,
+    workflow.nodes,
+    workflowProvider,
+    aiProfile
+  );
+  if (capabilityMismatches.length > 0) {
+    throw new Error(scopedCapabilityMismatchMessage(capabilityMismatches));
+  }
+
+  if (execContext.kind === 'container') {
+    const incompatible = collectContainerIncompatibleProviders(
+      providers,
+      workflow.nodes,
+      workflowProvider,
+      aiProfile
+    );
+    if (incompatible.size > 0) {
+      const list = [...incompatible].sort().join(', ');
+      throw new Error(
+        `Provider${incompatible.size === 1 ? '' : 's'} '${list}' cannot run inside a ` +
+          'container yet (containerExec capability). Use provider claude, or run without ' +
+          '--container.'
+      );
+    }
+  }
+
+  const violations = collectStrictSchemaViolations(
+    providers,
+    workflow.nodes,
+    workflowProvider,
+    aiProfile
+  );
+  if (violations.length === 0) return;
+  const [first] = violations;
+  const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';
+  const location =
+    `output_format schema strict-mode violation: workflow '${workflow.name}', ` +
+    `node '${first.nodeId}', ${first.schemaPath}`;
+  if (first.kind === 'missing-properties') {
+    throw new Error(
+      `${location} is an object schema without 'properties'${more}. ` +
+        `Provider '${first.provider}' (OpenAI strict mode) rejects it. ` +
+        'Declare the object properties and list every property in required; ' +
+        'use a nullable object (e.g. type: ["object","null"]) when the value may be absent.'
+    );
+  }
+  throw new Error(
+    `${location} declares ${first.missing.join(', ')} not in 'required'${more}. ` +
+      `Provider '${first.provider}' (OpenAI strict mode) rejects it. ` +
+      'List every property in required; express optionality in-type ' +
+      '(e.g. a ["string","null"] union or an enum sentinel).'
+  );
 }

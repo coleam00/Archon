@@ -320,7 +320,7 @@ export function resolveExecutionCheckoutStart(
 /**
  * Thrown when a `$nodeId.output.field` reference cannot be honored under the
  * no-silent-drop contract. Propagates to fail the consuming node (both call
- * sites run inside the dag-executor's per-node try/catch).
+ * sites run inside runLayers' per-node try/catch).
  */
 export type OutputRefErrorReason =
   | 'not-in-schema'

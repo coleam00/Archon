@@ -35,7 +35,7 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  *    `approveWorkflow`/`rejectWorkflow` (operations/workflow-operations.ts).
  *  - `'writeback'` — also resolved by `approveWorkflow`/`rejectWorkflow`'s write-back
  *    branch, then applied on parent resume by `runContainerWriteBackGate`
- *    (dag-executor.ts, `raiseWriteBackGate`'s sibling).
+ *    (dag/container-gate.ts, `raiseWriteBackGate`'s sibling).
  *  - `'child_workflow'` — never resolved by the approve/reject endpoints directly
  *    (redirected instead — `assertApprovable`/`assertRejectable`); re-inspected by
  *    `executeWorkflowNode` re-running on parent resume (dag/nodes/workflow).

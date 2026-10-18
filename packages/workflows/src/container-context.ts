@@ -1,9 +1,9 @@
 /**
- * Container run context shared by the executor and dag-executor (Phase C).
+ * Container run context shared by the executor and the DAG engine (Phase C).
  *
  * Lives in its own module so both `executor.ts` (which threads it in from the
- * caller) and `dag-executor.ts` (which drives suspend + the write-back gate) can
- * import it without an import cycle between those two large files.
+ * caller) and `dag/container-gate.ts` (which drives suspend + the write-back gate)
+ * can import it without an import cycle.
  */
 
 /**
