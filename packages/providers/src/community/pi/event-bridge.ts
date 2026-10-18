@@ -1,3 +1,4 @@
+import { createTextBlockBuffer } from './text-block-buffer';
 import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, StopReason, Usage } from '@earendil-works/pi-ai';
@@ -283,9 +284,9 @@ export { tryParseStructuredOutput };
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.
  *
  * Most Pi events map 1:1 or are skipped. Text and thinking deltas map to one chunk per
- * delta; `bridgeSession` coalesces them into whole blocks before yielding. Tool
- * execution is split across `tool_execution_start` / `tool_execution_end`, matched by
- * Pi's `toolCallId`.
+ * delta; `bridgeSession` coalesces them at block boundaries or immediate warnings,
+ * marking reply continuations after a warning. Tool execution is split across
+ * `tool_execution_start` / `tool_execution_end`, matched by Pi's `toolCallId`.
  *
  * `agent_end` is not mapped here: its result chunk needs every message of the
  * prompt, which only `bridgeSession` holds.
@@ -405,37 +406,14 @@ export async function* bridgeSession(
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
 
-  // ── Text-block coalescing (#1814) ──────────────────────────────────────
-  // Pi streams text and thinking as many tiny deltas (often a few characters
-  // each). The contract's text events carry a whole block, so consecutive deltas
-  // of one kind are coalesced and flushed only at natural boundaries (turn start,
-  // block end, a switch between text and thinking, before any other chunk, and at
-  // end-of-stream/error). `currentTurnText`/`assistantBuffer` still accumulate
-  // every text delta, so streaming-tail detection and structured-output buffering
-  // are unaffected.
-  let pending: { type: 'agent_message_chunk' | 'agent_thought_chunk'; text: string } | undefined;
-  const takePending = (): MessageChunk | undefined => {
-    const block = pending;
-    pending = undefined;
-    return block;
-  };
-  const flushPending = (): void => {
-    const block = takePending();
-    if (block) queue.push({ kind: 'chunk', chunk: block });
-  };
-  const appendPending = (
-    type: 'agent_message_chunk' | 'agent_thought_chunk',
-    text: string
-  ): void => {
-    if (pending?.type !== type) flushPending();
-    if (pending) pending.text += text;
-    else pending = { type, text };
-  };
+  const { takePending, flushPending, appendPending } = createTextBlockBuffer(chunk =>
+    queue.push({ kind: 'chunk', chunk })
+  );
 
   uiBridge?.setEmitter(chunk => {
     // A notify() warning must surface immediately and in order, so drain any
-    // buffered text ahead of it.
-    flushPending();
+    // buffered text ahead of it without ending the reply block.
+    flushPending(true);
     queue.push({ kind: 'chunk', chunk });
   });
   // Best-effort structured-output buffer. Only accumulates when the caller

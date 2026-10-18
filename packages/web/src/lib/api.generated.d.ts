@@ -6803,6 +6803,8 @@ export interface components {
             /** @enum {string} */
             type: 'agent_message_chunk';
             text: string;
+            /** @enum {boolean} */
+            continuesPreviousBlock?: true;
           }
         | {
             /** @enum {string} */
