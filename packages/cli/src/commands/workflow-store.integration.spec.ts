@@ -240,34 +240,6 @@ nodes:
   }
 }, 30_000);
 
-test('CLI run commands and reusable persistence helpers have no SQL imports or re-exports', () => {
-  const repository = join(import.meta.dir, '../../..');
-  const files = [
-    'cli/src/commands/workflow.ts',
-    'cli/src/commands/workflow-shared.ts',
-    'cli/src/commands/workflow-list.ts',
-    'cli/src/commands/workflow-node-summaries.ts',
-    'cli/src/adapters/cli-adapter.ts',
-    'cli/src/utils/owned-run-termination.ts',
-    'cli/src/utils/cli-user.ts',
-    'core/src/handlers/clone.ts',
-    'core/src/services/codebase-checkout-resolver.ts',
-    'core/src/workflows/child-isolation-resolver.ts',
-    'core/src/operations/workflow-adoption.ts',
-  ];
-  const scanner = new Bun.Transpiler({ loader: 'ts' });
-  for (const file of files) {
-    const imports = scanner.scan(readFileSync(join(repository, file), 'utf8')).imports;
-    for (const dependency of imports) {
-      expect(dependency.path, file).not.toMatch(
-        /(?:^|\/)db(?:\/|$)|(?:sql-host|sql-registration|store-adapter|isolation-store)$/
-      );
-      expect(dependency.path, file).not.toBe('@archon/core');
-      expect(dependency.path, file).not.toBe('@archon/core/workflows');
-    }
-  }
-});
-
 test('origin-free event waits signal and wake through the supplied host without SQL', async () => {
   const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-continuation-store-')));
   const project = join(root, 'project');

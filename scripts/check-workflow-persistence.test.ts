@@ -9,27 +9,27 @@ const track = trackTempRoots();
 
 test('the persistence boundary follows resolved modules and symbols', () => {
   const root = track(mkdtempSync(join(tmpdir(), 'workflow-persistence-')));
-  const write = (path: string, content: string): void => {
+  const write = (path: string, content: string): string => {
     mkdirSync(join(root, path, '..'), { recursive: true });
     writeFileSync(join(root, path), content);
+    return path;
   };
-  write(
-    'tsconfig.json',
-    JSON.stringify({
-      compilerOptions: {
-        target: 'ESNext',
-        module: 'Preserve',
-        moduleResolution: 'Bundler',
-        strict: true,
-      },
-    })
-  );
+  const compilerOptions = {
+    target: 'ESNext',
+    module: 'Preserve',
+    moduleResolution: 'Bundler',
+    strict: true,
+  };
+  write('tsconfig.json', JSON.stringify({ compilerOptions }));
   write(
     'packages/core/src/db/store.ts',
     'export const store = 1; export default store; export type Store = number;'
   );
   write('packages/core/src/workflows/sql-host.ts', 'export const sqlHost = 1;');
   write('packages/core/src/workflows/store-adapter.ts', 'export const adapter = 1;');
+  write('packages/core/src/handlers/sql-registration.ts', 'export const register = 1;');
+  write('packages/core/src/index.ts', 'export const contract = 1;');
+  write('packages/core/src/workflows/index.ts', 'export const workflows = 1;');
   write('safe.ts', 'export const safe = 1;');
   write(
     'barrel.ts',
@@ -45,6 +45,10 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     `import { store } from ${JSON.stringify(absolute)};`,
     "import { sqlHost } from '../packages/core/src/workflows/sql-host';",
     "import { adapter } from '../packages/core/src/workflows/store-adapter';",
+    "import { register } from '../packages/core/src/handlers/sql-registration';",
+    "import { contract } from '../packages/core/src/index';",
+    "import { workflows } from '../packages/core/src/workflows';",
+    "import {} from '../packages/core/src/index';",
     "import { alias as local } from '../barrel';",
     "import { renamed } from '../second';",
     "import * as ns from '../barrel';",
@@ -70,20 +74,15 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     "import { type Store } from '../barrel';",
     'const path = "store"; import(path); require(path);',
     "import '../safe';",
+    "import type { contract } from '../packages/core/src/index';",
+    "import { type contract } from '../packages/core/src/index';",
   ];
-  const cases = [
-    ...rejected.map(source => ({ source, rejected: true })),
-    ...accepted.map(source => ({ source, rejected: false })),
-  ];
-  const files = cases.map((item, index) => {
-    write(`consumers/${index}.ts`, item.source);
-    return `consumers/${index}.ts`;
-  });
-
+  const cases = [...rejected, ...accepted];
+  const files = cases.map((source, index) => write(`consumers/${index}.ts`, source));
   const violations = findPersistenceImports(root, files);
-  for (const [index, item] of cases.entries()) {
+  for (const [index, source] of cases.entries()) {
     const hits = violations.filter(line => line.startsWith(`consumers/${index}.ts:`));
-    expect(hits.length, item.source).toBe(item.rejected ? 1 : 0);
+    expect(hits.length, source).toBe(index < rejected.length ? 1 : 0);
   }
 });
 

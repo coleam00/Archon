@@ -12,10 +12,8 @@ import type { ProviderCapabilities, ProviderRegistry } from '@archon/provider-co
 import { settlingProvider } from '../test-settling-provider';
 import * as nodeEventWrite from '../node-event-write';
 import * as subprocess from '../subprocess';
-import {
-  substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
-  type ExecuteDagWorkflowOptions,
-} from '../dag-executor';
+import type { ExecuteDagWorkflowOptions } from '../dag-executor';
+import { substituteNodeOutputRefs as substituteNodeOutputRefsInScopes } from './references';
 import { resolveWorkflow } from '../graph-plan';
 import { readNodeArtifacts } from '../artifacts-index';
 import type {
