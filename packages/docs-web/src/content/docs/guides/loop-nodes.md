@@ -914,7 +914,8 @@ decides. `--json` records the decision without resuming; `archon serve`,
 A paused interactive loop resumes from the prompt template captured at the gate, so
 editing the YAML or command file does not change a run that is already paused. The first
 iteration after the resume sees the gated iteration's output as `$LOOP_PREV_OUTPUT`, and
-`until_bash` sees it as `LOOP_PREV_OUTPUT`.
+`until_bash` sees it as `LOOP_PREV_OUTPUT`. A `loop:` node paused by an earlier Archon
+release did not record that output, so its first resumed iteration sees both as empty.
 
 ### `signal_completes` — autonomous completion
 
