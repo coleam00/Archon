@@ -73,6 +73,9 @@
       "src/routes/api.artifacts.test.ts"
     ],
     [
+      "src/routes/api.run-control.test.ts"
+    ],
+    [
       "src/routes/api.providers.test.ts"
     ],
     [
