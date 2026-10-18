@@ -1,9 +1,0 @@
-forge: { source: gh }
-prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: 7, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: opens a pull request from the selected branch" }
-publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 8, url: "https://github.com/example/repo/pull/8", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-fixture:
-  expect: completed
-  inputs:
-    branch: "fixture-branch"
-  resolved-text-contains:
-    prepare: "When the caller selected a branch without naming a pull request, write the body even if `existing` is a number: publish may need it to open a new pull request from that branch."

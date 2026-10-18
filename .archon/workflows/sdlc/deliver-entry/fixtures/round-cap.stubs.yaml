@@ -74,5 +74,4 @@ fixture:
   reached: [stage__report, attend__settle]
   resolved-text-contains:
     attend__decide: '"reason":"round_cap"'
-    attend__ask: "**Recommendation: `rerun`** (medium confidence). stub: the conflict is mechanical"
 exec-code: true

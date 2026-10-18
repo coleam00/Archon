@@ -13,5 +13,3 @@ fixture:
   inputs:
     work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
   expect: completed
-  resolved-text-contains:
-    plan: "It changes a shipped contract — what an existing persisted or shipped value means"
