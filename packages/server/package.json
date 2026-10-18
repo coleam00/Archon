@@ -64,6 +64,21 @@
       "src/routes/api.workflow-runs.test.ts"
     ],
     [
+      "src/routes/api.workflow-run-launch.test.ts"
+    ],
+    [
+      "src/routes/api.run-attention.test.ts"
+    ],
+    [
+      "src/routes/api.artifacts.test.ts"
+    ],
+    [
+      "src/routes/api.run-control.test.ts"
+    ],
+    [
+      "src/routes/api.run-gates.test.ts"
+    ],
+    [
       "src/routes/api.providers.test.ts"
     ],
     [
