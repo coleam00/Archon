@@ -1,3 +1,13 @@
+import {
+  buildHonestGateMessage,
+  finalizeLoopFromSignal,
+  type LoopCompletionCheck,
+} from './dag/loop-completion';
+import {
+  pauseGateRespectingExternalTransition,
+  sendPauseNotice,
+  snapshotBodySessionCursorAncestry,
+} from './dag/pause';
 import { isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
 import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
@@ -19,7 +29,6 @@ import {
   serializeDeferredNodeUsage,
   serializeNodeTranscript,
   serializeNodeOutput,
-  persistedOutputContract,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import {
@@ -27,13 +36,6 @@ import {
   type NodeExecutionRecord,
   type NodeFailureKind,
 } from './schemas/node-execution';
-/**
- * DAG Workflow Executor
- *
- * Executes a `nodes:`-based workflow in topological order.
- * Independent nodes within the same layer run concurrently via Promise.allSettled.
- * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
- */
 import {
   NodeEventWriteError,
   persistNodeEvent,
@@ -141,14 +143,8 @@ import {
   executionClaim,
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
-  WorkflowRunPauseConflictError,
 } from './store';
-import type {
-  DagResumeSnapshot,
-  FanOutCancelReason,
-  GatePauseEventInput,
-  PersistedNodeOutput,
-} from './store';
+import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -303,6 +299,13 @@ import {
   collectContainerIncompatibleProviders,
   collectStrictSchemaViolations,
 } from './dag/capability-preflight';
+/**
+ * DAG Workflow Executor
+ *
+ * Executes a `nodes:`-based workflow in topological order.
+ * Independent nodes within the same layer run concurrently via Promise.allSettled.
+ * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
+ */
 
 interface WatchdogReset {
   type: MessageChunk['type'];
@@ -2024,57 +2027,6 @@ async function executeScriptNode(
   );
 }
 
-/** Cap for the iteration-output excerpt embedded in gate messages — keeps the
- *  persisted `metadata.approval.message` and SSE payloads bounded (mirrors the
- *  tool-input truncation used for progress events). */
-const GATE_EXCERPT_MAX = 500;
-
-type LoopCompletionCheck =
-  | { channel: 'until'; signal: string; completed: boolean }
-  | { channel: 'until_bash'; completed: boolean }
-  | { channel: 'until_field'; field: string; completed: boolean };
-
-function describeLoopCompletionCheck(check: LoopCompletionCheck): string {
-  switch (check.channel) {
-    case 'until':
-      return `\`until\` signal (\`${check.signal}\`)`;
-    case 'until_bash':
-      return '`until_bash`';
-    case 'until_field':
-      return `\`until_field\` (\`${check.field}\`)`;
-  }
-  const unreachable: never = check;
-  return unreachable;
-}
-
-/**
- * Build the honest interactive-gate message (#2074, change D): an engine-generated
- * status line naming the completion channels that fired (or every declared channel
- * when none fired), plus a bounded excerpt of the final iteration output, prepended
- * to the author's static `gate_message`. Shared by executeLoopNode and
- * executeLoopGroupNode so both gates tell the truth about the iteration they paused on.
- */
-function buildHonestGateMessage(
-  completionChecks: LoopCompletionCheck[],
-  lastIterationOutput: string,
-  gateMessage: string
-): string {
-  const trimmed = lastIterationOutput.trim();
-  const excerpt = trimmed.slice(0, GATE_EXCERPT_MAX);
-  const completedChecks = completionChecks.filter(check => check.completed);
-  const describedChecks = (completedChecks.length > 0 ? completedChecks : completionChecks).map(
-    describeLoopCompletionCheck
-  );
-  const statusLine =
-    completedChecks.length > 0
-      ? `✅ Completion condition${completedChecks.length === 1 ? '' : 's'} met via ${describedChecks.join(' and ')}.`
-      : `⚠️ No completion condition met in this iteration (${describedChecks.join(', ')}).`;
-  const excerptBlock = excerpt
-    ? `\n\n> ${excerpt}${trimmed.length > GATE_EXCERPT_MAX ? '…' : ''}`
-    : '';
-  return `${statusLine}${excerptBlock}\n\n${gateMessage}`;
-}
-
 /**
  * Narrow the token usage a loop gate persisted in its approval context (#2333).
  *
@@ -2131,93 +2083,6 @@ function readSignaledCostUsd(
   if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
   getLog().warn({ ...context, costUsd: raw }, 'dag_loop.signaled_cost_invalid_ignored');
   return undefined;
-}
-
-/** Complete a signaled loop without another provider call, retaining its paused observations. */
-async function finalizeLoopFromSignal(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowRun: WorkflowRun,
-  node: LoopNode | LoopGroupNode,
-  stepName: string,
-  nodeLabel: string,
-  finalizeOutput: string,
-  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
-  finalizeStructuredOutput: unknown,
-  logDir: string,
-  execution?: NodeExecutionRecord,
-  sessionId?: string
-): Promise<NodeExecutionResult> {
-  const nodeId = node.id;
-  // Impossible by construction today (the gate writes signaledOutput whenever
-  // completionSignaled is true) — this warn guards a future decoupling so a
-  // finalize that silently loses the iteration output is diagnosable.
-  if (finalizeOutput === '') {
-    getLog().warn(
-      { workflowRunId: workflowRun.id, nodeId },
-      'loop_node.finalize_missing_signaled_output'
-    );
-  }
-  await safeSendMessage(
-    platform,
-    conversationId,
-    `${nodeLabel} '${nodeId}' accepted after a completion condition was met (no re-run)`,
-    { workflowId: workflowRun.id, nodeName: nodeId }
-  );
-  const output = {
-    text: finalizeOutput,
-    structured: finalizeStructuredOutput,
-    declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
-  };
-  if (execution !== undefined) {
-    return recordNodeState(
-      { store: deps.store, logDir },
-      finishNodeExecution(
-        execution,
-        { status: 'completed' },
-        {
-          output,
-          ...finalizeUsage,
-          sessionId,
-          // Approval does no execution work. Keep the duration observed before pause.
-          durationMs: execution.timing.durationMs,
-        }
-      )
-    );
-  }
-  // Older paused loop gates may lack execution identity and observed start time.
-  // Preserve their completion without inventing historical execution metadata.
-  const event: import('./store').NodeStateEventInput = {
-    workflow_run_id: workflowRun.id,
-    event_type: 'node_completed',
-    step_name: stepName,
-    data: {
-      node_output: finalizeOutput,
-      ...(finalizeStructuredOutput !== undefined
-        ? { structured_output: finalizeStructuredOutput }
-        : {}),
-      ...(output.declaredOutputPaths !== undefined
-        ? persistedOutputContract(output.declaredOutputPaths)
-        : {}),
-      ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
-      ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
-    },
-  };
-  await persistNodeEvent(deps.store, event);
-  await recordDerivedNodeState({ logDir }, node, event);
-  return {
-    state: 'completed',
-    output: finalizeOutput,
-    ...(finalizeStructuredOutput !== undefined
-      ? { structuredOutput: finalizeStructuredOutput }
-      : {}),
-    ...(output.declaredOutputPaths !== undefined
-      ? { declaredOutputPaths: output.declaredOutputPaths }
-      : {}),
-    ...finalizeUsage,
-    ...(sessionId !== undefined ? { sessionId } : {}),
-  };
 }
 
 /**
@@ -4920,130 +4785,6 @@ async function executeLoopNode(
     loopIterations: Math.max(iterationLimit, startIteration - 1),
     data: { maxIterations: iterationLimit },
   });
-}
-
-/**
- * Send a paused run's inline notice. The durable pause is the record and the attention
- * queue is where it is answered, so a notice the platform cannot deliver leaves the run
- * paused. The failure is persisted on the run as `pause_notice_undelivered` (beside the
- * `platform_message_send_failed` log `safeSendMessage` writes), so a reader of the run
- * can see that nobody was told. It names the pause `occurrence` so the push router can
- * treat that pause as unannounced and notify the owner itself.
- */
-async function sendPauseNotice(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowRunId: string,
-  nodeId: string,
-  occurrence: string,
-  stepName: string,
-  notice: string
-): Promise<void> {
-  if (
-    await safeSendMessage(platform, conversationId, notice, {
-      workflowId: workflowRunId,
-      nodeName: nodeId,
-    })
-  )
-    return;
-  await deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRunId,
-      event_type: 'pause_notice_undelivered',
-      step_name: stepName,
-      data: { nodeId, occurrence, platform: platform.getPlatformType() },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId, eventType: 'pause_notice_undelivered' },
-        'workflow.event_persist_failed'
-      );
-    });
-}
-
-/**
- * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
- * External stops retain ownership of terminal state; other store failures propagate.
- * Write-back requires a successful pause before its apply/teardown path can proceed.
- * `event` commits with the pause, so every gate pause reaches the event feed the
- * attention watch follows. Returns the persisted context, including its minted
- * `pauseId`; undefined when the gate did not pause.
- */
-async function pauseGateRespectingExternalTransition(
-  deps: WorkflowDeps,
-  runId: string,
-  approvalContext: ApprovalContext,
-  options: {
-    event: GatePauseEventInput;
-    extraMetadata?: Record<string, unknown>;
-    failClosed?: boolean;
-  }
-): Promise<ApprovalContext | undefined> {
-  const { extraMetadata, failClosed = false } = options;
-  approvalContext = { ...approvalContext, pauseId: randomUUID() };
-  try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
-  } catch (pauseErr) {
-    if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
-    let status: WorkflowRunStatus | null;
-    try {
-      status = await deps.store.getWorkflowRunStatus(runId);
-    } catch {
-      // Status unknowable — surface the original pause failure.
-      throw pauseErr;
-    }
-    if (status === 'running' || status === 'pending') throw pauseErr;
-    if (status === 'paused') {
-      const run = await deps.store.getWorkflowRun(runId);
-      const active = run?.metadata?.approval;
-      const wait = run?.metadata?.wait;
-      if (isWorkflowWaitContext(wait)) {
-        getLog().info(
-          { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
-          'dag.gate_deferred'
-        );
-        return undefined;
-      }
-      if (
-        !isApprovalContext(active) ||
-        (active.nodeId === approvalContext.nodeId &&
-          active.bodyGateId === approvalContext.bodyGateId)
-      )
-        throw pauseErr;
-      getLog().info(
-        { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
-        'dag.gate_deferred'
-      );
-      return undefined;
-    }
-    getLog().warn(
-      { workflowRunId: runId, status, err: pauseErr as Error },
-      'dag.gate_pause_skipped_external_transition'
-    );
-    return undefined;
-  }
-  getWorkflowEventEmitter().emit({
-    type: 'approval_pending',
-    runId,
-    nodeId: approvalContext.nodeId,
-    message: approvalContext.message,
-    decisions: approvalContext.decisions,
-    pauseId: approvalContext.pauseId,
-  });
-  return approvalContext;
-}
-
-function snapshotBodySessionCursorAncestry(
-  ancestry: RunLayersContext['bodySessionCursorAncestry']
-): { bodySessionCursorAncestry?: BodySessionCursorAncestry } {
-  return ancestry === undefined || ancestry.size === 0
-    ? {}
-    : {
-        bodySessionCursorAncestry: Object.fromEntries(
-          [...ancestry].map(([key, cursors]) => [key, Object.fromEntries(cursors)])
-        ),
-      };
 }
 
 interface WaitLoopOwner {
