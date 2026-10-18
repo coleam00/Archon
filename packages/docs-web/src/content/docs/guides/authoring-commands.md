@@ -30,7 +30,7 @@ Shared commands live in `.archon/commands/` relative to the working directory. O
 
 > **Bundled commands live inside their workflow packages:** Commands shipped with Archon sit beside the workflow that uses them, under `.archon/workflows/<pack>/<workflow>/commands/`, and are embedded into the binary at build time. There is no shared bundled command directory. For your own commands use an owning workflow package's `commands/`, `.archon/commands/` (project-scoped), or `~/.archon/commands/` (home-scoped).
 
-> **CLI vs Server:** The CLI reads commands from wherever you run it, including uncommitted changes. The server uses the registered project's saved checkout path. An existing local registration can point to your checkout or a subdirectory of it, so the server reads local files there. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`; commit and push changes from another checkout so that clone can receive them when it syncs. Worktree runs use files in their worktree.
+> **CLI vs Server:** The CLI reads commands from wherever you run it, including uncommitted changes. The server uses the registered project's saved checkout path. An existing local registration can point to your checkout or a subdirectory of it, so the server reads local files there. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`, or at a suffixed path such as `owner/repo-2/source/` when that project name is taken; commit and push changes from another checkout so that clone can receive them when it syncs. Worktree runs use files in their worktree.
 
 Commands use this structure:
 

@@ -67,7 +67,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 
 > **Global workflows:** For workflows that apply to every project, place them in `~/.archon/workflows/`. Global workflows are overridden by same-named repo workflows. See [Global Workflows](/guides/global-workflows/).
 
-> **CLI vs Server:** The CLI reads workflow files from wherever you run it, including uncommitted changes. The server uses the registered project's saved checkout path, which can be your local checkout or a subdirectory of it. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`; changes made in another checkout must be committed and pushed for that clone to receive them when it syncs. Existing-registration webhook readiness does not sync your local checkout. Worktree runs use files in their worktree.
+> **CLI vs Server:** The CLI reads workflow files from wherever you run it, including uncommitted changes. The server uses the registered project's saved checkout path, which can be your local checkout or a subdirectory of it. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`, or at a suffixed path such as `owner/repo-2/source/` when that project name is taken; changes made in another checkout must be committed and pushed for that clone to receive them when it syncs. Existing-registration webhook readiness does not sync your local checkout. Worktree runs use files in their worktree.
 
 ---
 

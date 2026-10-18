@@ -1709,7 +1709,7 @@ When project registration fails, the command fails with the registration error, 
 
 When using `--branch`, workflows run inside the worktree directory.
 
-> **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, including uncommitted changes. The server uses the registered project's saved checkout path, including an existing local checkout or a subdirectory of it. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`; commit and push edits from another checkout so that clone can receive them when it syncs. Existing-registration webhook readiness skips sync to preserve local changes. Worktree runs use files in their worktree.
+> **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, including uncommitted changes. The server uses the registered project's saved checkout path, including an existing local checkout or a subdirectory of it. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`, or at a suffixed path such as `owner/repo-2/source/` when that project name is taken; commit and push edits from another checkout so that clone can receive them when it syncs. Existing-registration webhook readiness skips sync to preserve local changes. Worktree runs use files in their worktree.
 
 Legacy registrations with a relative stored project path fail with a project-named
 error. Attempt repair in Archon chat with

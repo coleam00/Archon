@@ -445,7 +445,7 @@ Workflows chain multiple commands as DAG nodes, support parallel execution, cond
 > Commands and workflows are loaded at runtime from the current working directory — not from a fixed global location.
 >
 > - **CLI:** Reads from wherever you run the `archon` command. If you run from your local repo, it picks up uncommitted changes immediately.
-> - **Server (Telegram/Slack/GitHub):** Uses the registered project's saved checkout path. For an existing local registration, this can be your checkout or a subdirectory of it, and the server reads local files there. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`; commit and push edits from another checkout so that clone can receive them when it syncs. Existing-registration webhook readiness skips sync to preserve local changes.
+> - **Server (Telegram/Slack/GitHub):** Uses the registered project's saved checkout path. For an existing local registration, this can be your checkout or a subdirectory of it, and the server reads local files there. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`, or at a suffixed path such as `owner/repo-2/source/` when that project name is taken; commit and push edits from another checkout so that clone can receive them when it syncs. Existing-registration webhook readiness skips sync to preserve local changes.
 >
 > Worktree runs use files in their worktree.
 

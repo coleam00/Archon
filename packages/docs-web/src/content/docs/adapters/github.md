@@ -109,7 +109,7 @@ Interact by @mentioning your bot in issue or PR **comments**:
 ```
 
 **First mention behavior:**
-- Reuses an existing local registration at its saved checkout path, including a subdirectory of a Git checkout. Otherwise, registers and clones the repository to `~/.archon/workspaces/owner/repo/source/`.
+- Reuses an existing local registration at its saved checkout path, including a subdirectory of a Git checkout. Otherwise, registers and clones the repository to `~/.archon/workspaces/owner/repo/source/`, or to a suffixed path such as `owner/repo-2/source/` when that project name is taken.
 - For an existing registration, readiness skips syncing the checkout to preserve local changes.
 - Detects and loads commands from `.archon/commands/` if present
 - Injects full issue/PR context for the AI assistant
