@@ -52,8 +52,7 @@ const MAX_BATCH_TOTAL_CHUNKS = 200;
 export function filterToolIndicators(assistantMessages: string[]): string {
   if (assistantMessages.length === 0) return '';
 
-  const allMessages = assistantMessages.join('\n\n---\n\n');
-  const sections = allMessages.split('\n\n');
+  const separator = '\n\n---\n\n';
 
   // Tool indicators from Claude Code SDK responses:
   // 🔧 (U+1F527) - tool usage, 💭 (U+1F4AD) - thinking, 📝 (U+1F4DD) - writing,
@@ -61,15 +60,22 @@ export function filterToolIndicators(assistantMessages: string[]): string {
   // 📂 (U+1F4C2) - folder, 🔍 (U+1F50D) - search
   const toolIndicatorRegex =
     /^(?:\u{1F527}|\u{1F4AD}|\u{1F4DD}|\u{270F}\u{FE0F}|\u{1F5D1}\u{FE0F}|\u{1F4C2}|\u{1F50D})/u;
-  const cleanSections = sections.filter(section => {
-    const trimmed = section.trim();
-    return !toolIndicatorRegex.test(trimmed);
-  });
 
-  const finalMessage = cleanSections.join('\n\n').trim();
+  // Filter per message so a message left empty drops out with its separator;
+  // filtering the joined text would keep bare `---` sections as content.
+  const finalMessage = assistantMessages
+    .map(message =>
+      message
+        .split('\n\n')
+        .filter(section => !toolIndicatorRegex.test(section.trim()))
+        .join('\n\n')
+        .trim()
+    )
+    .filter(message => message !== '')
+    .join(separator);
 
   // If we filtered everything out, fall back to all messages joined
-  return finalMessage || allMessages;
+  return finalMessage || assistantMessages.join(separator);
 }
 
 // ─── Session Helpers ────────────────────────────────────────────────────────

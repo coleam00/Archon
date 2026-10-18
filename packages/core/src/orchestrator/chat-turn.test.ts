@@ -109,7 +109,15 @@ describe('filterToolIndicators', () => {
   });
 
   test('falls back to all messages when everything gets filtered out', () => {
-    expect(filterToolIndicators(['🔧 Tool call one'])).toBe('🔧 Tool call one');
+    expect(filterToolIndicators(['🔧 Tool call one', '💭 Thinking...'])).toBe(
+      '🔧 Tool call one\n\n---\n\n💭 Thinking...'
+    );
+  });
+
+  test('drops the separator of a message that held only tool indicators', () => {
+    expect(filterToolIndicators(['First part.', '🔧 Some tool usage here', 'Second part.'])).toBe(
+      'First part.\n\n---\n\nSecond part.'
+    );
   });
 
   test('handles multiple assistant messages joined with separator', () => {
