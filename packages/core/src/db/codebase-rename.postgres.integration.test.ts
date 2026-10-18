@@ -78,6 +78,15 @@ test.skipIf(!baseUrl)(
         );
         expect(owners.rows).toHaveLength(1);
       }
+
+      // Owner/repo names set the storage path; these store under the checkout basename.
+      const taken = await codebases.createCodebase({ name: 'acme api', default_cwd: '/acme-api' });
+      const other = await codebases.createCodebase({ name: 'b', default_cwd: '/b' });
+      await expect(codebases.renameCodebase(other.id, 'Acme API')).rejects.toBeInstanceOf(
+        codebases.CodebaseNameTakenError
+      );
+      expect((await codebases.getCodebase(other.id))?.name).toBe('b');
+      expect((await codebases.renameCodebase(taken.id, 'Acme API')).name).toBe('Acme API');
     } finally {
       await db?.close();
       if (created) await admin.query(`DROP DATABASE "${scratchName}"`);
