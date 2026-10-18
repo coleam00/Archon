@@ -5,8 +5,6 @@
  * Both sources prove the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or
  * closed as the issue.
- * `issueAtCreation` recovers the text an issue was opened with, from GitHub's edit
- * history; the forge source has no history and answers with the current text.
  * `issueBodyAt` recovers the body at a past moment the same way, and `appendSection`
  * adds a dated section to the body, the one body write the pack makes.
  */
@@ -293,54 +291,6 @@ export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
   if (after.state !== 'closed' || after.state_reason !== reason) {
     throw new Error(`${after.html_url} does not read back closed as ${reason}; it may be closed`);
   }
-}
-
-/** `current` when the creation body could not be recovered and the current one stands in. */
-export const BODY_SOURCES = ['creation', 'current'] as const;
-
-/** The title and body an issue was opened with, and whether the body really is that. */
-export interface IssueAtCreation {
-  readonly title: string;
-  readonly body: string;
-  readonly body_from: (typeof BODY_SOURCES)[number];
-}
-
-const CREATION_QUERY = [
-  'query($owner: String!, $name: String!, $number: Int!) {',
-  'repository(owner: $owner, name: $name) { issue(number: $number) {',
-  'createdAt',
-  'userContentEdits(last: 1) { totalCount nodes { editedAt diff } }',
-  'timelineItems(first: 1, itemTypes: [RENAMED_TITLE_EVENT]) {',
-  'nodes { ... on RenamedTitleEvent { previousTitle } } }',
-  '} } }',
-].join(' ');
-
-export function issueAtCreation(item: QualifiedPr, current: IssueView): IssueAtCreation {
-  if (forgeSource() === 'forge') {
-    return { title: current.title, body: current.body, body_from: 'current' };
-  }
-  const history = graphql(item, CREATION_QUERY, `issue ${String(item.number)} history`);
-  const edits = record(history?.userContentEdits);
-  if (history === undefined || typeof edits?.totalCount !== 'number') {
-    throw new Error(`issue ${String(item.number)} has no edit history to read`);
-  }
-  // Edits are newest first and each holds the whole body at that revision, so the
-  // last one is the oldest. It is the creation body when it was made at creation; a
-  // deleted revision has no diff, and then the current body stands in, visibly.
-  const oldest = record(Array.isArray(edits.nodes) ? edits.nodes[0] : undefined);
-  const recovered =
-    edits.totalCount === 0
-      ? current.body
-      : typeof oldest?.diff === 'string' && oldest.editedAt === history.createdAt
-        ? oldest.diff
-        : undefined;
-  const renames = record(history.timelineItems)?.nodes;
-  const previousTitle = record(Array.isArray(renames) ? renames[0] : undefined)?.previousTitle;
-  return {
-    title: typeof previousTitle === 'string' ? previousTitle : current.title,
-    body: recovered ?? current.body,
-    body_from: recovered === undefined ? 'current' : 'creation',
-  };
 }
 
 function graphql(item: QualifiedPr, query: string, what: string): Record<string, unknown> | undefined {
