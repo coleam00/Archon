@@ -54,6 +54,23 @@ export async function sendPauseNotice(
 }
 
 /**
+ * The run's status after a pause write failed. When that read fails too the status is
+ * unknowable, so the original pause failure surfaces rather than the read's error.
+ */
+export async function statusAfterPauseFailure(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  pauseError: unknown
+): Promise<WorkflowRunStatus | null> {
+  try {
+    return await store.getWorkflowRunStatus(runId);
+  } catch (statusErr) {
+    getLog().warn({ err: statusErr as Error, workflowRunId: runId }, 'dag.status_check_failed');
+    throw pauseError;
+  }
+}
+
+/**
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
@@ -77,13 +94,7 @@ export async function pauseGateRespectingExternalTransition(
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
-    let status: WorkflowRunStatus | null;
-    try {
-      status = await deps.store.getWorkflowRunStatus(runId);
-    } catch {
-      // Status unknowable — surface the original pause failure.
-      throw pauseErr;
-    }
+    const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);
     if (status === 'running' || status === 'pending') throw pauseErr;
     if (status === 'paused') {
       const run = await deps.store.getWorkflowRun(runId);

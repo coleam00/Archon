@@ -1,4 +1,8 @@
-import { isSubprocessTimeout, type RawSubprocessRejection } from '../../../subprocess';
+import {
+  hostSpawnFailure,
+  isSubprocessTimeout,
+  type RawSubprocessRejection,
+} from '../../../subprocess';
 import { finishNodeExecution } from '../../../node-execution';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
@@ -164,6 +168,7 @@ export async function executeBashNode(
     // user-facing branch we end up in — the timeout message also contains the
     // full `Command failed: bash -c <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
+    const spawnFailure = hostSpawnFailure(execContext, err);
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
@@ -173,12 +178,12 @@ export async function executeBashNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+    } else if (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR') {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
         'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
         '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
-    } else if (err.code === 'EACCES') {
+    } else if (spawnFailure === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;

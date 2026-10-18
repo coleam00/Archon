@@ -60,9 +60,11 @@ export function setMockArtifactHome(home: string): void {
 export function setMockWorkflowHome(home: string): void {
   mockWorkflowHome = home;
 }
-// Captured before the module mock below replaces the re-export.
-const { isPathInside } = await import('@archon/paths/archon-paths');
+// Captured before the module mock below replaces it.
+const actualPaths = await import('@archon/paths');
+const { isPathInside } = actualPaths;
 mock.module('@archon/paths', () => ({
+  ...actualPaths,
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: (folder?: string) => {
     const paths = ['.archon/commands'];
@@ -76,7 +78,6 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
-  isPathInside,
   isInsideArchonHome: (candidate: string): boolean =>
     isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
   getRunArtifactsDirForRoot: (root: string, runId: string): string =>

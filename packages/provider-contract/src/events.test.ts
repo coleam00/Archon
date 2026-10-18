@@ -12,6 +12,7 @@ import {
 
 const oneOfEach: ProviderEvent[] = [
   { type: 'agent_message_chunk', text: 'Done.' },
+  { type: 'agent_message_chunk', text: 'continued', continuesPreviousBlock: true },
   { type: 'agent_thought_chunk', text: 'Check the tests first.' },
   {
     type: 'tool_call',

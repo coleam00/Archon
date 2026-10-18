@@ -1097,6 +1097,13 @@ const approvalContextBaseSchema = z.object({
    */
   signaledStructuredOutput: z.unknown().optional(),
   /**
+   * Single-node `loop` gate only. The paused iteration's (stripped) output, whether or not
+   * it signaled, restored on resume as the previous output that `$LOOP_PREV_OUTPUT` and
+   * until_bash read. A `loop_group` restores it from its body's persisted rows instead.
+   * Absent on gates paused by builds predating this field; those resume with it empty.
+   */
+  iterationOutput: z.string().optional(),
+  /**
    * Interactive-loop only, and written by the single-node `loop` gate ONLY. Cumulative
    * token usage through this pause, restored when the loop resumes so later gates and
    * terminal metadata retain every pre-gate iteration. The historical name remains for

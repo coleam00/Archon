@@ -6,7 +6,7 @@ A provider that knows why a turn failed sets `failure: { class, retryAfterMs?, r
 
 During a turn a provider streams `ProviderEvent`s (`src/events.ts`): message and thought text, tool calls and their updates, warnings, MCP server status, compaction, subtasks, hooks and state updates. Names follow the Agent Client Protocol where it has the concept, and each field documents whether it comes from ACP or is an Archon addition. `providerChunkSchema` is the whole stream: these events, then `result`, then `settled`.
 
-- Text events carry a whole block, not a token delta. A provider coalesces deltas and sends the block at a block, tool or turn boundary.
+- Providers coalesce text deltas and send blocks at block, tool or turn boundaries. An immediate warning may flush part of a reply block before that boundary; subsequent `agent_message_chunk` events in the same block set `continuesPreviousBlock: true` so consumers append their text to the preceding reply block. Omit the marker when a new reply block starts.
 - A provider gives every tool call its own `toolCallId` and closes it with exactly one `tool_call_update` before the next `result`. An interrupted call closes as `cancelled`.
 - Tool output is capped at `TOOL_OUTPUT_MAX_CHARS` code points, the unit JSON Schema's `maxLength` counts. The provider truncates with `truncateToolOutput`, which sets `outputTruncated` when it cuts.
 - A warning carries a provider-namespaced `code`, such as `claude.node_config_ignored`. Readers branch on the code, never on the message.

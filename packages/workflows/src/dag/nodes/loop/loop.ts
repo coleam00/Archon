@@ -13,7 +13,7 @@ import {
   type LoopCompletionCheck,
 } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
-import { type RawSubprocessRejection } from '../../../subprocess';
+import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import { requireProvider } from '@archon/provider-contract';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
@@ -442,7 +442,9 @@ export async function executeLoopNode(
     );
   }
 
-  let lastIterationOutput = '';
+  // A resumed loop continues from the paused iteration, so its output stays the
+  // previous output for $LOOP_PREV_OUTPUT and until_bash.
+  let lastIterationOutput = isLoopResume ? (loopGateMeta.iterationOutput ?? '') : '';
   let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined = persistedLoopCostUsd;
   let loopTotalTokens: TokenUsage | undefined = persistedLoopTokens;
@@ -543,7 +545,6 @@ export async function executeLoopNode(
     // channels, payload serialization) still reads — declared per-iteration but OUTSIDE
     // the attempt loop below, whose passes reassign them.
     let fullOutput = ''; // raw, for signal detection
-    let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
     // Whether this attempt's stream ended on the provider's `settled` (see the AI-node
     // path's streamSettled).
@@ -669,9 +670,9 @@ export async function executeLoopNode(
           configuredMcpServers: new Set(),
           onMessageText: async text => {
             fullOutput += text;
+            if (platform.getStreamingMode() !== 'stream') return;
             const cleaned = stripCompletionTags(text, loop.until);
-            cleanOutput += cleaned;
-            if (platform.getStreamingMode() === 'stream' && cleaned) {
+            if (cleaned) {
               await safeSendMessage(platform, conversationId, cleaned, msgContext);
             }
           },
@@ -720,7 +721,6 @@ export async function executeLoopNode(
         // accumulates or aborts must start clean or a prior attempt's prose would
         // leak into this one's output and signal detection.
         fullOutput = '';
-        cleanOutput = '';
         iterationIdleTimedOut = false;
         iterationSettled = false;
         lastWatchdogReset = undefined;
@@ -744,9 +744,7 @@ export async function executeLoopNode(
           // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
           // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
           // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
-          // the first iteration (no prior output exists). Across an interactive resume, the
-          // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
-          // the resume also receives an empty $LOOP_PREV_OUTPUT.
+          // the first iteration (no prior output exists).
           const { prompt: basePrompt } = substituteWorkflowVariables(
             loopPromptTemplate,
             workflowRun.id,
@@ -757,7 +755,7 @@ export async function executeLoopNode(
             issueContext,
             i === startIteration ? loopUserInput : '',
             undefined, // rejectionReason
-            i === startIteration ? '' : lastIterationOutput,
+            lastIterationOutput,
             {
               stateDir,
               inputs: resolveRunInputs(workflowRun),
@@ -909,7 +907,6 @@ export async function executeLoopNode(
                 loopResolvedModel = msg.resolvedModel;
                 if (msg.text !== undefined) {
                   fullOutput = msg.text;
-                  cleanOutput = stripCompletionTags(msg.text, loop.until);
                 }
                 attemptStructured = msg.structuredOutput;
                 if (msg.failure !== undefined) {
@@ -1316,6 +1313,9 @@ export async function executeLoopNode(
       lastIterationStructuredOutput = iterationPayload;
     }
 
+    // Stripped from the whole reply: a completion tag can span reply blocks, and each
+    // block's own whitespace is part of the text.
+    const cleanOutput = stripCompletionTags(fullOutput, loop.until);
     // Batch mode: send accumulated output
     const batchContent = structuredText ?? cleanOutput;
     if (platform.getStreamingMode() === 'batch' && batchContent) {
@@ -1443,7 +1443,7 @@ export async function executeLoopNode(
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the loop with a clear actionable error instead.
-        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+        if (hostSpawnFailure(execContext, bashErr) !== undefined) {
           getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
           throw new Error(
             `Loop node '${node.id}' until_bash failed: cannot execute bash at ` +
@@ -1605,6 +1605,7 @@ export async function executeLoopNode(
         signaledStructuredOutput: completionDetected
           ? (lastIterationStructuredOutput ?? null)
           : null,
+        iterationOutput: lastIterationOutput,
         // Cumulative usage consumed through this gate. A resumed loop seeds its
         // totals from these values so later gates and terminal metadata preserve
         // every pre-gate iteration; bare approval uses the same values directly.

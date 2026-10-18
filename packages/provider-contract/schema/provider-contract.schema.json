@@ -296,6 +296,10 @@
             "text": {
               "type": "string",
               "minLength": 1
+            },
+            "continuesPreviousBlock": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [

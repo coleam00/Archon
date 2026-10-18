@@ -1,4 +1,4 @@
-import { sendPauseNotice } from '../../pause';
+import { sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -187,7 +187,7 @@ export async function executeWaitNode(
       );
       paused = true;
     } catch (pauseError) {
-      const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+      const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
       if (status === 'running') throw pauseError;
       getLog().warn(
         { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },

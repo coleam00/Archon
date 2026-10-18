@@ -6,8 +6,10 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-const mockLogger = { info: mock(() => {}) };
-mock.module('@archon/paths', () => ({ createLogger: mock(() => mockLogger) }));
+const mockLogFn = mock(() => {});
+const mockLogger = { debug: mockLogFn, info: mockLogFn, warn: mockLogFn, error: mockLogFn };
+const actualPaths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => mockLogger) }));
 
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
