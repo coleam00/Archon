@@ -369,7 +369,7 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
     );
   }
 
-  const result = await getDatabase().withTransaction(async query => {
+  await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'postgresql') {
       await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         CODEBASE_IDENTITY_LOCK,
@@ -380,14 +380,14 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
       [id]
     );
     const requested = name.toLowerCase();
-    if (others.rows.some(other => other.name.toLowerCase() === requested)) return null;
-    return query(
+    if (others.rows.some(other => other.name.toLowerCase() === requested)) {
+      throw new CodebaseNameTakenError(name);
+    }
+    await query(
       `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2`,
       [name, id]
     );
   });
-  if (!result) throw new CodebaseNameTakenError(name);
-  if ((result.rowCount ?? 0) === 0) throw new CodebaseNotFoundError(id);
   const renamed = await getCodebase(id);
   if (!renamed) throw new CodebaseNotFoundError(id);
   getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
