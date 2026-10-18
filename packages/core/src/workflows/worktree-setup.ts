@@ -159,7 +159,7 @@ export function createRunWorktreeSetupExecutor(
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
-    const { resolveProjectPaths } = await import('@archon/workflows/executor');
+    const { resolveProjectPaths } = await import('@archon/workflows/run-paths');
     const { resolveWorkflowGithubEnvironment } = await import(
       '@archon/workflows/run-credential-env'
     );

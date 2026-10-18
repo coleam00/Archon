@@ -452,6 +452,8 @@ mock.module('@archon/workflows/executor', () => ({
     file_count: prepared.manifest.file_count,
     byte_count: prepared.manifest.byte_count,
   }),
+}));
+mock.module('@archon/workflows/run-paths', () => ({
   // The container dispatch resolves the run's artifacts directory to bind it into the
   // container and creates it on the host first, so hand it a real, reclaimed temp path.
   resolveProjectPaths: mock(() =>

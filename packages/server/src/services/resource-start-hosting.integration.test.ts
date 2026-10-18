@@ -1,4 +1,4 @@
-import { resolveProjectPaths } from '@archon/workflows/executor';
+import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { listWorkflowEvents } from '@archon/core/db/workflow-events';
 import { randomUUID } from 'node:crypto';
 import { getOrCreateConversation } from '@archon/core/db/conversations';
