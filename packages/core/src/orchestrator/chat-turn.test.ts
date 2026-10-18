@@ -564,6 +564,25 @@ describe('chat turn telemetry', () => {
     expect(platform.sendMessage).toHaveBeenLastCalledWith('conv-1', expected);
   });
 
+  test('batch truncation preserves a real answer in a warning-split indicator block', async () => {
+    const answers = Array.from({ length: 19 }, (_, i) => `Answer ${i + 1}`);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '🔧 Running' };
+      yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
+      yield { type: 'agent_message_chunk', text: ' tool output', continuesPreviousBlock: true };
+      yield { type: 'agent_message_chunk', text: '\n\nFinal answer', continuesPreviousBlock: true };
+      for (const text of answers) yield { type: 'agent_message_chunk', text };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
+    expect(platform.sendMessage).toHaveBeenLastCalledWith(
+      'conv-1',
+      ['Final answer', ...answers].join('\n\n---\n\n')
+    );
+  });
+
   test.each([
     [18, 1],
     [19, 1],
