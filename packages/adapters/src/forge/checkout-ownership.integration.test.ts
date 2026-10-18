@@ -323,11 +323,15 @@ test.each(readiness)(
       error: { code: 'not_a_repo', path: 'acme/api' },
     });
     try {
-      const codebase = { name: 'local-api', default_cwd: getProjectSourcePath('acme', 'api') };
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        await mkdir(codebase.default_cwd, { recursive: true });
-        await expect(prepare(codebase)).rejects.toThrow('not found');
-        expect(clone).toHaveBeenCalledTimes(attempt);
+      // A custom name at the webhook repository's source; an allocated name at its own source.
+      for (const [name, repo] of Object.entries({ 'local-api': 'api', 'acme/api-2': 'api-2' })) {
+        const codebase = { name, default_cwd: getProjectSourcePath('acme', repo) };
+        clone.mockClear();
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          await mkdir(codebase.default_cwd, { recursive: true });
+          await expect(prepare(codebase)).rejects.toThrow('not found');
+          expect(clone).toHaveBeenCalledTimes(attempt);
+        }
       }
     } finally {
       clone.mockRestore();
