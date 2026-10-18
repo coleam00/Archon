@@ -652,7 +652,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   queue's last round delivered. One already merged or closed is recorded without the
   agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
-  head, how many commits of the default branch it lacks, whether it merges cleanly, its size, CI and unresolved review threads at the
+  head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
   else can post a verdict. The trusted report is written under the run's
@@ -667,8 +667,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   published before verdicts were stamped: one such pull request gets a delta review in
   the same run, through an included `archon-review-block` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
-  gets one rerun of its failed jobs; the record stores the head it re-ran at and
-  refuses a second rerun there. What the build queue can fix (a verdict that is
+  gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
+  sweep reads it so it never reruns twice at one head. The sweep measures each diff with
+  git against the merge base, not the forge's counts. What the build queue can fix (a verdict that is
   not Ready, an unresolved thread, red the change caused) goes back to it with a
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
@@ -676,26 +677,22 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   refuses unless the verdict says Ready at the head and CI is green there (open review
   threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
-  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
-  writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
-  request that reads back unmerged, as when the forge queues merges, loses its receipt
-  and fails the gate.
+  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`
+  and reads the merge back. A pull request that reads back unmerged, as when the forge
+  queues merges, fails the gate.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
   batch it waits for CI on the default branch, rerunning a red in code the batch did
   not touch once; red after that is raised to a maintainer.
-- **Record.** The `record` script refuses, before it writes anything, a sweep that
-  left a claimed pull request undecided, decided one twice, offered an attention item
-  a person could not answer, merged a pull request it did not claim, merged without
-  checking the default branch afterwards, or raised the default branch without
-  merging. It reads every pull request back: the forge, not the sweep or the gate's
-  receipts, says what merged, at the head the forge merged, and a merge with no
-  receipt is recorded as made outside the run. A sweep that says it merged a pull
+- **Record.** The `record` script refuses a sweep that decided a pull request this
+  run did not claim, because that item belongs to another run. A claimed pull request
+  the sweep left undecided waits for the next sweep, and an ask with no attention item
+  waits the same way. It reads every pull request back: the forge, not the sweep, says
+  what merged, at the head the forge merged. A sweep that says it merged a pull
   request the forge does not show merged fails the record after every other decision
   is written: that pull request is recorded as waiting, or parked if it was closed,
   and the failure names a red default branch the run could not raise and any work
   item it could not write. A pull
-  request that cannot be read waits for the next sweep, and is parked when it could not
-  be read the sweep before either; a work item that cannot be written is reported, so one bad item never loses
+  request that cannot be read waits for the next sweep; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.
   It runs even when the delta review failed. It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
