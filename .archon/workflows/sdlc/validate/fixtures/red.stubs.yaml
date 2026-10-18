@@ -9,5 +9,5 @@ classify:
   summary: "stub: the failing test covers code this change added"
 fixture:
   expect: completed
-  reached: [mode, discover, run, classify, result]
+  reached: [discover, run, classify, result]
 exec-code: true

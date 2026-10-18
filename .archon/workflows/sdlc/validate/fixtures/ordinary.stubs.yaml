@@ -8,5 +8,5 @@ discover:
   notes: "stub: the project's checks"
 fixture:
   expect: completed
-  reached: [mode, discover, run, result]
+  reached: [discover, run, result]
 exec-code: true
