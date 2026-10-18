@@ -22,7 +22,7 @@ import {
   RERUNS,
   SWEEP_ACTIONS,
 } from '../../workflows/sdlc/.shared/merge';
-import { CONFIDENCES } from '../../workflows/sdlc/.shared/queue';
+import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -640,6 +640,7 @@ describe('the merge queue scripts', () => {
         { id: 'merge', label: 'Merge it' },
         { id: 'return', label: 'Rework it' },
         { id: 'park', label: 'Park it' },
+        { id: 'other', label: 'Something else' },
       ],
       asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42' },
     });
@@ -692,6 +693,16 @@ describe('the merge queue scripts', () => {
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
     expect(doc.facts.build?.brief).toContain('rework PR 42');
     expect(doc.facts.build?.brief).toContain(heading);
+  }, 60_000);
+
+  test("an 'other' answer returns the pull request with its text as the ruling", () => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const asked = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: withOther(ATTENTION, 'return') });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'Split the contract change out first.' });
+    expect(ok(ruled).decision).toBe('return');
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Split the contract change out first.");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
   }, 60_000);
 });
 

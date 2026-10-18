@@ -22,7 +22,7 @@ import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { attentionOptions, checkAttention, type DecisionEntry, renderAttention } from '../../.shared/queue.ts';
+import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
 import { parseMode, updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
@@ -70,7 +70,7 @@ type Decision =
 function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
-  return { kind: 'asked', by, attention, brief, reason };
+  return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
 }
 
 function decide(
