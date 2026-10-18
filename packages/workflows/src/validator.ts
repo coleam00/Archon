@@ -57,7 +57,8 @@ import {
   isWorkflowNode,
   mcpDeclaration,
 } from './schemas';
-import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
+import { parseWorkflow } from './loader';
+import { workflowNodeOutputFormatError } from './loader/contracts';
 import { PRIOR_OUTPUT_PATH_SOURCE, CURRENT_OUTPUT_PATH_SOURCE } from './output-ref';
 import { resolveWorkflowName } from './router';
 import { visitNodeTemplateSlots } from './template-walker';
