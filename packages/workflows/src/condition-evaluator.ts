@@ -86,7 +86,7 @@ function resolveOutputRef(
     // A `.field` ref that resolves to no output (a typo, or a real node that hasn't
     // run before this reference) fails the consuming node loudly, matching
     // `resolveNodeOutputField`'s strict no-silent-drop posture (and
-    // `substituteNodeOutputRefs` in dag-executor). A whole-text `$id.output` stays
+    // `substituteNodeOutputRefs` in dag/references). A whole-text `$id.output` stays
     // lenient ('').
     if (field) {
       throw new OutputRefError(nodeId, field, 'unknown-node', {

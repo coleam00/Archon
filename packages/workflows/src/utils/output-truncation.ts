@@ -3,7 +3,7 @@
  *
  * Two sides must agree on this string, so it lives in one place rather than
  * being written by one and pattern-matched by the other:
- *   - `formatPersistedNodeOutput` (dag-executor) WRITES it when successful bash or
+ *   - `formatPersistedNodeOutput` (dag/node-output) WRITES it when successful bash or
  *     script stdout exceeds the persisted-event byte cap.
  *   - `resolveNodeOutputField` (output-ref) RECOGNISES it so a resumed run can
  *     explain why an output it cannot parse was nonetheless emitted correctly.
