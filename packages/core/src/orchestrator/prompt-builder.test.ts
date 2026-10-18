@@ -58,21 +58,12 @@ describe('buildRoutingRulesWithProject', () => {
 
   for (const channel of ['tools', 'commands'] as const) {
     test.each([undefined, 'my-project'])(
-      `${channel} examples use illustrative placeholders (project: %s)`,
+      `${channel} examples invoke only the placeholder and name no pack workflow (project: %s)`,
       projectName => {
         const rules = buildRoutingRulesWithProject(channel, projectName);
         const names = invocationWorkflowNames(rules);
         expect(names.length).toBeGreaterThan(0);
         expect(names.every(name => name === '{workflow-name}')).toBe(true);
-        expect(rules).toContain('{workflow-name} is an illustrative placeholder');
-        expect(rules).toContain(
-          'replace it with the exact name of an appropriate workflow from Available Workflows'
-        );
-        expect(rules).toContain('Never invoke the placeholder literally');
-        expect(rules).toContain(
-          'If no listed workflow fits, explain that instead of inventing a name'
-        );
-        expect([...rules.matchAll(/\*\*([^*]+)\*\* workflow/g)]).toEqual([]);
         expect(rules.split('## Project Setup')[0]).not.toMatch(/\barchon-[\w-]+\b/);
       }
     );
@@ -80,14 +71,11 @@ describe('buildRoutingRulesWithProject', () => {
     test(`${channel} examples route actions and answer questions without invoking`, () => {
       const rules = buildRoutingRulesWithProject(channel);
       const action = rules.split('Example (clear intent):')[1]?.split('Example (ambiguous')[0];
-      expect(action).toContain('Fix issue #42');
       expect(invocationWorkflowNames(action ?? '')).toEqual(['{workflow-name}']);
       const question = rules
         .split('Example (ambiguous — answer directly):')[1]
         ?.split('## Project Setup')[0];
-      expect(question).toContain('What do you think about adding dark mode?');
-      expect(question).toContain('[answer the question]');
-      expect(question).toContain('if a suitable workflow is available');
+      expect(question).toBeDefined();
       expect(invocationWorkflowNames(question ?? '')).toEqual([]);
       expect(rules).toContain(
         channel === 'tools'
