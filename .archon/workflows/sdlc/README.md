@@ -586,8 +586,10 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
   is, why it matters, the agent's recommendation with its evidence, confidence and
   what would change it, the choices and what each does, what happens if nobody
-  answers, and the links to the evidence. The answer is one declared choice, so the
-  queue never reads the answer's prose for a decision. The `ruling` script writes the
+  answers, and the links to the evidence. The answer is one declared choice, or
+  `other`, which every item offers: its text says what to do instead and becomes the
+  ruling, and the item continues from it. The queue never reads the answer's prose for
+  a decision. The `ruling` script writes the
   choice's ruling and the person's words into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice launches
   the next round from it, and a `park` choice stops working the item until a
@@ -705,7 +707,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   asked about, labelled `merge: dev` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. On a pull request, `merge` approves it at the head that was asked about, and
+  links. Every pull-request item also offers `other`, which returns the pull request to
+  the build queue with the answer's text as the ruling. A red default branch is only
+  ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a later sweep merges it once the gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue; `park` stops working it until the build queue readies it

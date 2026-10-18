@@ -27,7 +27,7 @@ function formatNodeIssue(id: string, issue: z.ZodIssue): string {
  * Validate and parse a single DAG node from raw YAML, recording schema errors
  * and author-facing warnings.
  */
-export function parseDagNode(
+function parseDagNode(
   raw: unknown,
   index: number,
   errors: string[],
@@ -118,4 +118,25 @@ export function parseDagNode(
   }
 
   return node;
+}
+
+/**
+ * Parse every raw node, or the combined validation error when any node fails. The warnings
+ * collected here are the start of the workflow's parse warnings.
+ */
+export function parseDagNodes(
+  rawNodes: readonly unknown[],
+  filename: string
+): { nodes: (DagNode | IncludeDirective)[]; warnings: string[] } | string {
+  const validationErrors: string[] = [];
+  const warnings: string[] = [];
+  const nodes = rawNodes
+    .map((n: unknown, i: number) => parseDagNode(n, i, validationErrors, warnings))
+    .filter((n): n is DagNode | IncludeDirective => n !== null);
+
+  if (nodes.length !== rawNodes.length) {
+    getLog().debug({ filename, validationErrors }, 'dag_node_validation_failed');
+    return `DAG node validation failed: ${validationErrors.join('; ')}`;
+  }
+  return { nodes, warnings };
 }

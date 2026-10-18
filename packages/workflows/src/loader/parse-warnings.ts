@@ -10,7 +10,11 @@ import {
 } from '../schemas';
 import { KNOWN_DAG_NODE_KEYS, KNOWN_NODE_NESTED_KEYS } from '../schemas/dag-node';
 import type { NestedKeySpec } from '../schemas/dag-node';
-import { WORKFLOW_ONLY_KEYS } from '../schemas/workflow';
+import {
+  KNOWN_WORKFLOW_KEYS,
+  KNOWN_WORKFLOW_NESTED_KEYS,
+  WORKFLOW_ONLY_KEYS,
+} from '../schemas/workflow';
 import { OUTPUT_REF_SOURCE } from '../output-ref';
 import { getLog } from './log';
 
@@ -55,7 +59,7 @@ function unknownNodeKeyHint(key: string): string {
  * `Node 'refine' → loop_group node 'check'`) and appears only inside the
  * message prose, never as a structured field.
  */
-export function pushUnknownKeyWarning(
+function pushUnknownKeyWarning(
   id: string,
   label: string,
   key: string,
@@ -78,7 +82,7 @@ export function pushUnknownKeyWarning(
  * through the sub-objects `spec` describes. `keyPath` is the dotted prefix that
  * locates the key inside the node (e.g. `approval.on_reject.`).
  */
-export function collectUnknownConfigKeys(
+function collectUnknownConfigKeys(
   raw: unknown,
   spec: NestedKeySpec,
   id: string,
@@ -498,5 +502,74 @@ export function collectLegacyPauseWarnings(
     const message = `${label}: ${LEGACY_PAUSE_REPLACEMENTS[shape]} It keeps running as before until rewritten.`;
     warnings.push(message);
     getLog().debug({ shape, nodeIds, warning: message }, 'legacy_pause_deprecated');
+  }
+}
+
+function hasSignalCompletesWithoutInteractive(
+  ns: readonly (DagNode | IncludeDirective)[]
+): boolean {
+  return ns.some(
+    n =>
+      !isIncludeDirective(n) &&
+      ((isLoopNode(n) && n.loop.signal_completes === true && n.loop.interactive !== true) ||
+        (isLoopGroupNode(n) &&
+          ((n.loop_group.signal_completes === true && n.loop_group.interactive !== true) ||
+            hasSignalCompletesWithoutInteractive(n.loop_group.nodes))))
+  );
+}
+
+/**
+ * Warn (non-blocking) when signal_completes is set without interactive: the flag
+ * only changes interactive-gate behavior — a non-interactive loop already
+ * completes on the signal, so the author's intent is likely a missing
+ * `interactive: true`. The workflow still loads.
+ */
+export function warnSignalCompletesWithoutInteractive(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  filename: string
+): void {
+  if (hasSignalCompletesWithoutInteractive(nodes)) {
+    getLog().warn({ filename }, 'signal_completes_without_interactive_ignored');
+  }
+}
+
+/**
+ * Detect unknown workflow-level keys, and unknown keys inside the nested
+ * workflow-level configs (#2213)
+ */
+export function collectUnknownWorkflowKeys(
+  raw: Record<string, unknown>,
+  workflowName: string,
+  warnings: string[]
+): void {
+  const workflowLabel = `Workflow '${workflowName}'`;
+  for (const key of Object.keys(raw)) {
+    if (key === 'interactive') continue; // deprecated, warned by parseWorkflow
+    if (!KNOWN_WORKFLOW_KEYS.has(key)) {
+      const hint = KNOWN_DAG_NODE_KEYS.has(key)
+        ? ` ('${key}' is valid on individual nodes, not at workflow level.)`
+        : '';
+      pushUnknownKeyWarning(
+        workflowName,
+        workflowLabel,
+        key,
+        hint,
+        'workflow_unknown_key_ignored',
+        warnings
+      );
+      continue;
+    }
+    const nested = KNOWN_WORKFLOW_NESTED_KEYS.get(key);
+    if (nested) {
+      collectUnknownConfigKeys(
+        raw[key],
+        nested,
+        workflowName,
+        workflowLabel,
+        `${key}.`,
+        'workflow_unknown_key_ignored',
+        warnings
+      );
+    }
   }
 }
