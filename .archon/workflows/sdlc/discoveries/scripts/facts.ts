@@ -1,30 +1,27 @@
 /**
- * Build this pass's queue: the finished runs with records no decision settled yet,
- * every decision made so far, and the base commit claims are checked against.
+ * Build this pass's queue: the finished runs with records no pass decided yet, and the
+ * base commit claims are checked against.
  *
  * A run's records become final when the run reaches a terminal status, so only
- * terminal runs are queued, oldest first. A record is settled once a decision record
- * that is not `asked` lists it. In live mode each queued run is claimed with a
- * conditional write on its `discoveries/runs/<id>` document, so two passes never
- * decide the same run; a claim is released only when the claiming run is terminal.
- * Eval mode writes nothing and claims nothing: it decides every record in the window,
- * settled or not, against whatever decisions are already stored.
+ * terminal runs are queued, oldest first. A record is settled once its run's
+ * `discoveries/runs/<id>` document lists it as decided. Every run document is read in
+ * one call. In live mode each queued run is claimed with a conditional write on its
+ * document, so two passes never decide the same run; a claim is released only when the
+ * claiming run is terminal. Eval mode writes nothing and claims nothing: it decides
+ * every record in the window, settled or not.
  *
- * Writes `$ARTIFACTS_DIR/drain/queue.json` (the queued records, for the agent and the
- * outcome) and `$ARTIFACTS_DIR/drain/discovery-decisions.md` (every stored decision).
+ * Writes `$ARTIFACTS_DIR/drain/queue.json`: the queued records, each run with the
+ * questions earlier passes asked about it, for the agent and the outcome.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DECISIONS_PREFIX,
-  type DecisionRecord,
-  decidedRefs,
-  parseDecisionRecord,
   parseDrainMode,
-  parseRunClaim,
+  parseRunDocument,
   type QueuedRun,
-  renderDecisions,
+  type RunDocument,
+  RUNS_PREFIX,
   runName,
 } from '../../.shared/discoveries.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
@@ -52,15 +49,30 @@ function parseTime(name: string, value: string): number | undefined {
   return at;
 }
 
-function readDecisions(): DecisionRecord[] {
-  return stateDocuments(DECISIONS_PREFIX).map(({ name, value }) => parseDecisionRecord(name, value));
+/** Every drained run's document, by run id, in one read. */
+function readRunDocuments(): Map<string, RunDocument> {
+  const documents = new Map<string, RunDocument>();
+  for (const { name, value } of stateDocuments(RUNS_PREFIX)) {
+    const document = parseRunDocument(name, value);
+    if (document !== null) documents.set(name.slice(RUNS_PREFIX.length), document);
+  }
+  return documents;
+}
+
+/** The refs a pass already decided for a run; every ref when the run was drained before runs kept their own memory. */
+function settledOf(document: RunDocument | undefined): ((ref: string) => boolean) {
+  if (document === undefined) return () => false;
+  if (document.decided === undefined) return () => document.claim === null;
+  const decided = new Set(document.decided);
+  return ref => decided.has(ref);
 }
 
 /** Claim the run for this pass: false when another pass holds it or won the write. */
 function claimRun(runId: string, self: string, at: string): boolean {
   const name = runName(runId);
   const stored = stateGet(name);
-  const held = parseRunClaim(name, stored.value)?.claim ?? null;
+  const current = parseRunDocument(name, stored.value);
+  const held = current?.claim ?? null;
   if (held !== null && held.run_id !== self) {
     const status = runStatus(held.run_id);
     if (claimDisposition(status) === 'hold') {
@@ -68,7 +80,7 @@ function claimRun(runId: string, self: string, at: string): boolean {
       return false;
     }
   }
-  return statePut(name, { version: 1, claim: { run_id: self, at } }, stored.revision) === 'ok';
+  return statePut(name, { ...(current ?? { version: 1 }), claim: { run_id: self, at } }, stored.revision) === 'ok';
 }
 
 function main(): void {
@@ -88,8 +100,7 @@ function main(): void {
 
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
-  const decisions = readDecisions();
-  const settled = mode === 'live' ? decidedRefs(decisions) : new Set<string>();
+  const documents = mode === 'live' ? readRunDocuments() : new Map<string, RunDocument>();
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
@@ -127,9 +138,10 @@ function main(): void {
       note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
       continue;
     }
+    const settled = settledOf(documents.get(id));
     const records = relayed.records
       .map(record => ({ ...record, ref: `${id}:${record.ref}` }))
-      .filter(record => !settled.has(record.ref));
+      .filter(record => !settled(record.ref));
     if (records.length === 0) continue;
     if (mode === 'live' && !claimRun(id, self, at)) continue;
     queue.push({
@@ -138,6 +150,7 @@ function main(): void {
       completed_at: run.completed_at as string,
       artifacts,
       records,
+      questions: documents.get(id)?.questions ?? [],
     });
   }
 
@@ -147,7 +160,6 @@ function main(): void {
     join(drain, 'queue.json'),
     `${JSON.stringify({ mode, base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
   );
-  writeFileSync(join(drain, 'discovery-decisions.md'), renderDecisions(decisions));
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
     base: { branch: base.branch, sha },

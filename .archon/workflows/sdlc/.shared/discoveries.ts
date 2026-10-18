@@ -1,88 +1,48 @@
 /**
- * The discoveries workflow's state: one decision record per decided discovery, and
- * one claim document per drained run.
+ * The discoveries workflow's state: one document per drained run.
  *
- * `discoveries/decisions/<key>` holds what was decided about one discovery, under a
- * short key the deciding agent chose, with every run record (`<run-id>:<ref>`) that
- * found it. It is the workflow's memory and its commit point: a record is decided
- * once a decision record that is not `asked` lists it. The agent reads every record
- * before deciding, so a discovery already handled is not handled again, and a
- * maintainer's answer applies to later items. One small document per key keeps every
- * write well under the store's document cap.
+ * `discoveries/runs/<run-id>` is that run's memory and its claim. `decided` lists the
+ * refs a pass decided for it, whatever the outcome, so a later pass does not queue them
+ * again; `questions` holds what a pass asked a maintainer about it, with the answer once
+ * there is one, so the next pass decides those refs from it. A run's claim is held while
+ * a pass works it, and while one of its questions waits.
  *
- * `discoveries/runs/<run-id>` is a drained run's work item: only the claim of the
- * pass working it.
+ * There is no store of decisions across runs. A defect a later run finds again is judged
+ * again, against the tracker: a filed issue carries the key's marker, so filing the same
+ * key twice recovers the issue instead of opening another.
  */
 
-import { type QualifiedPr, sameRepo } from './forge.ts';
+import type { QualifiedPr } from './forge.ts';
 import type { DiscoveryRecord } from './report.ts';
 import { isObject } from './typed.ts';
 
-export const DECISIONS_PREFIX = 'discoveries/decisions/';
 export const RUNS_PREFIX = 'discoveries/runs/';
 const KEY = /^[a-z0-9][a-z0-9-]{2,80}$/;
 
 export type IssueRef = QualifiedPr;
 
-/**
- * What became of a discovery. A decision record is written before its public write,
- * and holds what that write still owes: a `filed` decision keeps the issue's body and
- * has a null issue until the create reads back, and a `tracked` decision keeps its
- * evidence comment until the comment is posted. The next live pass finishes either by
- * its marker, so a pass that stopped between the two never files or comments twice.
- */
-export type Decision =
-  | { readonly kind: 'filed'; readonly issue: IssueRef | null; readonly body: string }
-  | {
-      readonly kind: 'tracked';
-      readonly issue: IssueRef;
-      /** Evidence still to post; null once it is posted, or when there is none. */
-      readonly comment: string | null;
-    }
-  | { readonly kind: 'dropped' }
-  | { readonly kind: 'asked' };
-
-/** Whether the decision still owes a public write. */
-export function unfinished(decision: Decision): boolean {
-  return (
-    (decision.kind === 'filed' && decision.issue === null) ||
-    (decision.kind === 'tracked' && decision.comment !== null)
-  );
-}
-
 export interface Question {
+  /** The keys of the asked decisions this question covers. */
+  readonly keys: readonly string[];
+  readonly refs: readonly string[];
   readonly text: string;
   readonly recommendation: string;
   readonly answer: { readonly text: string; readonly at: string } | null;
 }
 
-export interface DecisionRecord {
-  readonly version: 1;
-  readonly key: string;
-  readonly title: string;
-  readonly decision: Decision;
-  readonly reason: string;
-  /** The base commit the claim was checked against. */
-  readonly verified_at: string;
-  readonly at: string;
-  /** Every run record that found this discovery, as `<run-id>:<ref>`. */
-  readonly refs: readonly string[];
-  /** The last question asked about it, with its answer once there is one. */
-  readonly question: Question | null;
-}
-
-export interface RunClaim {
+export interface RunDocument {
   readonly version: 1;
   readonly claim: { readonly run_id: string; readonly at: string } | null;
+  /**
+   * The refs a pass decided for this run. A document without it was drained before
+   * runs carried their own memory, and all of its records count as decided.
+   */
+  readonly decided?: readonly string[];
+  readonly questions?: readonly Question[];
 }
 
 export function isKey(value: unknown): value is string {
   return typeof value === 'string' && KEY.test(value);
-}
-
-export function decisionName(key: string): string {
-  if (!isKey(key)) throw new Error(`"${key}" is not a decision key (${KEY.source})`);
-  return `${DECISIONS_PREFIX}${key}`;
 }
 
 export function runName(runId: string): string {
@@ -99,166 +59,47 @@ export function refRun(ref: string): string {
   return ref.slice(0, ref.indexOf(':'));
 }
 
-/** The refs some decision already settled: every ref a record that is not `asked` lists. */
-export function decidedRefs(records: readonly DecisionRecord[]): Set<string> {
-  return new Set(records.filter(record => record.decision.kind !== 'asked').flatMap(record => record.refs));
-}
-
 function text(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-function issueRef(value: unknown): IssueRef | undefined {
-  if (!isObject(value) || !isObject(value.repo)) return undefined;
-  const { host, path } = value.repo;
-  return text(host) &&
-    host !== '' &&
-    text(path) &&
-    path !== '' &&
-    typeof value.number === 'number' &&
-    Number.isInteger(value.number) &&
-    value.number > 0
-    ? { repo: { host, path }, number: value.number }
-    : undefined;
+function strings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(text);
 }
 
-function decision(value: unknown): Decision | undefined {
-  if (!isObject(value)) return undefined;
-  switch (value.kind) {
-    case 'filed': {
-      const issue = value.issue === null ? null : issueRef(value.issue);
-      if (issue === undefined || !text(value.body)) return undefined;
-      return { kind: 'filed', issue, body: value.body };
-    }
-    case 'tracked': {
-      const issue = issueRef(value.issue);
-      if (issue === undefined || !(value.comment === null || text(value.comment))) return undefined;
-      return { kind: 'tracked', issue, comment: value.comment };
-    }
-    case 'dropped':
-    case 'asked':
-      return { kind: value.kind };
-    default:
-      return undefined;
+function question(value: unknown): Question | undefined {
+  if (!isObject(value) || !strings(value.keys) || !strings(value.refs) || !text(value.text) || !text(value.recommendation)) {
+    return undefined;
   }
-}
-
-function question(value: unknown): Question | null | undefined {
-  if (value === null) return null;
-  if (!isObject(value) || !text(value.text) || !text(value.recommendation)) return undefined;
   const answer = value.answer;
-  if (answer === null) return { text: value.text, recommendation: value.recommendation, answer };
-  if (!isObject(answer) || !text(answer.text) || !text(answer.at)) return undefined;
+  if (answer !== null && !(isObject(answer) && text(answer.text) && text(answer.at))) return undefined;
   return {
+    keys: value.keys,
+    refs: value.refs,
     text: value.text,
     recommendation: value.recommendation,
-    answer: { text: answer.text, at: answer.at },
+    answer: answer === null ? null : { text: answer.text as string, at: answer.at as string },
   };
 }
 
-/**
- * A stored decision record. Anything else refuses, naming the document: a record
- * that does not parse must never read as "not decided yet", which would file it again.
- */
-export function parseDecisionRecord(name: string, value: unknown): DecisionRecord {
-  const fail = (why: string): never => {
-    throw new Error(`${name} is not a decision record: ${why}`);
-  };
-  if (!isObject(value) || value.version !== 1) return fail('no version 1 object');
-  if (!isKey(value.key) || name !== `${DECISIONS_PREFIX}${value.key}`) {
-    return fail('its key does not match its name');
-  }
-  const parsed = decision(value.decision);
-  if (parsed === undefined) return fail('its decision is malformed');
-  const asked = question(value.question);
-  if (asked === undefined) return fail('its question is malformed');
-  if (
-    !text(value.title) ||
-    !text(value.reason) ||
-    !text(value.verified_at) ||
-    !text(value.at) ||
-    !Array.isArray(value.refs)
-  ) {
-    return fail('a title, reason, verified_at, at or refs field is missing');
-  }
-  if (!value.refs.every(isQualifiedRef)) return fail('a ref is not of the form <run-id>:<ref>');
-  return {
-    version: 1,
-    key: value.key,
-    title: value.title,
-    decision: parsed,
-    reason: value.reason,
-    verified_at: value.verified_at,
-    at: value.at,
-    refs: value.refs,
-    question: asked,
-  };
-}
-
-/** A drained run's claim document; null when there is none yet. */
-export function parseRunClaim(name: string, value: unknown): RunClaim | null {
+/** A drained run's document; null when there is none yet. */
+export function parseRunDocument(name: string, value: unknown): RunDocument | null {
   if (value === null) return null;
-  const claim = isObject(value) ? value.claim : undefined;
-  if (
-    !isObject(value) ||
-    value.version !== 1 ||
-    !(claim === null || (isObject(claim) && text(claim.run_id) && text(claim.at)))
-  ) {
-    throw new Error(`${name} is not a drained-run claim`);
-  }
+  const fail = (): never => {
+    throw new Error(`${name} is not a drained-run document`);
+  };
+  if (!isObject(value) || value.version !== 1) return fail();
+  const claim = value.claim;
+  if (!(claim === null || (isObject(claim) && text(claim.run_id) && text(claim.at)))) return fail();
+  if (value.decided !== undefined && !strings(value.decided)) return fail();
+  const questions = value.questions === undefined ? undefined : Array.isArray(value.questions) ? value.questions.map(question) : null;
+  if (questions === null || questions?.some(entry => entry === undefined)) return fail();
   return {
     version: 1,
     claim: claim === null ? null : { run_id: claim.run_id as string, at: claim.at as string },
+    ...(value.decided === undefined ? {} : { decided: value.decided }),
+    ...(questions === undefined ? {} : { questions: questions as Question[] }),
   };
-}
-
-function issueText(issue: IssueRef): string {
-  return `https://${issue.repo.host}/${issue.repo.path}/issues/${String(issue.number)}`;
-}
-
-function outcomeText(decided: Decision): string {
-  switch (decided.kind) {
-    case 'filed':
-      return decided.issue === null ? 'filed, issue not yet created' : `filed ${issueText(decided.issue)}`;
-    case 'tracked':
-      return `tracked by ${issueText(decided.issue)}${decided.comment === null ? '' : ', evidence comment not yet posted'}`;
-    case 'dropped':
-      return 'dropped';
-    case 'asked':
-      return 'asked a maintainer';
-  }
-}
-
-/**
- * Every decision as one readable document, for the deciding agent and for a person.
- * One section per key, in key order.
- */
-export function renderDecisions(records: readonly DecisionRecord[]): string {
-  if (records.length === 0) return '# Discovery decisions\n\nNo discovery has been decided yet.\n';
-  const sections = [...records]
-    .sort((left, right) => left.key.localeCompare(right.key))
-    .map(record => {
-      const runs = [...new Set(record.refs.map(refRun))];
-      const lines = [
-        `## ${record.key}`,
-        '',
-        `- ${record.title}`,
-        `- Decision: ${outcomeText(record.decision)}`,
-        `- Reason: ${record.reason}`,
-        `- Verified at ${record.verified_at}, decided ${record.at}, found by ${String(runs.length)} run(s): ${runs.join(', ')}`,
-      ];
-      if (record.question !== null) {
-        lines.push(`- Question: ${record.question.text}`);
-        lines.push(`- Recommended: ${record.question.recommendation}`);
-        lines.push(
-          record.question.answer === null
-            ? '- Answer: not yet answered'
-            : `- Answer (${record.question.answer.at}): ${record.question.answer.text}`
-        );
-      }
-      return lines.join('\n');
-    });
-  return `# Discovery decisions\n\n${sections.join('\n\n')}\n`;
 }
 
 // --- one pass -------------------------------------------------------------------
@@ -278,6 +119,8 @@ export interface QueuedRun {
   readonly completed_at: string;
   readonly artifacts: string;
   readonly records: readonly DiscoveryRecord[];
+  /** What earlier passes asked about this run, with any answer; the agent decides from it. */
+  readonly questions: readonly Question[];
 }
 
 export interface Queue {
@@ -309,15 +152,10 @@ export type AgentDecision = {
 
 /**
  * The exact checks before any write: every queued ref is decided exactly once, by a
- * decision whose key is valid and used once; a key that already has an issue is never
- * filed again; and a key whose filing is still unfinished is only filed, so its draft
- * is never overwritten. Returns every violation; an empty list passes.
+ * decision whose key is valid and used once. Returns every violation; an empty list
+ * passes. Filing a key twice is safe: the issue's marker recovers it.
  */
-export function checkDecisions(
-  queued: readonly string[],
-  decisions: readonly AgentDecision[],
-  stored: ReadonlyMap<string, DecisionRecord>
-): string[] {
+export function checkDecisions(queued: readonly string[], decisions: readonly AgentDecision[]): string[] {
   const problems: string[] = [];
   const seen = new Map<string, string>();
   const keys = new Set<string>();
@@ -331,25 +169,6 @@ export function checkDecisions(
       if (earlier !== undefined) problems.push(`${ref} is decided under both ${earlier} and ${decision.key}`);
       seen.set(ref, decision.key);
       if (!queued.includes(ref)) problems.push(`${ref} (key ${decision.key}) is not a queued ref`);
-    }
-    const prior = stored.get(decision.key)?.decision;
-    const issued = (prior?.kind === 'filed' && prior.issue !== null) || prior?.kind === 'tracked';
-    if (decision.outcome === 'file' && issued) {
-      problems.push(`key ${decision.key} already has an issue; it is never filed again`);
-    }
-    // A decision that replaced a write the record still owes would lose it.
-    if (prior !== undefined && unfinished(prior)) {
-      if (prior.kind === 'filed' && decision.outcome !== 'file') {
-        problems.push(`key ${decision.key} has an unfinished filing; it can only be filed`);
-      }
-      if (
-        prior.kind === 'tracked' &&
-        (decision.outcome !== 'track' ||
-          decision.issue.number !== prior.issue.number ||
-          !sameRepo(decision.issue.repo, prior.issue.repo))
-      ) {
-        problems.push(`key ${decision.key} has an unposted evidence comment; it can only be tracked on the same issue`);
-      }
     }
   }
   for (const ref of queued) if (!seen.has(ref)) problems.push(`${ref} has no decision`);

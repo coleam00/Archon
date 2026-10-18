@@ -125,7 +125,7 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 
 **When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. Start it by hand, or add the schedule binding the SDLC pack README's "Discoveries" section shows; the pack installs none.
 
-**What it produces**: Filed issues and evidence comments, and one decision record per discovery (`archon state list --prefix discoveries/decisions/`), so a discovery is decided once and a maintainer's answer is remembered.
+**What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
 
 ---
 
