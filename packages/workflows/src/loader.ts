@@ -427,7 +427,7 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * terminal sink recurses into this same case, following a chain of well-formed
  * sole-terminal-sink nesting to any depth). A gate anywhere else in a body is a
  * load error (`validateDagStructure`), so the chain never meets one. Mirrors
- * `findLoopGroupTerminalSuspendNode`'s doc comment (dag-executor.ts): the runtime
+ * `findLoopGroupTerminalSuspendNode`'s doc comment (dag/nodes/loop-group): the runtime
  * has no unambiguous way to escalate a pause through a sink that isn't a bare gate,
  * so this only makes that gap visible at load time.
  */
