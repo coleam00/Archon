@@ -233,7 +233,7 @@ const commandHelp: HelpEntry[] = [
       },
       {
         spec: '--after <cursor>',
-        description: 'With --watch: replay readable changes after an earlier line; gaps may remain',
+        description: 'With --watch: replay readable events after a cursor; gaps may remain',
       },
     ],
   },

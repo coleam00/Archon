@@ -184,10 +184,18 @@ host on the same database.
   for answerable pauses. Dedupe `terminal` and `resumed` on `(runId, cursor)`. `owner_lost` is a live
   observation: it is not replayed, and the next connection reports it again if the owner
   is still gone.
-- **Resume where you stopped.** Persist the `cursor` of the last line you handled and
-  restart with `--after <cursor>`. The new stream sends the snapshot and `ready`, then
-  replays readable changes after that cursor. A `degraded` warning means replay may have
-  gaps; follow the repair instructions below. `bookmark` lines keep the cursor moving while
+- **Replay from before an incomplete event.** Cursors identify feed events, not individual
+  lines. Replacing an open item can emit `resolved` and `attention` with the same cursor;
+  cancelling a paused run can emit `resolved` and `terminal` with the same cursor.
+  `--after <cursor>` excludes that entire event. Saving the cursor after only its first
+  line can therefore skip its remaining line on reconnect. Keep a checkpoint from before
+  the possibly partially handled event and replay from that earlier cursor, accepting
+  duplicate deliveries. A handled `bookmark` can checkpoint all preceding handled lines,
+  but other lines do not mark the end of an event. The new stream sends the current
+  snapshot and `ready`, then replays readable changes after the supplied cursor; the
+  snapshot restores the open set, not missed historical transitions. A `degraded` warning
+  means replay may have gaps; follow the repair instructions below.
+  `bookmark` lines keep the cursor moving while
   the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
   succeeds, so no line for well over 30 seconds means the stream is not reading. If the
   cursor is rejected, rerun without `--after`.

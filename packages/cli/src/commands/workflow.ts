@@ -3982,7 +3982,7 @@ export interface WorkflowAttentionOptions {
   countBy?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
-  /** With `watch`: a cursor from an earlier line, to replay what followed it. */
+  /** With `watch`: replay readable feed events strictly after this cursor. */
   after?: string;
 }
 

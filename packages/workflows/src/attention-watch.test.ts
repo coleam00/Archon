@@ -1020,6 +1020,53 @@ describe('watchAttentionQueue', () => {
     await stream.close();
   });
 
+  test.each(['completed', 'failed', 'cancelled', 'paused'] as const)(
+    '%s disarms owner liveness before awaiting the consumer',
+    async status => {
+      const store = await makeStore();
+      const runId = await running(store);
+      const owner = Promise.withResolvers<{ observedStatus: 'running' } | null>();
+      const delivered = Promise.withResolvers<void>();
+      const accepted = Promise.withResolvers<void>();
+      const lines: AttentionStreamLine[] = [];
+      let ownerSignal: AbortSignal | undefined;
+      const stream = await watchAttentionQueue(
+        store,
+        {
+          ...host,
+          ownerLoss: (_runId, signal) => {
+            ownerSignal = signal;
+            return owner.promise;
+          },
+        },
+        async line => {
+          lines.push(line);
+          if (line.type === (status === 'paused' ? 'attention' : 'terminal')) {
+            delivered.resolve();
+            await accepted.promise;
+          }
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      );
+      try {
+        if (status === 'completed') await store.completeWorkflowRun(runId, { duration_ms: 1 });
+        if (status === 'failed') await store.failWorkflowRun(runId, 'failed');
+        if (status === 'cancelled') await store.cancelWorkflowRun(runId);
+        if (status === 'paused')
+          await store.pauseWorkflowRunForWait(runId, ask(), { kind: 'started', stepName: 'ask' });
+        await delivered.promise;
+        owner.resolve({ observedStatus: 'running' });
+        await owner.promise;
+        expect(ownerSignal?.aborted).toBe(true);
+      } finally {
+        owner.resolve(null);
+        accepted.resolve();
+        await stream.close();
+      }
+      expect(lines.some(ofRun(runId, 'owner_lost'))).toBe(false);
+    }
+  );
+
   test('owner loss arrives once, and only through the liveness port', async () => {
     const store = await makeStore();
     const orphan = await running(store);

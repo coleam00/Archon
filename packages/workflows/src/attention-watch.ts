@@ -69,8 +69,9 @@ const lineBase = { cursor: cursorSchema, project: projectRefSchema.nullable(), r
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
- * `--after` it replays readable deliveries that followed. `attention` carries the queue item exactly as the
- * snapshot and `workflow attention <run>` build it.
+ * `--after` it replays later readable feed events, excluding every line at that cursor.
+ * `attention` carries the queue item exactly as the snapshot and
+ * `workflow attention <run>` build it.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({
@@ -526,6 +527,7 @@ export async function watchAttentionQueue(
     const view = await deliveryView(delivery);
     if (closed || view === undefined) return;
     const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
+    if (view?.run.status !== 'running' || !inScope) disarm(runId);
     if (!reconciled.has(runId)) {
       await reconcile(runId, view, cursor);
       reconciled.add(runId);
@@ -569,7 +571,6 @@ export async function watchAttentionQueue(
       });
     lost.delete(runId);
     if (view?.run.status === 'running' && inScope) arm(runId, view.project);
-    else disarm(runId);
   };
 
   try {
