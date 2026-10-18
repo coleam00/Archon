@@ -217,7 +217,13 @@ describe('executeDagWorkflow -- bash nodes', () => {
       {
         id: 'shell',
         kind: 'loop',
-        loop: { prompt: 'Work.', until: 'DONE', until_bash: 'exit 0', max_iterations: 1 },
+        loop: {
+          prompt: 'Work.',
+          until: 'DONE',
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          fresh_context: false,
+        },
       },
     ],
     [
@@ -229,6 +235,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
           until: 'DONE',
           until_bash: 'exit 0',
           max_iterations: 1,
+          fresh_context: false,
           nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
         },
       },
