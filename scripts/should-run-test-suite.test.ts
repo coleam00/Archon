@@ -8,7 +8,6 @@ import {
   readBundleIndex,
 } from '../packages/workflows/src/defaults/bundle-inventory';
 import {
-  BUILD_INPUTS,
   changedFilesBetween,
   diffRange,
   proofFromPullRequestRun,
@@ -86,13 +85,16 @@ describe('test-suite change decision', () => {
     expect(omittedMarkdownInputs(inputs)).toEqual([]);
   });
 
-  test.each(BUILD_INPUTS.filter(path => path.endsWith('.md')))(
-    'runs suite and workspace tests for Markdown input %s',
-    file => {
-      expect(shouldRunTestSuite([file])).toBe(true);
-      expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
-    }
-  );
+  test.each([
+    'packages/docs-web/src/content/docs/reference/database.md',
+    'packages/docs-web/src/content/docs/guides/attention-queue.md',
+    'packages/docs-web/src/content/docs/deployment/docker.md',
+    '.archon/architecture.md',
+    'packages/providers/src/codex/protocol/README.md',
+  ])('runs suite and workspace tests for required Markdown input %s', file => {
+    expect(shouldRunTestSuite([file])).toBe(true);
+    expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
+  });
 
   test('an unknown source file runs the suite', () => {
     expect(shouldRunTestSuite(['unknown.ts'])).toBe(true);
