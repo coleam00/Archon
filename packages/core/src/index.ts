@@ -92,8 +92,8 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage, resolveTitleRequest } from './orchestrator/orchestrator-agent';
-export type { TitleRequest } from './orchestrator/orchestrator-agent';
+export { handleMessage } from './orchestrator/orchestrator-agent';
+export { resolveTitleRequest, type TitleRequest } from './orchestrator/chat-request';
 export {
   buildOrchestratorPrompt,
   buildProjectScopedPrompt,

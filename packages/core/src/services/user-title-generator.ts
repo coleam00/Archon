@@ -10,7 +10,7 @@ import {
   type UserProviderCredential,
 } from '../credentials/user-provider-resolution';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
-import type { TitleRequest } from '../orchestrator/orchestrator-agent';
+import type { TitleRequest } from '../orchestrator/chat-request';
 import { generateAndSetTitle } from './title-generator';
 
 export async function generateTitleForUser(
