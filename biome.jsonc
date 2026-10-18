@@ -19,7 +19,6 @@
       "!.archon/maintainer-standup",
       "!.archon/workflows/**/commands",
       "!.archon/workflows/**/fixtures",
-      "!.archon/scripts/__tests__/fixtures/malicious",
       "!.agents",
       "!.claude",
       "!.github",
