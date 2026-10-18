@@ -1453,13 +1453,23 @@ describe('exec result contracts (#2453)', () => {
     }
   );
 
-  it.each([
-    ['bash', bashEmitting],
-    ['script', scriptEmitting],
-  ] as const)(
-    'a %s contract failure redacts credentials in schema-error paths',
-    async (kind, emitting) => {
-      const secret = 'SCHEMA_PATH_SECRET_123';
+  it.each(
+    (
+      [
+        ['bash', bashEmitting],
+        ['script', scriptEmitting],
+      ] as const
+    ).flatMap(([kind, emitting]) =>
+      [
+        ['SCHEMA_PATH_SECRET_123', 'SCHEMA_PATH_SECRET_123'],
+        ['SCHEMA/PATH_SECRET_123', 'SCHEMA~1PATH_SECRET_123'],
+        ['SCHEMA~PATH_SECRET_123', 'SCHEMA~0PATH_SECRET_123'],
+        ['SCHEMA/PATH~SECRET_123', 'SCHEMA~1PATH~0SECRET_123'],
+      ].map(([secret, pointerSecret]) => [kind, secret, pointerSecret, emitting] as const)
+    )
+  )(
+    'a %s contract failure redacts credential %s in schema-error paths',
+    async (kind, secret, pointerSecret, emitting) => {
       const store = createMockStore();
       await executeDagWorkflow(
         dagOptions({
@@ -1480,6 +1490,7 @@ describe('exec result contracts (#2453)', () => {
       expect(error).toContain('did not satisfy its declared output_format');
       expect(error).toContain('/[REDACTED]: must be integer');
       expect(error).not.toContain(secret);
+      expect(error).not.toContain(pointerSecret);
       expect(producerCompletion(events)).toBeUndefined();
       expect(mockSendQueryDag).not.toHaveBeenCalled();
     }

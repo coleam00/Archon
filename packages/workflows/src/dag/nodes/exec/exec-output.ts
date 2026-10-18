@@ -87,7 +87,14 @@ export function certifyExecOutput(
     );
   }
   if (!validation.valid) {
-    const schemaErrors = redactCredentialValues(validation.errors.join('; '), credentialValues);
+    // AJV instance paths encode object keys as JSON Pointer segments.
+    const diagnosticCredentialValues = credentialValues
+      .flatMap(value => [value, value.replaceAll('~', '~0').replaceAll('/', '~1')])
+      .sort((a, b) => b.length - a.length);
+    const schemaErrors = redactCredentialValues(
+      validation.errors.join('; '),
+      diagnosticCredentialValues
+    );
     throw new ExecOutputContractError(
       `${label}: stdout did not satisfy its declared output_format: ${schemaErrors}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
     );
