@@ -140,13 +140,6 @@ type ExecuteDagWorkflow = typeof import('./dag-executor').executeDagWorkflow;
 const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async () => undefined);
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
-  // Passthrough for the sub-run outcome mapper (#2121) — executor.ts imports it;
-  // no test here exercises the sub-run path, but the export must exist so the
-  // mocked module doesn't shadow it with `undefined`.
-  childOutcomeFromRun: mock((run: { id: string; status: string }) => ({
-    childRunId: run.id,
-    status: run.status,
-  })),
 }));
 
 // --- Mock logger functions ---

@@ -20,6 +20,7 @@
   },
   "testGroups": [
     [
+      "src/exec.test.ts",
       "src/forge.test.ts",
       "src/git.test.ts",
       "src/refresh-worktree-index.test.ts",

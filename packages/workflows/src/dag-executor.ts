@@ -1,5 +1,4 @@
 import { runSubprocess, isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
-export { containerCommandName, buildSubprocessDockerArgs } from './subprocess';
 import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
@@ -27,11 +26,8 @@ import {
   nodeExecutionMetadataSchema,
   type NodeExecutionRecord,
   type NodeFailureKind,
-  type NodeInvocation,
   type McpUnavailable,
 } from './schemas/node-execution';
-import type { CheckoutObservation } from './schemas/checkout-observation';
-import { observeCheckout } from './checkout-observation';
 /**
  * DAG Workflow Executor
  *
@@ -60,7 +56,6 @@ import {
   capturedSourceReadGuard,
   assertCapturedFilesPresent,
   isSourceReadFailure,
-  isSystemError,
   liveSourceRoots,
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
@@ -84,7 +79,7 @@ import type {
   ExecutionContext,
 } from '@archon/provider-contract';
 import type { OverlayChangeSummary } from './container-context';
-import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
+import { mcpServerMap } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import {
@@ -116,16 +111,11 @@ import type {
   TriggerRule,
   WorkflowRun,
   EffortLevel,
-  SandboxSettings,
-  WebSearchMode,
-  GraphPlan,
   ResolvedWorkflow,
   LoopGateRunMetadata,
   ApprovalContext,
   WorkflowRunOutcome,
-  NodeArtifactLoopFrame,
   WorkflowRunNodeSession,
-  WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
   WorkflowUsageLimitWaitContext,
@@ -166,11 +156,7 @@ import {
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import {
-  buildAiNodeEnvironment,
-  buildExecNodeEnvironment,
-  type ExecNodeEnvironmentContext,
-} from './exec-environment';
+import { buildExecNodeEnvironment, type ExecNodeEnvironmentContext } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import type { RunExitReason } from './schemas/run-terminal-reason';
 import {
@@ -204,7 +190,7 @@ import {
   createProviderEventHandler,
   type ProviderEventHandler,
 } from './provider-events';
-import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import { isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
@@ -277,7 +263,6 @@ import {
   isProviderLimit,
   type ProviderLimitFailure,
   aggregateProviderFailure,
-  loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
   type TemplateReferences,
@@ -297,6 +282,32 @@ import {
   type ResolvedAiProfile,
   type TierName,
 } from './model-validation';
+import { getLog } from './dag/log';
+import { sumFanOutCost, sumFanOutTokens, sumTokenUsage } from './dag/usage';
+import {
+  childOutcomeFromRun,
+  type ChildWorkflowOutcome,
+  type RunChildWorkflowFn,
+} from './dag/child-run';
+import {
+  assertNodeSourceReadable,
+  loadNodeCommandPrompt,
+  RunSourceUnreadableError,
+  settledValuesOrThrow,
+} from './dag/node-source';
+import {
+  aiNodeEnvironment,
+  beginExecution,
+  observeNodeCheckout,
+  type LayerNodeResult,
+  type PersistScope,
+  type RunInputs,
+  type RunLayersContext,
+  type SequentialSessionCursor,
+  type SessionCheckpoint,
+  type SessionResumeIntent,
+  type WorkflowLevelOptions,
+} from './dag/run-context';
 
 /**
  * Resolve this run's named inputs (#2470) from persisted sub-run metadata. Non-empty
@@ -627,13 +638,6 @@ function resolveBindingDirective(
   return wholeRefLogicalValue(producer, ref.nodeId, ref.field, directive.from.trim());
 }
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.dag-executor');
-  return cachedLog;
-}
-
 interface WatchdogReset {
   type: MessageChunk['type'];
   at: number;
@@ -752,62 +756,6 @@ export async function resolveNodeMcp(
   return { kind: 'load', path: fullPath, servers: new Set(servers) };
 }
 
-/** Workflow-level provider options. The provider options have node-level
- *  counterparts and are resolved as `node.X ?? workflowLevelOptions.X`. Two do
- *  not: `webSearchMode`, absent from `dagNodeSchema` so a workflow-level value
- *  is the only value, and `workflowTier`, which is not an author-facing field at
- *  all — it carries the workflow's resolved tier keyword for annotation. */
-interface WorkflowLevelOptions {
-  effort?: EffortLevel;
-  fallbackModel?: string;
-  betas?: string[];
-  sandbox?: SandboxSettings;
-  /** Codex-only: web-search mode, consumed as `assistantConfig.webSearchMode`.
-   *  Permanently workflow-level-only — decided in #2556, and the ONLY
-   *  workflow-level field with no per-node counterpart. */
-  webSearchMode?: WebSearchMode;
-  /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
-   *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
-  workflowTier?: TierName;
-}
-
-/**
- * Add provider usage, keeping each cache axis that was actually reported and marking the
- * result a floor when some contribution stayed silent (see `mergeTokenUsage`).
- * Required non-finite counters invalidate only that contribution; malformed optional
- * counters are treated as unknown while valid gross input/output remain usable.
- */
-function sumTokenUsage(
-  usages: readonly TokenUsage[],
-  context: Record<string, unknown> = {}
-): TokenUsage | undefined {
-  const valid: TokenUsage[] = [];
-  for (const usage of usages) {
-    if (!Number.isFinite(usage.input) || !Number.isFinite(usage.output)) {
-      getLog().warn({ ...context, tokens: usage }, 'dag.usage_tokens_non_finite_ignored');
-      continue;
-    }
-    // Spread rather than rebuild field-by-field: a rebuilt literal silently drops any
-    // axis this function does not know about, which is how `cachePartial` was lost on
-    // re-aggregation (a partial total became complete on the next merge).
-    const normalized: TokenUsage = { ...usage };
-    for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-      const value = usage[axis];
-      if (value === undefined) continue;
-      if (!Number.isFinite(value)) {
-        // Cleared rather than deleted (no-dynamic-delete): every reader treats an
-        // undefined axis as unreported, and JSON.stringify omits the key entirely.
-        normalized[axis] = undefined;
-        getLog().warn({ ...context, axis, value }, 'dag.usage_optional_tokens_non_finite_ignored');
-      }
-    }
-    valid.push(normalized);
-  }
-  // The merge rule itself lives with TokenUsage so every aggregation site shares one
-  // owner; this function keeps the validation and warn events, which differ per caller.
-  return mergeTokenUsage(valid);
-}
-
 // ---------------------------------------------------------------------------
 // workflow: (sub-run) node — cross-run composition (#2121 Phase 2)
 // ---------------------------------------------------------------------------
@@ -823,162 +771,6 @@ export interface PriorRunUsage {
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd: number;
-}
-
-/** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
-  childRunId: string;
-  status: 'completed' | 'paused' | 'failed' | 'cancelled';
-  /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
-  output?: string;
-  /**
-   * The terminal node's structured payload (#2637), read from `metadata.summary_value`
-   * when the child stamped one. Threads the LOGICAL value back to the parent so
-   * `$<id>.output.field` access and fan-out aggregation keep the type instead of
-   * re-encoding the text. Absent for text-only children and pre-#2637 rows.
-   */
-  structuredOutput?: unknown;
-  /**
-   * Field paths the child's selected `returns:` node declared (#2453), read from the
-   * run's subrun metadata. This is what authorizes a parent's `$<node>.output.a.b`: the
-   * child owns the contract, and a `workflow:` node cannot declare one of its own.
-   * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
-   */
-  declaredOutputPaths?: DeclaredOutputPaths;
-  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  error?: string;
-}
-
-/** Arguments for starting (or resuming a failed) child sub-run. */
-export interface RunChildWorkflowArgs {
-  parentRun: WorkflowRun;
-  nodeId: string;
-  childWorkflowName: string;
-  /** Data string forwarded as the child's user_message (substituted upstream). */
-  input: string;
-  cwd: string;
-  /** Platform conversation id (shared with the parent). */
-  conversationId: string;
-  userId?: string;
-  /** Codebase id inherited from the parent (env vars + attribution). */
-  codebaseId?: string;
-  /**
-   * Per-child isolation mode (#2121 slice 2, PR-A). `'worktree'` runs the child in
-   * its own git worktree via the injected child-isolation resolver; `'inherit'`
-   * (or undefined) shares the parent's checkout. Threaded from `node.isolation`.
-   */
-  isolation?: WorkflowNode['isolation'];
-  /**
-   * Fan-out instance index (#2121 slice 2, PR-C). Set when this child is one of N
-   * spawned by a `fan_out:` node; stamped into the child's `metadata.child_index` so
-   * parent resume can re-key the ordered instance set by index. Undefined for a
-   * single (non-fan-out) `workflow:` child. Also seeds the per-child worktree branch
-   * identifier so N fan-out children get distinct worktrees.
-   */
-  childIndex?: number;
-  /**
-   * Content hash of a fan-out child's input (#2121 slice 2, PR-C). Stamped into
-   * `metadata.fan_out_item_hash` at spawn so parent resume can WARN when a
-   * non-deterministic items producer changed the item at a given index (never re-keys).
-   */
-  itemHash?: string;
-  /** Present only when re-driving an existing child on parent resume. */
-  resumeChild?:
-    | { kind: 'failed'; run: WorkflowRun }
-    | { kind: 'fan-out-cancelled'; run: WorkflowRun };
-  /**
-   * Named inputs (#2470) — the resolved `with:` map the parent supplied, plus (for a
-   * fan-out child) the per-item `fan_out.as` entry. Logical JSON values (#2637).
-   * Persisted to the child's `metadata.inputs` (canonical text) plus, when any value
-   * is non-string, the `metadata.inputs_values` sibling, so `$INPUTS.<name>` resolves
-   * at runtime and reconstitutes typed on cold resume. Undefined/empty when the node
-   * declares no `with:`/`as`.
-   */
-  inputs?: Record<string, JsonValue>;
-}
-
-/**
- * Injected closure that starts a child workflow run in-process (#2121 Phase 2).
- * Defined in executor.ts — it captures `executeWorkflow` from the SAME module, so
- * there is no static import cycle — and threaded through executeDagWorkflow →
- * RunLayersContext so a `workflow:` node can spawn its child without dag-executor
- * importing executor.
- */
-export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWorkflowOutcome>;
-
-/**
- * Derive a child's node-facing outcome from its persisted run row. Cost and tokens are
- * written into the child's metadata at its run tail regardless of outcome (#2469) and
- * the terminal `summary` at completion, so both the synchronous path (runChildWorkflow
- * reads the row back) and the re-entry path (executeWorkflowNode finds an
- * already-terminal child) read the same source — and a child that burned tokens and
- * then failed or was cancelled still reports what it spent.
- */
-export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
-  if (run.status === 'running' || run.status === 'pending') {
-    // Fail fast instead of a blind narrowing cast: every caller must hand this a
-    // settled (terminal or paused) run. A non-settled status slipping through
-    // would fall out of interpret()'s switch and corrupt the node result with
-    // `undefined` — throwing turns that into a loud, attributable node failure.
-    throw new Error(
-      `Sub-run ${run.id} is still '${run.status}' — cannot derive a node outcome from an unsettled run.`
-    );
-  }
-  const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
-  const cacheRead =
-    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
-  const cacheWrite =
-    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens =
-    input !== undefined || output !== undefined
-      ? {
-          input: input ?? 0,
-          output: output ?? 0,
-          ...(cacheRead !== undefined ? { cacheRead } : {}),
-          ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-          // Persisted by persistRunUsage; without it a child's floor would contribute to
-          // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-        }
-      : undefined;
-  // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
-  // reading through readSubrunMetadata's summaryValue keeps them distinguishable
-  // from "not stamped".
-  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
-  return {
-    childRunId: run.id,
-    status: run.status,
-    output: typeof md.summary === 'string' ? md.summary : undefined,
-    ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
-    // The child's own field contract (#2453) — read from the row so the synchronous
-    // path and the parent re-entry/resume path stay one source, exactly like the
-    // summary and usage above.
-    ...(summaryDeclaredOutputPaths !== undefined
-      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
-      : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
-    error: typeof md.error === 'string' ? md.error : undefined,
-  };
-}
-
-type SequentialSessionCursor = SessionCursor;
-type SessionResumeIntent = 'ordinary' | 'source-fork' | 'owner-continuation';
-
-/** Makes a provider session durable before its node becomes authoritatively complete. */
-type SessionCheckpoint = (sessionId: string) => Promise<void>;
-
-/** Per-node result surfaced by a runLayers layer closure. `sessionProvider` tags which
- *  resolved provider created `output.sessionId` (session-producing paths only). */
-interface LayerNodeResult {
-  nodeId: string;
-  output: NodeExecutionResult;
-  sessionProvider?: string;
 }
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
@@ -2352,63 +2144,6 @@ export function checkComposedBlockBoundaries(
   return { decision: 'run' };
 }
 
-/**
- * Capture immutable attribution before one execution attempt starts.
- *
- * `checkoutStart` is this attempt's checkout sample. The first sample also becomes the
- * invocation's, and the dispatch context keeps that invocation, so a retry or a resumed
- * continuation is compared with where the invocation began rather than where it paused.
- */
-function beginExecution(
-  ctx: RunLayersContext,
-  node: DagNode,
-  options: {
-    provider?: string;
-    model?: string;
-    tier?: TierName;
-    effort?: EffortLevel;
-    sessionId?: string;
-    capabilities?: ProviderCapabilities;
-    checkoutStart?: CheckoutObservation;
-  } = {}
-): NodeExecutionRecord {
-  let invocation = ctx.nodeInvocation ?? newNodeInvocation(ctx.loopGroupPath);
-  if (options.checkoutStart !== undefined && invocation.checkoutStart === undefined) {
-    invocation = { ...invocation, checkoutStart: options.checkoutStart };
-  }
-  ctx.nodeInvocation = invocation;
-  const execution = startNodeExecution({
-    runId: ctx.workflowRun.id,
-    path: ctx.stepNamePrefix + node.id,
-    node,
-    invocation,
-    ...options,
-  });
-  ctx.currentExecution = execution;
-  return execution;
-}
-
-/**
- * Sample the checkout a node is about to execute against, through the run's execution
- * backend. Taken at every attempt start of a node that runs code or an agent there.
- */
-function observeNodeCheckout(ctx: RunLayersContext): Promise<CheckoutObservation> {
-  return observeCheckout(ctx.cwd, ctx.execContext, {
-    runId: ctx.workflowRun.id,
-    artifactsDir: ctx.artifactsDir,
-  });
-}
-
-function aiNodeEnvironment(
-  ctx: RunLayersContext,
-  execution: NodeExecutionRecord
-): Record<string, string> {
-  return buildAiNodeEnvironment(
-    execution,
-    ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
-  );
-}
-
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
@@ -3428,85 +3163,6 @@ function unsettledTurnError(
   const tasks =
     liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';
   return `${cause}${tasks} Its work may be incomplete.`;
-}
-
-/**
- * This host could not read the run's frozen source for a node (`isSourceReadFailure`).
- * Not a node outcome: it leaves the layer join like a budget refusal, and
- * `executeDagWorkflow` releases the run to be continued by a host that can read it.
- */
-class RunSourceUnreadableError extends Error {
-  readonly path?: string;
-  constructor(
-    /** The node's persisted step name. */
-    readonly nodeId: string,
-    cause: unknown
-  ) {
-    const path =
-      cause instanceof WorkflowSourceUnavailableError
-        ? cause.path
-        : isSystemError(cause) && typeof cause.path === 'string'
-          ? cause.path
-          : undefined;
-    super(
-      `This host could not read the run's source for node '${nodeId}': ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-      { cause }
-    );
-    this.name = 'RunSourceUnreadableError';
-    this.path = path;
-  }
-}
-
-/** Verify the run's frozen source before a node reads it; a read failure releases the run. */
-async function assertNodeSourceReadable(
-  roots: WorkflowSourceRoots,
-  stepName: string
-): Promise<ReadonlySet<string> | undefined> {
-  try {
-    return await assertWorkflowSourceIntegrity(roots);
-  } catch (error) {
-    if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
-    throw error;
-  }
-}
-
-async function loadNodeCommandPrompt(
-  ctx: RunLayersContext,
-  command: string,
-  stepName: string
-): Promise<Awaited<ReturnType<typeof loadCommandPrompt>>> {
-  const verifiedFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
-  try {
-    const result = await loadCommandPrompt(
-      ctx.deps,
-      ctx.cwd,
-      command,
-      ctx.configuredCommandFolder,
-      ctx.workflowSourceRoots,
-      verifiedFiles
-    );
-    if (!result.success && isSourceReadFailure(result.cause, verifiedFiles)) {
-      // Packaged commands resolve by path, so ENOENT can also mean an authored command
-      // never existed. Only a file in the verified capture was lost on this host.
-      if (
-        result.reason === 'not_found' &&
-        !(
-          isSystemError(result.cause) &&
-          typeof result.cause.path === 'string' &&
-          verifiedFiles?.has(result.cause.path)
-        )
-      )
-        return result;
-      throw result.cause;
-    }
-    return result;
-  } catch (error) {
-    if (isSourceReadFailure(error, verifiedFiles))
-      throw new RunSourceUnreadableError(stepName, error);
-    throw error;
-  }
 }
 
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
@@ -8358,43 +8014,6 @@ export async function resolveFanOutChildDefinition(
   }
 }
 
-/**
- * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
- *
- * This is Σ of every child, not only the completed ones: a child persists its usage at
- * its run tail whatever its outcome (#2469), so a failed or cancelled child still
- * contributes what it burned. That matters most here — `all_done` is the default join,
- * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
- */
-function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
-  let sum = 0;
-  let any = false;
-  for (const o of outcomes) {
-    if (o.costUsd !== undefined && Number.isFinite(o.costUsd)) {
-      sum += o.costUsd;
-      any = true;
-    }
-  }
-  return any ? sum : undefined;
-}
-
-/**
- * Σ of defined child token usage; unavailable if any child explicitly cannot count
- * its tokens, or if no child reported tokens. Like
- * {@link sumFanOutCost}, this covers every child regardless of outcome.
- */
-function sumFanOutTokens(
-  outcomes: readonly { tokens?: TokenUsage; tokensUnknown?: boolean }[]
-): TokenUsage | undefined {
-  if (outcomes.some(outcome => outcome.tokensUnknown)) return undefined;
-  return sumTokenUsage(
-    outcomes.flatMap(outcome => (outcome.tokens !== undefined ? [outcome.tokens] : [])),
-    { scope: 'fan_out' }
-  );
-}
-
 async function findFanOutChildRuns(
   store: WorkflowDeps['store'],
   parentRunId: string,
@@ -9693,18 +9312,6 @@ async function executeComposeFanOutNode(
 }
 
 /**
- * A run's cross-run session scope. Concurrent runs of one workflow share a scope, so
- * `sessionsAtStart` is read once when the run starts and every persisted node continues
- * from that copy, never from a row a sibling run wrote afterwards. The read is issued
- * before any node runs; a persisted node awaits it, so a failed read surfaces at the
- * node that needed it.
- */
-interface PersistScope {
-  key: string;
-  sessionsAtStart: Promise<readonly WorkflowNodeSession[]>;
-}
-
-/**
  * Build the by-reference recovery suffix for a cold-resume warning (#1846): list
  * the typed artifacts that PRIOR invocations of this workflow+scope left in the
  * stable scope dir, as absolute file paths — never pasted content. Entries
@@ -9745,177 +9352,6 @@ async function buildColdResumeRecoveryPointer(
     );
     return '';
   }
-}
-
-type ClaimedWorkPausePolicy = 'finish_through_parent_pause';
-
-/** Run-level values the caller supplies verbatim to the DAG boundary. */
-interface RunInputs {
-  deps: WorkflowDeps;
-  platform: IWorkflowPlatform;
-  conversationId: string;
-  /** The workspace nodes ACT on: provider turns, subprocesses, git, output files. */
-  cwd: string;
-  /**
-   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
-   * Phase 2). Undefined when the caller (e.g. a unit test) doesn't wire it — a
-   * `workflow:` node then fails fast rather than silently no-op'ing. Forwarded
-   * into loop_group body contexts too, though a `workflow:` node inside a
-   * loop_group body is rejected at load time.
-   */
-  runChildWorkflow?: RunChildWorkflowFn;
-  workflowRun: WorkflowRun;
-  config: WorkflowConfig;
-  workflowProvider: string | undefined;
-  workflowModel: string | undefined;
-  aiProfile?: ResolvedAiProfile;
-  workflowPreset?: ModelAliasPreset;
-  artifactsDir: string;
-  /**
-   * `$STATE_DIR` — the per-PROJECT cross-run state directory (#2200), shared by
-   * every workflow in the project and pre-created by the executor. A run-level
-   * invariant like `artifactsDir`; forwarded unchanged into loop_group bodies.
-   */
-  stateDir: string;
-  logDir: string;
-  baseBranch: string;
-  docsDir: string;
-  configuredCommandFolder?: string;
-  issueContext?: string;
-}
-
-/** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
-interface RunDerived {
-  toolAttention: ReturnType<typeof createRunToolCallAttention>;
-  /**
-   * The roots nodes READ executable source from — command files and named scripts.
-   *
-   * REQUIRED and concrete: normalized once at the DAG boundary so no leaf lookup can be
-   * reached without them. They were optional at first, and an omitted argument at any one
-   * of six call sites silently recreated the original source/target bug — the resolver
-   * would fall back to `cwd` and look for the workflow's own files inside the workspace it
-   * was executing against. Public discovery helpers keep their live-source defaults; this
-   * internal path does not.
-   */
-  workflowSourceRoots: WorkflowSourceRoots;
-  /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
-   *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
-  execContext: ExecutionContext;
-  /** Workflow name — used for persist_session keying + telemetry. */
-  workflowName: string;
-  workflowLevelOptions: WorkflowLevelOptions;
-  /** Cross-run session persistence for this run, or undefined to skip. */
-  persistScope: PersistScope | undefined;
-  /** Workflow-level default for per-node `persist_session` (opt-in). */
-  workflowPersistSessions: boolean;
-  /**
-   * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
-   * undefined when the run cannot use session persistence (`runMayPersistSessions`,
-   * which also counts composed fan-out bodies). When set,
-   * persistence-participating nodes with `output_type` mirror their typed sidecars
-   * here, and a cold session resume points the user at the prior invocation's
-   * artifacts by reference (#1846). Always undefined for loop_group bodies
-   * (which also run with `persistScope: undefined`).
-   */
-  scopeArtifactsDir: string | undefined;
-}
-
-/**
- * Shared context for {@link runLayers}. Bundles the run-level invariants (deps, platform,
- * run record, resolved provider/model/options, paths, config) together with the per-subgraph
- * mutable state (the node set + its pre-computed topological layers, the shared output map,
- * session threading, usage accumulators, and resume cache).
- *
- * The top-level DAG and each `loop_group` body iteration construct their own context: the
- * top-level call uses `workflow.nodes` / a fresh `nodeOutputs`; a loop-group body uses the
- * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
- * `stepNamePrefix` of `'{groupId}.'` that namespaces the persisted `step_name` of EVERY
- * body event — runLayers' own control events (skip/trigger_rule/when) AND the lifecycle
- * events emitted inside executeNodeInternal / executeBashNode / executeScriptNode /
- * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
- * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
- */
-interface RunLayersContext extends RunInputs, RunDerived {
-  /** One node dispatch, shared by its inner retry attempts. Never mutate the parent context. */
-  nodeInvocation?: NodeInvocation;
-  /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
-  currentExecution?: NodeExecutionRecord;
-  /**
-   * Ids of the nodes in this concurrent layer that have taken their
-   * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
-   * violation names the others as nodes that also ran in the layer; add-only, so a
-   * named node may have finished before the write. A node that was skipped or
-   * reused from a prior run never snapshots and is never named. Undefined when the
-   * layer runs sequentially. Set per layer; never inherited.
-   */
-  guardedLayerSnapshots?: Set<string>;
-  bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
-  unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
-  /** The run budget's live ledger; set only when the workflow declares `budget:`. */
-  runBudget?: RunBudgetLedger;
-  // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
-  /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
-  layers: GraphPlan['layers'];
-  /** Shared node-output map (caller owns; runLayers writes node results here). */
-  nodeOutputs: Map<string, NodeOutput>;
-  /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
-  loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
-  /**
-   * Awaited after a complete layer has been aggregated and before lifecycle status is
-   * observed. The top-level DAG uses this to durably capture authored run state at
-   * the first point it exists; loop_group bodies have no run-level hook.
-   */
-  afterLayer?: () => Promise<void>;
-  /**
-   * Finish an already-claimed deterministic subgraph when a sibling pauses the parent.
-   * Composed fan-out bodies set this after their durable start claim: load-time
-   * validation proves they cannot create the pause themselves, and finishing the outer
-   * node's claimed work avoids leaving an unresolved durable start. Cancellation and
-   * deletion still stop between layers, and unclaimed instances still cannot start.
-   */
-  claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
-  /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
-  priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-  nodeSessionHandles?: Map<string, SequentialSessionCursor>;
-  namedResumeSourceIds?: ReadonlySet<string>;
-  bodySessionCursors?: Map<string, SessionCursor>;
-  bodySessionCursorAncestry?: Map<string, Map<string, SessionCursor>>;
-  /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
-   *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
-  lastSequentialSession: SequentialSessionCursor | undefined;
-  /**
-   * Provider/model conflicts already reported to the user this run, keyed
-   * `declared|resolved|modelRef`. A conflict the author wrote once at workflow level is
-   * collapsed onto every node (#1764), so without this one mistake produces one message
-   * per node. Genuinely distinct per-node conflicts still each get their own. Shared by
-   * reference with loop_group body contexts so an iteration cannot re-report.
-   */
-  warnedProviderConflicts: Set<string>;
-  /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
-  totalCostUsd: number | undefined;
-  totalTokens: TokenUsage | undefined;
-  totalTokensUnknown?: boolean;
-  /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */
-  stepNamePrefix: string;
-  /** Complete runtime loop_group lineage for typed body artifacts; empty at top level. */
-  loopGroupPath: NodeArtifactLoopFrame[];
-  /**
-   * One {@link LoopBodyScope} per enclosing loop_group iteration, outermost first; empty
-   * outside a loop_group body. Every body node template resolves its `$LOOP_PREV.*` and
-   * `$LOOP_USER_INPUT` references against these, in the same pass as its other references.
-   */
-  loopBodyScopes: readonly LoopBodyScope[];
-  /**
-   * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `exec:` nodes, delivered
-   * into the subprocess as an env var (#2115, #2725). `script:` nodes never splice this into
-   * source (unsafe for TS/Python) and rely on this env var exclusively. `bash:` nodes get it
-   * as a second channel alongside the loop scope's shell-quoted splice of the literal
-   * `$LOOP_USER_INPUT` token — this env var is what covers an indirect
-   * read (`${LOOP_USER_INPUT}`, `printenv`, `env`) that splice can't reach. Only non-empty on
-   * the first resumed iteration of an interactive group; undefined for the top-level DAG
-   * (top-level exec nodes have no loop user input).
-   */
-  bodyLoopUserInput?: string;
 }
 
 /**
@@ -10025,32 +9461,6 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   } catch {
     return false;
   }
-}
-
-/** Preserve the rejection that determines run recovery after all claimed work settles. */
-function settledValuesOrThrow<T>(
-  results: readonly PromiseSettledResult<T>[],
-  workflowRunId: string
-): T[] {
-  const values: T[] = [];
-  const failures: PromiseRejectedResult[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') values.push(result.value);
-    else failures.push(result);
-  }
-  const selected =
-    failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
-    failures.find(result => result.reason instanceof NodeEventWriteError) ??
-    failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
-    failures.find(result => result.reason instanceof RunSourceUnreadableError) ??
-    failures[0];
-  if (selected === undefined) return values;
-  for (const failure of failures) {
-    if (failure === selected) continue;
-    const reason: unknown = failure.reason;
-    getLog().error({ err: reason, workflowRunId }, 'dag.join_secondary_failure');
-  }
-  throw selected.reason;
 }
 
 /**

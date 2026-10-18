@@ -7,7 +7,6 @@ import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { inspectResumableRun } from './executor';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
-import * as nodeEventWrite from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
 import { buildRunTerminalTelemetry } from './run-terminal-telemetry';
 import { RUN_GRAPH_METADATA_KEY, type WorktreeDisposition } from './schemas/terminal-record';
@@ -33,61 +32,8 @@ import * as pluginProcess from '@archon/paths/plugin-process';
 import * as subprocess from './subprocess';
 import { recordNodeProcessTrees } from './subprocess';
 import { RATE_LIMIT_MAX_RETRIES, RATE_LIMIT_PAUSE_DELAY_MS } from './executor-shared';
-
-// --- Mock logger (MUST come before imports of modules under test) ---
-
-const mockLogFn = mock((_data: unknown, _message?: string): void => {});
-const mockLogger = {
-  info: mockLogFn,
-  warn: mockLogFn,
-  error: mockLogFn,
-  debug: mockLogFn,
-  trace: mockLogFn,
-  fatal: mockLogFn,
-  child: mock(() => mockLogger),
-};
-/**
- * The Archon home the artifact-pointer gate (#2453) resolves run artifact roots under.
- * Mutable so the pointer suite can point it at its own temp tree; every other suite in
- * this file leaves it on the unreachable default, where no pointer can validate.
- */
-let mockArtifactHome = '/nonexistent/home';
-let mockWorkflowHome = '/nonexistent/home/workflows';
-// Captured before the module mock below replaces the re-export.
-const { isPathInside } = await import('@archon/paths/archon-paths');
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getCommandFolderSearchPaths: (folder?: string) => {
-    const paths = ['.archon/commands'];
-    if (folder) paths.unshift(folder);
-    return paths;
-  },
-  getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
-  getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
-  getHomeWorkflowsPath: () => mockWorkflowHome,
-  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
-  getArchonHome: () => '/nonexistent/home',
-  // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
-  // containment rules are exercised rather than stubbed away.
-  isPathInside,
-  isInsideArchonHome: (candidate: string): boolean =>
-    isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
-  getRunArtifactsDirForRoot: (root: string, runId: string): string =>
-    join(root, 'artifacts', 'runs', runId),
-}));
-
-// --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { clearRegistry, getProviderCapabilities } from '@archon/providers';
-import {
-  registerBuiltinProviders,
-  registerPiProvider,
-  registerOpencodeProvider,
-} from '@archon/providers/in-process';
-import type {
-  ProviderCapabilities,
-  ProviderRegistry,
-  ProviderFailure,
-} from '@archon/provider-contract';
+import { getProviderCapabilities } from '@archon/providers';
+import type { ProviderRegistry, ProviderFailure } from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
@@ -95,17 +41,52 @@ import {
   type ProviderEvent,
   type TokenUsage,
 } from '@archon/provider-contract';
-clearRegistry();
-registerBuiltinProviders();
-// Pi is a community provider (best-effort structured output) — register it so the
-// reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
-// deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
-registerPiProvider();
-// OpenCode is the only registered provider with `effortControl: false` — it is what
-// makes `resolvePresetEffort`'s rejection branch reachable at this call site (#2556).
-registerOpencodeProvider();
-
-// --- Imports (after mocks) ---
+import {
+  mockLogFn,
+  mockLogger,
+  mockArtifactHome,
+  mockWorkflowHome,
+  setMockArtifactHome,
+  setMockWorkflowHome,
+  composeScope,
+  composeInnerStep,
+  type MockWorkflowEventCollector,
+  type MockWorkflowStore,
+  mockWorkflowRun,
+  createMockStore,
+  runUsageWrites,
+  authoredOutcomeWrites,
+  withProviderCapabilities,
+  mockClaudeCapabilities,
+  mockProviderRegistry,
+  mockCodexCapabilities,
+  mockSendQueryDag,
+  mockGetAgentProviderDag,
+  type MockWorkflowDeps,
+  createMockDeps,
+  type MockWorkflowPlatform,
+  createMockPlatform,
+  deliveredMessages,
+  persistedEvents,
+  failedLoopIterations,
+  minimalConfig,
+  type TestWorkflowDefinition,
+  type DagOptionsOverrides,
+  resolveTestWorkflow,
+  stubMissingContainer,
+  spyOnNodeExec,
+  nodeDockerCalls,
+  dagOptions,
+  ready,
+  node,
+  substituteNodeOutputRefs,
+  makeOutput,
+  readAllArtifacts,
+  makeWorkflowRun,
+  expectLoopGateEvidence,
+  loaderBypassingWorkflow,
+  readTranscript,
+} from './dag/test-utils';
 import {
   checkTriggerRule,
   substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
@@ -114,16 +95,12 @@ import {
   collectContainerIncompatibleProviders,
   visitProviderInvokingNodes,
   collectStrictSchemaViolations,
-  containerCommandName,
-  buildSubprocessDockerArgs,
-  childOutcomeFromRun,
   resolveNodeBindings,
   type LoopBodyScope,
   type ShellInputContext,
   type ExecuteDagWorkflowOptions,
-  type RunChildWorkflowFn,
 } from './dag-executor';
-import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
+import { childOutcomeFromRun, type RunChildWorkflowFn } from './dag/child-run';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import { nodeArtifactsListingSchema } from './schemas/node-artifact';
@@ -137,7 +114,6 @@ import type {
   GateNode,
   ExecNode,
   LoopGroupNode,
-  LoopGroupNodeConfig,
   IncludeDirective,
   NodeOutput,
   SkipCause,
@@ -153,7 +129,6 @@ import type {
 } from './schemas';
 import { dagNodeSchema, skipCauseSchema, workflowDefinitionSchema } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
-import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import {
   COMPILED_LOOP_COMMAND,
@@ -164,12 +139,8 @@ import {
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from './store';
-import { waitCompletionEvents, WorkflowRunPauseConflictError } from './store';
-import {
-  buildInstanceSnapshots,
-  composeFanOutScopeSegment,
-  type FanOutInstanceSnapshot,
-} from './fan-out-identity';
+import { WorkflowRunPauseConflictError } from './store';
+import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from './fan-out-identity';
 import {
   buildAiProfile,
   isLiteralSpec,
@@ -184,310 +155,6 @@ import {
 } from './workflow-source';
 import { CONTAINER_MARKER_PROBE } from './checkout-observation';
 
-function composeScope(
-  nodeId = 'fan',
-  loopGroupPath: readonly { groupId: string; iteration: number }[] = []
-): string {
-  return composeFanOutScopeSegment(nodeId, loopGroupPath);
-}
-
-function composeInnerStep(
-  identity: string,
-  innerNodeId: string,
-  nodeId = 'fan',
-  loopGroupPath: readonly { groupId: string; iteration: number }[] = []
-): string {
-  const scope = composeScope(nodeId, loopGroupPath);
-  return `${scope}__${identity}__${nodeId}__${identity}__${innerNodeId}`;
-}
-
-// --- Mock helpers ---
-
-// This fixture's createWorkflowEvent mock collects both durable and best-effort writes.
-// The production IWorkflowStore interface separately restricts the best-effort route.
-type MockWorkflowEventCollector = Mock<IWorkflowStore['persistWorkflowEvent']>;
-type MockWorkflowStore = {
-  [K in Exclude<keyof IWorkflowStore, 'createWorkflowEvent'>]: IWorkflowStore[K] extends (
-    ...args: infer Args
-  ) => infer Result
-    ? Mock<(...args: Args) => Result>
-    : IWorkflowStore[K];
-} & { createWorkflowEvent: MockWorkflowEventCollector };
-
-function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
-  return {
-    origin: { conversationId: 'conv-mock' },
-    id,
-    workflow_name: 'mock',
-    conversation_id: 'conv-mock',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
-    user_message: 'mock message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
-  };
-}
-
-function createMockStore(): MockWorkflowStore {
-  const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
-  const getWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(async _id => 'running');
-  return {
-    getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
-      throw new Error('Unexpected getStateDocument');
-    }),
-    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
-      throw new Error('Unexpected putStateDocument');
-    }),
-    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
-      throw new Error('Unexpected patchStateDocument');
-    }),
-    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
-      throw new Error('Unexpected deleteStateDocument');
-    }),
-    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
-      throw new Error('Unexpected listStateRevisions');
-    }),
-    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
-      throw new Error('Unexpected listStateDocuments');
-    }),
-    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
-      throw new Error('Unexpected getStateDocuments');
-    }),
-    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
-      throw new Error('Unexpected pruneStateRevisions');
-    }),
-    setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
-    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
-      throw new Error('Unexpected admitResourceStart');
-    }),
-    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
-      throw new Error('Unexpected drainResourceStarts');
-    }),
-    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
-      throw new Error('Unexpected hasStartReceiptForDelivery');
-    }),
-    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
-      throw new Error('Unexpected acceptStartReceipt');
-    }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
-    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
-      throw new Error('Unexpected listPendingStartBindings');
-    }),
-    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
-      throw new Error('Unexpected getResourceStartRequest');
-    }),
-    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
-      throw new Error('Unexpected listQueuedResourceStartsForHost');
-    }),
-    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
-      throw new Error('Unexpected withdrawQueuedResourceStart');
-    }),
-    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
-      throw new Error('Unexpected claimStartBindingPreparation');
-    }),
-    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
-      throw new Error('Unexpected completeStartBindingPreparation');
-    }),
-    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
-      throw new Error('Unexpected failStartBindingPreparation');
-    }),
-    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
-      throw new Error('Unexpected resetStartBindingPreparation');
-    }),
-    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
-      throw new Error('Unexpected listDueWorkflowContinuations');
-    }),
-    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
-      throw new Error('Unexpected deferWorkflowContinuation');
-    }),
-    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async () => {
-        getWorkflowRunStatus.mockImplementation(async () => 'paused');
-        return { released: true };
-      }
-    ),
-    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
-      Promise.resolve({ released: false })
-    ),
-    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
-      throw new Error('Unexpected answerAttentionWait');
-    }),
-    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
-      throw new Error('Unexpected labelAttentionWait');
-    }),
-    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
-      throw new Error('Unexpected listAttentionQueueRows');
-    }),
-    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
-      throw new Error('Unexpected signalWorkflowWait');
-    }),
-    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
-      throw new Error('Unexpected resolveApprovalGate');
-    }),
-    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
-      throw new Error('Unexpected resolveAndCancelApprovalGate');
-    }),
-    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
-      () => {
-        throw new Error('Unexpected cancelResumableRunsForConversation');
-      }
-    ),
-    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
-      throw new Error('Unexpected deleteWorkflowNodeSessions');
-    }),
-    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
-    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
-      throw new Error('Unexpected listWorkflowRuns');
-    }),
-    createWorkflowRun: mock<IWorkflowStore['createWorkflowRun']>(async _data => mockWorkflowRun()),
-    claimPendingWorkflowRun: mock<IWorkflowStore['claimPendingWorkflowRun']>(async _id =>
-      mockWorkflowRun()
-    ),
-    recordWorkflowRunCheckoutBaseline: mock<IWorkflowStore['recordWorkflowRunCheckoutBaseline']>(
-      async (_id, baseline) => baseline
-    ),
-    getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
-    findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
-    getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
-    getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
-      async (_workingPath, _self) => null
-    ),
-    findResumableRun: mock<IWorkflowStore['findResumableRun']>(
-      async (_workflowName, _workingPath) => null
-    ),
-    resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
-    recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
-      mockWorkflowRun()
-    ),
-    updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(async (_id, _updates) => {}),
-    updateWorkflowActivity: mock<IWorkflowStore['updateWorkflowActivity']>(async _id => {}),
-    getWorkflowRunStatus,
-    completeWorkflowRun: mock<IWorkflowStore['completeWorkflowRun']>(
-      async (_id, _completion, _metadata) => {}
-    ),
-    failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true })),
-    pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, _approvalContext, _extraMetadata, event) => {
-        if (event) await createWorkflowEvent(event);
-      }
-    ),
-    pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
-      async (_id, _waitContext) => {}
-    ),
-    clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
-      async (id, _waitContext, completion) => ({
-        cleared: true,
-        nodeEvent: waitCompletionEvents(id, completion).node,
-      })
-    ),
-    claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
-    releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => {}),
-    cancelWorkflowRun: mock<IWorkflowStore['cancelWorkflowRun']>(async _id => ({
-      cancelled: false,
-    })),
-    cancelFanOutRun: mock<IWorkflowStore['cancelFanOutRun']>(async (_id, _reason) => ({
-      cancelled: false,
-    })),
-    createWorkflowEvent,
-    persistWorkflowEvent: mock<IWorkflowStore['persistWorkflowEvent']>(async data => {
-      await createWorkflowEvent(data);
-    }),
-    persistWorkflowEventIfRunning: mock<IWorkflowStore['persistWorkflowEventIfRunning']>(
-      async data => {
-        await createWorkflowEvent(data);
-        return { persisted: true };
-      }
-    ),
-    listProviderEvents: mock<IWorkflowStore['listProviderEvents']>(async () => []),
-    getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
-      Promise.resolve({
-        completedNodeOutputs: new Map<string, { output: string }>(),
-        fanOutSnapshots: new Map(),
-        unresolvedNodeStarts: new Set(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })
-    ),
-    getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
-    getCodebaseEnvVars: mock<IWorkflowStore['getCodebaseEnvVars']>(async _codebaseId => ({})),
-    listWorkflowNodeSessions: mock<IWorkflowStore['listWorkflowNodeSessions']>(async _scope => []),
-    listWorkflowRunNodeSessions: mock<IWorkflowStore['listWorkflowRunNodeSessions']>(
-      async _workflowRunId => []
-    ),
-    upsertWorkflowRunNodeSession: mock<IWorkflowStore['upsertWorkflowRunNodeSession']>(
-      async _params => {}
-    ),
-    upsertWorkflowNodeSession: mock<IWorkflowStore['upsertWorkflowNodeSession']>(
-      async _params => {}
-    ),
-  };
-}
-
-/**
- * The run-level usage metadata the executor persisted, in call order (#2469). Usage is
- * written through `updateWorkflowRun` at the run tail on EVERY disposition, so this is
- * the single surface a usage assertion should read — regardless of whether the run then
- * completed, failed, was cancelled, or paused. Other `updateWorkflowRun` writes
- * (output_root, evidence_validation, …) are filtered out by key.
- */
-function runUsageWrites(store: ReturnType<typeof createMockStore>): Record<string, unknown>[] {
-  return (store.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
-    .map((call: unknown[]) => (call[1] as { metadata?: Record<string, unknown> })?.metadata)
-    .filter(
-      (metadata): metadata is Record<string, unknown> =>
-        metadata !== undefined &&
-        ('total_cost_usd' in metadata ||
-          'total_tokens_in' in metadata ||
-          'total_tokens_out' in metadata)
-    );
-}
-
-/** Authored-outcome writes, excluding lifecycle/metadata/root updates. */
-function authoredOutcomeWrites(
-  store: ReturnType<typeof createMockStore>
-): Array<'succeeded' | 'failed'> {
-  return (store.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
-    .map((call: unknown[]) => (call[1] as { outcome?: 'succeeded' | 'failed' }).outcome)
-    .filter((outcome): outcome is 'succeeded' | 'failed' => outcome !== undefined);
-}
-
 describe('executor capability ownership', () => {
   let cwd: string;
 
@@ -497,11 +164,6 @@ describe('executor capability ownership', () => {
 
   afterEach(async () => {
     await removeTempTree(cwd);
-  });
-
-  it('reads capabilities only from the injected descriptors', async () => {
-    const source = await readFile(new URL('./dag-executor.ts', import.meta.url), 'utf8');
-    expect(source.includes('getCapabilities')).toBe(false);
   });
 
   for (const kind of ['agent', 'loop'] as const) {
@@ -698,241 +360,8 @@ describe('executor capability ownership', () => {
   }
 });
 
-function withProviderCapabilities(
-  providers: ProviderRegistry,
-  provider: string,
-  capabilities: ProviderCapabilities
-): ProviderRegistry {
-  const descriptor = providers.get(provider);
-  if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
-  const replacement = { ...descriptor, capabilities };
-  return {
-    get: id => (id === provider ? replacement : providers.get(id)),
-    list: () => providers.list().map(entry => (entry.id === provider ? replacement : entry)),
-    unavailable: id => providers.unavailable?.(id),
-  };
-}
-
-const mockClaudeCapabilities = (): ProviderCapabilities => ({
-  ...getProviderCapabilities('claude'),
-  backgroundWork: 'unobserved',
-});
-
-const mockProviderRegistry = withProviderCapabilities(
-  providerRegistry,
-  'claude',
-  mockClaudeCapabilities()
-);
-
-/** Canonical capabilities for Codex-backed test nodes. */
-const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
-  getProviderCapabilities('codex');
-
-/** Mock AI sendQuery generator */
-const mockSendQueryDag = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-  async function* (_prompt, _cwd, _resumeSessionId, _options) {
-    yield { type: 'agent_message_chunk', text: 'DAG AI response' };
-    yield { type: 'result', sessionId: 'dag-session-id' };
-  }
-);
-
-const mockGetAgentProviderDag = mock<WorkflowDeps['getAgentProvider']>(_provider => ({
-  sendQuery: mockSendQueryDag,
-  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-  getType: () => 'claude',
-  getCapabilities: mockClaudeCapabilities,
-}));
-
-type MockWorkflowDeps<TStore extends IWorkflowStore> = Omit<
-  WorkflowDeps,
-  'store' | 'getAgentProvider' | 'loadConfig'
-> & {
-  store: TStore;
-  getAgentProvider: WorkflowDeps['getAgentProvider'];
-  loadConfig: Mock<WorkflowDeps['loadConfig']>;
-};
-
-function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
-  storeOverride?: TStore,
-  providers: ProviderRegistry = mockProviderRegistry
-): MockWorkflowDeps<TStore> {
-  const store = storeOverride ?? createMockStore();
-  return {
-    providers,
-    store: store as TStore,
-    // Mock providers settle like real ones; see settlingProvider.
-    getAgentProvider: provider =>
-      settlingProvider({
-        ...mockGetAgentProviderDag(provider),
-        getCapabilities: () => {
-          const descriptor = providers.get(provider);
-          if (!descriptor) throw new Error(`Missing test provider '${provider}'`);
-          return descriptor.capabilities;
-        },
-      }),
-    loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
-      assistant: 'claude' as const,
-      commands: {},
-      defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
-      assistants: { claude: {}, codex: {} },
-    })),
-  };
-}
-
-type MockWorkflowPlatform = {
-  sendMessage: Mock<IWorkflowPlatform['sendMessage']>;
-  getStreamingMode: Mock<IWorkflowPlatform['getStreamingMode']>;
-  getPlatformType: Mock<IWorkflowPlatform['getPlatformType']>;
-  sendStructuredEvent: Mock<NonNullable<IWorkflowPlatform['sendStructuredEvent']>>;
-};
-
-function createMockPlatform(): MockWorkflowPlatform {
-  return {
-    sendMessage: mock<IWorkflowPlatform['sendMessage']>(
-      async (_conversationId, _message, _metadata) => {}
-    ),
-    getStreamingMode: mock<IWorkflowPlatform['getStreamingMode']>(() => 'batch'),
-    getPlatformType: mock<IWorkflowPlatform['getPlatformType']>(() => 'test'),
-    sendStructuredEvent: mock<NonNullable<IWorkflowPlatform['sendStructuredEvent']>>(
-      async (_conversationId, _event) => {}
-    ),
-  };
-}
-
-/**
- * Every message the run delivered to the platform, in call order.
- *
- * Assertions on this list should name an exact message. Operator prose is not a
- * wire format: a `find(m => m.includes(a) && m.includes(b))` guard passes for
- * any message that happens to contain both fragments, and breaks on a reword
- * that changes no behavior (#3167). Where the outcome has a structured surface
- * — a node status, a persisted event, a typed error — assert on that instead.
- */
-function deliveredMessages(platform: MockWorkflowPlatform): string[] {
-  return platform.sendMessage.mock.calls.map(call => call[1]);
-}
-
-/** The workflow events the run persisted, in call order. */
-function persistedEvents(store: MockWorkflowStore) {
-  return store.createWorkflowEvent.mock.calls.map(([event]) => event);
-}
-
-/** `loopIterations` lives only on the in-memory record, so read it where the record is written. */
-async function failedLoopIterations(nodeId: string, run: () => Promise<unknown>) {
-  const recordSpy = spyOn(nodeEventWrite, 'recordNodeState');
-  try {
-    await run();
-    const failed = recordSpy.mock.calls
-      .map(([, record]) => record)
-      .find(
-        record =>
-          !('cache' in record) && record.lifecycle.status === 'failed' && record.node.id === nodeId
-      );
-    return failed && !('cache' in failed) ? failed.diagnostics?.loopIterations : undefined;
-  } finally {
-    recordSpy.mockRestore();
-  }
-}
-
-const minimalConfig: WorkflowConfig = {
-  assistant: 'claude',
-  assistants: { claude: {}, codex: {} },
-  commands: {},
-  defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
-};
-
-/**
- * `deps`, `cwd`, `workflow`, and `workflowRun` carry each test's own fixtures, so every call
- * supplies them; the run directories derive from `cwd` the way every call site built them.
- */
-type TestWorkflowDefinition = Omit<WorkflowDefinition, 'description' | 'nodes'> & {
-  description?: string;
-  nodes: readonly (DagNode | IncludeDirective)[];
-};
-
-type DagOptionsOverrides = Omit<Partial<ExecuteDagWorkflowOptions>, 'workflow'> &
-  Pick<ExecuteDagWorkflowOptions, 'deps' | 'cwd' | 'workflowRun'> & {
-    workflow: TestWorkflowDefinition;
-  };
-
-function resolveTestWorkflow(workflow: TestWorkflowDefinition): ResolvedWorkflow {
-  return resolveWorkflow({
-    ...workflow,
-    description: workflow.description ?? workflow.name,
-    nodes: [...workflow.nodes],
-  });
-}
-
-/**
- * Answer every `execFileAsync` call the way `docker exec` answers for a container that does
- * not exist. Container-run tests use made-up container ids, and each node start probes the
- * container's checkout through `execFileAsync`; left alone, that probe spawns a real
- * `docker`, which can take longer than a test's whole budget on a CI runner.
- */
-function stubMissingContainer(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
-  return spyOn(git, 'execFileAsync').mockImplementation(async () => {
-    throw new Error('Error response from daemon: No such container');
-  });
-}
-
-/**
- * Spy on `execFileAsync` as the transport of a host bash or script node. On Windows such a
- * node runs through the owned process group instead, so its deadline can end the whole tree;
- * that path is routed into the same spy until the test ends.
- */
-function spyOnNodeExec(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
-  const execSpy = spyOn(git, 'execFileAsync');
-  if (process.platform === 'win32')
-    ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
-      (cmd, args, options) => git.execFileAsync(cmd, args, options)
-    );
-  return execSpy;
-}
-let ownedGroupSpy: { mockRestore(): void } | undefined;
-afterEach(() => {
-  ownedGroupSpy?.mockRestore();
-  ownedGroupSpy = undefined;
-});
-
-/** The `docker` calls that dispatch node work, leaving out the checkout observation's probe. */
-function nodeDockerCalls(
-  calls: Parameters<typeof git.execFileAsync>[]
-): Parameters<typeof git.execFileAsync>[] {
-  return calls.filter(
-    ([command, args]) => command === 'docker' && args.at(-1) !== CONTAINER_MARKER_PROBE
-  );
-}
-
-/**
- * Options for a direct `executeDagWorkflow` call, built from only what a test varies. The
- * defaults are the exact values these tests used to spell out at every call site, so a test
- * reads as the run it configures rather than as the fields it does not care about.
- *
- * Supplying `workflowModel` here is a convenience for tests only. It stays a required
- * `string | undefined` on `ExecuteDagWorkflowOptions` so a production caller cannot omit a
- * resolved model decision (#2302); this builder is not that guard's audience.
- */
-function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
-  const { cwd, workflow, ...rest } = overrides;
-  return {
-    platform: createMockPlatform(),
-    conversationId: 'conv-dag',
-    workflowProvider: 'claude',
-    workflowModel: undefined,
-    artifactsDir: join(cwd, 'artifacts'),
-    stateDir: join(cwd, 'state'),
-    logDir: join(cwd, 'logs'),
-    baseBranch: 'main',
-    docsDir: 'docs/',
-    config: minimalConfig,
-    ...rest,
-    cwd,
-    workflow: resolveTestWorkflow(workflow),
-  };
-}
-
 describe('executeDagWorkflow options type contract', () => {
-  it('requires one named object including workflowModel', () => {
+  it('requires workflowModel even when it resolves to undefined', () => {
     const validOptions: ExecuteDagWorkflowOptions = {
       deps: createMockDeps(),
       platform: createMockPlatform(),
@@ -956,311 +385,6 @@ describe('executeDagWorkflow options type contract', () => {
     // @ts-expect-error workflowModel is a required resolved-policy input, even when undefined.
     const missingWorkflowModel: ExecuteDagWorkflowOptions = withoutWorkflowModel;
     expect(missingWorkflowModel).not.toHaveProperty('workflowModel');
-
-    const legacyArguments = [
-      validOptions.deps,
-      validOptions.platform,
-      validOptions.conversationId,
-      validOptions.cwd,
-      validOptions.workflow,
-      validOptions.workflowRun,
-      validOptions.workflowProvider,
-      validOptions.workflowModel,
-      validOptions.artifactsDir,
-      validOptions.stateDir,
-      validOptions.logDir,
-      validOptions.baseBranch,
-      validOptions.docsDir,
-      validOptions.config,
-      validOptions.configuredCommandFolder,
-      validOptions.issueContext,
-      validOptions.priorCompletedNodes,
-      validOptions.aiProfile,
-      validOptions.workflowPreset,
-      validOptions.scopeArtifactsDir,
-      validOptions.execContext,
-      validOptions.containerCtx,
-      validOptions.runChildWorkflow,
-      validOptions.priorUsage,
-      validOptions.priorNodeSessions,
-      validOptions.workflowSourceRoots,
-    ] as const;
-    const legacyCall = (): Promise<string | undefined> => {
-      // @ts-expect-error executeDagWorkflow no longer accepts the positional contract.
-      return executeDagWorkflow(...legacyArguments);
-    };
-    expect(legacyCall).toBeFunction();
-  });
-});
-
-// --- Helpers ---
-
-function ready(wf: TestWorkflowDefinition): ResolvedWorkflow {
-  return resolveTestWorkflow(wf);
-}
-
-function node(id: string, depends_on?: string[], opts?: Partial<AgentNode>): AgentNode {
-  return {
-    id,
-    kind: 'agent',
-    source: { kind: 'command', name: id },
-    ...(depends_on?.length ? { depends_on } : {}),
-    ...opts,
-  };
-}
-
-/** Substitution outside any loop_group: no enclosing loop scope. */
-function substituteNodeOutputRefs(
-  prompt: string,
-  nodeOutputs: Map<string, NodeOutput>,
-  escapedForBash?: boolean,
-  artifactsDir?: string,
-  requiredContext?: Parameters<typeof substituteNodeOutputRefsInScopes>[5]
-): string {
-  return substituteNodeOutputRefsInScopes(
-    prompt,
-    nodeOutputs,
-    [],
-    escapedForBash,
-    artifactsDir,
-    requiredContext
-  );
-}
-
-/**
- * Build a NodeOutput fixture for substitution tests.
- * Omits `structuredOutput` when undefined so the `'structuredOutput' in nodeOutput` presence
- * check in substituteNodeOutputRefs matches real producer behavior (Pi/Codex/Claude populate
- * it; older providers and the pending/skipped states leave it off).
- */
-function makeOutput(
-  state: NodeOutput['state'],
-  output = '',
-  structuredOutput?: unknown,
-  declaredFields?: string[]
-): NodeOutput {
-  const extra = {
-    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined
-      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
-      : {}),
-  };
-  if (state === 'failed') {
-    return { state, output, error: 'error', ...extra } as NodeOutput;
-  }
-  if (state === 'pending' || state === 'skipped') {
-    return state === 'skipped'
-      ? { state, output, cause: { kind: 'condition', expr: 'false' } }
-      : { state, output };
-  }
-  return { state, output, ...extra } as NodeOutput;
-}
-
-/**
- * The reader's grouped result flattened across types, the whole-run view these
- * executor tests assert; scope filtering is proved in artifacts-index.test.ts.
- */
-async function readAllArtifacts(artifactsDir: string) {
-  const { artifactsByType } = await readNodeArtifacts(artifactsDir, { scope: 'resolved-scope' });
-  return Object.values(artifactsByType).flat();
-}
-
-function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
-  return {
-    origin: { conversationId: 'conv-dag' },
-    id,
-    workflow_name: 'dag-test',
-    conversation_id: 'conv-dag',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
-    user_message: 'dag test message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
-    ...overrides,
-  };
-}
-
-function expectLoopGateEvidence(
-  store: MockWorkflowStore,
-  platform: MockWorkflowPlatform,
-  statusLine: string,
-  completionSignaled: boolean
-): void {
-  const pauseCalls = store.pauseWorkflowRun.mock.calls;
-  expect(pauseCalls.length).toBe(1);
-  const approval = pauseCalls[0][1];
-  expect(approval).toMatchObject({ completionSignaled });
-  expect(approval.message.startsWith(statusLine)).toBe(true);
-
-  const approvalRequested = store.createWorkflowEvent.mock.calls
-    .map(([event]) => event)
-    .filter(event => event.event_type === 'approval_requested');
-  expect(approvalRequested.length).toBe(1);
-  expect(approvalRequested[0].data).toMatchObject({
-    message: approval.message,
-    completionSignaled,
-  });
-
-  const sentMessages = platform.sendMessage.mock.calls.map(([, message]) => message);
-  expect(sentMessages.some(message => message.includes(approval.message))).toBe(true);
-}
-
-function loaderBypassingWorkflow(
-  workflow: TestWorkflowDefinition & {
-    modelReasoningEffort: string;
-  }
-): ResolvedWorkflow & { modelReasoningEffort: string } {
-  return Object.assign(resolveTestWorkflow(workflow), {
-    modelReasoningEffort: workflow.modelReasoningEffort,
-  });
-}
-
-// --- Tests ---
-
-/**
- * A run's JSONL transcript, parsed. Module-scoped so every describe reads a run's
- * transcript the same way.
- */
-const readTranscript = async (
-  logDir: string,
-  runId: string
-): Promise<Array<Record<string, unknown>>> =>
-  (await readFile(join(logDir, `${runId}.jsonl`), 'utf-8'))
-    .trim()
-    .split('\n')
-    .map(line => JSON.parse(line) as Record<string, unknown>);
-
-describe('planGraph', () => {
-  it('single node with no dependencies -> one layer', () => {
-    const layers = planGraph([node('a')]).layers;
-    expect(layers).toHaveLength(1);
-    expect(layers[0].map(n => n.id)).toEqual(['a']);
-  });
-
-  it('linear chain -> one node per layer', () => {
-    const layers = planGraph([node('a'), node('b', ['a']), node('c', ['b'])]).layers;
-    expect(layers).toHaveLength(3);
-    expect(layers[0].map(n => n.id)).toEqual(['a']);
-    expect(layers[1].map(n => n.id)).toEqual(['b']);
-    expect(layers[2].map(n => n.id)).toEqual(['c']);
-  });
-
-  it('fan-out: classify -> [investigate, plan] in same layer', () => {
-    const layers = planGraph([
-      node('classify'),
-      node('investigate', ['classify']),
-      node('plan', ['classify']),
-    ]).layers;
-    expect(layers).toHaveLength(2);
-    expect(layers[0].map(n => n.id)).toEqual(['classify']);
-    const layer1Ids = layers[1].map(n => n.id).sort();
-    expect(layer1Ids).toEqual(['investigate', 'plan']);
-  });
-
-  it('fan-in: [a, b] -> implement in its own layer', () => {
-    const layers = planGraph([node('a'), node('b'), node('implement', ['a', 'b'])]).layers;
-    expect(layers).toHaveLength(2);
-    expect(layers[0].map(n => n.id).sort()).toEqual(['a', 'b']);
-    expect(layers[1].map(n => n.id)).toEqual(['implement']);
-  });
-
-  it('diamond: classify -> [investigate, plan] -> implement', () => {
-    const layers = planGraph([
-      node('classify'),
-      node('investigate', ['classify']),
-      node('plan', ['classify']),
-      node('implement', ['investigate', 'plan']),
-    ]).layers;
-    expect(layers).toHaveLength(3);
-    expect(layers[0].map(n => n.id)).toEqual(['classify']);
-    expect(layers[1].map(n => n.id).sort()).toEqual(['investigate', 'plan']);
-    expect(layers[2].map(n => n.id)).toEqual(['implement']);
-  });
-
-  it('throws on a cyclic graph', () => {
-    const cyclic = [node('a', ['b']), node('b', ['a'])];
-    expect(() => planGraph(cyclic)).toThrow('Cycle detected');
-  });
-
-  it('self-referential node throws', () => {
-    const selfRef = [node('a', ['a'])];
-    expect(() => planGraph(selfRef)).toThrow('Cycle detected');
-  });
-
-  it('two independent chains share layers correctly', () => {
-    const layers = planGraph([node('a'), node('b', ['a']), node('c'), node('d', ['c'])]).layers;
-    expect(layers).toHaveLength(2);
-    expect(layers[0].map(n => n.id).sort()).toEqual(['a', 'c']);
-    expect(layers[1].map(n => n.id).sort()).toEqual(['b', 'd']);
-  });
-
-  it('records every sink in definition order', () => {
-    const plan = planGraph([node('root'), node('left', ['root']), node('right', ['root'])]);
-    expect(plan.sinks).toEqual(['left', 'right']);
-  });
-
-  it('attaches the complete plan to a resolved workflow', () => {
-    const workflow = resolveTestWorkflow({
-      name: 'representative',
-      nodes: [node('root'), node('left', ['root']), node('right', ['root'])],
-    });
-
-    expect(workflow.plan.layers.map(layer => layer.map(item => item.id))).toEqual([
-      ['root'],
-      ['left', 'right'],
-    ]);
-    expect(workflow.plan.sinks).toEqual(['left', 'right']);
-    expect(workflow.nodes).toBe(workflow.plan.nodes);
-
-    // biome-ignore lint/correctness/noConstantCondition: compile-time assertions that never run
-    if (false) {
-      // @ts-expect-error Resolved workflow nodes are immutable after planning.
-      workflow.nodes.push(node('late'));
-      // @ts-expect-error The plan exposes the same immutable node set.
-      workflow.plan.nodes.splice(0, 1);
-      // @ts-expect-error Planned layers cannot be mutated after construction.
-      workflow.plan.layers[0]?.push(node('late'));
-    }
-  });
-
-  it('does not let a typed caller pair a plan with another node set', () => {
-    const first = resolveTestWorkflow({ name: 'first', nodes: [node('first')] });
-    const second = resolveTestWorkflow({ name: 'second', nodes: [node('second')] });
-
-    // @ts-expect-error Object spread loses the factory-only resolved-workflow identity.
-    const mismatched: ResolvedWorkflow = { ...first, nodes: second.nodes };
-    expect(mismatched.plan.nodes).not.toBe(mismatched.nodes);
-  });
-
-  it('rejects an include directive that survived expansion and names it', () => {
-    const include: IncludeDirective = { id: 'block', kind: 'include', include: 'child' };
-    expect(() => planGraph([include])).toThrow("include node 'block'");
-    expect(() =>
-      resolveWorkflow({ name: 'invalid', description: 'invalid', nodes: [include] })
-    ).toThrow("include node 'block'");
-  });
-});
-
-describe('resolvedBodyNodes', () => {
-  it('rejects an include directive in a nested body and names it', () => {
-    const include: IncludeDirective = { id: 'nested', kind: 'include', include: 'child' };
-    const group: LoopGroupNodeConfig = {
-      until: 'DONE',
-      max_iterations: 1,
-      fresh_context: false,
-      nodes: [include],
-    };
-    expect(() => resolvedBodyNodes(group)).toThrow("include node 'nested'");
   });
 });
 
@@ -1534,322 +658,6 @@ describe('checkTriggerRule -- classify-gated pipeline behavior on failure', () =
       decision: 'skip',
       cause: { kind: 'upstream_skipped', origin: 'code-review' },
     });
-  });
-});
-
-describe('DAG Loader -- cycle detection', () => {
-  let testDir: string;
-
-  beforeEach(async () => {
-    testDir = join(tmpdir(), `dag-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    await mkdir(testDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await removeTempTree(testDir);
-  });
-
-  it('rejects cyclic DAG at load time', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'cyclic.yaml'),
-      `
-name: cyclic-dag
-description: A cyclic dag
-nodes:
-  - id: a
-    command: plan
-    depends_on: [b]
-  - id: b
-    command: implement
-    depends_on: [a]
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/cycle/i);
-  });
-
-  it('rejects unknown depends_on reference', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'bad-ref.yaml'),
-      `
-name: bad-ref
-description: Bad dep ref
-nodes:
-  - id: a
-    command: plan
-    depends_on: [nonexistent]
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/nonexistent/);
-  });
-
-  it('rejects duplicate node IDs', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'dup-ids.yaml'),
-      `
-name: dup-ids
-description: Duplicate node IDs
-nodes:
-  - id: a
-    command: plan
-  - id: a
-    command: implement
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/duplicate/i);
-  });
-
-  it('rejects node with both command and prompt', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'both.yaml'),
-      `
-name: both-cmd-prompt
-description: Both command and prompt
-nodes:
-  - id: a
-    command: plan
-    prompt: "do something"
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/mutually exclusive/i);
-  });
-
-  it('rejects node with neither command nor prompt', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'neither.yaml'),
-      `
-name: no-cmd-or-prompt
-description: No command or prompt
-nodes:
-  - id: a
-    depends_on: []
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/must have either/i);
-  });
-
-  it('accepts valid DAG with fan-out, when: conditions, and trigger_rule', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'valid.yaml'),
-      `
-name: classify-and-fix
-description: Classify then fix or plan
-nodes:
-  - id: classify
-    command: classify-issue
-    output_format:
-      type: object
-      properties:
-        type:
-          type: string
-          enum: [BUG, FEATURE]
-      required: [type]
-  - id: investigate
-    command: investigate-bug
-    depends_on: [classify]
-    when: "$classify.output.type == 'BUG'"
-  - id: plan
-    command: plan-feature
-    depends_on: [classify]
-    when: "$classify.output.type == 'FEATURE'"
-  - id: implement
-    command: implement-changes
-    depends_on: [investigate, plan]
-    trigger_rule: none_failed_min_one_success
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(0);
-    expect(result.workflows).toHaveLength(1);
-
-    const wf = result.workflows[0].workflow;
-    expect(wf.nodes).toHaveLength(4);
-    expect(wf.nodes[0].id).toBe('classify');
-    expect((wf.nodes[0] as DagNode).output_format).toBeDefined();
-    expect(wf.nodes[1].when).toBe("$classify.output.type == 'BUG'");
-    expect(wf.nodes[3].trigger_rule).toBe('none_failed_min_one_success');
-  });
-
-  it('accepts inline prompt nodes', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'inline-prompt.yaml'),
-      `
-name: inline-prompts
-description: DAG with inline prompts
-nodes:
-  - id: step-a
-    prompt: "Output exactly: hello from A"
-  - id: step-b
-    prompt: "Output exactly: hello from B"
-    depends_on: [step-a]
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(0);
-    expect(result.workflows).toHaveLength(1);
-
-    const wf = result.workflows[0].workflow;
-    expect(wf.nodes).toBeDefined();
-    const stepA = wf.nodes[0] as AgentNode;
-    expect(stepA.source).toEqual({ kind: 'inline', prompt: 'Output exactly: hello from A' });
-    expect(wf.nodes[1].depends_on).toEqual(['step-a']);
-  });
-
-  it('ignores unknown top-level fields when valid nodes: is present', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'nodes-extra.yaml'),
-      `
-name: extra-fields
-description: Has extra top-level fields that are ignored
-nodes:
-  - id: a
-    command: plan
-loop:
-  until: COMPLETE
-  max_iterations: 5
-prompt: "do something"
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(0);
-    expect(result.workflows).toHaveLength(1);
-    expect(result.workflows[0].workflow.name).toBe('extra-fields');
-  });
-
-  it('rejects node with invalid trigger_rule', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'bad-rule.yaml'),
-      `
-name: bad-trigger-rule
-description: Invalid trigger rule
-nodes:
-  - id: a
-    command: plan
-  - id: b
-    command: implement
-    depends_on: [a]
-    trigger_rule: all-success
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].error).toMatch(/trigger_rule/i);
-  });
-
-  it('parses allowed_tools and denied_tools on DAG nodes', async () => {
-    const wfDir = join(testDir, '.archon', 'workflows');
-    await mkdir(wfDir, { recursive: true });
-
-    await writeFile(
-      join(wfDir, 'tool-restrictions.yaml'),
-      `
-name: tool-restriction-test
-description: Test tool restrictions
-nodes:
-  - id: review
-    command: code-review
-    allowed_tools: [Read, Grep, Glob]
-  - id: implement
-    command: implement-feature
-    denied_tools: [WebSearch, WebFetch]
-  - id: mcp-only
-    command: mcp-command
-    allowed_tools: []
-`
-    );
-
-    const result = await discoverWorkflows(testDir, {
-      providers: providerRegistry,
-      loadDefaults: false,
-    });
-    expect(result.errors).toHaveLength(0);
-    const wf = result.workflows
-      .map(ws => ws.workflow)
-      .find(w => w.name === 'tool-restriction-test');
-    expect(wf).toBeDefined();
-    if (!wf) return;
-    const toolNodes = wf.nodes as AgentNode[];
-
-    expect(toolNodes[0].allowed_tools).toEqual(['Read', 'Grep', 'Glob']);
-    expect(toolNodes[0].denied_tools).toBeUndefined();
-
-    expect(toolNodes[1].denied_tools).toEqual(['WebSearch', 'WebFetch']);
-    expect(toolNodes[1].allowed_tools).toBeUndefined();
-
-    // Empty array must be preserved (distinct from absent)
-    expect(toolNodes[2].allowed_tools).toEqual([]);
   });
 });
 
@@ -6032,258 +4840,6 @@ describe('executeDagWorkflow -- provider event recording', () => {
 });
 
 // ---------------------------------------------------------------------------
-// loadMcpConfig — per-node MCP server config loading (#445)
-// ---------------------------------------------------------------------------
-
-describe('loadMcpConfig', () => {
-  let testDir: string;
-
-  beforeEach(async () => {
-    testDir = join(tmpdir(), `dag-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    await mkdir(testDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await removeTempTree(testDir);
-  });
-
-  it('loads and parses a valid MCP config JSON', async () => {
-    const config = { github: { command: 'npx', args: ['-y', '@mcp/server-github'] } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    expect(result.serverNames).toEqual(['github']);
-    expect(result.servers).toEqual(config);
-    expect(result.missingVars).toEqual([]);
-  });
-
-  it('loads standard mcpServers-wrapped config JSON', async () => {
-    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
-    await writeFile(join(testDir, 'wrapped.json'), JSON.stringify({ mcpServers: servers }));
-
-    const result = await loadMcpConfig('wrapped.json', testDir);
-    expect(result.serverNames).toEqual(['figma']);
-    expect(result.servers).toEqual(servers);
-  });
-
-  it('rejects mixed mcpServers wrapper and top-level metadata', async () => {
-    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
-    await writeFile(
-      join(testDir, 'mixed-wrapper.json'),
-      JSON.stringify({ $schema: 'https://example.com/schema.json', mcpServers: servers })
-    );
-
-    await expect(loadMcpConfig('mixed-wrapper.json', testDir)).rejects.toThrow(
-      'cannot mix top-level "mcpServers" with other keys'
-    );
-  });
-
-  it('loads multiple servers from one config', async () => {
-    const config = {
-      github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
-      postgres: { command: 'npx', args: ['-y', '@mcp/server-postgres'] },
-    };
-    await writeFile(join(testDir, 'multi.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('multi.json', testDir);
-    expect(result.serverNames).toEqual(['github', 'postgres']);
-  });
-
-  it('expands $VAR_NAME in env values from process.env', async () => {
-    process.env.TEST_MCP_TOKEN_445 = 'secret123';
-    const config = { github: { command: 'npx', env: { TOKEN: '$TEST_MCP_TOKEN_445' } } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.github as Record<string, unknown>;
-    expect(server.env).toEqual({ TOKEN: 'secret123' });
-
-    delete process.env.TEST_MCP_TOKEN_445;
-  });
-
-  it('expands $VAR_NAME in headers values', async () => {
-    process.env.TEST_API_KEY_445 = 'key456';
-    const config = {
-      api: {
-        type: 'http',
-        url: 'https://example.com',
-        headers: { Authorization: 'Bearer $TEST_API_KEY_445' },
-      },
-    };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.api as Record<string, unknown>;
-    expect(server.headers).toEqual({ Authorization: 'Bearer key456' });
-
-    delete process.env.TEST_API_KEY_445;
-  });
-
-  it('replaces undefined env vars with empty string and reports them', async () => {
-    delete process.env.NONEXISTENT_VAR_445;
-    const config = { svc: { command: 'npx', env: { KEY: '$NONEXISTENT_VAR_445' } } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.svc as Record<string, unknown>;
-    expect(server.env).toEqual({ KEY: '' });
-    expect(result.missingVars).toContain('NONEXISTENT_VAR_445');
-  });
-
-  it('does not expand vars in command or args fields', async () => {
-    process.env.TEST_CMD_445 = 'should-not-expand';
-    const config = { svc: { command: '$TEST_CMD_445', args: ['$TEST_CMD_445'] } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.svc as Record<string, unknown>;
-    expect(server.command).toBe('$TEST_CMD_445');
-    expect(server.args).toEqual(['$TEST_CMD_445']);
-
-    delete process.env.TEST_CMD_445;
-  });
-
-  it('resolves absolute paths as-is', async () => {
-    const config = { svc: { command: 'npx' } };
-    const absPath = join(testDir, 'abs.json');
-    await writeFile(absPath, JSON.stringify(config));
-
-    const result = await loadMcpConfig(absPath, '/some/other/dir');
-    expect(result.serverNames).toEqual(['svc']);
-  });
-
-  it('throws on missing file', async () => {
-    await expect(loadMcpConfig('nonexistent.json', testDir)).rejects.toThrow(
-      'MCP config file not found'
-    );
-  });
-
-  it('throws on invalid JSON', async () => {
-    await writeFile(join(testDir, 'bad.json'), 'not json');
-    await expect(loadMcpConfig('bad.json', testDir)).rejects.toThrow('not valid JSON');
-  });
-
-  it('throws on non-object JSON (array)', async () => {
-    await writeFile(join(testDir, 'arr.json'), '[]');
-    await expect(loadMcpConfig('arr.json', testDir)).rejects.toThrow('must be a JSON object');
-  });
-
-  it('throws on non-object JSON (string)', async () => {
-    await writeFile(join(testDir, 'str.json'), '"hello"');
-    await expect(loadMcpConfig('str.json', testDir)).rejects.toThrow('must be a JSON object');
-  });
-
-  it('throws on array-valued server config', async () => {
-    await writeFile(join(testDir, 'server-array.json'), JSON.stringify({ figma: [] }));
-
-    await expect(loadMcpConfig('server-array.json', testDir)).rejects.toThrow(
-      'MCP server "figma" must be a JSON object'
-    );
-  });
-
-  it('throws on non-string env values', async () => {
-    await writeFile(
-      join(testDir, 'env-number.json'),
-      JSON.stringify({ figma: { command: 'figma-mcp', env: { TOKEN: 123 } } })
-    );
-
-    await expect(loadMcpConfig('env-number.json', testDir)).rejects.toThrow(
-      'MCP config figma.env.TOKEN must be a string'
-    );
-  });
-
-  it('throws on non-string header values', async () => {
-    await writeFile(
-      join(testDir, 'header-array.json'),
-      JSON.stringify({
-        figma: {
-          type: 'http',
-          url: 'http://127.0.0.1:3845/mcp',
-          headers: { Authorization: ['Bearer token'] },
-        },
-      })
-    );
-
-    await expect(loadMcpConfig('header-array.json', testDir)).rejects.toThrow(
-      'MCP config figma.headers.Authorization must be a string'
-    );
-  });
-
-  it('expands ${VAR_NAME} brace-form in env values', async () => {
-    process.env.TEST_MCP_TOKEN_1612 = 'braced-secret';
-    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_MCP_TOKEN_1612}' } } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.github as Record<string, unknown>;
-    expect(server.env).toEqual({ TOKEN: 'braced-secret' });
-
-    delete process.env.TEST_MCP_TOKEN_1612;
-  });
-
-  it('expands ${VAR_NAME} brace-form in headers values', async () => {
-    process.env.TEST_API_KEY_1612 = 'braced-key';
-    const config = {
-      api: {
-        type: 'http',
-        url: 'https://example.com',
-        headers: { Authorization: 'Bearer ${TEST_API_KEY_1612}' },
-      },
-    };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.api as Record<string, unknown>;
-    expect(server.headers).toEqual({ Authorization: 'Bearer braced-key' });
-
-    delete process.env.TEST_API_KEY_1612;
-  });
-
-  it('replaces undefined brace-form vars with empty string and reports them', async () => {
-    delete process.env.NONEXISTENT_VAR_1612;
-    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_VAR_1612}' } } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.svc as Record<string, unknown>;
-    expect(server.env).toEqual({ KEY: '' });
-    expect(result.missingVars).toContain('NONEXISTENT_VAR_1612');
-  });
-
-  it('expands mixed bare and brace-form vars in the same string', async () => {
-    process.env.TEST_HOST_1612 = 'db.example.com';
-    process.env.TEST_PORT_1612 = '5432';
-    const config = {
-      db: {
-        command: 'npx',
-        env: { DSN: 'postgres://$TEST_HOST_1612:${TEST_PORT_1612}/mydb' },
-      },
-    };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.db as Record<string, unknown>;
-    expect(server.env).toEqual({ DSN: 'postgres://db.example.com:5432/mydb' });
-
-    delete process.env.TEST_HOST_1612;
-    delete process.env.TEST_PORT_1612;
-  });
-
-  it('does not expand brace-form vars in command or args fields', async () => {
-    process.env.TEST_CMD_1612 = 'should-not-expand';
-    const config = { svc: { command: '${TEST_CMD_1612}', args: ['${TEST_CMD_1612}'] } };
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-
-    const result = await loadMcpConfig('mcp.json', testDir);
-    const server = result.servers.svc as Record<string, unknown>;
-    expect(server.command).toBe('${TEST_CMD_1612}');
-    expect(server.args).toEqual(['${TEST_CMD_1612}']);
-
-    delete process.env.TEST_CMD_1612;
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Skills — executor-level behavior (#446)
 // ---------------------------------------------------------------------------
 
@@ -6636,270 +5192,6 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(deliveredMessages(platform)).toContain(
       "Warning: Node 'review' uses agents but codex doesn't support it — this will be ignored."
     );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Skills — loader validation via discoverWorkflows (#446)
-// ---------------------------------------------------------------------------
-
-describe('skills field validation via parseWorkflow', () => {
-  it('parses valid skills array on a DAG node', () => {
-    const yaml = `
-name: test-skills
-description: test
-nodes:
-  - id: review
-    prompt: "Review the code"
-    skills:
-      - codebase-search
-      - test-runner
-`;
-    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    expect(result.workflow).not.toBeNull();
-    const wf = result.workflow!;
-    expect(wf.nodes).toBeDefined();
-    expect((wf.nodes[0] as DagNode).skills).toEqual(['codebase-search', 'test-runner']);
-  });
-
-  it('rejects non-string skills array entries', () => {
-    const yaml = `
-name: bad-skills
-description: test
-nodes:
-  - id: review
-    prompt: "Review"
-    skills:
-      - 123
-`;
-    const result = parseWorkflow(yaml, 'bad.yaml', providerRegistry);
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('skills');
-  });
-
-  it('accepts empty skills array', () => {
-    const yaml = `
-name: empty-skills
-description: test
-nodes:
-  - id: review
-    prompt: "Review"
-    skills: []
-`;
-    const result = parseWorkflow(yaml, 'empty.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    expect((result.workflow?.nodes[0] as DagNode | undefined)?.skills).toEqual([]);
-  });
-
-  it('ignores skills on bash nodes with warning', () => {
-    const yaml = `
-name: bash-skills
-description: test
-nodes:
-  - id: lint
-    bash: "echo lint"
-    skills:
-      - should-be-ignored
-`;
-    const result = parseWorkflow(yaml, 'bash-skills.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    expect(result.workflow).not.toBeNull();
-    const wf = result.workflow!;
-    expect(wf.nodes).toBeDefined();
-    // Bash nodes don't get the skills field
-    expect((wf.nodes[0] as DagNode).skills).toBeUndefined();
-  });
-
-  it('node with no skills has undefined skills field', () => {
-    const yaml = `
-name: no-skills
-description: test
-nodes:
-  - id: basic
-    prompt: "Do something"
-`;
-    const result = parseWorkflow(yaml, 'no-skills.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect(wf.nodes).toBeDefined();
-    expect((wf.nodes[0] as DagNode).skills).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Inline agents — field validation via parseWorkflow
-// ---------------------------------------------------------------------------
-
-describe('agents field validation via parseWorkflow', () => {
-  it('parses a valid agents map on a DAG node', () => {
-    const yaml = `
-name: test-agents
-description: test
-nodes:
-  - id: triage
-    prompt: "Spawn a brief-gen sub-agent"
-    agents:
-      brief-gen:
-        description: Summarises an issue
-        prompt: "You are concise. Return JSON { summary }."
-        model: haiku
-        tools: [Bash, Read]
-        disallowedTools: [Write]
-        skills: [codebase-search]
-        maxTurns: 5
-`;
-    const result = parseWorkflow(yaml, 'agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    expect(result.workflow).not.toBeNull();
-    const wf = result.workflow!;
-    const node = wf.nodes[0] as DagNode;
-    expect(node.agents).toEqual({
-      'brief-gen': {
-        description: 'Summarises an issue',
-        prompt: 'You are concise. Return JSON { summary }.',
-        model: 'haiku',
-        tools: ['Bash', 'Read'],
-        disallowedTools: ['Write'],
-        skills: ['codebase-search'],
-        maxTurns: 5,
-      },
-    });
-  });
-
-  it('rejects an agent missing description', () => {
-    const yaml = `
-name: missing-desc
-description: test
-nodes:
-  - id: triage
-    prompt: "p"
-    agents:
-      brief-gen:
-        prompt: "You are concise."
-`;
-    const result = parseWorkflow(yaml, 'missing-desc.yaml', providerRegistry);
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('agents');
-  });
-
-  it('rejects an agent missing prompt', () => {
-    const yaml = `
-name: missing-prompt
-description: test
-nodes:
-  - id: triage
-    prompt: "p"
-    agents:
-      brief-gen:
-        description: "A brief generator"
-`;
-    const result = parseWorkflow(yaml, 'missing-prompt.yaml', providerRegistry);
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('agents');
-  });
-
-  it('rejects empty agents map', () => {
-    const yaml = `
-name: empty-agents
-description: test
-nodes:
-  - id: triage
-    prompt: "p"
-    agents: {}
-`;
-    const result = parseWorkflow(yaml, 'empty-agents.yaml', providerRegistry);
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('agents');
-  });
-
-  it('rejects agent ID that is not kebab-case', () => {
-    const yaml = `
-name: bad-id
-description: test
-nodes:
-  - id: triage
-    prompt: "p"
-    agents:
-      BriefGen:
-        description: "d"
-        prompt: "p"
-`;
-    const result = parseWorkflow(yaml, 'bad-id.yaml', providerRegistry);
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('kebab-case');
-  });
-
-  it('ignores agents on bash nodes (field stripped, no error)', () => {
-    const yaml = `
-name: bash-agents
-description: test
-nodes:
-  - id: lint
-    bash: "echo lint"
-    agents:
-      helper:
-        description: "d"
-        prompt: "p"
-`;
-    const result = parseWorkflow(yaml, 'bash-agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
-  });
-
-  it('ignores agents on script nodes (field stripped, no error)', () => {
-    const yaml = `
-name: script-agents
-description: test
-nodes:
-  - id: run
-    script: 'console.log("hi")'
-    runtime: bun
-    agents:
-      helper:
-        description: "d"
-        prompt: "p"
-`;
-    const result = parseWorkflow(yaml, 'script-agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
-  });
-
-  it('ignores agents on loop nodes (field stripped, no error)', () => {
-    const yaml = `
-name: loop-agents
-description: test
-nodes:
-  - id: iterate
-    loop:
-      prompt: "Do the work"
-      until: "DONE"
-      max_iterations: 2
-    agents:
-      helper:
-        description: "d"
-        prompt: "p"
-`;
-    const result = parseWorkflow(yaml, 'loop-agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
-  });
-
-  it('node with no agents field is undefined', () => {
-    const yaml = `
-name: no-agents
-description: test
-nodes:
-  - id: basic
-    prompt: "Do something"
-`;
-    const result = parseWorkflow(yaml, 'no-agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
   });
 });
 
@@ -22896,12 +21188,12 @@ describe('executeDagWorkflow -- home MCP paths', () => {
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'dag-home-mcp-'));
     yamlDir = join(testDir, 'home', 'workflows', 'nested');
-    mockWorkflowHome = join(testDir, 'home', 'workflows');
+    setMockWorkflowHome(join(testDir, 'home', 'workflows'));
     await mkdir(yamlDir, { recursive: true });
     mockSendQueryDag.mockClear();
   });
   afterEach(async () => {
-    mockWorkflowHome = '/nonexistent/home/workflows';
+    setMockWorkflowHome('/nonexistent/home/workflows');
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'ok' };
       yield { type: 'result', sessionId: 'sess' };
@@ -31929,55 +30221,6 @@ describe('executeDagWorkflow -- addressable session resume', () => {
   });
 });
 
-describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () => {
-  const originalEnv = process.env.ARCHON_BASH_PATH;
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      delete process.env.ARCHON_BASH_PATH;
-    } else {
-      process.env.ARCHON_BASH_PATH = originalEnv;
-    }
-  });
-
-  it('returns the platform default when ARCHON_BASH_PATH is unset', () => {
-    delete process.env.ARCHON_BASH_PATH;
-    const result = git.resolveBashPath();
-    if (process.platform === 'win32') {
-      // Multi-candidate scan: first existing Git-Bash location, or the
-      // canonical Program Files default when none exist.
-      expect(result.endsWith('\\bash.exe')).toBe(true);
-    } else {
-      expect(result).toBe('bash');
-    }
-  });
-
-  it('returns the ARCHON_BASH_PATH override when the path exists', () => {
-    // process.execPath is the test runner binary — always exists, cross-platform.
-    process.env.ARCHON_BASH_PATH = process.execPath;
-    expect(git.resolveBashPath()).toBe(process.execPath);
-  });
-
-  it('throws with an actionable message when ARCHON_BASH_PATH points to a non-existent path', () => {
-    process.env.ARCHON_BASH_PATH = '/definitely/does/not/exist/bash';
-    expect(() => git.resolveBashPath()).toThrow(
-      /ARCHON_BASH_PATH points to a path that does not exist/
-    );
-  });
-
-  it('error message includes both the bad path and the Git Bash hint', () => {
-    process.env.ARCHON_BASH_PATH = '/definitely/does/not/exist/bash';
-    try {
-      git.resolveBashPath();
-      expect.unreachable('should have thrown');
-    } catch (e) {
-      const msg = (e as Error).message;
-      expect(msg).toContain('/definitely/does/not/exist/bash');
-      expect(msg).toContain('LOCALAPPDATA');
-    }
-  });
-});
-
 describe('executeDagWorkflow -- provider-boundary session threading (#1992)', () => {
   let testDir: string;
 
@@ -33317,21 +31560,6 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
   });
 });
 
-describe('containerCommandName', () => {
-  it('returns a bare command unchanged', () => {
-    expect(containerCommandName('bash')).toBe('bash');
-    expect(containerCommandName('bun')).toBe('bun');
-  });
-
-  it('strips a unix directory to the basename', () => {
-    expect(containerCommandName('/usr/local/bin/bash')).toBe('bash');
-  });
-
-  it('strips a Windows path + .exe (container is always Linux)', () => {
-    expect(containerCommandName('C:\\Program Files\\Git\\bin\\bash.exe')).toBe('bash');
-  });
-});
-
 describe('collectContainerIncompatibleProviders', () => {
   const promptNode = (id: string, provider?: string): DagNode =>
     ({
@@ -33810,66 +32038,6 @@ describe('executeDagWorkflow -- strict-schema preflight', () => {
     } finally {
       await removeTempTree(testDir);
     }
-  });
-});
-
-describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
-  const CTX = { kind: 'container' as const, containerId: 'cid-9' };
-
-  it('delivers the Archon-managed env via -e flags only and runs at the same cwd', () => {
-    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'echo hi'], {
-      cwd: '/tmp/ops-client',
-      env: { ARTIFACTS_DIR: '/a', ANTHROPIC_API_KEY: 'sk', BASE_BRANCH: 'main' },
-    });
-    expect(args.slice(0, 2)).toEqual(['exec', '-w']);
-    expect(args[2]).toBe('/tmp/ops-client');
-    // Every managed var is delivered as an explicit -e flag.
-    expect(args).toContain('-e');
-    expect(args).toContain('ARTIFACTS_DIR=/a');
-    expect(args).toContain('ANTHROPIC_API_KEY=sk');
-    expect(args).toContain('BASE_BRANCH=main');
-    // Container id, then the normalized command, then the node args.
-    const cidIdx = args.indexOf('cid-9');
-    expect(cidIdx).toBeGreaterThan(-1);
-    expect(args[cidIdx + 1]).toBe('bash');
-    expect(args.slice(cidIdx + 2)).toEqual(['-c', 'echo hi']);
-  });
-
-  it('does NOT leak host process.env (only the passed env bag is forwarded)', () => {
-    const canary = 'ARCHON_DAGEXEC_CANARY';
-    process.env[canary] = 'leaked';
-    try {
-      const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
-        cwd: '/w',
-        env: { ONLY_THIS: '1' },
-      });
-      const joined = args.join(' ');
-      expect(joined).toContain('ONLY_THIS=1');
-      expect(joined).not.toContain(canary);
-    } finally {
-      delete process.env[canary];
-    }
-  });
-
-  it('normalizes a host bash path to the in-container binary name', () => {
-    const args = buildSubprocessDockerArgs(CTX, '/usr/local/bin/bash', ['-c', 'x'], {
-      cwd: '/w',
-      env: {},
-    });
-    const cidIdx = args.indexOf('cid-9');
-    expect(args[cidIdx + 1]).toBe('bash');
-  });
-
-  it('never forwards denylisted keys (PATH/HOME) — a project env var must not clobber resolution', () => {
-    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
-      cwd: '/w',
-      env: { PATH: '/evil/bin', HOME: '/evil', PWD: '/x', KEEP: '1' },
-    });
-    const joined = args.join(' ');
-    expect(joined).not.toContain('PATH=/evil/bin');
-    expect(joined).not.toContain('HOME=/evil');
-    expect(joined).not.toContain('PWD=/x');
-    expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
   });
 });
 
@@ -36962,68 +35130,6 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
   });
 });
 
-describe('childOutcomeFromRun cache reporting', () => {
-  const settledRun = (metadata: Record<string, unknown>) =>
-    makeWorkflowRun('child-1', { status: 'completed', metadata });
-
-  it('carries a child run total that is only a floor up to its parent', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_in: 100,
-        total_tokens_out: 10,
-        total_cache_read_tokens: 60,
-        total_cache_write_tokens: 0,
-        total_cache_partial: true,
-      })
-    );
-
-    // Reading the numbers but not the flag let a parent merge a child's floor as
-    // though it were exact, which is the same defect one run boundary up.
-    expect(outcome.tokens).toEqual({
-      input: 100,
-      output: 10,
-      cacheRead: 60,
-      cacheWrite: 0,
-      cachePartial: true,
-    });
-  });
-
-  it('keeps an explicitly unknown child total unavailable despite older numeric metadata', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_unknown: true,
-        total_tokens_in: 170,
-        total_tokens_out: 20,
-        total_cost_usd: 0.3,
-      })
-    );
-    expect(outcome.tokens).toBeUndefined();
-    expect(outcome.tokensUnknown).toBe(true);
-    expect(outcome.costUsd).toBe(0.3);
-  });
-
-  it('leaves a complete child total unflagged', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_in: 100,
-        total_tokens_out: 10,
-        total_cache_read_tokens: 60,
-        total_cache_write_tokens: 0,
-      })
-    );
-
-    expect(outcome.tokens).toEqual({
-      input: 100,
-      output: 10,
-      cacheRead: 60,
-      cacheWrite: 0,
-    });
-    // toEqual alone would still pass on `cachePartial: undefined`; the key must be absent,
-    // because absence is what every reader treats as "this total is exact".
-    expect(outcome.tokens).not.toHaveProperty('cachePartial');
-  });
-});
-
 // ───────────────────────────────────────────────────────────────────────────
 // TokenUsage axis seam guard (#2674)
 //
@@ -38594,7 +36700,7 @@ describe('artifact pointers (#2453)', () => {
     testDir = join(tmpdir(), `dag-pointer-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     outputRoot = join(testDir, 'workspaces', '_cwd', 'proj');
     await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
-    mockArtifactHome = testDir;
+    setMockArtifactHome(testDir);
     mockSendQueryDag.mockClear();
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
@@ -38606,7 +36712,7 @@ describe('artifact pointers (#2453)', () => {
   });
 
   afterEach(async () => {
-    mockArtifactHome = originalArtifactHome;
+    setMockArtifactHome(originalArtifactHome);
     await removeTempTree(testDir);
   });
 
@@ -38808,7 +36914,7 @@ describe('a result contract survives the whole composed path (#2453)', () => {
     // pointer then names — the same directory the pointer gate resolves independently
     // from the run's persisted `output_root`.
     await mkdir(runArtifactsDir, { recursive: true });
-    mockArtifactHome = testDir;
+    setMockArtifactHome(testDir);
     mockSendQueryDag.mockClear();
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
@@ -38931,7 +37037,7 @@ nodes:
   });
 
   afterEach(async () => {
-    mockArtifactHome = originalArtifactHome;
+    setMockArtifactHome(originalArtifactHome);
     await removeTempTree(testDir);
   });
 
