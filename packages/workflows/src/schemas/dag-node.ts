@@ -386,7 +386,7 @@ export type AgentNode = z.infer<typeof agentNodeSchema>;
  * against the node's own stdout (#2453).
  *
  * The EXECUTOR deliberately did not follow this collapse: `executeBashNode`/
- * `executeScriptNode` in dag-executor.ts stay two separate functions rather than
+ * `executeScriptNode` in dag/nodes/exec/ stay two separate functions rather than
  * one `executeExecNode` branching on `runtime` (#2718, decided after a full
  * side-by-side read of both, 222 + 323 = 545 lines). The two are not thin
  * wrappers around one shell-out — real, non-superficial differences: output-ref

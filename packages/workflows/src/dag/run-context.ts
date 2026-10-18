@@ -155,7 +155,7 @@ export interface RunDerived {
  * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
  * `stepNamePrefix` of `'{groupId}.'` that namespaces the persisted `step_name` of EVERY
  * body event — runLayers' own control events (skip/trigger_rule/when) AND the lifecycle
- * events emitted inside executeNodeInternal / executeBashNode / executeScriptNode /
+ * events emitted inside executeAgentNode / executeBashNode / executeScriptNode /
  * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */

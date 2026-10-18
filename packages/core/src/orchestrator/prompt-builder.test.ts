@@ -213,9 +213,9 @@ describe('buildOrchestratorSystemAppend', () => {
   });
 
   test('does NOT include the run-management section (orchestrator gates it per-provider)', async () => {
-    // The CLI run-management pointer is appended by orchestrator-agent.ts only for
-    // project-scoped chats on providers WITHOUT the native manage_run tool — never
-    // here, so Claude/Pi (nativeTools) don't get a redundant pointer.
+    // The CLI run-management pointer is appended by `prepareChatTurnRequest`
+    // (chat-request.ts) only for project-scoped chats on providers WITHOUT the
+    // native manage_run tool — never here, so Claude/Pi (nativeTools) don't get a redundant pointer.
     const scoped = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,

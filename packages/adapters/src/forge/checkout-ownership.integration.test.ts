@@ -312,9 +312,10 @@ const readiness = [
 ];
 
 test.each(readiness)(
-  '$name clones again into the empty managed source a failed clone left',
+  '$name clones again into the empty managed source a failed clone left inside a checkout',
   async ({ prepare }) => {
     const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-clone-retry-')));
+    execFileSync('git', ['init', '-q', root]);
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = root;
     const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
@@ -322,11 +323,15 @@ test.each(readiness)(
       error: { code: 'not_a_repo', path: 'acme/api' },
     });
     try {
-      const codebase = { name: 'acme/api', default_cwd: getProjectSourcePath('acme', 'api') };
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        await mkdir(codebase.default_cwd, { recursive: true });
-        await expect(prepare(codebase)).rejects.toThrow('not found');
-        expect(clone).toHaveBeenCalledTimes(attempt);
+      // A custom name at the webhook repository's source; an allocated name at its own source.
+      for (const [name, repo] of Object.entries({ 'local-api': 'api', 'acme/api-2': 'api-2' })) {
+        const codebase = { name, default_cwd: getProjectSourcePath('acme', repo) };
+        clone.mockClear();
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          await mkdir(codebase.default_cwd, { recursive: true });
+          await expect(prepare(codebase)).rejects.toThrow('not found');
+          expect(clone).toHaveBeenCalledTimes(attempt);
+        }
       }
     } finally {
       clone.mockRestore();
@@ -336,13 +341,12 @@ test.each(readiness)(
   }
 );
 
-test.each(readiness.filter(forge => forge.name !== 'GitHub'))(
+test.each(readiness)(
   '$name syncs a project registered at a subdirectory of a checkout instead of cloning into it',
   async ({ prepare }) => {
     const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-subdirectory-project-')));
-    const checkout = join(root, 'checkout');
-    execFileSync('git', ['init', '-q', '-b', 'main', checkout]);
-    const subdirectory = join(checkout, 'service');
+    execFileSync('git', ['init', '-q', '-b', 'main', root]);
+    const subdirectory = join(root, 'service');
     await mkdir(subdirectory);
     await writeFile(join(subdirectory, 'README.md'), 'service');
     const previousHome = process.env.ARCHON_HOME;

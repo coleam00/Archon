@@ -355,7 +355,7 @@ export async function resolveNodeProviderAndModel(
   // Build raw nodeConfig — provider translates internally
   const nodeConfig: NodeConfig = {
     nodeId: node.id,
-    // `mcp` is set per attempt by `executeNodeInternal`, which decides whether an
+    // `mcp` is set per attempt by `executeAgentNode`, which decides whether an
     // optional declaration reaches the provider.
     hooks: node.hooks,
     skills: node.skills,

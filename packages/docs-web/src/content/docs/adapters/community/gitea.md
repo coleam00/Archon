@@ -96,7 +96,7 @@ Interact by @mentioning the bot in issue or PR **comments**:
 ```
 
 **First mention behavior:**
-- Automatically clones the repository to `~/.archon/workspaces/`
+- Reuses an existing local registration at its saved checkout path. Otherwise, registers and clones the repository to `~/.archon/workspaces/`
 - Detects and loads commands from `.archon/commands/` if present
 - Injects full issue/PR context (title, description, labels) for the AI assistant
 
