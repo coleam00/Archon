@@ -18,8 +18,6 @@ import { RunActionForbiddenError } from '@archon/core/operations/run-authorizati
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { providerRegistry } from '@archon/providers';
 
-import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
-import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
@@ -72,7 +70,6 @@ import {
   apiError,
   getLog,
   getValidatedBody,
-  getValidatedQuery,
   jsonError,
   openApiRouteRegistrar,
 } from './api-route-kit';
@@ -82,7 +79,6 @@ import {
   resolveAuthContext,
   resolveRunActor,
 } from './api-request-auth';
-import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
 import { createOrchestratorDispatch } from './api-message-dispatch';
 import { toCleanEntry, validatePresetEntry } from './api-preset-entry';
 import { registerAuthRoutes } from './api.auth';
@@ -93,10 +89,11 @@ import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.
 import { registerUserAiPrefsRoutes } from './api.user-ai-prefs';
 import { registerWorkflowDefinitionRoutes, registerWorkflowListRoute } from './api.workflows';
 import { registerWorkflowRunLaunchRoute } from './api.workflow-run-launch';
+import { registerRunAttentionRoutes } from './api.run-attention';
+import { registerDashboardRunsRoute, registerWorkflowRunReadRoutes } from './api.workflow-runs';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
-import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
   AbandonOwnerNotStoppedError,
@@ -108,50 +105,21 @@ import {
   assertAnswerable,
   assertResponseAccepted,
   attentionAnswerFor,
-  assertLabelable,
   expectedGateForOccurrence,
   StaleGateAnswerError,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import {
-  createSqlWorkflowOperations,
-  createWorkflowHostStore,
-} from '@archon/core/workflows/sql-host';
-import {
-  attentionQueueSource,
-  resolveAttentionProject,
-} from '@archon/core/operations/attention-queue';
-import {
-  attentionQueueItems,
-  countAttentionQueue,
-  parseAttentionQueueRequest,
-  readAttentionQueueItem,
-  selectAttentionQueue,
-  type AttentionQueueScope,
-} from '@archon/workflows/attention-queue';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { isApiGateEnabled, isConversationOwnershipEnforced } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
-  workflowRunListResponseSchema,
-  workflowRunDetailSchema,
-  providerEventsQuerySchema,
-  providerEventsResponseSchema,
-  workflowRunByWorkerResponseSchema,
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
-  dashboardRunsResponseSchema,
-  dashboardRunsQuerySchema,
-  workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
   respondWorkflowRunBodySchema,
   answerWorkflowRunBodySchema,
-  attentionQueueQuerySchema,
-  attentionQueueCountsResponseSchema,
-  attentionQueueItemResponseSchema,
-  labelAttentionBodySchema,
-  labelAttentionResponseSchema,
   resetWorkflowNodeSessionsParamsSchema,
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
@@ -174,12 +142,7 @@ import {
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import { introspectOpencodeCredentials } from '@archon/providers/community/opencode';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
-import {
-  runsNeedingAttentionResponseSchema,
-  runAttentionSchema,
-  RUN_ATTENTION_SCHEMA_NAME,
-  workflowRunStatusSchema,
-} from './schemas/workflow.schemas';
+import { runAttentionSchema, RUN_ATTENTION_SCHEMA_NAME } from './schemas/workflow.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -269,110 +232,6 @@ const listRunArtifactsRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
-const getRunsNeedingAttentionRoute = createRoute({
-  method: 'get',
-  path: '/api/runs/attention',
-  tags: ['Workflows'],
-  summary: 'List or count the attention queue',
-  request: { query: attentionQueueQuerySchema },
-  responses: {
-    200: {
-      content: {
-        'application/json': {
-          schema: z.union([runsNeedingAttentionResponseSchema, attentionQueueCountsResponseSchema]),
-        },
-      },
-      description: 'The items in scope, or their counts when countBy is given',
-    },
-    400: jsonError('Bad request'),
-    500: jsonError('Server error'),
-  },
-});
-
-const getRunAttentionItemRoute = createRoute({
-  method: 'get',
-  path: '/api/runs/{runId}/attention',
-  tags: ['Workflows'],
-  summary: 'Read the attention queue item a run stands for',
-  request: { params: z.object({ runId: z.string() }) },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: attentionQueueItemResponseSchema } },
-      description: 'The item, or null when the run needs no one now',
-    },
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
-const labelRunAttentionRoute = createRoute({
-  method: 'post',
-  path: '/api/runs/{runId}/attention/labels',
-  tags: ['Workflows'],
-  summary: 'Set or remove labels on the attention wait a run is paused at',
-  request: {
-    params: z.object({ runId: z.string() }),
-    body: { content: { 'application/json': { schema: labelAttentionBodySchema } } },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: labelAttentionResponseSchema } },
-      description: 'Labeled',
-    },
-    400: jsonError('Bad request'),
-    403: jsonError('Run action forbidden'),
-    404: jsonError('Not found'),
-    409: jsonError('The write names an occurrence the run is no longer paused at'),
-    500: jsonError('Server error'),
-  },
-});
-
-const getDashboardRunsRoute = createRoute({
-  method: 'get',
-  path: '/api/dashboard/runs',
-  tags: ['Workflows'],
-  summary: 'List enriched workflow runs for the Command Center dashboard',
-  request: { query: dashboardRunsQuerySchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: dashboardRunsResponseSchema } },
-      description: 'OK',
-    },
-    500: jsonError('Server error'),
-  },
-});
-
-const getWorkflowRunByWorkerRoute = createRoute({
-  method: 'get',
-  path: '/api/workflows/runs/by-worker/{platformId}',
-  tags: ['Workflows'],
-  summary: 'Look up a workflow run by its worker conversation platform ID',
-  request: { params: z.object({ platformId: z.string() }) },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: workflowRunByWorkerResponseSchema } },
-      description: 'Workflow run',
-    },
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
-const listWorkflowRunsRoute = createRoute({
-  method: 'get',
-  path: '/api/workflows/runs',
-  tags: ['Workflows'],
-  summary: 'List workflow runs',
-  request: { query: workflowRunsQuerySchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: workflowRunListResponseSchema } },
-      description: 'OK',
-    },
     500: jsonError('Server error'),
   },
 });
@@ -592,41 +451,6 @@ const resetWorkflowNodeSessionsRoute = createRoute({
     404: jsonError('Not found'),
     500: jsonError('Server error'),
     503: jsonError('Identity backend unavailable'),
-  },
-});
-
-const getWorkflowRunRoute = createRoute({
-  method: 'get',
-  path: '/api/workflows/runs/{runId}',
-  tags: ['Workflows'],
-  summary: 'Get workflow run details with events',
-  request: { params: z.object({ runId: z.string() }) },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: workflowRunDetailSchema } },
-      description: 'Workflow run detail',
-    },
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
-const getProviderEventsRoute = createRoute({
-  method: 'get',
-  path: '/api/workflows/runs/{runId}/provider-events',
-  tags: ['Workflows'],
-  summary: "List a run's provider events",
-  description:
-    "Every event the run's providers streamed (text, thinking, tool calls with output, warnings, MCP status, compaction, subtasks, hooks, state), as the engine recorded them. Grouped by node; each node's in emission order. Rows written before the engine recorded envelopes come back translated, with a null attemptId.",
-  request: { params: z.object({ runId: z.string() }), query: providerEventsQuerySchema },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: providerEventsResponseSchema } },
-      description: 'Provider events',
-    },
-    400: jsonError('Invalid cursor'),
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
   },
 });
 
@@ -904,6 +728,7 @@ export function registerApiRoutes(
   registration: Pick<CloneOptions, 'githubAppAuth'> = {}
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
+  const operations = createSqlWorkflowOperations();
   const {
     assertRunActionAllowed,
     signalWorkflowWait,
@@ -915,13 +740,8 @@ export function registerApiRoutes(
     rejectWorkflow,
     respondToWorkflow,
     answerWorkflow,
-    labelAttentionWait,
     resetWorkflowNodeSessions,
-  } = createSqlWorkflowOperations();
-  const attentionQueue = attentionQueueSource(
-    createWorkflowStore(),
-    createWorkflowHostStore().isolation
-  );
+  } = operations;
 
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
   app.openAPIRegistry.register('WebPushPayload', webPushPayloadSchema);
@@ -993,124 +813,9 @@ export function registerApiRoutes(
 
   registerWorkflowRunLaunchRoute(app, { webAdapter, dispatchToOrchestrator });
 
-  // GET /api/runs/attention - The attention queue. A server has no working directory, so
-  // without `project` the scope is the whole install.
-  registerOpenApiRoute(getRunsNeedingAttentionRoute, async c => {
-    try {
-      const query = getValidatedQuery(c, attentionQueueQuerySchema);
-      const label = query.label ?? [];
-      let scope: AttentionQueueScope;
-      let request: ReturnType<typeof parseAttentionQueueRequest>;
-      try {
-        request = parseAttentionQueueRequest({
-          ...query,
-          all: query.all === 'true',
-          labels: typeof label === 'string' ? [label] : label,
-        });
-        scope =
-          query.project === undefined
-            ? { kind: 'all' }
-            : {
-                kind: 'project',
-                project: await resolveAttentionProject(codebaseDb, query.project),
-              };
-      } catch (refusal) {
-        return apiError(c, 400, (refusal as Error).message);
-      }
-      // One read backs both the items and the console's dashboard rows for the same runs.
-      const rows = await workflowDb.listAttentionQueueRows();
-      const items = await attentionQueueItems(attentionQueue, rows);
-      const { labels, order, countBy } = request;
-      if (countBy !== undefined)
-        return c.json({ counts: countAttentionQueue(items, { scope, labels, countBy }) });
-      const selected = selectAttentionQueue(items, { scope, labels, order });
-      const ids = new Set(selected.map(item => item.runId));
-      const runs = rows.filter(run => ids.has(run.id));
-      return c.json({ runs: runs.map(toApiDashboardWorkflowRun), items: selected });
-    } catch (error) {
-      getLog().error({ err: error }, 'list_runs_needing_attention_failed');
-      return apiError(c, 500, 'Failed to list runs needing attention');
-    }
-  });
+  registerRunAttentionRoutes(app, operations);
 
-  // GET /api/runs/:runId/attention - The item a run stands for; a parent blocked on
-  // sub-runs resolves to its child's item.
-  registerOpenApiRoute(getRunAttentionItemRoute, async c => {
-    const runId = c.req.param('runId') ?? '';
-    try {
-      const item = await readAttentionQueueItem(attentionQueue, runId);
-      if (item === undefined) return apiError(c, 404, 'Workflow run not found');
-      return c.json({ item });
-    } catch (error) {
-      getLog().error({ err: error, runId }, 'api.run_attention_item_failed');
-      return apiError(c, 500, 'Failed to read the attention queue item');
-    }
-  });
-
-  // POST /api/runs/:runId/attention/labels - Merge a label write into the open attention wait.
-  registerOpenApiRoute(labelRunAttentionRoute, async c => {
-    const runId = c.req.param('runId') ?? '';
-    try {
-      const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) return apiError(c, 404, 'Workflow run not found');
-      const actor = await resolveRunActor(c);
-      await assertRunActionAllowed(run, actor, 'respond');
-      const body = getValidatedBody(c, labelAttentionBodySchema);
-      const request = { occurrence: body.occurrence, set: body.set ?? {}, unset: body.unset ?? [] };
-      try {
-        assertLabelable(run, request, 'api');
-      } catch (refusal) {
-        if (refusal instanceof StaleGateAnswerError) return apiError(c, 409, refusal.message);
-        return apiError(c, 400, (refusal as Error).message);
-      }
-      return c.json(await labelAttentionWait(runId, request, actor, 'api'));
-    } catch (error) {
-      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
-      // A race lost after the pre-check above: the run moved to another pause meanwhile.
-      if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
-      getLog().error({ err: error, runId }, 'api.run_attention_label_failed');
-      return apiError(c, 500, 'Failed to label the attention wait');
-    }
-  });
-
-  // GET /api/dashboard/runs - Enriched workflow runs for Command Center
-  // Supports server-side search, status/date filtering, and offset pagination.
-  registerOpenApiRoute(getDashboardRunsRoute, async c => {
-    try {
-      const rawStatus = c.req.query('status');
-      const validStatuses = workflowRunStatusSchema.options;
-      type DashboardRunStatus = (typeof validStatuses)[number];
-      const status: DashboardRunStatus | undefined =
-        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
-          ? (rawStatus as DashboardRunStatus)
-          : undefined;
-      const codebaseId = c.req.query('codebaseId') ?? undefined;
-      const search = c.req.query('search')?.trim() || undefined;
-      const after = c.req.query('after') ?? undefined;
-      const before = c.req.query('before') ?? undefined;
-      const limitRaw = Number(c.req.query('limit'));
-      const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
-      const offsetRaw = Number(c.req.query('offset'));
-      const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(0, offsetRaw);
-
-      const result = await workflowDb.listDashboardRuns({
-        status,
-        codebaseId,
-        search,
-        after,
-        before,
-        limit,
-        offset,
-      });
-      return c.json({
-        ...result,
-        runs: result.runs.map(toApiDashboardWorkflowRun),
-      });
-    } catch (error) {
-      getLog().error({ err: error }, 'list_dashboard_runs_failed');
-      return apiError(c, 500, 'Failed to list dashboard runs');
-    }
-  });
+  registerDashboardRunsRoute(app);
 
   // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run through the shared
   // owner-checked cancel: cooperative for a run this server executes, an owner stop for
@@ -1684,146 +1389,7 @@ export function registerApiRoutes(
     }
   });
 
-  // GET /api/workflows/runs - List workflow runs
-  registerOpenApiRoute(listWorkflowRunsRoute, async c => {
-    try {
-      const conversationId = c.req.query('conversationId') ?? undefined;
-      const rawStatus = c.req.query('status');
-      const validStatuses = workflowRunStatusSchema.options;
-      type WorkflowRunStatus = (typeof validStatuses)[number];
-      const status: WorkflowRunStatus | undefined =
-        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
-          ? (rawStatus as WorkflowRunStatus)
-          : undefined;
-      const codebaseId = c.req.query('codebaseId') ?? undefined;
-      const limitRaw = Number(c.req.query('limit'));
-      const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's runs).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
-
-      // Open-work inbox (#2747): a status-derived query, not a stored flag —
-      // terminal failed runs with no adopter/successor. Mutually exclusive with
-      // the other filters by contract; the inbox wins when combined.
-      if (c.req.query('open') === 'true') {
-        const openRuns = await workflowDb.findOpenWorkRuns({ codebaseId, limit });
-        return c.json({ runs: openRuns.map(toApiWorkflowRun) });
-      }
-
-      const runs = await workflowDb.listWorkflowRuns({
-        conversationId,
-        status,
-        limit,
-        codebaseId,
-        userId,
-      });
-      return c.json({ runs: runs.map(toApiWorkflowRun) });
-    } catch (error) {
-      getLog().error({ err: error }, 'list_workflow_runs_failed');
-      return apiError(c, 500, 'Failed to list workflow runs');
-    }
-  });
-
-  // GET /api/workflows/runs/by-worker/:platformId - Look up run by worker conversation
-  // Must be registered before :runId to avoid "by-worker" matching as a runId
-  registerOpenApiRoute(getWorkflowRunByWorkerRoute, async c => {
-    try {
-      const platformId = c.req.param('platformId') ?? '';
-      const run = await workflowDb.getWorkflowRunByWorkerPlatformId(platformId);
-      if (!run) {
-        return apiError(c, 404, 'No workflow run found for this worker');
-      }
-      return c.json({ run: toApiWorkflowRun(run) });
-    } catch (error) {
-      getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
-      return apiError(c, 500, 'Failed to look up workflow run');
-    }
-  });
-
-  // GET /api/workflows/runs/:runId - Get run details with events
-  registerOpenApiRoute(getWorkflowRunRoute, async c => {
-    try {
-      const runId = c.req.param('runId') ?? '';
-      const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) {
-        return apiError(c, 404, 'Workflow run not found');
-      }
-      // Provider events are served by their own route, per node; a long run has
-      // thousands and they would dominate this payload.
-      const events = await workflowEventDb.listWorkflowEvents(runId, {
-        excludeEventTypes: workflowEventDb.PROVIDER_EVENT_ROW_TYPES,
-      });
-
-      // Look up the run's conversation platform ID.
-      // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
-      // For CLI runs (no parent): conversation_id is the single conversation → set conversation_platform_id only
-      let workerPlatformId: string | undefined;
-      let conversationPlatformId: string | undefined;
-      if (run.conversation_id) {
-        const conv = await conversationDb.getConversationById(run.conversation_id);
-        if (run.parent_conversation_id) {
-          // Web run: conversation_id points to the worker conversation
-          workerPlatformId = conv?.platform_conversation_id;
-        } else {
-          // CLI run: conversation_id is the only conversation (no worker/parent split)
-          conversationPlatformId = conv?.platform_conversation_id;
-        }
-      }
-
-      // Look up parent conversation to get its platform_conversation_id for navigation
-      let parentPlatformId: string | undefined;
-      if (run.parent_conversation_id) {
-        const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
-        parentPlatformId = parentConv?.platform_conversation_id;
-      }
-
-      const terminalRecord = getTerminalRecord(run.status, events);
-      return c.json({
-        run: {
-          ...toApiWorkflowRun(run),
-          worker_platform_id: workerPlatformId,
-          parent_platform_id: parentPlatformId,
-          conversation_platform_id: conversationPlatformId ?? null,
-          terminal_record: terminalRecord,
-          // The console reads node state from here and keeps no fold of its own.
-          nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
-        },
-        // The console renders each cost's scope from here and keeps no copy of the rule.
-        events: events.map(event =>
-          typeof event.data.cost_usd === 'number'
-            ? { ...event, cost_scope: nodeCostScope(event.data) }
-            : event
-        ),
-      });
-    } catch (error) {
-      getLog().error({ err: error }, 'get_workflow_run_failed');
-      return apiError(c, 500, 'Failed to get workflow run');
-    }
-  });
-
-  // GET /api/workflows/runs/:runId/provider-events - A run's provider events
-  registerOpenApiRoute(getProviderEventsRoute, async c => {
-    const runId = c.req.param('runId') ?? '';
-    const { step, attemptId, afterSeq } = (
-      c.req as unknown as { valid(k: 'query'): z.infer<typeof providerEventsQuerySchema> }
-    ).valid('query');
-    try {
-      const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) return apiError(c, 404, 'Workflow run not found');
-      // Read through the engine's store seam, not the DB module.
-      const events = await createWorkflowStore().listProviderEvents(
-        runId,
-        step !== undefined && attemptId !== undefined && afterSeq !== undefined
-          ? { stepName: step, after: { attemptId, seq: afterSeq } }
-          : { stepName: step }
-      );
-      return c.json({ events });
-    } catch (error) {
-      getLog().error({ err: error, runId }, 'list_provider_events_failed');
-      return apiError(c, 500, 'Failed to list provider events');
-    }
-  });
+  registerWorkflowRunReadRoutes(app);
 
   registerWorkflowDefinitionRoutes(app);
 
