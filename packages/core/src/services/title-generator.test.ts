@@ -290,19 +290,27 @@ describe('title-generator', () => {
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {
+    const userMessage = 'PRIVATE_DOUBLE_FAILURE_4397';
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      throw new Error('AI failure');
+      throw new Error(`AI failure: ${userMessage}`);
     });
 
     mockUpdateConversationTitle.mockImplementation(() =>
-      Promise.reject(new Error('DB write failure'))
+      Promise.reject(new Error(`DB write failure: ${userMessage}`))
     );
 
     // Should NOT throw despite both failures
-    await generateAndSetTitle('conv-12', 'Some message', 'claude', '/tmp');
+    await generateAndSetTitle('conv-12', userMessage, 'claude', '/tmp');
 
     // Verify it attempted the fallback write
-    expect(mockUpdateConversationTitle).toHaveBeenCalled();
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-12', userMessage);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { conversationDbId: 'conv-12' },
+      'title.fallback_also_failed'
+    );
+    for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
+      expect(Bun.inspect(mockLogger[level].mock.calls)).not.toContain(userMessage);
+    }
   });
 
   test('collects text from multiple streaming chunks', async () => {
