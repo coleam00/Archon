@@ -229,9 +229,8 @@ Three rules, each protecting something a script cannot get back on its own:
   the pack and the standard library are the whole surface, which is what keeps
   these workflows runnable against a project in any language.
 
-A vocabulary a node declares in YAML has exactly one owner. A script that routes on
-one imports it from `.shared/verdict.ts`; a script that merely consumes another
-node's certified value does not restate the list at all.
+A vocabulary a node declares in YAML has exactly one owner, its `output_format`. A
+script that consumes another node's certified value does not restate the list.
 
 ## Evidence never carries credentials
 

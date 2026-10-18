@@ -53,7 +53,7 @@ Read `packages/server/src/adapters/web/` files — the Web adapter uses SSE for 
 `sendStructuredEvent()` for rich tool call data.
 !`ls packages/server/src/adapters/web/`
 
-Read `packages/server/src/routes/api.ts` first 80 lines for API route structure.
+Read `registerApiRoutes` in `packages/server/src/routes/api.ts` for the API route structure: it calls one registrar per area, each in an `api.<area>.ts` module beside it.
 
 ### 7. Check Recent Frontend Activity
 

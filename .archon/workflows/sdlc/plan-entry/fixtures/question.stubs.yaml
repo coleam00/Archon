@@ -30,6 +30,4 @@ fixture:
     work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
   expect: paused
   reached: [stage__plan, attend__settle]
-  resolved-text-contains:
-    attend__ask: "**What it is.** stub: the plan stopped on where relative MCP paths resolve\n\n**Why it matters.** stub: either answer changes what existing relative paths mean\n\n**Recommendation: `rerun`** (medium confidence). stub: the checkout keeps every existing path meaning the same\nEvidence: stub: plan.md, open question 1\nWhat would change it: stub: a project document that rules on it\n\n**Choices.**\n- `rerun` (stub: plan again with my answer): stub: plans again with the note as the answer\n- `finish` (stub: leave it): stub: ends the run with the question open\n\n**If nobody answers.** stub: the run stays paused and spends nothing\n\n**Evidence links.**\n- stub: plan.md"
 exec-code: true

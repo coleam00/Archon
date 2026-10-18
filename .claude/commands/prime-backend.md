@@ -62,7 +62,7 @@ Read `packages/server/src/index.ts` first 80 lines — adapter wiring, port allo
 List API routes:
 !`ls packages/server/src/routes/`
 
-Read `packages/server/src/routes/api.ts` first 60 lines for REST endpoint structure.
+Read `registerApiRoutes` in `packages/server/src/routes/api.ts` for the REST endpoint structure: it calls one registrar per area, each in an `api.<area>.ts` module beside it.
 
 ### 8. Check Recent Backend Activity
 
