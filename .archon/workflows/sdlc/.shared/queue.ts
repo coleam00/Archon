@@ -86,11 +86,11 @@ export function withOther<Effect extends string>(
   attention: Attention<Effect>,
   effect: Effect
 ): Attention<Effect> {
-  if (attention.choices.some(choice => choice.id === OTHER)) return attention;
+  // The queue owns `other`: an agent-declared one is replaced, so its effect is always this one.
   return {
     ...attention,
     choices: [
-      ...attention.choices,
+      ...attention.choices.filter(choice => choice.id !== OTHER),
       {
         id: OTHER,
         label: 'Something else',

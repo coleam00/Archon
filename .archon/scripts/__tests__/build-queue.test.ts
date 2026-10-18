@@ -539,6 +539,13 @@ describe('the build queue scripts', () => {
     expect(build?.brief).toContain(heading);
   }, 60_000);
 
+  test("the queue owns 'other': an agent-declared one is replaced by the queue's", () => {
+    const declared = { ...ATTENTION, choices: [...ATTENTION.choices, { id: 'other', label: 'x', does: 'x', effect: 'park' as const, ruling: 'x' }] };
+    const others = withOther(declared, 'continue').choices.filter(choice => choice.id === 'other');
+    expect(others).toHaveLength(1);
+    expect(others[0]).toMatchObject({ effect: 'continue', ruling: '' });
+  });
+
   test("an 'other' answer writes its text as the ruling and continues the item", () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));

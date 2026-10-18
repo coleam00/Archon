@@ -707,8 +707,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   asked about, labelled `merge: dev` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. Every item also offers `other`, which returns the pull request to the build
-  queue with the answer's text as the ruling. On a pull request, `merge` approves it at the head that was asked about, and
+  links. Every pull-request item also offers `other`, which returns the pull request to
+  the build queue with the answer's text as the ruling. A red default branch is only
+  ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a later sweep merges it once the gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue; `park` stops working it until the build queue readies it
