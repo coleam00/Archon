@@ -86,6 +86,17 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
       ? join(repo, 'packages', parts[1])
       : repo;
   };
+  const markdownDirectories = new Set<string>();
+  for (const file of tracked) {
+    if (!file.endsWith('.md')) continue;
+    let directory = dirname(file).replaceAll('\\', '/');
+    while (!markdownDirectories.has(directory)) {
+      markdownDirectories.add(directory);
+      if (directory === '.') break;
+      directory = dirname(directory).replaceAll('\\', '/');
+    }
+  }
+  markdownDirectories.add('');
   const sourcePaths = new Set(sources.map(file => resolve(repo, file)));
   const localSource = (owner: ts.SourceFile, name: string): ts.SourceFile | undefined => {
     if (!name.startsWith('.')) return undefined;
@@ -172,7 +183,10 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
     | ts.MethodDeclaration;
   const callable = (node: ts.Expression): Callable | undefined => {
     const target = targetDeclaration(node);
-    const fn = target && ts.isVariableDeclaration(target) ? target.initializer : target;
+    const fn =
+      target && (ts.isVariableDeclaration(target) || ts.isPropertyAssignment(target))
+        ? target.initializer
+        : target;
     return fn &&
       (ts.isFunctionDeclaration(fn) ||
         ts.isFunctionExpression(fn) ||
@@ -325,6 +339,27 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
       active.delete(node);
     }
   }
+  function arrayElements(node: ts.Expression, seen = new Set<ts.Node>()): readonly ts.Expression[] {
+    if (seen.has(node)) return [];
+    seen.add(node);
+    if (ts.isArrayLiteralExpression(node)) return node.elements;
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node)
+    )
+      return arrayElements(node.expression, seen);
+    const target = targetDeclaration(node);
+    if (
+      target &&
+      ts.isVariableDeclaration(target) &&
+      ts.isVariableDeclarationList(target.parent) &&
+      (target.parent.flags & ts.NodeFlags.Const) !== 0 &&
+      target.initializer
+    )
+      return arrayElements(target.initializer, seen);
+    return [];
+  }
   const pending = tests.map(file => ({
     file: resolve(repo, file),
     cwd: cwdFor(resolve(repo, file)),
@@ -358,16 +393,25 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
       found.set(path, readers);
     };
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-        const origin = imported(node.expression);
-        if (
-          (origin && ['node:path', 'path', 'node:url', 'url'].includes(origin.module)) ||
-          (ts.isNewExpression(node) &&
-            ts.isIdentifier(node.expression) &&
-            node.expression.text === 'URL' &&
-            !declaration(node.expression))
-        )
-          record(value(node, cwd));
+      if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
+        const binding = node.initializer.declarations[0];
+        const elements = arrayElements(node.expression);
+        if (binding && ts.isIdentifier(binding.name) && elements.length > 0) {
+          const previous = parameters.get(binding);
+          try {
+            for (const element of elements) {
+              const candidate = value(element, cwd);
+              if (candidate === undefined) parameters.delete(binding);
+              else parameters.set(binding, candidate);
+              visit(node.statement);
+            }
+          } finally {
+            if (previous === undefined) parameters.delete(binding);
+            else parameters.set(binding, previous);
+          }
+          visit(node.expression);
+          return;
+        }
       }
       if (ts.isCallExpression(node)) {
         const origin = imported(node.expression);
@@ -408,7 +452,18 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
           record(candidate);
         }
         const fn = callable(node.expression);
-        if (fn?.body && node.arguments.some(argument => value(argument, cwd)?.endsWith('.md'))) {
+        if (
+          fn?.body &&
+          node.arguments.some(argument => {
+            const candidate = value(argument, cwd);
+            if (candidate === undefined) return false;
+            const path = relative(
+              repo,
+              candidate.startsWith('file:') ? fileURLToPath(candidate) : resolve(cwd, candidate)
+            ).replaceAll('\\', '/');
+            return trackedMarkdown(candidate) !== undefined || markdownDirectories.has(path);
+          })
+        ) {
           const body = fn.body;
           withArguments(fn, node.arguments, cwd, () => visit(body));
         }
@@ -599,6 +654,106 @@ describe('test-suite change decision', () => {
       'docs/url.md read by scripts/new-reader.test.ts'
     );
     expect(omittedMarkdownInputs(inputs)).toHaveLength(inputs.size);
+  });
+
+  test('object property readers and directory helpers cannot bypass the omission check', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-callables-')));
+    const reads = {
+      'local-arrow': "local.arrow('docs/local-arrow.md')",
+      'local-expression': "local.expression('docs/local-expression.md')",
+      'imported-arrow': "imported.arrow('docs/imported-arrow.md')",
+      'imported-expression': "imported.expression('docs/imported-expression.md')",
+      directory: "readDirectory('docs')",
+    };
+    mkdirSync(join(repo, 'docs'));
+    for (const name of Object.keys(reads)) writeFileSync(join(repo, `docs/${name}.md`), 'input');
+    const properties = `{
+      arrow: (path: string) => readFileSync(path, 'utf8'),
+      expression: function(path: string) { return readFileSync(path, 'utf8'); }
+    }`;
+    writeFileSync(
+      join(repo, 'helper.ts'),
+      `
+      import { readFileSync } from 'node:fs';
+      export const imported = ${properties};
+    `
+    );
+    writeFileSync(
+      join(repo, 'reader.test.ts'),
+      `
+      import { readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      import { imported } from './helper';
+      const local = ${properties};
+      function readDirectory(directory: string) {
+        return readFileSync(join(directory, 'directory.md'), 'utf8');
+      }
+      ${Object.values(reads).join(';\n')};
+    `
+    );
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'add', '.');
+    const inputs = markdownTestInputs(repo);
+    expect([...inputs.keys()].sort()).toEqual(
+      Object.keys(reads)
+        .map(name => `docs/${name}.md`)
+        .sort()
+    );
+    expect(omittedMarkdownInputs(inputs)).toHaveLength(Object.keys(reads).length);
+  });
+
+  test.each([
+    "join(process.cwd(), 'README.md')",
+    "resolve(process.cwd(), 'README.md')",
+    "dirname(join(process.cwd(), 'README.md', 'child'))",
+    "fileURLToPath(new URL('./README.md', import.meta.url))",
+    "pathToFileURL(join(process.cwd(), 'README.md'))",
+    "new URL('./README.md', import.meta.url)",
+  ])('a filename assertion using %s does not register a read', expression => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-path-assertion-')));
+    writeFileSync(join(repo, 'README.md'), 'prose');
+    writeFileSync(
+      join(repo, 'reader.test.ts'),
+      `
+      import { join, resolve, dirname } from 'node:path';
+      import { fileURLToPath, pathToFileURL } from 'node:url';
+      expect(${expression}).toBeDefined();
+    `
+    );
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'add', '.');
+    expect([...markdownTestInputs(repo)]).toEqual([]);
+    writeFileSync(
+      join(repo, 'reader.test.ts'),
+      `
+      import { readFileSync } from 'node:fs';
+      import { join, resolve, dirname } from 'node:path';
+      import { fileURLToPath, pathToFileURL } from 'node:url';
+      readFileSync(${expression}, 'utf8');
+    `
+    );
+    expect([...markdownTestInputs(repo).keys()]).toEqual(['README.md']);
+  });
+
+  test('collection paths are registered only when the loop reads them', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-collection-')));
+    writeFileSync(join(repo, 'input.md'), 'input');
+    writeFileSync(join(repo, 'README.md'), 'prose');
+    writeFileSync(
+      join(repo, 'reader.test.ts'),
+      `
+      import { readFileSync } from 'node:fs';
+      const inputs = [new URL('./input.md', import.meta.url)];
+      for (const path of inputs) readFileSync(path, 'utf8');
+      const filenames = [new URL('./README.md', import.meta.url)];
+      for (const path of filenames) expect(path).toBeDefined();
+    `
+    );
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'add', '.');
+    const inputs = markdownTestInputs(repo);
+    expect([...inputs.keys()]).toEqual(['input.md']);
+    expect(omittedMarkdownInputs(inputs)).toEqual(['input.md read by reader.test.ts']);
   });
 
   test.each(['readFileSync', 'readFile', 'Bun.file'])(
