@@ -145,13 +145,66 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
     const origin = imported(node);
     const source = origin && localSource(node.getSourceFile(), origin.module);
     const symbol = source && checker.getSymbolAtLocation(source);
-    return symbol
-      ? checker.getExportsOfModule(symbol).find(item => item.name === origin?.name)
-          ?.valueDeclaration
-      : declaration(node);
+    if (symbol)
+      return checker.getExportsOfModule(symbol).find(item => item.name === origin?.name)
+        ?.valueDeclaration;
+    const direct = declaration(node);
+    if (direct) return direct;
+    if (ts.isPropertyAccessExpression(node)) {
+      const owner = targetDeclaration(node.expression);
+      if (
+        owner &&
+        ts.isVariableDeclaration(owner) &&
+        owner.initializer &&
+        ts.isObjectLiteralExpression(owner.initializer)
+      )
+        return owner.initializer.properties.find(
+          property =>
+            property.name && ts.isIdentifier(property.name) && property.name.text === node.name.text
+        );
+    }
+    return undefined;
+  };
+  type Callable =
+    | ts.FunctionDeclaration
+    | ts.FunctionExpression
+    | ts.ArrowFunction
+    | ts.MethodDeclaration;
+  const callable = (node: ts.Expression): Callable | undefined => {
+    const target = targetDeclaration(node);
+    const fn = target && ts.isVariableDeclaration(target) ? target.initializer : target;
+    return fn &&
+      (ts.isFunctionDeclaration(fn) ||
+        ts.isFunctionExpression(fn) ||
+        ts.isArrowFunction(fn) ||
+        ts.isMethodDeclaration(fn))
+      ? fn
+      : undefined;
   };
   const parameters = new Map<ts.Declaration, string>();
-  const activeFunctions = new Set<ts.FunctionDeclaration>();
+  const activeFunctions = new Set<Callable>();
+  function withArguments<T>(
+    fn: Callable,
+    args: readonly ts.Expression[],
+    cwd: string,
+    inspect: () => T
+  ): T | undefined {
+    if (activeFunctions.has(fn)) return undefined;
+    const values = args.map(argument => value(argument, cwd));
+    const previous = new Map(parameters);
+    fn.parameters.forEach((parameter, index) => {
+      const argument = values[index];
+      if (argument !== undefined) parameters.set(parameter, argument);
+    });
+    activeFunctions.add(fn);
+    try {
+      return inspect();
+    } finally {
+      activeFunctions.delete(fn);
+      parameters.clear();
+      for (const [parameter, argument] of previous) parameters.set(parameter, argument);
+    }
+  }
   const active = new Set<ts.Node>();
   function value(node: ts.Expression | undefined, cwd: string): string | undefined {
     if (!node || active.has(node)) return undefined;
@@ -217,6 +270,26 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
         if (node.name.text === 'url') return pathToFileURL(node.getSourceFile().fileName).href;
       }
       if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        if (ts.isCallExpression(node)) {
+          if (
+            ts.isPropertyAccessExpression(node.expression) &&
+            ts.isIdentifier(node.expression.expression) &&
+            node.expression.expression.text === 'process' &&
+            !declaration(node.expression.expression) &&
+            node.expression.name.text === 'cwd' &&
+            node.arguments.length === 0
+          )
+            return cwd;
+          const fn = callable(node.expression);
+          if (fn?.body) {
+            const body = fn.body;
+            return withArguments(fn, node.arguments, cwd, () => {
+              if (!ts.isBlock(body)) return value(body, cwd);
+              const returned = body.statements.find(ts.isReturnStatement);
+              return value(returned?.expression, cwd);
+            });
+          }
+        }
         const args: string[] = [];
         for (const argument of node.arguments ?? []) {
           const resolved = value(argument, cwd);
@@ -285,13 +358,17 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
       found.set(path, readers);
     };
     const visit = (node: ts.Node): void => {
-      if (
-        ts.isCallExpression(node) ||
-        ts.isNewExpression(node) ||
-        ts.isTemplateExpression(node) ||
-        ts.isBinaryExpression(node)
-      )
-        record(value(node, cwd));
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const origin = imported(node.expression);
+        if (
+          (origin && ['node:path', 'path', 'node:url', 'url'].includes(origin.module)) ||
+          (ts.isNewExpression(node) &&
+            ts.isIdentifier(node.expression) &&
+            node.expression.text === 'URL' &&
+            !declaration(node.expression))
+        )
+          record(value(node, cwd));
+      }
       if (ts.isCallExpression(node)) {
         const origin = imported(node.expression);
         const fsRead =
@@ -330,24 +407,10 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
           }
           record(candidate);
         }
-        const fn = targetDeclaration(node.expression);
-        if (fn && ts.isFunctionDeclaration(fn) && fn.body && !activeFunctions.has(fn)) {
-          const arguments_ = node.arguments.map(argument => value(argument, cwd));
-          if (arguments_.some(argument => argument?.endsWith('.md'))) {
-            const previous = new Map(parameters);
-            fn.parameters.forEach((parameter, index) => {
-              const argument = arguments_[index];
-              if (argument !== undefined) parameters.set(parameter, argument);
-            });
-            activeFunctions.add(fn);
-            try {
-              visit(fn.body);
-            } finally {
-              activeFunctions.delete(fn);
-              parameters.clear();
-              for (const [parameter, argument] of previous) parameters.set(parameter, argument);
-            }
-          }
+        const fn = callable(node.expression);
+        if (fn?.body && node.arguments.some(argument => value(argument, cwd)?.endsWith('.md'))) {
+          const body = fn.body;
+          withArguments(fn, node.arguments, cwd, () => visit(body));
         }
       }
       ts.forEachChild(node, visit);
@@ -381,7 +444,7 @@ describe('test-suite change decision', () => {
   const trackTempRoot = trackTempRoots();
   const workspaceInputs = workspaceTestInputs(resolve(import.meta.dir, '..'));
 
-  test('every tracked Markdown path constructed by tests runs the suite', () => {
+  test('every concrete tracked Markdown test input runs the suite', () => {
     const inputs = markdownTestInputs(resolve(import.meta.dir, '..'));
     expect(inputs.size).toBeGreaterThan(0);
     expect(omittedMarkdownInputs(inputs)).toEqual([]);
@@ -415,6 +478,15 @@ describe('test-suite change decision', () => {
       'docs/indirect.md': '',
       'docs/returned.md': '',
       'docs/dynamic.md': '',
+      'docs/local-arrow.md': '',
+      'docs/local-expression.md': '',
+      'docs/local-method.md': '',
+      'docs/imported-arrow.md': '',
+      'docs/imported-expression.md': '',
+      'docs/imported-method.md': '',
+      'docs/process-root.md': '',
+      'docs/process-promise.md': '',
+      'docs/process-bun.md': '',
       'docs/unread.md': '',
       'README.md': '',
       'packages/a/package.json': '{}',
@@ -429,6 +501,9 @@ describe('test-suite change decision', () => {
         export const doc = paths.resolve(import.meta.dir, '..', 'docs', 'imported.md');
         readFileSync('docs/helper-read.md', 'utf8');
         export function readDoc(path: string) { return readFileSync(path, 'utf8'); }
+        export const arrowRead = (path: string) => readFileSync(path, 'utf8');
+        export const expressionRead = function(path: string) { return readFileSync(path, 'utf8'); };
+        export const reader = { read(path: string) { return readFileSync(path, 'utf8'); } };
         export function docsInput() { return import.meta.dir + '/../docs/returned.md'; }
       `,
       'scripts/new-reader.test.ts': `
@@ -436,11 +511,23 @@ describe('test-suite change decision', () => {
         import { readFile } from 'node:fs/promises';
         import { join as assemble, dirname } from 'node:path';
         import * as urls from 'node:url';
-        import { doc as importedPath, readDoc, docsInput } from './helper';
+        import { doc as importedPath, readDoc, docsInput, arrowRead, expressionRead, reader } from './helper';
         import text from '../docs/text.md' with { type: 'text' };
         const { readFileSync: dynamicRead } = await import('node:fs');
         dynamicRead('docs/dynamic.md', 'utf8');
         readDoc('docs/indirect.md');
+        arrowRead('docs/imported-arrow.md');
+        expressionRead('docs/imported-expression.md');
+        reader.read('docs/imported-method.md');
+        const localArrow = (path: string) => read(path, 'utf8');
+        const localExpression = function(path: string) { return read(path, 'utf8'); };
+        const localReader = { read(path: string) { return read(path, 'utf8'); } };
+        localArrow('docs/local-arrow.md');
+        localExpression('docs/local-expression.md');
+        localReader.read('docs/local-method.md');
+        read(assemble(process.cwd(), 'docs/process-root.md'), 'utf8');
+        await readFile(assemble(process.cwd(), 'docs/process-promise.md'), 'utf8');
+        Bun.file(assemble(process.cwd(), 'docs/process-bun.md'));
         read(docsInput(), 'utf8');
         read(import.meta.dir + '/../docs/concat.md', 'utf8');
         read(\`\${import.meta.dir}/../docs/template.md\`, 'utf8');
@@ -467,6 +554,11 @@ describe('test-suite change decision', () => {
           const assemble = otherJoin;
           assemble(root, 'docs/unread.md');
         }
+        const name = 'README';
+        expect(\`\${name}.md\`).toBe('README.md');
+        expect('docs/' + 'unread.md').toBe('docs/unread.md');
+        function unusedPath() { return 'docs/' + 'unread.md'; }
+        expect(unusedPath()).toBe('docs/unread.md');
         expect('README.md').toBe('README.md');
       `,
     };
@@ -484,8 +576,17 @@ describe('test-suite change decision', () => {
       'docs/direct.md',
       'docs/dynamic.md',
       'docs/helper-read.md',
+      'docs/imported-arrow.md',
+      'docs/imported-expression.md',
+      'docs/imported-method.md',
       'docs/imported.md',
       'docs/indirect.md',
+      'docs/local-arrow.md',
+      'docs/local-expression.md',
+      'docs/local-method.md',
+      'docs/process-bun.md',
+      'docs/process-promise.md',
+      'docs/process-root.md',
       'docs/returned.md',
       'docs/split.md',
       'docs/template.md',
