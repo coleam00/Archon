@@ -1,17 +1,9 @@
-import { missingProviderMessage } from '@archon/provider-contract';
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
 import type { ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, IncludeDirective } from './schemas';
-import {
-  isLoopNode,
-  isLoopGroupNode,
-  isIncludeDirective,
-  nodeUsesPersistedScope,
-  persistedSessionHandling,
-  isNodeContextResume,
-} from './schemas';
+import { isLoopNode, isLoopGroupNode, isIncludeDirective } from './schemas';
 import {
   KNOWN_DAG_NODE_KEYS,
   effortLevelSchema,
@@ -52,7 +44,12 @@ import {
   collectUnknownConfigKeys,
   pushUnknownKeyWarning,
 } from './loader/parse-warnings';
-import { parseDagNode } from './loader/node-parse';
+import { parseDagNodes } from './loader/node-parse';
+import {
+  persistSessionError,
+  sessionResumeProviderError,
+  unknownProviderError,
+} from './loader/provider-checks';
 import { validateDagStructure } from './loader/dag-structure';
 
 /**
@@ -99,147 +96,110 @@ export type ParseResult =
 /**
  * Parse and validate a workflow YAML file
  */
+interface WorkflowHeader {
+  readonly name: string;
+  readonly description: string;
+  readonly nodes: readonly unknown[];
+}
+
+/**
+ * The fields every workflow must have, or the error for a document that is not a workflow:
+ * not an object, a removed field, a missing name or description, legacy `steps:` or no `nodes:`.
+ */
+function parseWorkflowHeader(
+  raw: Record<string, unknown>,
+  filename: string
+): WorkflowHeader | string {
+  if (!raw || typeof raw !== 'object') {
+    return 'YAML file is empty or does not contain an object';
+  }
+
+  if (Object.hasOwn(raw, 'thinking')) {
+    return "'thinking:' has been removed; use 'effort:' instead";
+  }
+
+  // A load failure reaches the author through the returned `error`, which discovery
+  // collects for `workflow list`, `validate workflows`, `workflow run`, and the API.
+  // Like parse warnings, the log line is debug so a broken file is not repeated on
+  // every discovery (#3444).
+  if (!raw.name || typeof raw.name !== 'string') {
+    getLog().debug({ filename }, 'workflow_missing_name');
+    return "Missing required field 'name'";
+  }
+  if (!raw.description || typeof raw.description !== 'string') {
+    getLog().debug({ filename }, 'workflow_missing_description');
+    return "Missing required field 'description'";
+  }
+
+  // Reject legacy steps-based workflows
+  if (Array.isArray(raw.steps) && raw.steps.length > 0) {
+    return '`steps:` format has been removed. Workflows now use `nodes:` (DAG) format exclusively. Your bundled defaults are already updated — custom workflows need manual migration. See docs/sequential-dag-migration-guide.md for conversion patterns, or run: claude "Read docs/sequential-dag-migration-guide.md then convert .archon/workflows/<file> to nodes: format"';
+  }
+
+  if (!Array.isArray(raw.nodes) || raw.nodes.length === 0) {
+    getLog().debug({ filename }, 'workflow_missing_nodes');
+    return "Workflow must have 'nodes:' configuration";
+  }
+  return { name: raw.name, description: raw.description, nodes: raw.nodes };
+}
+
+/** The first graph-level error in the parsed nodes: structure, output formats, prose completion. */
+function nodeGraphError(
+  dagNodes: readonly (DagNode | IncludeDirective)[],
+  filename: string
+): string | null {
+  const structureError = validateDagStructure(dagNodes);
+  if (structureError) {
+    getLog().debug({ filename, structureError }, 'dag_structure_invalid');
+    return structureError;
+  }
+
+  const outputFormatError = validateNodeOutputFormats(dagNodes);
+  if (outputFormatError) {
+    getLog().debug({ filename, outputFormatError }, 'output_format_rejected');
+    return outputFormatError;
+  }
+
+  const proseCompletionError = validateLoopGroupProseCompletion(dagNodes);
+  if (proseCompletionError) {
+    getLog().debug({ filename, proseCompletionError }, 'loop_group_prose_completion_rejected');
+    return proseCompletionError;
+  }
+  return null;
+}
+
+/**
+ * Parse and validate a workflow YAML file
+ */
 export function parseWorkflow(
   content: string,
   filename: string,
   providers: ProviderRegistry,
   configuredEnvNames?: ReadonlySet<string>
 ): ParseResult {
+  const reject = (error: string): ParseResult => ({
+    workflow: null,
+    error: { filename, error, errorType: 'validation_error' },
+  });
   try {
     const raw = parseYaml(content) as Record<string, unknown>;
 
-    if (!raw || typeof raw !== 'object') {
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: 'YAML file is empty or does not contain an object',
-          errorType: 'validation_error',
-        },
-      };
-    }
+    const header = parseWorkflowHeader(raw, filename);
+    if (typeof header === 'string') return reject(header);
 
-    if (Object.hasOwn(raw, 'thinking')) {
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: "'thinking:' has been removed; use 'effort:' instead",
-          errorType: 'validation_error',
-        },
-      };
-    }
+    const parsedNodes = parseDagNodes(header.nodes, filename);
+    if (typeof parsedNodes === 'string') return reject(parsedNodes);
+    const { nodes: dagNodes, warnings: parseWarnings } = parsedNodes;
 
-    // A load failure reaches the author through the returned `error`, which discovery
-    // collects for `workflow list`, `validate workflows`, `workflow run`, and the API.
-    // Like parse warnings, the log line is debug so a broken file is not repeated on
-    // every discovery (#3444).
-    if (!raw.name || typeof raw.name !== 'string') {
-      getLog().debug({ filename }, 'workflow_missing_name');
-      return {
-        workflow: null,
-        error: { filename, error: "Missing required field 'name'", errorType: 'validation_error' },
-      };
-    }
-    if (!raw.description || typeof raw.description !== 'string') {
-      getLog().debug({ filename }, 'workflow_missing_description');
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: "Missing required field 'description'",
-          errorType: 'validation_error',
-        },
-      };
-    }
-
-    const errors: string[] = [];
-
-    // Reject legacy steps-based workflows
-    const hasSteps = Array.isArray(raw.steps) && raw.steps.length > 0;
-    if (hasSteps) {
-      errors.push(
-        '`steps:` format has been removed. Workflows now use `nodes:` (DAG) format exclusively. Your bundled defaults are already updated — custom workflows need manual migration. See docs/sequential-dag-migration-guide.md for conversion patterns, or run: claude "Read docs/sequential-dag-migration-guide.md then convert .archon/workflows/<file> to nodes: format"'
-      );
-    }
-
-    const hasNodes = Array.isArray(raw.nodes) && (raw.nodes as unknown[]).length > 0;
-
-    if (errors.length > 0) {
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: errors.join('; '),
-          errorType: 'validation_error',
-        },
-      };
-    }
-
-    if (!hasNodes) {
-      getLog().debug({ filename }, 'workflow_missing_nodes');
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: "Workflow must have 'nodes:' configuration",
-          errorType: 'validation_error',
-        },
-      };
-    }
-
-    // Parse DAG nodes using dagNodeSchema
-    const validationErrors: string[] = [];
-    const parseWarnings: string[] = [];
-    const dagNodes = (raw.nodes as unknown[])
-      .map((n: unknown, i: number) => parseDagNode(n, i, validationErrors, parseWarnings))
-      .filter((n): n is DagNode | IncludeDirective => n !== null);
-
-    if (dagNodes.length !== (raw.nodes as unknown[]).length) {
-      getLog().debug({ filename, validationErrors }, 'dag_node_validation_failed');
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: `DAG node validation failed: ${validationErrors.join('; ')}`,
-          errorType: 'validation_error',
-        },
-      };
-    }
-
-    const structureError = validateDagStructure(dagNodes);
-    if (structureError) {
-      getLog().debug({ filename, structureError }, 'dag_structure_invalid');
-      return {
-        workflow: null,
-        error: { filename, error: structureError, errorType: 'validation_error' },
-      };
-    }
-
-    const outputFormatError = validateNodeOutputFormats(dagNodes);
-    if (outputFormatError) {
-      getLog().debug({ filename, outputFormatError }, 'output_format_rejected');
-      return {
-        workflow: null,
-        error: { filename, error: outputFormatError, errorType: 'validation_error' },
-      };
-    }
-
-    const proseCompletionError = validateLoopGroupProseCompletion(dagNodes);
-    if (proseCompletionError) {
-      getLog().debug({ filename, proseCompletionError }, 'loop_group_prose_completion_rejected');
-      return {
-        workflow: null,
-        error: { filename, error: proseCompletionError, errorType: 'validation_error' },
-      };
-    }
+    const graphError = nodeGraphError(dagNodes, filename);
+    if (graphError !== null) return reject(graphError);
 
     collectConditionalJoinWarnings(dagNodes, parseWarnings);
-    collectLegacyPauseWarnings(dagNodes, raw.nodes as unknown[], parseWarnings);
+    collectLegacyPauseWarnings(dagNodes, header.nodes, parseWarnings);
 
     if (raw.interactive !== undefined) {
       const message =
-        `Workflow '${raw.name}': workflow-level 'interactive:' is deprecated and has no effect. ` +
+        `Workflow '${header.name}': workflow-level 'interactive:' is deprecated and has no effect. ` +
         'Any workflow can start in the foreground, in the background or from a trigger; a ' +
         'pause waits in the attention queue until it is answered. Remove the line.';
       parseWarnings.push(message);
@@ -253,141 +213,12 @@ export function parseWorkflow(
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
-    // Validate provider identity at load time, both at the workflow level and
-    // per node. Model strings are NOT validated — they pass through to the SDK
-    // at run time, which is the source of truth for what model names exist
-    // (vendor SDKs ship new models faster than Archon can update).
-    if (provider && !providers.get(provider)) {
-      return {
-        workflow: null,
-        error: {
-          filename,
-          error: missingProviderMessage(providers, provider),
-          errorType: 'validation_error',
-        },
-      };
-    }
-    for (const node of dagNodes) {
-      if (isIncludeDirective(node)) continue;
-      if (node.provider !== undefined && !providers.get(node.provider)) {
-        return {
-          workflow: null,
-          error: {
-            filename,
-            error: `Node '${node.id}': ${missingProviderMessage(providers, node.provider)}`,
-            errorType: 'validation_error',
-          },
-        };
-      }
-    }
-
-    interface SessionNode {
-      node: DagNode;
-      provider: string | undefined;
-    }
-    const sessionConsumers: { consumer: SessionNode; sources: ReadonlyMap<string, SessionNode> }[] =
-      [];
-    const collectSessionNodes = (
-      nodes: readonly (DagNode | IncludeDirective)[],
-      inheritedProvider: string | undefined,
-      enclosing = new Map<string, SessionNode>()
-    ): void => {
-      const scope = new Map(enclosing);
-      for (const node of nodes) {
-        if (!isIncludeDirective(node))
-          scope.set(node.id, { node, provider: node.provider ?? inheritedProvider });
-      }
-      for (const node of nodes) {
-        if (isIncludeDirective(node)) continue;
-        const consumer = scope.get(node.id);
-        if (consumer === undefined) continue;
-        if (isNodeContextResume(node.context)) sessionConsumers.push({ consumer, sources: scope });
-        if (isLoopGroupNode(node))
-          collectSessionNodes(node.loop_group.nodes, consumer.provider, scope);
-      }
-    };
-    collectSessionNodes(dagNodes, provider);
-    for (const {
-      consumer: { node, provider: consumerProvider },
-      sources,
-    } of sessionConsumers) {
-      if (!isNodeContextResume(node.context)) continue;
-      const sourceEntry = sources.get(node.context.resume);
-      if (sourceEntry === undefined) continue;
-      const source = sourceEntry.node;
-      const sourceProvider = sourceEntry.provider;
-      if (
-        consumerProvider !== undefined &&
-        sourceProvider !== undefined &&
-        consumerProvider !== sourceProvider
-      ) {
-        return {
-          workflow: null,
-          error: {
-            filename,
-            error: `Node '${node.id}' context.resume source '${source.id}' uses provider '${sourceProvider}', but the consumer uses '${consumerProvider}'`,
-            errorType: 'validation_error',
-          },
-        };
-      }
-
-      const knownProvider = consumerProvider ?? sourceProvider;
-      const knownDescriptor =
-        knownProvider === undefined ? undefined : providers.get(knownProvider);
-      if (knownDescriptor) {
-        const caps = knownDescriptor.capabilities;
-        if (!caps.sessionResume || caps.sessionFork !== true) {
-          return {
-            workflow: null,
-            error: {
-              filename,
-              error: `Node '${node.id}' context.resume requires immutable session forks, but provider '${knownProvider}' does not support sessionFork`,
-              errorType: 'validation_error',
-            },
-          };
-        }
-      }
-    }
-
-    // persist_session capability gating: when the effective provider is known at
-    // load time (explicit at node or workflow level), reject a provider without session
-    // resume, and warn for one that cannot fork: the executor never continues its
-    // persisted session, so each run of that node starts fresh. Both outcomes come from
-    // `persistedSessionHandling`, the same answer the executor acts on. When the
-    // provider is implicit (set via .archon/config.yaml defaults), the check defers to
-    // runtime in agent dispatch (dag/nodes/agent/dispatch.ts).
-    //
-    // `nodeUsesPersistedScope` skips nodes that never use a persisted session (non-agent
-    // nodes, context: 'fresh'), so workflow-level `persist_sessions: true` next to,
-    // e.g., a bash node does not fail validation.
     const workflowPersistSessions = raw.persist_sessions === true;
-    for (const node of dagNodes) {
-      if (isIncludeDirective(node)) continue;
-      if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
-
-      const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      const descriptor = explicitProvider ? providers.get(explicitProvider) : undefined;
-      if (!descriptor) continue;
-      const handling = persistedSessionHandling(descriptor.capabilities);
-      if (handling === 'unsupported') {
-        return {
-          workflow: null,
-          error: {
-            filename,
-            error: `Node '${node.id}' has persist_session: true but provider '${explicitProvider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`,
-            errorType: 'validation_error',
-          },
-        };
-      }
-      if (handling === 'fresh') {
-        const message = `Node '${node.id}': provider '${explicitProvider}' cannot fork a session, so persist_session never continues an earlier run's session and every run starts fresh. Use a provider with sessionFork, or pass state between runs through artifacts.`;
-        parseWarnings.push(message);
-        getLog().debug(
-          { id: node.id, provider: explicitProvider },
-          'persist_session_not_continued'
-        );
-      }
-    }
+    const providerError =
+      unknownProviderError(provider, dagNodes, providers) ??
+      sessionResumeProviderError(dagNodes, provider, providers) ??
+      persistSessionError(dagNodes, workflowPersistSessions, provider, providers, parseWarnings);
+    if (providerError !== null) return reject(providerError);
 
     // Validate modelReasoningEffort / webSearchMode — warn and ignore invalid values.
     const modelReasoningEffort = parseOptionalField(
@@ -755,11 +586,11 @@ export function parseWorkflow(
     if (modelReasoningEffort !== undefined) {
       const message =
         declaredEffort === undefined
-          ? `Workflow '${raw.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and ` +
+          ? `Workflow '${header.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and ` +
             `has been applied as 'effort: ${modelReasoningEffort}'. NOTE: 'effort:' applies to EVERY node ` +
             'in this workflow, including non-Codex ones, where the old Codex-only field applied to none. ' +
             "Set 'effort:' per node if only some nodes should reason that deeply."
-          : `Workflow '${raw.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and was ` +
+          : `Workflow '${header.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and was ` +
             `IGNORED because this workflow also declares 'effort: ${declaredEffort}', which now applies on ` +
             "every provider including Codex. Delete the 'modelReasoningEffort:' line.";
       parseWarnings.push(message);
@@ -810,7 +641,7 @@ export function parseWorkflow(
 
     // Detect unknown workflow-level keys, and unknown keys inside the nested
     // workflow-level configs (#2213)
-    const workflowName = raw.name;
+    const workflowName = header.name;
     const workflowLabel = `Workflow '${workflowName}'`;
     for (const key of Object.keys(raw)) {
       if (key === 'interactive') continue; // deprecated, warned above
@@ -843,8 +674,8 @@ export function parseWorkflow(
     }
 
     const workflow: WorkflowDefinition = {
-      name: raw.name,
-      description: raw.description,
+      name: header.name,
+      description: header.description,
       provider,
       model,
       // `modelReasoningEffort` is deliberately absent — it was translated into

@@ -1361,8 +1361,8 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  * - mode-specific retry validation; retry not allowed on loop_group nodes
  * - timeout on bash must be positive
  *
- * Note: provider identity is validated in loader.ts (workflow-level) and
- * dag-executor.ts (node-level). Model strings are passed through to the SDK
+ * Note: provider identity, at the workflow and node level, is validated at load time in
+ * loader/provider-checks.ts. Model strings are passed through to the SDK
  * unchanged — the SDK is the source of truth for what model names exist.
  */
 export const dagNodeSchema = z
