@@ -21,7 +21,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { isRejectableUnreadableGate } from '../operations/workflow-operations';
 
-type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
+type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description' | 'deprecated'> & {
   readonly nodes: readonly unknown[];
 };
 
@@ -57,6 +57,7 @@ export function formatWorkflowSection(workflows: readonly PromptWorkflow[]): str
   for (const w of workflows) {
     section += `**${w.name}**\n`;
     section += `  ${w.description}\n`;
+    if (w.deprecated) section += `  Deprecated: ${w.deprecated.message}\n`;
     section += `  Type: DAG (${String(w.nodes.length)} nodes)\n`;
     section += '\n';
   }
@@ -332,7 +333,7 @@ ${rule4}
 5. If no project needed (general question) → answer directly without workflow
 6. If the user wants to add a new project → clone it, then register it (see below)
 
-In the examples below, {workflow-name} is an illustrative placeholder: replace it with the exact name of an appropriate workflow from Available Workflows. Never invoke the placeholder literally. If no listed workflow fits, explain that instead of inventing a name.`;
+In the examples below, {workflow-name} is an illustrative placeholder: replace it with the exact name of an appropriate workflow from Available Workflows. Never invoke the placeholder literally. If no listed workflow fits, explain that instead of inventing a name. Do not recommend deprecated workflows when a non-deprecated workflow fits; follow the deprecation guidance in Available Workflows.`;
 
   const promptRules = (
     arg: string

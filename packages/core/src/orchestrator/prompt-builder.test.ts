@@ -72,6 +72,7 @@ describe('buildRoutingRulesWithProject', () => {
           'If no listed workflow fits, explain that instead of inventing a name'
         );
         expect([...rules.matchAll(/\*\*([^*]+)\*\* workflow/g)]).toEqual([]);
+        expect(rules.split('## Project Setup')[0]).not.toMatch(/\barchon-[\w-]+\b/);
       }
     );
 
@@ -198,7 +199,15 @@ describe('buildOrchestratorSystemAppend', () => {
         `${channel}, scope ${codebaseId}: routing with custom workflows: %s`,
         async withWorkflows => {
           const customWorkflows = withWorkflows
-            ? [{ name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] }]
+            ? [
+                { name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] },
+                {
+                  name: 'legacy-delivery',
+                  description: 'Previous delivery workflow',
+                  nodes: [],
+                  deprecated: { message: 'Use custom-delivery instead.' },
+                },
+              ]
             : [];
           const result = await buildOrchestratorSystemAppend(
             makeConversation(codebaseId),
@@ -210,12 +219,21 @@ describe('buildOrchestratorSystemAppend', () => {
           if (withWorkflows) {
             expect(available).toContain('**custom-delivery**');
             expect(available).toContain('Deliver a requested change');
+            expect(available).toContain(
+              '**legacy-delivery**\n  Previous delivery workflow\n  Deprecated: Use custom-delivery instead.'
+            );
+            expect(available).not.toContain(
+              '**custom-delivery**\n  Deliver a requested change\n  Deprecated:'
+            );
           } else {
             expect(available).toContain('No workflows available');
           }
           const names = invocationWorkflowNames(result);
           expect(names.length).toBeGreaterThan(0);
           expect(names.every(name => name === '{workflow-name}')).toBe(true);
+          expect(result).toContain(
+            'Do not recommend deprecated workflows when a non-deprecated workflow fits'
+          );
         }
       );
     }
