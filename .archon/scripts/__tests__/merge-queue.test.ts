@@ -21,6 +21,7 @@ import {
   prFromUrl,
   RERUNS,
   SWEEP_ACTIONS,
+  verdictCarry,
 } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
@@ -125,6 +126,77 @@ describe('the merge record and the gate', () => {
       'it is closed',
       'it is a draft',
       'it targets main, not the default branch dev',
+    ]);
+  });
+
+  test('a Ready verdict carries only across clean merges of the default branch that touch none of its files', () => {
+    const repo = track(mkdtempSync(join(tmpdir(), 'archon-merge-carry-')));
+    const run = (...args: string[]): string => {
+      const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+    const commit = (file: string, text: string): string => {
+      writeFileSync(join(repo, file), text);
+      run('add', file);
+      run('commit', '-q', '-m', `edit ${file}`);
+      return run('rev-parse', 'HEAD');
+    };
+    run('init', '-q', '-b', 'dev');
+    run('config', 'user.email', 'test@example.com');
+    run('config', 'user.name', 'Test');
+    for (const file of ['own.ts', 'shared.ts', 'other.ts']) writeFileSync(join(repo, file), 'one\ntwo\nthree\n');
+    run('add', '.');
+    run('commit', '-q', '-m', 'base');
+    run('checkout', '-q', '-b', 'pr');
+    const reviewed = commit('own.ts', 'one\nmine\nthree\n');
+    const syncWith = (devFile: string, devText: string) => {
+      run('checkout', '-q', 'dev');
+      const devHead = commit(devFile, devText);
+      run('checkout', '-q', 'pr');
+      run('reset', '-q', '--hard', reviewed);
+      run('merge', '-q', '--no-edit', 'dev');
+      return { devHead, head: run('rev-parse', 'HEAD') };
+    };
+
+    // Dev changed a file the pull request does not: the verdict carries.
+    const clean = syncWith('other.ts', 'one\ndev\nthree\n');
+    expect(verdictCarry(reviewed, clean.head, clean.devHead, repo)).toEqual({ held: true, why: '' });
+
+    // Dev changed a file the pull request changes, cleanly: review it.
+    run('checkout', '-q', 'dev');
+    run('reset', '-q', '--hard', clean.devHead);
+    const overlap = syncWith('own.ts', 'one\ntwo\nthree\ndev\n');
+    expect(verdictCarry(reviewed, overlap.head, overlap.devHead, repo)).toEqual({
+      held: false,
+      why: 'the default branch also changed own.ts',
+    });
+
+    // A commit of the pull request's own after the review: not a merge.
+    run('reset', '-q', '--hard', clean.head);
+    const own = commit('shared.ts', 'one\nlater\nthree\n');
+    expect(verdictCarry(reviewed, own, clean.devHead, repo)).toEqual({
+      held: false,
+      why: `${own} is not a merge of the default branch`,
+    });
+
+    // A merge that changed more than git's own merge, as a resolved conflict does.
+    run('reset', '-q', '--hard', clean.head);
+    writeFileSync(join(repo, 'shared.ts'), 'edited during the merge\n');
+    run('add', 'shared.ts');
+    run('commit', '-q', '--amend', '--no-edit');
+    const amended = run('rev-parse', 'HEAD');
+    expect(verdictCarry(reviewed, amended, clean.devHead, repo)).toEqual({
+      held: false,
+      why: `${amended} resolves a conflict or changes more than the merge`,
+    });
+  });
+
+  test('the gate takes a carried verdict as Ready at the head and says why one does not carry', () => {
+    const stale = { ...FACTS, verdict: { ...FACTS.verdict, reviewed: OLD } };
+    expect(gateRefusals(stale, HEAD, { held: true, why: '' })).toEqual([]);
+    expect(gateRefusals(stale, HEAD, { held: false, why: 'the default branch also changed own.ts' })).toEqual([
+      `its Ready verdict is for ${OLD}, not its head, and it does not carry: the default branch also changed own.ts`,
     ]);
   });
 
@@ -425,7 +497,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/merge/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const gated = run(at, 'gate', {}, { args });
-    expect(ok(gated)).toEqual({ pr: PR_URL, head: HEAD, refusals: [], merge_commit: '3333333333333333333333333333333333333333' });
+    expect(ok(gated)).toEqual({ pr: PR_URL, head: HEAD, refusals: [], carried: null, merge_commit: '3333333333333333333333333333333333333333' });
     expect(merges(gated)).toEqual([`pr merge 42 --repo ${PR.repo.host}/${PR.repo.path} --squash --match-head-commit ${HEAD}`]);
     expect(JSON.parse(readFileSync(join(gated.artifacts, 'merge/receipts/42.json'), 'utf8'))).toMatchObject({ head: HEAD });
   }, 60_000);
@@ -455,7 +527,11 @@ describe('the merge queue scripts', () => {
     const args = ['--method', 'squash', '--receipts', '{ARTIFACTS}/receipts', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const stale = run(at, 'gate', {}, { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, 'old') }] });
     expect(stale.code).toBe(1);
-    expect(JSON.parse(stale.stdout)).toMatchObject({ refusals: [`its Ready verdict is for ${OLD}, not its head`], merge_commit: null });
+    expect(JSON.parse(stale.stdout)).toMatchObject({
+      refusals: [`its Ready verdict is for ${OLD}, not its head, and it does not carry: the checkout lacks ${OLD}, ${HEAD}`],
+      carried: null,
+      merge_commit: null,
+    });
     const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
     expect(JSON.parse(red.stdout).refusals).toEqual([
       `it lacks 2 commits of dev at ${OLD}`,

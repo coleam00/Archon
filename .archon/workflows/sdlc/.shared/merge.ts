@@ -394,6 +394,56 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
   };
 }
 
+/** Whether a Ready verdict at an earlier commit still holds at the head, and why not. */
+export interface VerdictCarry {
+  readonly held: boolean;
+  readonly why: string;
+}
+
+function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
+  const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+  return { ok: result.exitCode === 0, out: result.stdout.toString().trim() };
+}
+
+function lines(text: string): string[] {
+  return text === '' ? [] : text.split('\n');
+}
+
+/**
+ * Whether the Ready verdict at `reviewed` still holds at `head`, read from the checkout's
+ * history. It holds when every commit the pull request gained since `reviewed` is a merge
+ * of the default branch that git makes with no conflict, and the default branch changed
+ * none of the files the pull request changes. A delta review of such a sync has nothing
+ * to read: CI at the head still judges the composed result. An overlap is where a
+ * semantic conflict hides, so it goes to review.
+ */
+export function verdictCarry(reviewed: string, head: string, defaultHead: string, cwd = process.cwd()): VerdictCarry {
+  const refuse = (why: string): VerdictCarry => ({ held: false, why });
+  const missing = () => [...new Set([reviewed, head, defaultHead])].filter(sha => !git(cwd, 'cat-file', '-e', `${sha}^{commit}`).ok);
+  if (missing().length > 0) git(cwd, 'fetch', '--quiet');
+  const absent = missing();
+  if (absent.length > 0) return refuse(`the checkout lacks ${absent.join(', ')}`);
+  if (!git(cwd, 'merge-base', '--is-ancestor', reviewed, head).ok) return refuse(`${head} does not contain ${reviewed}`);
+  const added = lines(git(cwd, 'rev-list', head, `^${reviewed}`, `^${defaultHead}`).out);
+  if (added.length === 0) return refuse(`nothing since ${reviewed} merges the default branch`);
+  for (const commit of added) {
+    const [, ours, theirs, ...more] = git(cwd, 'rev-list', '--parents', '-n', '1', commit).out.split(' ');
+    if (ours === undefined || theirs === undefined || more.length > 0) return refuse(`${commit} is not a merge of the default branch`);
+    if (!git(cwd, 'merge-base', '--is-ancestor', theirs, defaultHead).ok) {
+      return refuse(`${commit} merges ${theirs}, which is not on the default branch`);
+    }
+    const merged = git(cwd, 'merge-tree', '--write-tree', ours, theirs);
+    const tree = git(cwd, 'rev-parse', `${commit}^{tree}`).out;
+    if (!merged.ok || lines(merged.out)[0] !== tree) return refuse(`${commit} resolves a conflict or changes more than the merge`);
+  }
+  const base = git(cwd, 'merge-base', reviewed, defaultHead).out;
+  const synced = git(cwd, 'merge-base', head, defaultHead).out;
+  const ownFiles = new Set(lines(git(cwd, 'diff', '--name-only', base, reviewed).out));
+  const overlap = lines(git(cwd, 'diff', '--name-only', base, synced).out).filter(file => ownFiles.has(file));
+  if (overlap.length > 0) return refuse(`the default branch also changed ${overlap.join(', ')}`);
+  return { held: true, why: '' };
+}
+
 /**
  * Why the pull request may not merge at `head`; empty when it may. The three facts the
  * queue's contract names are the verdict, CI and the threads, each at the head; the
@@ -401,7 +451,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
  * exactly the commit that was judged, and that commit containing the default branch's
  * head, so what was judged is what the merge produces.
  */
-export function gateRefusals(facts: PrFacts, head: string): string[] {
+export function gateRefusals(facts: PrFacts, head: string, carry: VerdictCarry = { held: false, why: '' }): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
@@ -414,8 +464,9 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
   }
   const { verdict } = facts;
   if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
-  else if (verdict.reviewed !== facts.head_revision) {
-    refusals.push(`its Ready verdict is for ${verdict.reviewed ?? 'no commit'}, not its head`);
+  else if (verdict.reviewed !== facts.head_revision && !carry.held) {
+    const why = carry.why === '' ? '' : `, and it does not carry: ${carry.why}`;
+    refusals.push(`its Ready verdict is for ${verdict.reviewed ?? 'no commit'}, not its head${why}`);
   }
   if (facts.checks.state !== 'green') {
     const named = [...facts.checks.failing, ...facts.checks.pending];
