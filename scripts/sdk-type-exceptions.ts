@@ -130,7 +130,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     reason: 'Derived Archon workflow-run schema status, not Copilot workflow status.',
   },
   {
-    file: 'packages/server/src/routes/api.ts',
+    file: 'packages/server/src/routes/api.artifacts.ts',
     name: 'FileEntry',
     kind: 'independent',
     reason: 'Artifact HTTP response with size and modification time, not Pi file-tree entry.',
