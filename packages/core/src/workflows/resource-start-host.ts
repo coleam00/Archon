@@ -30,7 +30,7 @@ import {
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
   withCapturedSource,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { canonicalValueText, type JsonValue } from '@archon/workflows/output-ref';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {

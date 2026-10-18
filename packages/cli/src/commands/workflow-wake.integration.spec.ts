@@ -109,7 +109,7 @@ import { getOrCreateConversation } from ${path('packages/core/src/db/conversatio
 import { closeDatabase } from ${path('packages/core/src/db/connection.ts')};
 import { findOrCreateUserByPlatformIdentity } from ${path('packages/core/src/db/users.ts')};
 import { InProcessWorkflowEngine } from ${path('packages/workflows/src/in-process-engine.ts')};
-import { prepareWorkflowSource, recordSelectedWorkflow } from ${path('packages/workflows/src/executor.ts')};
+import { prepareWorkflowSource, recordSelectedWorkflow } from ${path('packages/workflows/src/run-source.ts')};
 import { discoverWorkflowsWithConfig } from ${path('packages/workflows/src/workflow-discovery.ts')};
 import { HeadlessPlatform } from ${path('packages/core/src/workflows/headless-platform.ts')};
 import { startRunLiveOwner } from ${path('packages/core/src/services/run-live-owner.ts')};

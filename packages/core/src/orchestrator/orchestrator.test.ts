@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -439,15 +440,17 @@ mock.module('../utils/error-formatter', () => ({
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
 }));
-/** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
+}));
+mock.module('@archon/workflows/run-source', () => ({
   finalizeWorkflowSource: mock(
-    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+    async (_deps: unknown, source: WorkflowRunSource.PreparedWorkflowSource) => source
   ),
-  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+  preparedWorkflowSourceRecord: (source: WorkflowRunSource.PreparedWorkflowSource) => ({
     version: 1,
     root: source.anchor.root,
     origin: source.origin,
@@ -457,10 +460,7 @@ mock.module('@archon/workflows/executor', () => ({
     file_count: source.manifest.file_count,
     byte_count: source.manifest.byte_count,
   }),
-  hydrateResumableRun: mock(() => Promise.resolve(null)),
-  // Source capture runs before dispatch and does real filesystem work; stub it so these
-  // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
-  // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
+  // Bun merges module mocks: stub each capture export to avoid real I/O.
   prepareWorkflowSource: mock(() =>
     Promise.resolve({
       runId: 'prepared-run-id',

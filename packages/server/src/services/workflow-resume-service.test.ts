@@ -10,7 +10,7 @@ import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-work
 import {
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-resume';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -92,11 +92,13 @@ mock.module('@archon/paths', () => ({
   }),
   getArchonWorkspacesPath: () => '/tmp/workspaces',
 }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@archon/workflows/run-source', () => ({
   WorkflowSourceUnavailableError,
+  resolveContinuationWorkflow: mock(async () => undefined),
+}));
+mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
-  resolveContinuationWorkflow: mock(async () => undefined),
 }));
 
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
@@ -239,11 +241,8 @@ describe('workflow continuation scanner', () => {
     }
   );
 
-  // #2910: the headless scanner is the unattended path — nothing revisits a row it
-  // leaves at 'running' (listDueWorkflowContinuations selects paused/failed only).
-  // Both sides of the branch are asserted through the real engine wrapper: an
-  // ordinary rejection gets the engine's compensating write, while a rejected
-  // terminal write must not get a second one.
+  // The unattended scanner must fail a claimed run after an ordinary rejection.
+  // A rejected terminal write must escape without a second write (#2910).
   describe('rejected execution', () => {
     const startHeadlessResume = async (rejection: unknown): Promise<void> => {
       const paused = run('wait-headless', 'paused', {});

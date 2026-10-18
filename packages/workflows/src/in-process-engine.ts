@@ -1,5 +1,5 @@
-import { executeWorkflow, hydrateResumableRun, resolveContinuationWorkflow } from './executor';
-import type { ExecuteWorkflowOptions } from './executor';
+import { executeWorkflow, hydrateResumableRun, type ExecuteWorkflowOptions } from './executor';
+import { resolveContinuationWorkflow } from './run-source';
 import {
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,

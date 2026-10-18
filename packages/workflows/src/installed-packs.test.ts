@@ -21,7 +21,7 @@ import { findWorkflow, resolveWorkflowName } from './router';
 import { validateWorkflowResources } from './validator';
 import { loadCommandPrompt } from './executor-shared';
 import { discoverScriptsForCwd } from './script-discovery';
-import { resolveContinuationWorkflow } from './executor';
+import { resolveContinuationWorkflow } from './run-source';
 import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
 import {
   captureWorkflowSource,

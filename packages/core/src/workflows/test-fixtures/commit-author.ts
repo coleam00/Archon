@@ -7,7 +7,7 @@ import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
   preparedWorkflowSourceRecord,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { createWorkflowDeps } from '../store-adapter';
 import { startAdmittedResourceStart } from '../resource-start-host';

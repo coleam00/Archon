@@ -47,7 +47,7 @@ import {
   withCapturedSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { loadConfig } from '../config/config-loader';

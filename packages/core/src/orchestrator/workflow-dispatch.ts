@@ -40,11 +40,11 @@ import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   withCapturedSource,
   type CapturedSourceOwner,
-  inspectResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
+import { inspectResumableRun } from '@archon/workflows/executor';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import {

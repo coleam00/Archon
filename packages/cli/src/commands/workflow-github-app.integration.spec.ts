@@ -222,7 +222,7 @@ if (process.argv[2] === 'seed') {
   const { closeDatabase } = await import(${source('packages/core/src/db/connection.ts')});
   const { findOrCreateUserByPlatformIdentity } = await import(${source('packages/core/src/db/users.ts')});
   const { InProcessWorkflowEngine } = await import(${source('packages/workflows/src/in-process-engine.ts')});
-  const { prepareWorkflowSource, recordSelectedWorkflow } = await import(${source('packages/workflows/src/executor.ts')});
+  const { prepareWorkflowSource, recordSelectedWorkflow } = await import(${source('packages/workflows/src/run-source.ts')});
   const { discoverWorkflowsWithConfig } = await import(${source('packages/workflows/src/workflow-discovery.ts')});
   const { loadConfig } = await import(${source('packages/core/src/config/config-loader.ts')});
   const { HeadlessPlatform } = await import(${source('packages/core/src/workflows/headless-platform.ts')});

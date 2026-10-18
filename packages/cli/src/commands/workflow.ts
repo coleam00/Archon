@@ -1,3 +1,4 @@
+import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { recordWorktreeAdoption } from '@archon/isolation';
 import { formatDuration } from '@archon/paths/duration';
 import { canonicalizeProjectPath } from '@archon/paths';
@@ -131,13 +132,12 @@ import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
-  resolveProjectPaths,
   withCapturedSource,
   workflowSourceConfigFrom,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
   type ResolvedContinuation,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import {
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,

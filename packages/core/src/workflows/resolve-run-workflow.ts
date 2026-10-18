@@ -2,7 +2,7 @@ import { createLogger } from '@archon/paths';
 import {
   WorkflowSourceIntegrityError,
   resolveContinuationWorkflow,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { findWorkflowLoadError, type ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
