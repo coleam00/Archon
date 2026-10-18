@@ -11,7 +11,6 @@ import {
 } from '@archon/core/workflows/worktree-setup';
 import { checkoutSharedEventDataSchema } from '@archon/workflows/schemas/workflow-event';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
   createRegisteredWorktree,
@@ -76,9 +75,6 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import {
   workflowRunStatusSchema,
-  isApprovalContext,
-  isWorkflowWaitContext,
-  isScheduledWorkflowResume,
   runAttention,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
@@ -115,8 +111,6 @@ import {
 } from '@archon/workflows/attention-queue';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
-import { attentionAnswerLines } from '@archon/workflows/deps';
-import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import {
   loadWorkflows,
   projectWorkflowDescription,
@@ -166,11 +160,10 @@ import {
   formatToolAttention,
   formatWaitOutcome,
   announceWaitAttached,
-  describeCheckoutBaseline,
-  describeRunStopReason,
   type LeaveBehind,
   buildLeaveBehind,
   readParseWarningEvents,
+  printRunDetail,
 } from './workflow-inspect';
 import {
   type WorkflowAttentionOptions,
@@ -2208,136 +2201,7 @@ export async function workflowGetCommand(
     return 0;
   }
 
-  console.log(`  ID:     ${run.id}`);
-  console.log(`  Name:   ${run.workflow_name}`);
-  console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-  console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
-  console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
-  console.log(`  Status: ${run.status}`);
-  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
-  console.log(`  Age:    ${formatAge(run.started_at)}`);
-  // Paused interactive-loop gate: one honest line so a human (or an agent parsing
-  // the plain output) sees whether any declared completion condition completed
-  // the paused iteration (#2074). --json already carries the full metadata.approval.
-  const gateMeta = run.metadata.approval;
-  const waitMeta = run.metadata.wait;
-  if (
-    run.status === 'paused' &&
-    !isWorkflowWaitContext(waitMeta) &&
-    isApprovalContext(gateMeta) &&
-    gateMeta.type === 'interactive_loop'
-  ) {
-    const completionMet = gateMeta.completionSignaled === true ? 'yes' : 'no';
-    console.log(
-      `  Gate:   awaiting approval — completion condition met: ${completionMet} (iteration ${String(gateMeta.iteration ?? '?')})`
-    );
-  }
-  if (
-    run.status === 'paused' &&
-    !isWorkflowWaitContext(waitMeta) &&
-    isApprovalContext(gateMeta) &&
-    gateMeta.type !== 'child_workflow' &&
-    gateMeta.type !== 'fan_out' &&
-    !gateMeta.resolved
-  ) {
-    console.log(`  Choices: ${gateMeta.message}`);
-    for (const decision of getApprovalDecisions(gateMeta)) {
-      const display = decision.label ? `${decision.label} (${decision.id})` : decision.id;
-      console.log(`    ${display}: archon workflow respond ${run.id} ${decision.id} [text]`);
-    }
-  }
-  if (run.status === 'paused' && isWorkflowWaitContext(waitMeta)) {
-    if (waitMeta.kind === 'attention') {
-      const attention = runAttention(run);
-      console.log(
-        attention?.kind === 'attention'
-          ? `  Wait:   needs attention — ${waitMeta.message} (occurrence ${attention.occurrence})`
-          : `  Wait:   answered via ${String(waitMeta.answeredVia)} at ${String(waitMeta.answeredAt)}; awaiting continuation`
-      );
-      if (attention?.kind === 'attention')
-        for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
-          console.log(`    ${line}`);
-    } else {
-      console.log(
-        waitMeta.kind === 'event'
-          ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
-          : waitMeta.kind === 'quota'
-            ? usageLimitWaitLine(waitMeta.nodeId, waitMeta.resumeAt)
-            : `  Wait:   until ${waitMeta.resumeAt}`
-      );
-    }
-  }
-  const scheduledResume = run.metadata.scheduled_resume;
-  if (
-    run.status === 'failed' &&
-    isScheduledWorkflowResume(scheduledResume) &&
-    scheduledResume.triggeredAt === undefined
-  ) {
-    console.log(
-      `  Resume: scheduled for ${scheduledResume.resumeAt} (attempt ${String(scheduledResume.attempt)}/${String(scheduledResume.maxAttempts)})`
-    );
-  }
-  // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
-  // with the key still set (cancelWorkflowRun abandons a failed run without touching
-  // metadata), and the console's runStatusLabel applies the same rule.
-  const stopped = run.status === 'failed' ? describeRunStopReason(run.metadata) : null;
-  if (stopped) {
-    console.log(`  Stopped: ${stopped}`);
-  }
-  const runError = typeof run.metadata.error === 'string' ? run.metadata.error : undefined;
-  if (runError) {
-    console.log(`  Error:  ${runError}`);
-  }
-  if (terminalRecord) {
-    console.log('  Terminal record:');
-    if (terminalRecord.first_failed_node) {
-      console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
-    }
-    console.log(`    Selected return: ${terminalRecord.returns.availability}`);
-    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
-    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
-    for (const limitation of terminalRecord.artifacts.limitations) {
-      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
-    }
-  } else {
-    console.log('  Terminal record: (unavailable)');
-  }
-  if (leaveBehind) {
-    console.log('  Leave-behind:');
-    if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
-    if (leaveBehind.worktree) {
-      console.log(
-        `    Worktree: ${leaveBehind.worktree} (${leaveBehind.worktreeLive ? 'live' : 'gone'})`
-      );
-    }
-    if (leaveBehind.adopted_from) console.log(`    Adopted from: ${leaveBehind.adopted_from}`);
-    for (const a of leaveBehind.adopted_by) console.log(`    Adopted by: ${a}`);
-    if (leaveBehind.artifactFiles.length > 0) {
-      console.log(
-        `    Artifacts (${String(leaveBehind.artifactFiles.length)} files under $ARTIFACTS_DIR):`
-      );
-      for (const f of leaveBehind.artifactFiles.slice(0, 20)) console.log(`      - ${f}`);
-      if (leaveBehind.artifactFiles.length > 20) console.log('      …');
-    }
-    const omitted = leaveBehind.artifactFilesOmitted;
-    if (omitted.internalFiles > 0) {
-      console.log(
-        `    Engine-internal artifact files (not listed): ${String(omitted.internalFiles)}`
-      );
-    }
-    if (omitted.truncated) console.log('    Artifact list truncated at the display cap');
-    for (const path of omitted.unreadable) {
-      console.log(`    Unreadable artifact directory: ${path === '' ? '$ARTIFACTS_DIR' : path}`);
-    }
-  }
-  if (verbose) {
-    const parseWarnings = readParseWarningEvents(events);
-    if (parseWarnings.length > 0) {
-      console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
-      for (const w of parseWarnings) console.log(`    - ${w}`);
-    }
-    printVerboseNodes(events);
-  }
+  printRunDetail(run, { transcriptPath, terminalRecord, leaveBehind, events, verbose });
   return 0;
 }
 
