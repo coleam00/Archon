@@ -4,7 +4,7 @@
  * write lock another connection holds for longer than the adapter's busy timeout.
  *
  * Runs in its own `bun test` invocation (see package.json) — it mock.module's
- * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
+ * ./connection with a real adapter, conflicting with the fake in the mock-based workflow-run-*.test.ts suites.
  */
 import { describe, test, expect, mock, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';

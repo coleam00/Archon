@@ -2,14 +2,14 @@
 /**
  * Integration test: resumeWorkflowRun against a REAL bun:sqlite database.
  *
- * The mock-based workflows.test.ts asserts SQL substrings but cannot catch a
+ * The mock-based workflow-run-resume.test.ts asserts SQL substrings but cannot catch a
  * mis-bound parameter or the dialect-specific date arithmetic — which is exactly
  * how the CAS `$2`-unbound bug (PR #1830 review C1) slipped through. This runs
  * the actual function against a real SqliteAdapter so the orphan-recovery arm and
  * the `datetime('now','-N days')` comparison are executed end-to-end.
  *
  * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
- * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
+ * ./connection with a real adapter, conflicting with the fake in the mock-based workflow-run-*.test.ts suites.
  */
 import { describe, test, expect, mock, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, realpath } from 'node:fs/promises';
