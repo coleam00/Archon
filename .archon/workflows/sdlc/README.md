@@ -685,7 +685,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   receipt is recorded as made outside the run. A sweep that says it merged a pull
   request the forge does not show merged fails the record after every other decision
   is written: that pull request is recorded as waiting, or parked if it was closed,
-  and a red default branch the run could not raise is named in the failure. A pull
+  and the failure names a red default branch the run could not raise and any work
+  item it could not write. A pull
   request that cannot be read waits for the next sweep, and is parked when it could not
   be read the sweep before either; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.

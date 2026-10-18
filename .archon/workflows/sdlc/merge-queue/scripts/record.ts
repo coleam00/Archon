@@ -7,14 +7,15 @@
  * recorded merged. The gate's receipts say which merges this run made; a merge without
  * one is marked as made outside this run. A sweep that claims a merge the forge does not
  * show fails the record, but only after every decision is written: that pull request is
- * recorded as waiting for the next sweep, or parked if it was closed, and a red default
- * branch the run could not raise is named in the failure. A run whose gate merged must have checked the default
- * branch after its batch, and one that merged nothing raises nothing about it. A
- * `return` hands the item back to the build queue with its brief. A run raises at most
- * one attention item: a red default branch first, because it holds every merge,
- * otherwise the first pull request the sweep asked about, in its order. That item keeps
- * its claim while the run waits; every other claim is released, and an ask that was not
- * raised waits for the next sweep, which decides it again.
+ * recorded as waiting for the next sweep, or parked if it was closed, and the failure names
+ * a red default branch the run could not raise and any work item it could not write. A
+ * run whose gate merged must have checked the default branch after its batch, and one
+ * that merged nothing raises nothing about it. A `return` hands the item back to the
+ * build queue with its brief. A run raises at most one attention item: a red default
+ * branch first, because it holds every merge, otherwise the first pull request the sweep
+ * asked about, in its order. That item keeps its claim while the run waits; every other
+ * claim is released, and an ask that was not raised waits for the next sweep, which
+ * decides it again.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -196,6 +197,53 @@ function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<strin
   return settle(decision, after, receipts);
 }
 
+/** What one record run writes with, and the lines it reports. */
+interface Writes {
+  readonly at: string;
+  readonly runId: string;
+  readonly lines: string[];
+  /** Work items that could not be written, for a failure that would otherwise hide them. */
+  readonly failed: string[];
+}
+
+/** Change one claimed work item; one that cannot be written is reported and left for the next sweep. */
+function write(writes: Writes, subject: QualifiedPr, name: string, label: string, change: (doc: WorkItem) => WorkItem): boolean {
+  try {
+    updateClaimed(subject, writes.runId, change);
+    writes.lines.push(`${name}: ${label}`);
+    return true;
+  } catch (error) {
+    const failure = `${name}: not recorded, the next sweep decides it again (${message(error)})`;
+    note(`merge-queue record: ${failure}`);
+    writes.lines.push(failure);
+    writes.failed.push(failure);
+    return false;
+  }
+}
+
+function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string {
+  if (raised) return 'ask';
+  if (decision.action === 'ask') return 'ask (not raised this run)';
+  if (outcome.status === 'merged') return 'merged';
+  return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
+}
+
+/** Record one pull request's decision; false when its work item could not be written. */
+function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean): boolean {
+  const { at, runId } = writes;
+  const { decision, status, reason, head } = outcome;
+  const label = labelOf(decision, outcome, raised);
+  const decided = `${label} (${[decision.class, ...(decision.synced ? ['synced'] : [])].join(', ')})`;
+  const links = [item.url, ...(decision.attention?.links ?? [])];
+  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
+  return write(writes, item.item as QualifiedPr, `PR ${String(decision.number)}`, label, doc => {
+    const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
+    if (status !== 'returned') return recorded;
+    const returned = { ...entry, decision: 'returned by the merge queue' };
+    return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
+  });
+}
+
 function main(): void {
   const mode = parseMode(text(process.env.INPUTS_MODE));
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
@@ -221,9 +269,8 @@ function main(): void {
   if (sweep !== null) check(mode, items, sweep, receipts);
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  const asks = decisions.filter(decision => decision.attention !== null);
   const devAttention = sweep?.dev.attention ?? null;
-  const firstAsk = asks[0];
+  const firstAsk = decisions.find(decision => decision.attention !== null);
   let asked: MergeAsked | null =
     devAttention !== null
       ? { by: 'dev', attention: devAttention }
@@ -265,10 +312,8 @@ function main(): void {
 
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const at = new Date().toISOString();
+  const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
-  const merged: number[] = [];
-  const lines: string[] = [];
 
   // Every read and check happens before the first write, so a check that refuses writes nothing.
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers, receipts) }));
@@ -278,91 +323,29 @@ function main(): void {
   if (asked?.by === 'dev' && contradictions.length > 0) {
     contradictions.push(`the default branch is red after the batch and was not raised (${sweep?.dev.summary ?? ''})`);
   }
-  if (contradictions.length > 0) asked = null;
-  const write = (subject: QualifiedPr, label: string, change: (doc: WorkItem) => WorkItem): boolean => {
-    try {
-      updateClaimed(subject, runId, change);
-      return true;
-    } catch (error) {
-      const failure = `${label}: not recorded, the next sweep decides it again (${message(error)})`;
-      note(`merge-queue record: ${failure}`);
-      lines.push(failure);
-      return false;
-    }
-  };
+  // The asked pull request was merged or closed under the question: there is nothing to ask.
+  const askedPr = asked?.by === 'pr' ? asked.pr.number : null;
+  if (contradictions.length > 0 || outcomes.some(({ decision, status }) => decision.number === askedPr && status !== 'waiting')) {
+    asked = null;
+  }
 
-  for (const { decision, status, reason, head, contradiction } of outcomes) {
-    const item = itemOf(decision.number);
-    const name = `PR ${String(decision.number)}`;
-    const isAsked = asked?.by === 'pr' && asked.pr.number === decision.number;
-    const raised = isAsked && status === 'waiting';
-    // The pull request was merged or closed under the question: there is nothing to ask.
-    if (isAsked && !raised) asked = null;
-    const label = raised
-      ? 'ask'
-      : decision.action === 'ask'
-        ? 'ask (not raised this run)'
-        : status === 'merged'
-          ? 'merged'
-          : contradiction !== null
-            ? 'claimed merged, not merged'
-            : decision.action;
-    const entry: MergeDecisionEntry = {
-      at,
-      run_id: runId,
-      decision: `${label} (${[decision.class, ...(decision.synced ? ['synced'] : [])].join(', ')})`,
-      reason,
-      links: [item.url, ...(decision.attention?.links ?? [])],
-      head,
-      reran: decision.reran,
-    };
-    const written = write(item.item as QualifiedPr, name, doc => {
-      const recorded = withMerge(doc, {
-        at,
-        run_id: runId,
-        entry,
-        status: raised ? 'asking' : status,
-        pr: item.pr,
-        release: !raised,
-      });
-      return status === 'returned'
-        ? withBuild(recorded, {
-            at,
-            run_id: runId,
-            round: null,
-            entry: { ...entry, decision: 'returned by the merge queue' },
-            status: 'next',
-            brief: decision.brief,
-            release: true,
-          })
-        : recorded;
-    });
-    if (status === 'merged') merged.push(decision.number);
-    if (!written) {
-      if (raised) asked = null;
-      continue;
-    }
-    lines.push(`${name}: ${label}`);
+  for (const outcome of outcomes) {
+    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
+    if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
   }
   for (const done of settled) {
-    const name = `Issue ${String(done.item.number)}`;
-    const written = write(done.item, name, doc =>
-      withMerge(doc, {
-        at,
-        run_id: runId,
-        entry: { at, run_id: runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false },
-        status: done.status,
-        pr: done.pr,
-        release: true,
-      })
+    const entry = { at: writes.at, run_id: runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
+    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+      withMerge(doc, { at: writes.at, run_id: runId, entry, status: done.status, pr: done.pr, release: true })
     );
-    if (written) lines.push(`${name}: ${done.status}`);
   }
-  if (contradictions.length > 0) throw new Error(`${contradictions.join('; ')}; every other decision is recorded`);
+  if (contradictions.length > 0) {
+    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
+  }
 
   emit({
-    merged,
-    summary: [sweep?.summary ?? '', ...lines].filter(line => line !== '').join('\n'),
+    merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
+    summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
     attention: render(asked),
     options: asked === null ? [] : attentionOptions<string>(asked.attention),
     class: asked?.by ?? '',
