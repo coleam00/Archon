@@ -1,4 +1,8 @@
-import { isSubprocessTimeout, type RawSubprocessRejection } from '../../../subprocess';
+import {
+  hostSpawnFailure,
+  isSubprocessTimeout,
+  type RawSubprocessRejection,
+} from '../../../subprocess';
 import { finishNodeExecution } from '../../../node-execution';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
@@ -334,6 +338,7 @@ export async function executeScriptNode(
     // user-facing branch we end up in — the timeout message also contains the
     // full `Command failed: bun -e <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
+    const spawnFailure = hostSpawnFailure(execContext, err);
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
@@ -343,9 +348,9 @@ export async function executeScriptNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
+    } else if (spawnFailure === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
+    } else if (spawnFailure === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;

@@ -816,7 +816,9 @@ DISCORD_STREAMING_MODE=stream
 
 ### Batch Mode
 
-Only the final summary message is sent after AI completes processing.
+The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive unless an orchestrator command prefix has already been detected.
+
+Filtering operates on provider text blocks, including continuations split by an immediate warning. Adapters may split long replies into multiple platform messages or comments.
 
 ```ini
 TELEGRAM_STREAMING_MODE=batch
@@ -825,14 +827,14 @@ DISCORD_STREAMING_MODE=batch
 ```
 
 **Pros:**
-- Single coherent message/comment
+- One assembled assistant reply before delivery; adapters may split long replies
 - Fewer API calls
 - No spam or clutter
 
 **Cons:**
-- No progress indication during processing
+- Assistant text is held until processing completes
 - Longer wait for first response
-- Can't see intermediate steps
+- Intermediate tool-indicator sections are normally omitted; the all-filtered fallback includes them
 
 **Best for:** Issue trackers and async platforms (GitHub)
 

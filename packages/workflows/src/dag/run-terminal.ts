@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import { runContainerWriteBackGate } from './container-gate';
+import { statusAfterPauseFailure } from './pause';
 
 /** What the terminal tally reads: the run's estate, and the outputs and usage its pass left. */
 export type RunTerminalContext = Pick<
@@ -504,7 +505,8 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
   } catch (pauseError) {
     // A run cancelled or paused meanwhile keeps that status, exactly as the failure
     // branches below leave it.
-    if ((await deps.store.getWorkflowRunStatus(workflowRun.id)) === 'running') throw pauseError;
+    const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
+    if (status === 'running') throw pauseError;
     getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
     return true;
   }

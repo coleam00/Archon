@@ -52,7 +52,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { attentionOptions, checkAttention, renderAttention } from '../../.shared/queue.ts';
+import { attentionOptions, checkAttention, renderAttention, withOther } from '../../.shared/queue.ts';
 import { type IntakeMode, parseMode, readMaintainers, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -274,7 +274,8 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            attention: firstAsk.attention as MergeAttention,
+            // `other` hands the item back to the build queue with the person's text as the ruling.
+            attention: withOther(firstAsk.attention as MergeAttention, 'return'),
           };
   const render = (raised: MergeAsked | null): string =>
     raised === null

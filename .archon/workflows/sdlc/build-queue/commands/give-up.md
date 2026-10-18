@@ -20,7 +20,7 @@ On ask, the attention item asks the scope question. A maintainer reads it withou
 - `what`: the item, how many rounds ran, and the scope question in plain words.
 - `why`: what another round costs and risks, and what narrowing or re-planning would change.
 - `recommendation`: the id of the choice you recommend, `why`, the `evidence` (the rounds' new findings, by report path), your `confidence`, and what evidence `would_change` it.
-- `choices`: at least two, each a kebab-case `id`, a short `label`, what it `does`, its `effect` (`continue` launches the next round from the answer's brief; `park` stops the queue working the item until a re-triage), and the `ruling` written into the issue body as a dated scope section when it is chosen, such as a narrower acceptance or a design constraint. Leave it empty when the choice changes no scope.
+- `choices`: at least two, each a kebab-case `id`, a short `label`, what it `does`, its `effect` (`continue` launches the next round from the answer's brief; `park` stops the queue working the item until a re-triage), and the `ruling` written into the issue body as a dated scope section when it is chosen, such as a narrower acceptance or a design constraint. Leave it empty when the choice changes no scope. The queue adds `other` itself, for an answer none of your choices covers; don't declare it.
 - `if_unanswered`: whether the item waits, blocks other work, or goes stale as the base moves.
 - `links`: the pull request, each round's review report, and the runs.
 

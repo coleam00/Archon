@@ -120,7 +120,8 @@
       "src/community/pi/config.test.ts"
     ],
     [
-      "src/community/pi/event-bridge.test.ts"
+      "src/community/pi/event-bridge.test.ts",
+      "src/community/pi/event-bridge-text.test.ts"
     ],
     [
       "src/community/pi/extension-error-broker.test.ts",
