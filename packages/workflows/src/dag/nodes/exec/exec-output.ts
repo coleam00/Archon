@@ -66,8 +66,9 @@ export function certifyExecOutput(
   try {
     parsed = JSON.parse(stdout) as unknown;
   } catch (parseErr) {
+    const diagnostic = redactCredentialValues((parseErr as Error).message, credentialValues);
     throw new ExecOutputContractError(
-      `${label} declares an output_format, so its stdout must be a single JSON document, but it did not parse: ${(parseErr as Error).message}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
+      `${label} declares an output_format, so its stdout must be a single JSON document, but it did not parse: ${diagnostic}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
     );
   }
   // `JSON.parse` can only yield a JsonValue — no undefined, no non-finite number, no

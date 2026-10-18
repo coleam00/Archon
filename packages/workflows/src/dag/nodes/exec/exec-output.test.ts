@@ -1424,6 +1424,35 @@ describe('exec result contracts (#2453)', () => {
     expect(error).not.toContain(secret);
   });
 
+  it.each([
+    ['bash', bashEmitting],
+    ['script', scriptEmitting],
+  ] as const)(
+    'a %s contract failure redacts credentials quoted by the JSON parser',
+    async (kind, emitting) => {
+      const secret = 'SECRET_TOKEN_123';
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(`contract-parser-redaction-${kind}`),
+          workflow: contractWorkflow(emitting(`{"key":${secret}}`)),
+          config: { ...minimalConfig, protectedCredentialValues: [secret] },
+        })
+      );
+      const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+        (call: unknown[]) => call[0] as PersistedEvent
+      );
+      const error = String(producerFailure(events)?.data?.error);
+      expect(error).toContain('must be a single JSON document');
+      expect(error).toContain('[REDACTED]');
+      expect(error).not.toContain(secret);
+      expect(producerCompletion(events)).toBeUndefined();
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    }
+  );
+
   it('a certified exec value survives cold resume identically', async () => {
     const freshPrompts: string[] = [];
     captureConsumerPrompts(freshPrompts);
