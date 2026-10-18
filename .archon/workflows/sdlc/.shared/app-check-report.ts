@@ -13,7 +13,7 @@
  *   C1 PASS|FAIL|INCOMPLETE  <criterion>  <observation>  [evidence: <path>, <path>]
  *   H1 PASS|FAIL|FAIL (pre-existing: <citation>)|INCOMPLETE  <scenario id>  <symptom>  [evidence: ...]
  *   P1 OK|SURPRISE  <state> / <action>: <what happened>  [evidence: ...]
- *   D1 NEW|PRE-EXISTING (<citation>)  <what a user sees>  [evidence: ...]
+ *   D1 NEW|PRE-EXISTING (<citation>)|QUESTION  <what a user sees>  [evidence: ...]
  *   DEFECTS SEEN: none
  *   Overall: PASS | FAIL (<reason>)
  *
@@ -118,7 +118,16 @@ export function isProvenPreExisting(line: ReportLine): boolean {
 export function blocksPass(line: ReportLine): boolean {
   if (line.kind === 'P') return false;
   if (line.kind === 'C') return line.verdict !== 'PASS';
+  if (isQuestion(line)) return false;
   return !(line.verdict === 'PASS' && line.kind === 'H') && !isProvenPreExisting(line);
+}
+
+/**
+ * Something the app check saw and is not sure is a defect. It does not fail the check, but
+ * it is never dropped: the reviewer must decide it (an issue, or accepted with a reason).
+ */
+export function isQuestion(line: ReportLine): boolean {
+  return line.kind === 'D' && line.verdict === 'QUESTION';
 }
 
 /** Image evidence must have been opened, not just written. */

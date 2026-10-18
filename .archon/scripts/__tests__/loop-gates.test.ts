@@ -199,6 +199,33 @@ describe('merge gate', () => {
     ]);
   });
 
+  it('a question does not fail the check, but the review must decide it', () => {
+    const report = CLEAN.replace(
+      'DEFECTS SEEN: none',
+      'DEFECTS SEEN\nD1 QUESTION  a refused save drops what was typed into the edit form  [evidence: d1.txt]'
+    );
+    expect(evidenceProblems(parseAppCheck(report), STARTED, () => fresh)).toEqual([]);
+    expect(gate(report)).toEqual([
+      'D1 is an open question the review did not decide (an issue, or accepted with a reason)',
+    ]);
+    const thin = parseDispositions(JSON.stringify([{ line: 'D1', action: 'accepted', ref: 'fine' }]));
+    expect(gate(report, { dispositions: thin })).toHaveLength(1);
+    const reasoned = parseDispositions(
+      JSON.stringify([{ line: 'D1', action: 'accepted', ref: 'a locked note cannot be saved, so nothing savable is lost' }])
+    );
+    expect(gate(report, { dispositions: reasoned })).toEqual([]);
+    const filed = parseDispositions(JSON.stringify([{ line: 'D1', action: 'issue', ref: '#60' }]));
+    expect(gate(report, { dispositions: filed, issueExists: ref => ref === '#60' })).toEqual([]);
+  });
+
+  it('a disposition that quotes the whole report line is matched by its id (seen live)', () => {
+    const quoted = parseDispositions(
+      JSON.stringify([{ line: 'D1 NEW Export leaves out a note’s locked state', action: 'blocks', ref: 'x.txt' }])
+    );
+    expect([...quoted.keys()]).toEqual(['D1']);
+    expect(parseDispositions(JSON.stringify([{ line: 'D12 NEW x', action: 'issue', ref: '#1' }])).has('D12')).toBe(true);
+  });
+
   it('malformed dispositions are ignored, never trusted', () => {
     expect(parseDispositions('not json').size).toBe(0);
     expect(parseDispositions('{"line":"D1"}').size).toBe(0);

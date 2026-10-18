@@ -4,7 +4,7 @@
  * `loop/scripts/evidence.ts` and `loop/scripts/land.ts` do the reading; these decide.
  */
 
-import { blocksPass, isAdverse, isImage, isProvenPreExisting, type AppCheckReport } from './app-check-report.ts';
+import { blocksPass, isAdverse, isImage, isProvenPreExisting, isQuestion, type AppCheckReport } from './app-check-report.ts';
 
 export interface CitedFile {
   readonly exists: boolean;
@@ -84,7 +84,9 @@ export function parseDispositions(textValue: string): Map<string, Disposition> {
   if (!Array.isArray(raw)) return found;
   for (const entry of raw as Record<string, unknown>[]) {
     if (entry === null || typeof entry !== 'object') continue;
-    const line = typeof entry.line === 'string' ? entry.line.trim().toUpperCase() : '';
+    // A reviewer may quote the whole report line; the id it starts with is what counts.
+    const quoted = typeof entry.line === 'string' ? entry.line.trim().toUpperCase() : '';
+    const line = /^([CHPD]\d+)(?![0-9])/.exec(quoted)?.[1] ?? '';
     if (line === '') continue;
     found.set(line, {
       line,
@@ -132,6 +134,13 @@ export function recordRefusals(facts: GateFacts): string[] {
         continue;
       }
       refusals.push(`${line.id} (${line.verdict}) has no re-check or default-branch proof the reviewer wrote`);
+    } else if (isQuestion(line)) {
+      const decided =
+        (disposition?.action === 'issue' && facts.issueExists(disposition.ref)) ||
+        (disposition?.action === 'accepted' && (disposition.ref ?? '').trim().length >= 12);
+      if (!decided) {
+        refusals.push(`${line.id} is an open question the review did not decide (an issue, or accepted with a reason)`);
+      }
     } else if (isProvenPreExisting(line)) {
       if (disposition?.action !== 'issue' || !facts.issueExists(disposition.ref)) {
         refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);

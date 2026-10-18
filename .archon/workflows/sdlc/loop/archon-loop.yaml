@@ -229,7 +229,7 @@ nodes:
             type: object
             properties:
               line: { type: string }
-              action: { type: string, enum: [issue, pre-existing, rechecked, blocks] }
+              action: { type: string, enum: [issue, pre-existing, rechecked, accepted, blocks] }
               ref: { type: string }
             required: [line, action, ref]
         reason: { type: string }

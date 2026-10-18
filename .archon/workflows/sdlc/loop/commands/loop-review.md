@@ -62,13 +62,14 @@ Every finding needs reproducible evidence: a failing command and its output, or 
 ## Every line gets a disposition
 
 Before you decide, give every line of the app check that is not a plain PASS (every C or H line that
-is FAIL or INCOMPLETE, every probe SURPRISE through its defect line, and every DEFECTS SEEN line)
+is FAIL or INCOMPLETE, and every DEFECTS SEEN line, including each `QUESTION`; a probe SURPRISE is decided through the defect line it names)
 exactly one disposition, and list them in your output:
 
 - `blocks`: it is this change's to fix. You send the change back.
 - `rechecked`: you checked it yourself and the app check was wrong. `ref` is the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now.
 - `pre-existing`: the default branch has the same failure, which you showed. `ref` is the file in `$ARTIFACTS_DIR` where you saved your default-branch run, written now, then the issue that tracks the failure: `<file> #<number>` (an existing issue, or one you open now).
-- `issue`: the default branch has it too (the app check proved it with a citation, or you did) and an open issue tracks it. `ref` is `#<number>`: an existing issue, or one you open now with what a user sees, never quoting a holdout.
+- `accepted`: only for a `QUESTION` line you judge is not a defect. `ref` is the reason, in a sentence a reader can check against the work item or the product document.
+- `issue`: a `QUESTION` line worth doing later, or a failure the default branch has too (the app check proved it with a citation, or you did) and an open issue tracks it. `ref` is `#<number>`: an existing issue, or one you open now with what a user sees, never quoting a holdout.
 
 No observation leaves this review without one of these. When the evidence check above is not ok,
 the lines it names are not evidence: check those criteria yourself and record `rechecked` with your
@@ -80,7 +81,7 @@ Never overrule a FAIL on opinion: only your own recorded evidence stands in for 
 
 **Merge** when every one of these holds: every contract criterion passed or you rechecked it; every
 holdout scenario passed, or fails the same way on the default branch and an issue tracks it; every
-defect is pre-existing with an issue, or you showed it is not one; you found no real bug,
+defect is pre-existing with an issue, or you showed it is not one; every question is decided; you found no real bug,
 regression, weakened test, unapproved change to a check, or scope creep that matters; no protected
 file changed; the project's checks pass on the commit you name.
 
@@ -108,4 +109,4 @@ Leave exactly one comment on the pull request (or the work item, when there is n
 
 ## Output
 
-Return the structured verdict: `outcome` (`merge`, `sent-back`, `needs-owner`, `approved` or `nothing`), `pr` (the pull request URL, or empty), `sha` (the head commit for `merge`, otherwise the head you reviewed or empty), `delivers` (`all`, `part` or `none`), `dispositions` (one `{line, action, ref}` per line above; empty when there are none), and `reason` (one sentence).
+Return the structured verdict: `outcome` (`merge`, `sent-back`, `needs-owner`, `approved` or `nothing`), `pr` (the pull request URL, or empty), `sha` (the head commit for `merge`, otherwise the head you reviewed or empty), `delivers` (`all`, `part` or `none`), `dispositions` (one `{line, action, ref}` per line above, where `line` is the id alone, such as `D1` or `H2`; empty when there are none), and `reason` (one sentence).
