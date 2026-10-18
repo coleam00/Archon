@@ -74,7 +74,10 @@ touching only prose or files no check reads skips the test, service and binary j
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
 `.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
-Markdown read by tests, bundled skills, generated docs, and the docs manifest. `INERT_PATHS`
+Markdown read by tests, bundled skills, generated docs, and the docs manifest. A conformance test
+requires every tracked Markdown path with a directory named in a test file to run the suite,
+even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
+`INERT_PATHS`
 lists the non-prose files no check reads. On a pull request, `workspaceTestInputs` in the same
 file decides whether the `cli` and `packages` legs of the `test` job run: a change limited to
 root `scripts/` files that no package test or CI entry point reads skips them, the

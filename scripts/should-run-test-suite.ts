@@ -20,12 +20,14 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
- *   - Concrete Markdown paths read by tests are checked against this gate by
+ *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 export const BUILD_INPUTS = [
   '.claude/skills/',
   '.archon/architecture.md',
+  '.archon/workflow-language-constitution.md',
+  '.claude/commands/execute.md',
   'packages/providers/src/codex/protocol/README.md',
   'packages/docs-web/src/content/docs/reference/database.md',
   'packages/docs-web/src/content/docs/reference/api.md',
