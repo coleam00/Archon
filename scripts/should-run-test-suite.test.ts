@@ -12,7 +12,6 @@ import {
   diffRange,
   proofFromPullRequestRun,
   shouldRunTestSuite,
-  shouldRunWorkflowFixtures,
   shouldRunWorkspaceTests,
   workspaceTestInputs,
   type EventPayload,
@@ -174,14 +173,13 @@ describe('test-suite change decision', () => {
    * A force-push leaves `github.event.before` unreachable. The decision must still be a decision:
    * an empty stdout here is read as "skip" by every downstream gate.
    */
-  test('an unreadable diff resolves to running the fixtures, with the cause on stderr', () => {
+  test('an unreadable diff resolves to running the suite, with the cause on stderr', () => {
     const unreachable = '1'.repeat(40);
     const result = runDecision(
       trackTempRoot,
-      'push',
-      { before: unreachable, after: 'HEAD' },
-      process.cwd(),
-      ['--workflow-fixtures']
+      'pull_request',
+      { pull_request: { base: { sha: unreachable }, head: { sha: 'HEAD' } } },
+      process.cwd()
     );
 
     expect(result.exitCode).toBe(0);
@@ -254,8 +252,7 @@ describe('diff mode', () => {
       trackTempRoot,
       'pull_request',
       { pull_request: { base: { sha: base }, head: { sha: head } } },
-      repo,
-      ['--workflow-fixtures']
+      repo
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('false');
@@ -265,7 +262,7 @@ describe('diff mode', () => {
     process.platform === 'win32'
       ? ['é.yaml']
       : ['é.yaml', 'quote".yaml', 'back\\slash.yaml', 'tab\t.yaml', 'line\n.yaml']
-  )('fixture decision preserves Git-quoted filename %j', filename => {
+  )('the decision preserves Git-quoted filename %j', filename => {
     const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-fixture-path-')));
     git(repo, 'init', '-q', '-b', 'main');
     git(repo, 'config', 'core.quotepath', 'true');
@@ -280,8 +277,7 @@ describe('diff mode', () => {
       trackTempRoot,
       'pull_request',
       { pull_request: { base: { sha: base }, head: { sha: head } } },
-      repo,
-      ['--workflow-fixtures']
+      repo
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('true');
@@ -327,19 +323,6 @@ describe('diff mode', () => {
 
     expect(result.stderr).toBe('');
     expect(result.stdout).toBe('true');
-    const fixtures = runDecision(
-      trackTempRoot,
-      'pull_request',
-      {
-        before: codePush,
-        after: docsPush,
-        pull_request: { base: { sha: prBase }, head: { sha: docsPush } },
-      },
-      repo,
-      ['--workflow-fixtures']
-    );
-    expect(fixtures.exitCode).toBe(0);
-    expect(fixtures.stdout).toBe('true');
   });
 });
 
@@ -369,43 +352,18 @@ describe('inert paths', () => {
   });
 });
 
-describe('workflow fixture selection', () => {
+describe('decision arguments and events', () => {
   const track = trackTempRoots();
-  test.each([
-    '.archon/workflows/sdlc/implement/workflow.yaml',
-    '.archon/workflows/sdlc/scripts/route.ts',
-    '.archon/workflows/sdlc/commands/implement.md',
-    '.archon/workflows/sdlc/fixtures/pass.yaml',
-    'packages/workflows/src/fixture-runner.ts',
-    'packages/workflows/src/dry-run.ts',
-    'packages/cli/src/commands/workflow.ts',
-    'packages/cli/src/commands/workflow-list.ts',
-    'packages\\workflows\\src\\schema.ts',
-  ])('runs for %s', file => {
-    expect(shouldRunWorkflowFixtures([file])).toBe(true);
-  });
-  test.each([
-    'README.md',
-    'packages/web/src/app.ts',
-    'packages/core/src/index.ts',
-    'packages/providers/src/index.ts',
-    'scripts/validate.ts',
-    '.archon/workflows/sdlc-extra/workflow.yaml',
-    'packages/workflows/src-extra/index.ts',
-    'packages/cli/src/commands/workflow.test.ts',
-  ])('skips %s', file => {
-    expect(shouldRunWorkflowFixtures([file])).toBe(false);
-  });
   test.each([
     ['workflow_dispatch', {}],
     ['push', { before: EMPTY_GIT_SHA }],
     ['push', { before: 'unreachable', after: 'HEAD' }],
   ] as const)('runs for %s without a usable diff', (event, payload) => {
-    const result = runDecision(track, event, payload, process.cwd(), ['--workflow-fixtures']);
+    const result = runDecision(track, event, payload, process.cwd());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('true');
   });
-  test.each([{ args: ['--unsupported'] }, { args: ['--workflow-fixtures', '--unsupported'] }])(
+  test.each([{ args: ['--unsupported'] }, { args: ['--workspace-tests', '--unsupported'] }])(
     'rejects unknown arguments %j',
     ({ args }) => {
       const result = runDecision(track, 'workflow_dispatch', {}, process.cwd(), args);
@@ -413,8 +371,8 @@ describe('workflow fixture selection', () => {
       expect(result.stdout).toBe('');
     }
   );
-  test('rejects malformed fixture events', () => {
-    const result = runDecision(track, 'pull_request', {}, process.cwd(), ['--workflow-fixtures']);
+  test('rejects malformed events', () => {
+    const result = runDecision(track, 'pull_request', {}, process.cwd());
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toBe('');
   });
@@ -760,17 +718,6 @@ describe('a push proven by its pull request run', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('true');
-      expect(result.stderr).toContain('No pull request run proves this push');
-    });
-
-    test('an unproven push decides fixtures from its diff', async () => {
-      const push = docsOnlyPush();
-      const answers = provenApi(push.after);
-      answers[`git/commits/${PR_HEAD}`] = { tree: { sha: 'tree-b' } };
-      const result = await runPush(answers, push, ['--workflow-fixtures']);
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe('false');
       expect(result.stderr).toContain('No pull request run proves this push');
     });
   });
