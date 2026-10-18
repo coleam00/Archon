@@ -572,9 +572,8 @@ async function executeLoopGroupBody(
             };
           }
           if (
-            bashErr.code === 'ENOENT' ||
-            bashErr.code === 'EACCES' ||
-            bashErr.code === 'ENOTDIR'
+            execContext.kind === 'host' &&
+            (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR')
           ) {
             getLog().error(
               { err: bashErr, nodeId: node.id, iteration: resumedIteration },
@@ -1056,8 +1055,11 @@ async function executeLoopGroupBody(
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
-        // executeLoopNode's until_bash handling).
-        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+        // executeLoopNode's until_bash handling, including its host-only scope).
+        if (
+          execContext.kind === 'host' &&
+          (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR')
+        ) {
           getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_group.until_bash_failed'

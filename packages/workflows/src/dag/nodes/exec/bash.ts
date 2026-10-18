@@ -173,12 +173,12 @@ export async function executeBashNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+    } else if (execContext.kind === 'host' && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
       errorMsg =
         `${label} failed: bash executable not found at '${bashPath}'. ` +
         'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
         '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
-    } else if (err.code === 'EACCES') {
+    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;

@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -22,6 +22,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode, ExecNode } from '../../../schemas';
+import { CONTAINER_MARKER_PROBE } from '../../../checkout-observation';
 
 describe('executeDagWorkflow -- bash nodes', () => {
   let testDir: string;
@@ -207,6 +208,62 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(errorMsg).toContain('stdout context before failure');
     expect(errorMsg).toContain('[stderr]');
     expect(errorMsg).toContain('[stdout]');
+  });
+
+  const containerBashNodes: [string, TestWorkflowDefinition['nodes'][number]][] = [
+    ['bash node', { id: 'shell', kind: 'exec', runtime: 'sh', script: 'echo not reached' }],
+    [
+      'loop until_bash',
+      {
+        id: 'shell',
+        kind: 'loop',
+        loop: { prompt: 'Work.', until: 'DONE', until_bash: 'exit 0', max_iterations: 1 },
+      },
+    ],
+    [
+      'loop_group until_bash',
+      {
+        id: 'shell',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+        },
+      },
+    ],
+  ];
+  it.each(
+    containerBashNodes.flatMap(([label, node]) =>
+      (['ENOENT', 'EACCES'] as const).map(code => [label, code, node] as const)
+    )
+  )('a container %s keeps Docker %s spawn attribution', async (_label, code, node) => {
+    const mockDeps = createMockDeps();
+    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_command, args) => {
+      if (args.at(-1) === CONTAINER_MARKER_PROBE) return { stdout: 'none\n', stderr: '' };
+      throw Object.assign(new Error(`spawn docker ${code}`), { code });
+    });
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          cwd: testDir,
+          workflow: { name: 'container-bash-spawn', nodes: [node] },
+          workflowRun: makeWorkflowRun('container-bash-spawn-run'),
+          execContext: { kind: 'container', containerId: 'bash-container' },
+        })
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    const failed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'shell'
+    );
+    expect(failed?.data?.error).toContain(`spawn docker ${code}`);
+    expect(failed?.data?.error).not.toContain('ARCHON_BASH_PATH');
+    expect(failed?.data?.error).not.toContain('permission denied (check cwd permissions)');
   });
 
   it('variable substitution works in bash scripts', async () => {
