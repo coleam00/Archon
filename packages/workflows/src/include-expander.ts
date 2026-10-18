@@ -65,12 +65,12 @@ import {
   type JsonValue,
 } from './output-ref';
 import { createLogger } from '@archon/paths';
+import { validateDagStructure } from './loader/dag-structure';
 import {
-  validateDagStructure,
   validateLoopGroupProseCompletion,
   validateRunBudgetShape,
   validateWorkflowOutcomeDeclaration,
-} from './loader';
+} from './loader/contracts';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
 import { parseWhenExpression } from './when-atom';

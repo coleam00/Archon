@@ -66,7 +66,8 @@ import {
 } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
-import { parseWorkflow, collectLoopGroupSinkWarnings } from './loader';
+import { parseWorkflow } from './loader';
+import { collectLoopGroupSinkWarnings } from './loader/parse-warnings';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {

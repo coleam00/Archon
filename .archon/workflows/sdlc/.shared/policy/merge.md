@@ -6,8 +6,10 @@ documents the project already has.
 
 The queue merges on its own when the case is clear, and asks a maintainer when it is
 not. The gate is not policy: no pull request merges unless its trusted review verdict
-says Ready at its head, CI is green at that head and no review thread is unresolved,
-whatever this document says.
+says Ready at its head and CI is green at that head, whatever this document says.
+An open review thread holds the merge only when it raises a defect in what the pull
+request changes. A thread on code the pull request doesn't change or make reachable,
+such as one that arrived with a merge of the default branch, doesn't hold it.
 
 ## Clear: the queue merges
 
@@ -34,7 +36,7 @@ whatever this document says.
 ## Before a merge
 
 - **Fix first, ask last.** A pull request that fails the gate for a reason the build
-  queue can correct, such as an unresolved review thread, a verdict that is not Ready,
+  queue can correct, such as a review thread that raises a defect in the change, a verdict that is not Ready,
   or CI red that the change caused, goes back to the build queue with a brief, whether
   it is clear or not. Ask only when what is left is the decision itself.
 - **Sync before a merge, and only then.** The pull request about to merge, and only

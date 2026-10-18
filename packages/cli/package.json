@@ -67,6 +67,30 @@
       "src/commands/workflow-list.test.ts"
     ],
     [
+      "src/commands/workflow-run-output.test.ts"
+    ],
+    [
+      "src/commands/workflow-transcript.test.ts"
+    ],
+    [
+      "src/commands/workflow-inspect.test.ts"
+    ],
+    [
+      "src/commands/workflow-runs.test.ts"
+    ],
+    [
+      "src/commands/workflow-wait.test.ts"
+    ],
+    [
+      "src/commands/workflow-detach.test.ts"
+    ],
+    [
+      "src/commands/workflow-isolation.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-preflight.test.ts"
+    ],
+    [
       "src/commands/doctor-dispatch.test.ts",
       "src/commands/doctor-forge-parity.test.ts"
     ],
