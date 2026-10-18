@@ -226,9 +226,15 @@ const commandHelp: HelpEntry[] = [
       },
       {
         spec: '--watch',
-        description: 'Stream every change as lines until stopped; the open set comes first',
+        description:
+          'Stream readable changes until stopped; the open set comes first\n' +
+          'A degraded warning means coverage may have gaps. Repair and replay:\n' +
+          'https://archon.diy/guides/attention-queue/#stream-the-queue',
       },
-      { spec: '--after <cursor>', description: 'With --watch: replay after an earlier line' },
+      {
+        spec: '--after <cursor>',
+        description: 'With --watch: replay readable changes after an earlier line; gaps may remain',
+      },
     ],
   },
   {

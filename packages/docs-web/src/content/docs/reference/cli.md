@@ -1669,7 +1669,7 @@ archon version
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, `attention`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
-| `--after <cursor>` | For `workflow attention --watch`: replay the stream after the line that carried this cursor. |
+| `--after <cursor>` | For `workflow attention --watch`: replay readable changes after the line that carried this cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/guides/attention-queue/#stream-the-queue). |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
