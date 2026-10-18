@@ -372,7 +372,7 @@ archon complete <branch> --force   # bypass safety checks, including live runs a
 
 These are the `sdlc` pack, bundled with Archon. To customize them, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it — same-named workflows override the bundled ones. The older `archon-*` workflows such as `archon-fix-github-issue` no longer ship; see [Workflows that no longer ship](/book/essential-workflows/#workflows-that-no-longer-ship).
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-ship`, while "review this PR" routes to `archon-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
+> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. It prefers a non-deprecated workflow when one fits and follows each deprecated workflow's guidance; [deprecated workflows remain runnable](/guides/authoring-workflows/#deprecating-a-workflow). For example, "fix issue #42" routes to `archon-ship`, while "review this PR" routes to `archon-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
 
 ---
 

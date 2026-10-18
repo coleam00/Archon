@@ -5,13 +5,16 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatWorkflowSection,
   formatPausedGateSection,
   type LaunchChannel,
 } from './prompt-builder';
 import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+
+const invoked = (p: string): string[] =>
+  [...p.matchAll(/\/invoke-workflow (\S+) --project|workflow: "([^"]+)"/g)].map(m => m[1] ?? m[2]);
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -49,35 +52,21 @@ describe('buildRoutingRulesWithProject', () => {
     }
   });
 
-  test('routing rules never steer work into archon-assist (#3525)', () => {
-    for (const channel of ['tools', 'commands'] as const) {
-      for (const rules of [
-        buildRoutingRulesWithProject(channel),
-        buildRoutingRulesWithProject(channel, 'p'),
-      ]) {
-        expect(rules).not.toContain('archon-assist');
-      }
-    }
-  });
-
-  test.each(['tools', 'commands'] as const)(
-    'every workflow the %s routing examples name is bundled and not deprecated (#3525)',
-    channel => {
-      const rules = buildRoutingRulesWithProject(channel);
-      // Our own prompt text, not user prose: the examples name workflows as
-      // `/invoke-workflow <name>`, `workflow: "<name>"` and `**<name>** workflow`.
-      const named = [
-        ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
-        ...[...rules.matchAll(/workflow: "([a-z0-9-]+)"/g)].map(m => m[1]),
-        ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
-      ];
-      expect(named.length).toBeGreaterThan(1);
-      for (const name of named) {
-        const yaml = BUNDLED_WORKFLOWS[name];
-        expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
-        const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
-        expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
-      }
+  test.each([
+    ['tools', undefined, 'but do NOT call `invoke_workflow`'],
+    ['tools', 'p', 'but do NOT call `invoke_workflow`'],
+    ['commands', undefined, 'but do NOT include /invoke-workflow'],
+    ['commands', 'p', 'but do NOT include /invoke-workflow'],
+  ] as const)(
+    '%s examples (project %s) invoke only the placeholder and answer questions directly',
+    (channel, project, noInvoke) => {
+      const rules = buildRoutingRulesWithProject(channel, project);
+      const routing = rules.split('## Project Setup')[0];
+      expect(routing).not.toMatch(/\barchon-[\w-]+\b/);
+      const [, action, question] = routing.split(/Example \((?:clear intent|ambiguous[^)]*)\):/);
+      expect(invoked(action)).toEqual(['{workflow-name}']);
+      expect(invoked(question)).toEqual([]);
+      expect(rules).toContain(noInvoke);
     }
   );
 
@@ -127,6 +116,17 @@ describe('formatWorkflowContextSection', () => {
       { workflowName: 'assist', runId: 'r-1', summary: 'Done.' },
     ]);
     expect(result).toBe(result.trimEnd());
+  });
+});
+
+describe('formatWorkflowSection', () => {
+  test('carries deprecation guidance only for deprecated workflows', () => {
+    const section = formatWorkflowSection([
+      { name: 'current', description: 'Current', nodes: [] },
+      { name: 'legacy', description: 'Legacy', nodes: [], deprecated: { message: 'Use current.' } },
+    ]);
+    expect(section).toContain('**current**\n  Current\n  Type:');
+    expect(section).toContain('**legacy**\n  Legacy\n  Deprecated: Use current.\n  Type:');
   });
 });
 
