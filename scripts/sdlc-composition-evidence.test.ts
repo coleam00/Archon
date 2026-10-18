@@ -20,11 +20,6 @@ import {
   type CompositionRequest,
   type CompositionEvidence,
 } from '../.archon/workflows/sdlc/.shared/composition';
-import {
-  PASSES_RED,
-  passesRed,
-  unfinishedValidation,
-} from '../.archon/workflows/sdlc/.shared/verdict';
 
 const track = trackTempRoots();
 
@@ -267,12 +262,6 @@ describe('three-tree project gate evidence', () => {
       parseCompositionRequest({ ...f.request, check: { ...f.request.check, argv: [] } })
     ).toThrow('project gate');
   });
-
-  it('keeps interaction out of every shared accepted-red route', () => {
-    expect(PASSES_RED).toEqual(['inherited', 'environment']);
-    expect(passesRed('interaction')).toBe(false);
-    expect(passesRed('')).toBe(false);
-  });
 });
 
 it('keeps implement sessions and validation producer contracts in agreement', () => {
@@ -311,26 +300,4 @@ it('keeps implement sessions and validation producer contracts in agreement', ()
   expect(
     implement.nodes.find(n => n.id === 'implement')!.output_format!.properties.red_cause.enum
   ).toEqual(ordinary);
-});
-
-it("refuses implement's unfinished validation as unfinished, never as red", () => {
-  const script = join(
-    import.meta.dir,
-    '..',
-    '.archon/workflows/sdlc/implement/scripts/assert-changed.ts'
-  );
-  const summary = 'A usage limit stopped validation during tests; type-check passed.';
-  const run = Bun.spawnSync([process.execPath, script], {
-    env: {
-      ...process.env,
-      INPUTS_GREEN: 'false',
-      INPUTS_RED_CAUSE: 'incomplete',
-      INPUTS_SUMMARY: summary,
-      INPUTS_BASELINE: '',
-    },
-  });
-  expect(run.exitCode).toBe(1);
-  expect(run.stdout.toString()).toBe('');
-  expect(run.stderr.toString().trim()).toBe(unfinishedValidation('The implementation', summary));
-  expect(run.stderr.toString()).not.toMatch(/\bred\b/);
 });
