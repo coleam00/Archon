@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, readdir, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -159,6 +159,28 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
   return parseProcessOwner(record, path);
 }
 
+const hostFingerprint = createHash('sha256').update(currentProcessOwner.host).digest('hex');
+const scratchUuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const scratchPattern = new RegExp(
+  `^\\.(lock|probe)-v1-([0-9a-f]{64})-([1-9][0-9]*)-(${scratchUuid})-${scratchUuid}(\\.link)?$`
+);
+
+function scratchName(kind: 'lock' | 'probe'): string {
+  return `.${kind}-v1-${hostFingerprint}-${String(currentProcessOwner.pid)}-${currentProcessOwner.instance}-${randomUUID()}`;
+}
+
+async function readScratchOwner(name: string, path: string): Promise<ProcessOwner | null> {
+  // Older writers used UUID-only names; their owner evidence is still in the contents.
+  if (!name.startsWith('.lock-v1-') && !name.startsWith('.probe-v1-')) return readOwner(path);
+  const match = scratchPattern.exec(name);
+  if (!match || (match[1] === 'lock' && match[5])) throw new ProcessOwnerRecordError(path);
+  const owner = parseProcessOwner(
+    { host: currentProcessOwner.host, pid: Number(match[3]), instance: match[4] },
+    path
+  );
+  return match[2] === hostFingerprint ? owner : null;
+}
+
 async function tryLink(source: string, target: string): Promise<boolean> {
   const { value } = await retryFileStoreHandles('link', target, async () => {
     try {
@@ -184,7 +206,7 @@ async function tryLink(source: string, target: string): Promise<boolean> {
 async function acquire(root: string, timeoutMs: number): Promise<() => Promise<void>> {
   const path = join(root, 'lock');
   const breaker = join(root, 'lock.break');
-  const candidate = join(root, `.lock-${randomUUID()}`);
+  const candidate = join(root, scratchName('lock'));
   const deadline = Date.now() + timeoutMs;
   let reported = false;
   try {
@@ -264,7 +286,7 @@ const unsupportedLinkCodes = [
 
 export async function probeFileStoreFilesystem(root: string): Promise<void> {
   await mkdir(root, { recursive: true });
-  const source = join(root, `.probe-${randomUUID()}`);
+  const source = join(root, scratchName('probe'));
   const target = `${source}.link`;
   try {
     await writeOwner(source);
@@ -284,9 +306,9 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
 
 /**
  * Removes `.lock-*` and `.probe-*` scratch files a process left when it died
- * between creating and removing them. Each holds its creator's owner record; a
- * file whose owner is not provably gone, or whose record cannot be read (a live
- * creator may not have written it yet), stays.
+ * between creating and removing them. Versioned names carry ownership even before
+ * the contents are written. Legacy files need a readable owner record; unprovable
+ * ownership always stays for operator inspection.
  */
 async function sweepScratch(root: string): Promise<void> {
   let names: string[];
@@ -301,7 +323,7 @@ async function sweepScratch(root: string): Promise<void> {
     if (!name.startsWith('.lock-') && !name.startsWith('.probe-')) continue;
     const path = join(root, name);
     try {
-      const owner = await readOwner(path);
+      const owner = await readScratchOwner(name, path);
       if (owner && isOwnerProvablyGone(owner)) await discard(path);
     } catch (error) {
       log.warn({ path, err: error }, 'file_store.scratch_sweep_skipped');
