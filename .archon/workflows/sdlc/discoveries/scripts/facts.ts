@@ -4,11 +4,9 @@
  *
  * A run's records become final when the run reaches a terminal status, so only
  * terminal runs are queued, oldest first. A record is settled once a decision record
- * that is not `asked` lists it. In live mode each queued run is claimed with a
- * conditional write on its `discoveries/runs/<id>` document, so two passes never
- * decide the same run; a claim is released only when the claiming run is terminal.
- * Eval mode writes nothing and claims nothing: it decides every record in the window,
- * settled or not, against whatever decisions are already stored.
+ * that is not `asked` lists it. Each queued run is claimed with a conditional write
+ * on its `discoveries/runs/<id>` document, so two passes never decide the same run;
+ * a claim is released only when the claiming run is terminal.
  *
  * Writes `$ARTIFACTS_DIR/drain/queue.json` (the queued records, for the agent and the
  * outcome) and `$ARTIFACTS_DIR/drain/discovery-decisions.md` (every stored decision).
@@ -21,7 +19,6 @@ import {
   type DecisionRecord,
   decidedRefs,
   parseDecisionRecord,
-  parseDrainMode,
   parseRunClaim,
   type QueuedRun,
   renderDecisions,
@@ -73,7 +70,6 @@ function claimRun(runId: string, self: string, at: string): boolean {
 
 function main(): void {
   // Every input is validated before anything is read or written.
-  const mode = parseDrainMode(trimmed(process.env.INPUTS_MODE));
   const since = parseTime('since', trimmed(process.env.INPUTS_SINCE));
   const until = parseTime('until', trimmed(process.env.INPUTS_UNTIL));
   const limit = Number(trimmed(process.env.INPUTS_LIMIT));
@@ -89,7 +85,7 @@ function main(): void {
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
   const decisions = readDecisions();
-  const settled = mode === 'live' ? decidedRefs(decisions) : new Set<string>();
+  const settled = decidedRefs(decisions);
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
@@ -131,7 +127,7 @@ function main(): void {
       .map(record => ({ ...record, ref: `${id}:${record.ref}` }))
       .filter(record => !settled.has(record.ref));
     if (records.length === 0) continue;
-    if (mode === 'live' && !claimRun(id, self, at)) continue;
+    if (!claimRun(id, self, at)) continue;
     queue.push({
       id,
       workflow: typeof run.workflow_name === 'string' ? run.workflow_name : '',
@@ -145,7 +141,7 @@ function main(): void {
   mkdirSync(drain, { recursive: true });
   writeFileSync(
     join(drain, 'queue.json'),
-    `${JSON.stringify({ mode, base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
+    `${JSON.stringify({ base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
   );
   writeFileSync(join(drain, 'discovery-decisions.md'), renderDecisions(decisions));
   emit({

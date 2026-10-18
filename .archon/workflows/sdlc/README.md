@@ -333,8 +333,7 @@ too — a `gh` update notice merged into a read becomes the value.
 ## Intake
 
 [`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
-Trigger bindings start it on issue events; only an eval run (below) is started by
-hand. Each issue has a work item, the state document `work/<number>` in the
+Trigger bindings start it on issue events. Each issue has a work item, the state document `work/<number>` in the
 project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
 document is the item's state: its trust, stage, triage fields, promotion, claim and
 a short history. The issue's pack labels mirror it, and a label a person adds is a
@@ -387,7 +386,7 @@ request, never the state.
   comment, so a repeated run edits it rather than adding another. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
-  it again; one closed for another reason fails the run before any comment. A demoted item, an eval run and every other verdict close nothing.
+  it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer
@@ -497,12 +496,6 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
 - **Record.** The work item's `facts.build` holds the item's status (`next`,
   `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
   rounds and its last twenty decisions with any maintainer's answer.
-- **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
-  issue named by `number`: with an empty `replay` it makes the route decision, and
-  otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
-  are its history), reading the issue body as it was at `as_of`. The agents keep
-  their read tools, so they can still see the pull request and comments as they are
-  now.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
 item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
@@ -613,9 +606,6 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue; `park` stops working it until the build queue readies it
   again. Any other ask waits for a later sweep, which decides it again.
-- **Eval mode.** `mode: eval` claims, pushes, reruns and merges nothing. It decides
-  the pull requests named in `replay`, each from the facts recorded with it, and
-  returns the decisions as the record's `evaluation`.
 
 The pack installs no binding. A schedule sweeps the queue; each run changes its
 checkout when it syncs a pull request, so it needs its own worktree, and one sweep at a
@@ -687,10 +677,6 @@ terminal report lists.
   `discoveries: question`. The answer is stored on each asked record. The runs those
   records came from stay claimed by the asking run until it ends, so no other pass asks
   again; the next pass then decides them with the answer in memory.
-- **Eval mode.** `mode: eval` reads the stored decisions and writes nothing: no state
-  document, issue or comment. It ignores which runs earlier passes drained, so it
-  decides the window's runs as unhandled, and returns every decision, and every check
-  that would have refused the pass, as the outcome's `evaluation`.
 
 The pack installs no binding, so the workflow runs only when started by hand until an
 operator adds one. A native schedule starts a pass every few hours; `overlap: skip`

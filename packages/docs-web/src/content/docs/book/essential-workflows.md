@@ -91,7 +91,7 @@ archon workflow run archon-triage "#142"
 
 #### `archon-intake`
 
-The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label. With `mode: eval` it writes nothing and returns what it would decide for the issue as it was opened, which is how to try it on real issues.
+The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label.
 
 **When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack installs no binding; the SDLC pack README's "Intake" section shows the two bindings to add.
 
@@ -101,7 +101,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake, started by a schedule binding. Each run claims one triaged item, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section. With `mode: eval` it launches and writes nothing and replays a recorded run's ending.
+The stage after intake, started by a schedule binding. Each run claims one triaged item, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack installs no binding; the SDLC pack README's "Build queue" section shows the one to add.
 
@@ -111,7 +111,7 @@ The stage after intake, started by a schedule binding. Each run claims one triag
 
 #### `archon-merge-queue`
 
-The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges the base branch into any behind it, sends a pull request whose review a push made stale to a delta review, hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready at the head, CI is green there, no review thread is unresolved and the head contains the base branch, and merges pinned to that head. After a batch it checks the base branch's CI. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices. With `mode: eval` it merges and writes nothing and replays recorded merge decisions.
+The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges the base branch into any behind it, sends a pull request whose review a push made stale to a delta review, hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready at the head, CI is green there, no review thread is unresolved and the head contains the base branch, and merges pinned to that head. After a batch it checks the base branch's CI. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices.
 
 **When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack installs no binding; the SDLC pack README's "Merge queue" section shows the one to add.
 
@@ -121,7 +121,7 @@ The stage after the build queue, started by a schedule binding. Each run claims 
 
 #### `archon-discoveries`
 
-Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, or ask a maintainer. Scripts perform only the writes it declared. With `mode: eval` it writes nothing and returns every decision.
+Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, or ask a maintainer. Scripts perform only the writes it declared.
 
 **When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. Start it by hand, or add the schedule binding the SDLC pack README's "Discoveries" section shows; the pack installs none.
 
