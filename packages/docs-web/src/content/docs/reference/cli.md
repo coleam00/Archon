@@ -968,7 +968,7 @@ archon workflow attention --json --project acme/web --label ci=other
 archon workflow attention --json --sort label:urgency
 archon workflow attention --json --all --count-by label:class
 archon workflow attention <run-id> --json                          # one item
-archon workflow attention --watch --json --all                     # every change, as lines
+archon workflow attention --watch --json --all                     # stream readable changes
 archon workflow attention --watch --json --after <cursor>          # resume a stream
 ```
 
@@ -991,12 +991,19 @@ tree cannot be read. The list holds the same items. An unknown run id prints `er
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
-item in scope, then `ready`, then a line for every change any process commits, as
+item in scope, then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
+Repeated run-projection failures send an identifier-free `degraded` line with
+`reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
+readable deliveries can continue while unreadable deliveries are omitted. Store-wide
+projection outages retain the cursor and retry. Check the operator log and reconnect
+after repair to refresh the open set; replay from before the gap for historical transitions.
+Later bookmarks do not establish repaired coverage.
 With `--json` each line is one compact JSON object; without it, a short sentence per
 change. Scope and `--label` work as for the list; `--sort`, `--count-by` and a run id are
 refused. **`--after <cursor>`** takes the `cursor` of an earlier line and, after the
-snapshot, replays every change since it. The line shapes and the consumer contract are in
+snapshot, replays readable changes since it. A `degraded` warning means replay may have
+gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
 the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start, `4` when the store cannot read the stream's cursor, an `--after` cursor this

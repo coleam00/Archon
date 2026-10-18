@@ -1,6 +1,6 @@
 /**
- * The attention queue as a stream (#3050): every change to the items in scope, across
- * every run, including runs started after the stream did.
+ * The attention queue as a stream (#3050), across runs including those started later.
+ * Unreadable run deliveries may be omitted after a `degraded` warning.
  *
  * Queue items reflect the current row; lifecycle lines follow committed events so
  * transitions survive even when the row has already moved on. Out-of-process runs are
@@ -46,7 +46,12 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
-import type { IWorkflowStore, WorkflowEventCursor, WorkflowEventPage } from './store';
+import {
+  WorkflowEventCursorError,
+  type IWorkflowStore,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+} from './store';
 import { getTerminalRecord } from './terminal-record';
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -64,7 +69,7 @@ const lineBase = { cursor: cursorSchema, project: projectRefSchema.nullable(), r
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
- * `--after` it replays what followed. `attention` carries the queue item exactly as the
+ * `--after` it replays readable deliveries that followed. `attention` carries the queue item exactly as the
  * snapshot and `workflow attention <run>` build it.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
@@ -112,6 +117,11 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
+  z.object({
+    type: z.literal('degraded'),
+    reason: z.literal('run_unreadable'),
+    cursor: cursorSchema,
+  }),
   /** The store cannot read the stream's cursor; the last line of the stream. */
   z.object({ type: z.literal('error'), error: z.literal('cursor_invalid') }),
 ]);
@@ -263,19 +273,17 @@ export async function watchAttentionQueue(
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
   // listener sees one line at a time, and the tail awaits it.
-  function emit(line: AttentionStreamLine): void {
-    if (closed) return;
+  function emit(line: AttentionStreamLine): Promise<void> {
+    if (closed) return Promise.resolve();
     lastLineAt = Date.now();
-    chain = chain.then(async () => {
-      try {
-        await listener(line);
-      } catch (error) {
-        getLog().warn(
-          { err: error as Error, type: line.type },
-          'workflow.attention_watch_listener_failed'
-        );
-      }
+    const delivery = chain.then(() => listener(line));
+    chain = delivery.catch(error => {
+      getLog().warn(
+        { err: error as Error, type: line.type },
+        'workflow.attention_watch_listener_failed'
+      );
     });
+    return delivery;
   }
 
   const inQuery = (item: AttentionQueueItem): boolean =>
@@ -377,20 +385,89 @@ export async function watchAttentionQueue(
   let views = new Map<string, Promise<RunView | null>>();
   let codebases = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>();
   let answers = new Map<string, string | null>();
+  const projectRun = async (
+    runId: string,
+    cache = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>()
+  ): Promise<RunView | null> => {
+    const run = await store.getWorkflowRun(runId);
+    if (run === null) return null;
+    const item = await attentionQueueItemForRun(source, run, cache);
+    return { run, item, project: item?.project ?? (await runProject(source, run, cache)) };
+  };
   const viewOf = (runId: string): Promise<RunView | null> => {
     let view = views.get(runId);
     if (view === undefined) {
-      view = (async (): Promise<RunView | null> => {
-        const run = await store.getWorkflowRun(runId);
-        if (run === null) return null;
-        const item = await attentionQueueItemForRun(source, run, codebases);
-        return { run, item, project: item?.project ?? (await runProject(source, run, codebases)) };
-      })();
-      // A failed read is not cached: it fails the delivery, which is retried.
+      view = projectRun(runId, codebases);
       view.catch(() => views.delete(runId));
       views.set(runId, view);
     }
     return view;
+  };
+  let blocked: { cursor: WorkflowEventCursor; warned: boolean } | undefined;
+  const isolated = new Set<string>();
+
+  const hasReadableWitness = async (delivery: WorkflowRunDelivery): Promise<boolean> => {
+    let cursor = delivery.cursor;
+    while (!closed) {
+      const page = await store.readWorkflowEventsAfter(cursor, { limit: 100 });
+      if (closed || page.events.length === 0) return false;
+      for (const { event } of page.events) {
+        if (closed) return false;
+        if (event.workflow_run_id === delivery.event.workflow_run_id) continue;
+        try {
+          // A cached success says nothing about whether reads work now.
+          await projectRun(event.workflow_run_id);
+          return !closed;
+        } catch (error) {
+          if (error instanceof WorkflowEventCursorError) throw error;
+          getLog().debug(
+            { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
+            'workflow.attention_watch_probe_failed'
+          );
+        }
+      }
+      cursor = page.next;
+    }
+    return false;
+  };
+
+  const deliveryView = async (
+    delivery: WorkflowRunDelivery
+  ): Promise<RunView | null | undefined> => {
+    const { event, cursor } = delivery;
+    const runId = event.workflow_run_id;
+    try {
+      const view = await viewOf(runId);
+      blocked = undefined;
+      return view;
+    } catch (error) {
+      if (error instanceof WorkflowEventCursorError) throw error;
+      const fields = { err: error as Error, runId, eventId: event.id, cursor };
+      if (blocked?.cursor !== cursor) {
+        blocked = { cursor, warned: false };
+        getLog().warn(fields, 'workflow.attention_watch_delivery_failed');
+        throw error;
+      }
+      if (!blocked.warned && !closed) {
+        await emit({ type: 'degraded', reason: 'run_unreadable', cursor: position() });
+        blocked.warned = true;
+      }
+      if (closed || !(await hasReadableWitness(delivery))) throw error;
+      try {
+        const view = await projectRun(runId);
+        if (closed) throw error;
+        views.set(runId, Promise.resolve(view));
+        blocked = undefined;
+        return view;
+      } catch (retryError) {
+        if (retryError instanceof WorkflowEventCursorError) throw retryError;
+        if (closed) throw retryError;
+        getLog().warn({ ...fields, retryError }, 'workflow.attention_watch_delivery_unreadable');
+        isolated.add(runId);
+        blocked = undefined;
+        return undefined;
+      }
+    }
   };
   const reconciled = new Set<string>();
 
@@ -438,9 +515,12 @@ export async function watchAttentionQueue(
     resolve(runId, prev, cursor, view?.run ?? null);
   };
 
-  const handle = async ({ cursor, event }: WorkflowRunDelivery): Promise<void> => {
+  const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
+    const { cursor, event } = delivery;
     const runId = event.workflow_run_id;
-    const view = await viewOf(runId);
+    if (closed || isolated.has(runId)) return;
+    const view = await deliveryView(delivery);
+    if (closed || view === undefined) return;
     const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
     if (!reconciled.has(runId)) {
       reconciled.add(runId);
@@ -492,6 +572,7 @@ export async function watchAttentionQueue(
         views = new Map();
         codebases = new Map();
         reconciled.clear();
+        isolated.clear();
         answers = indexAnswers(page);
       },
       onCaughtUp: () => {

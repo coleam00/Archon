@@ -4192,6 +4192,10 @@ function attentionStreamText(
       return [
         `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
       ];
+    case 'degraded':
+      return [
+        'Attention stream coverage may be incomplete because a run could not be read. Check the operator log; reconnect after repairing the read failure.',
+      ];
     case 'bookmark':
       return [];
   }
