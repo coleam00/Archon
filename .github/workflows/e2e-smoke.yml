@@ -48,6 +48,7 @@ jobs:
               # The smoke exercises the CLI --container/--folder dispatch + teardown
               # and the Claude container-exec spawn, so changes there must trigger it.
               - 'packages/cli/src/commands/workflow.ts'
+              - 'packages/cli/src/commands/workflow-isolation.ts'
               - 'packages/providers/src/claude/container-*'
               - '.github/workflows/e2e-smoke.yml'
               - '.archon/workflows/test-workflows/e2e-container-smoke.yaml'

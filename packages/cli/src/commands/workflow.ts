@@ -1,8 +1,5 @@
 import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { recordWorktreeAdoption } from '@archon/isolation';
-import { formatDuration } from '@archon/paths/duration';
-import { canonicalizeProjectPath } from '@archon/paths';
-import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -30,36 +27,20 @@ import {
  * Workflow command - list and run workflows
  */
 
-import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
-import {
-  registerRepository,
-  registerFolder,
-  ProjectRegistrationError,
-} from '@archon/core/handlers/clone';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
-import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { OverlayMode } from '@archon/workflows/container-context';
-import type {
-  AttentionWatch,
-  IWorkflowEngine,
-  WorkflowRunSubscription,
-} from '@archon/workflows/engine-port';
+import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
 import {
-  WorkflowEventCursorError,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
-  workflowEventCursor,
   deadlineWaitCursor,
   resumeCursorMatches,
 } from '@archon/workflows/store';
-import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
-import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import {
@@ -73,53 +54,31 @@ import {
   type WorkflowEventType,
 } from '@archon/workflows/store';
 import {
-  isTierName,
   applyResolvedRunModelOverrides,
   buildAiProfile,
   parseRunModelAssignments,
   resolveRunModelOverrides,
-  TIER_NAMES,
   type BuildAiProfileOptions,
   type ResolvedAiProfile,
-  type TierName,
-  type RawTiersConfig,
 } from '@archon/workflows/model-validation';
 import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
 } from '@archon/isolation';
-import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
-import {
-  getArchonHome,
-  BUNDLED_IS_BINARY,
-  BUNDLED_VERSION,
-  readTierNoticeState,
-  markTierNoticeShown,
-  expandTilde,
-  isDocker,
-  captureDetachedInstallContext,
-  type DetachedInstallContext,
-} from '@archon/paths';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import {
   applyWorkflowRunConfigLayer,
   WORKFLOW_RUN_CONFIG_METADATA_KEY,
 } from '@archon/workflows/run-config';
-import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
-import { mkdir, open as openFile } from 'node:fs/promises';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
-import {
-  findCodebaseForCheckoutPath,
-  resolveCodebaseForPath,
-} from '@archon/core/services/codebase-checkout-resolver';
+import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
-import type {
-  RunWaitResult,
-  UnknownOwnerLiveness,
-} from '@archon/core/services/run-attention-watch';
+import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import {
   startRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError,
@@ -138,20 +97,8 @@ import {
   type PreparedWorkflowSource,
   type ResolvedContinuation,
 } from '@archon/workflows/run-source';
-import {
-  assertWorkflowRequirementsMet,
-  resolveTopLevelInputs,
-} from '@archon/workflows/utils/workflow-requirements';
-import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflow-requirements';
+import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
-import { formatDeprecationNotice } from '@archon/workflows/deprecation';
-import type { WorkflowEvent } from '@archon/workflows/logger';
-import {
-  providerEventEnvelopeSchema,
-  providerEventLineSchema,
-  type ProviderEventLine,
-} from '@archon/workflows/schemas/provider-event';
-import { formatToolInputBrief } from '@archon/workflows/utils/tool-formatter';
 import {
   dryRunWorkflow,
   formatDryRunTrace,
@@ -159,16 +106,10 @@ import {
   writeDryRunStubScaffold,
 } from '@archon/workflows/dry-run';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
-import {
-  getWorkflowEventEmitter,
-  type WorkflowEmitterEvent,
-} from '@archon/workflows/event-emitter';
-import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import {
   findWorkflowLoadError,
-  type WorkflowDefinition,
   type WorkflowLoadError,
-  type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
@@ -178,7 +119,6 @@ import {
   pendingWorkflowWaitDeadline,
   workflowWaitStepName,
   isScheduledWorkflowResume,
-  readRunStopReason,
   runAttention,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
@@ -187,8 +127,6 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ContinuationMode,
-  RunAttention,
-  ExecutionOwnerRecord,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -209,11 +147,7 @@ import {
   adoptRegisteredWorktree,
   resolveWorkflowAdoption,
 } from '@archon/core/operations/workflow-adoption';
-import {
-  attentionProjectForCwd,
-  attentionQueueSource,
-  resolveAttentionProject,
-} from '@archon/core/operations/attention-queue';
+import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import {
   countAttentionQueue,
   listAttentionQueue,
@@ -221,12 +155,10 @@ import {
   parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
-  type AttentionQueueItem,
-  type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
-import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
+import { attentionAnswerLines } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import {
   loadWorkflows,
@@ -237,14 +169,13 @@ import {
 import {
   buildNodeSummaries,
   fetchVerboseEvents,
-  formatSkipCause,
   listRunEvents,
   printVerboseNodes,
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
-import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
+import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
@@ -265,547 +196,61 @@ import {
   type WorkflowRunOptions,
 } from './workflow-shared';
 
+import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
+import { type OpenToolCalls, workflowEventLine } from './workflow-run-output';
 import {
-  DETACHED_RESUME_RECEIPT_ENV,
-  DETACHED_RESUME_RECEIPT_FD,
-  consumeDetachedResumeReceiptRequest,
-  waitForDetachedResumeReceipt,
-} from '../utils/detached-resume-receipt';
-
-const DETACHED_STARTUP_WINDOW_MS = 500;
-const DETACHED_LOG_TAIL_MAX_CHARS = 4_000;
-const DETACHED_LOG_TAIL_MAX_LINES = 40;
-
-function readDetachedLogTail(path: string): string | null {
-  try {
-    const content = readFileSync(path, 'utf8');
-    const lines = content.slice(-DETACHED_LOG_TAIL_MAX_CHARS).split('\n');
-    const tail = lines.slice(-DETACHED_LOG_TAIL_MAX_LINES).join('\n').trim();
-    return tail.length > 0 ? tail : null;
-  } catch {
-    return null;
-  }
-}
-
-function detachedStartupExitError(
-  code: number | null,
-  signal: NodeJS.Signals | null,
-  logPath: string | null
-): Error {
-  const reason = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${String(code)}`;
-  const tail = logPath ? readDetachedLogTail(logPath) : null;
-  const diagnostic = tail ? `\n\nChild output (${logPath}):\n${tail}` : '';
-  return new Error(`Detached workflow child exited during startup with ${reason}.${diagnostic}`);
-}
-
-async function waitForDetachedStartup(
-  child: ChildProcess,
-  logPath: string | null,
-  execPath: string,
-  conversationId: string
-): Promise<void> {
-  const outcome = await new Promise<'completed' | 'failed' | 'survived'>((resolve, reject) => {
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      child.off('exit', onExit);
-      child.off('error', onStartupError);
-    };
-    const settle = (result: 'completed' | 'failed' | 'survived' | Error): void => {
-      cleanup();
-      if (result instanceof Error) reject(result);
-      else resolve(result);
-    };
-    // A child that is gone before the window closes either finished the run that fast or
-    // never started it, and only the child can say which: `DETACHED_RUN_FAILED_EXIT_CODE`
-    // is it reporting its run's own failure. Everything else non-zero is a death this
-    // process could not have caused and the run cannot explain — a launch failure.
-    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-      if (code === 0) settle('completed');
-      else if (code === DETACHED_RUN_FAILED_EXIT_CODE) settle('failed');
-      else settle(detachedStartupExitError(code, signal, logPath));
-    };
-    const onStartupError = (error: Error): void => {
-      settle(error);
-    };
-    const timer = setTimeout(() => {
-      settle('survived');
-    }, DETACHED_STARTUP_WINDOW_MS);
-
-    child.once('exit', onExit);
-    child.once('error', onStartupError);
-  });
-
-  if (outcome === 'survived') child.unref();
-  getLog().debug(
-    { execPath, conversationId, outcome, startupWindowMs: DETACHED_STARTUP_WINDOW_MS },
-    'cli.detached_run_startup_acknowledged'
-  );
-}
-
-/**
- * Default runner image when `.archon/config.yaml > container.image` is unset.
- * The build script (`bun run build:runner-image`) tags both
- * `archon-runner:<version>` and `archon-runner:latest`; defaulting to `latest`
- * always matches the most recently built image without coupling to the
- * dev-vs-binary version string. Operators pin `container.image` for reproducibility.
- */
-const DEFAULT_RUNNER_IMAGE = 'archon-runner:latest';
-
-/**
- * Resolve the container backend config from the merged `container` config,
- * applying Phase B defaults (bridge network, 4 GiB memory, 512 pids).
- *
- * `container.*` comes from hand-parsed YAML (not Zod), so the values are
- * untrusted at runtime despite their static types — validate them here. In
- * particular `network` must be `bridge`/`none`: a stray `host` would otherwise
- * flow straight to `docker run --network host` and drop the network isolation.
- */
-export function resolveContainerBackendConfig(
-  cfg: { image?: string; network?: string; memoryMb?: number; pidsLimit?: number } | undefined
-): ContainerBackendConfig {
-  const network = cfg?.network;
-  if (network !== undefined && network !== 'bridge' && network !== 'none') {
-    throw new Error(
-      `Invalid container.network '${network}' in .archon/config.yaml — must be ` +
-        "'bridge' or 'none'. Host networking is not allowed for container isolation."
-    );
-  }
-  // Positive INTEGERS — `docker run --memory`/`--pids-limit` reject fractions,
-  // and Number.isFinite alone would let `512.5` through to a runtime docker error.
-  const memoryMb = cfg?.memoryMb;
-  if (memoryMb !== undefined && (!Number.isInteger(memoryMb) || memoryMb <= 0)) {
-    throw new Error(
-      `Invalid container.memoryMb '${String(memoryMb)}' — must be a positive integer (MiB).`
-    );
-  }
-  const pidsLimit = cfg?.pidsLimit;
-  if (pidsLimit !== undefined && (!Number.isInteger(pidsLimit) || pidsLimit <= 0)) {
-    throw new Error(
-      `Invalid container.pidsLimit '${String(pidsLimit)}' — must be a positive integer.`
-    );
-  }
-  return {
-    image: cfg?.image?.trim() || DEFAULT_RUNNER_IMAGE,
-    network: network ?? 'bridge',
-    memoryMb: memoryMb ?? 4096,
-    pidsLimit: pidsLimit ?? 512,
-  };
-}
-
-/**
- * H2 — a container run has an UNRESOLVED write-back when its overlay diff was raised
- * for review (`pending_writeback` set) but never applied or discarded
- * (`writeback_resolved !== true`). This happens on a failed/partial apply. The CLI
- * teardown must PRESERVE the container+volume in this state (the overlay is the only
- * copy of the changes) rather than destroy it. Pure so the decision is unit-testable.
- */
-export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
-  if (!metadata) return false;
-  return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
-}
-
-/**
- * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
- * so both the dev (bun + entry script) and compiled-binary (execPath only)
- * branches are unit-testable — the binary branch is otherwise unreachable in
- * tests because `BUNDLED_IS_BINARY` is a module-level const. Drops `--detach`
- * and `--json` and appends `--cwd <cwd>` (last-wins) plus any extra flags.
- */
-export function buildDetachedRunCmd(
-  isBinary: boolean,
-  execPath: string,
-  argv: string[],
-  cwd: string,
-  extraArgs: string[]
-): string[] {
-  // Only the command prefix differs between modes: in a compiled binary
-  // execPath IS the archon binary and re-invoking it needs no entry script; in
-  // dev, execPath is bun and argv[1] is the cli entry that bun must be handed.
-  const baseCmd = isBinary ? [execPath] : [execPath, argv[1]];
-  // User args always start at argv[2] in BOTH modes. A Bun single-file
-  // executable does have an argv[1] — the virtual entry path
-  // (`/$bunfs/root/<name>`, `B:/~BUN/root/<name>.exe` on Windows) — so slicing
-  // from 1 in binary mode leaked that path in as the child's first token and
-  // the child died with `Unknown command: B:/~BUN/root/archon-...exe` (#2248).
-  // cli.ts's own parser reads `process.argv.slice(2)` unconditionally, which is
-  // the contract this must match.
-  const userArgs: string[] = [];
-  const supplied = argv.slice(2);
-  for (let index = 0; index < supplied.length; index++) {
-    const arg = supplied[index];
-    if (arg === '--')
-      return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs, ...supplied.slice(index)];
-    if (arg === '--base-branch') {
-      index++;
-      continue;
-    }
-    if (arg.startsWith('--base-branch=') || arg === '--detach' || arg === '--json') continue;
-    userArgs.push(arg);
-  }
-  // --cwd is appended last (parseArgs last-wins) so the child resolves the same
-  // absolute working dir regardless of any relative --cwd the caller passed.
-  return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
-}
-
-/** Freeze the install key context before a detached child changes cwd. */
-export function resolveDetachedRunEncryptionEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  cwd: string = process.cwd()
-): DetachedInstallContext {
-  return {
-    ...captureDetachedInstallContext(env),
-    ARCHON_HOME: isDocker(env)
-      ? getArchonHome(env)
-      : env.ARCHON_HOME
-        ? resolve(cwd, expandTilde(env.ARCHON_HOME))
-        : '',
-  };
-}
-
-async function spawnDetachedWorkflowRun(
-  cwd: string,
-  conversationId: string,
-  extraArgs: string[],
-  runConfigPayload?: string,
-  confirmResume = false
-): Promise<string | null> {
-  const cmd = buildDetachedRunCmd(
-    BUNDLED_IS_BINARY,
-    process.execPath,
-    process.argv,
-    cwd,
-    runConfigPayload
-      ? [...extraArgs, '--internal-detached-run-config', runConfigPayload]
-      : extraArgs
-  );
-
-  let logPath: string | null = null;
-  let logFd: number | undefined;
-  try {
-    const logDir = join(getArchonHome(), 'logs');
-    mkdirSync(logDir, { recursive: true });
-    logPath = join(logDir, `detached-run-${conversationId}.log`);
-    logFd = openSync(logPath, 'a');
-    writeSync(
-      logFd,
-      `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
-    );
-  } catch (error) {
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
-    getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
-    logPath = null;
-    logFd = undefined;
-  }
-
-  try {
-    // Node's spawn with `detached: true` puts the child in its own process
-    // group so it survives the parent's exit. Bun.spawn + unref() does NOT
-    // detach on Windows — the child was killed ~1s in (at worktree_creating)
-    // when the launching shell/console tore down. `detached: true` is the
-    // standard fix, also used by setup-spawn.ts's trySpawn(); if a kill-on-close Job
-    // Object wrapper ever defeats it, a `start /b` breakaway fallback is the
-    // next step. `windowsHide` keeps the child headless.
-    const child = spawn(cmd[0], cmd.slice(1), {
-      cwd,
-      env: {
-        ...process.env,
-        [DETACHED_RUN_OWNER_ENV]: '1',
-        [DETACHED_RESUME_RECEIPT_ENV]: confirmResume ? '1' : '',
-        ...(runConfigPayload
-          ? {
-              // Empty strings preserve meaningful absence: Bun will not fill
-              // these from the target repo's auto-loaded .env.
-              ...resolveDetachedRunEncryptionEnv(),
-            }
-          : {}),
-      },
-      stdio: [
-        'ignore',
-        logFd ?? 'ignore',
-        logFd ?? 'ignore',
-        ...(confirmResume ? ['pipe' as const] : []),
-      ],
-      detached: true,
-      windowsHide: true,
-    });
-    // Unlike Bun.spawn, Node's spawn does NOT throw synchronously on a bad
-    // executable or cwd — the failure arrives as an async 'error' event, which
-    // would crash the CLI as an uncaught exception without this listener.
-    child.on('error', (error: Error) => {
-      getLog().error(
-        { err: error, execPath: cmd[0], conversationId },
-        'cli.detached_run_spawn_failed'
-      );
-    });
-    // pid is set synchronously iff the OS-level spawn succeeded (same check as
-    // setup-spawn.ts's trySpawn) — fail fast instead of acking a run that never started.
-    if (child.pid === undefined) {
-      throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
-    }
-    if (confirmResume) {
-      const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
-      if (!pipe || !('readable' in pipe)) {
-        child.unref();
-        throw new Error('Detached resume acceptance pipe was not created.');
-      }
-      try {
-        await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
-          detachedStartupExitError(code, signal, null)
-        );
-      } catch (error) {
-        const tail = logPath ? readDetachedLogTail(logPath) : null;
-        throw new Error(
-          `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
-            (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
-          { cause: error }
-        );
-      }
-    } else {
-      await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
-    }
-  } finally {
-    // The child inherits its own dup of the log fd; close the parent's copy so a
-    // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
-  }
-  return logPath;
-}
-
-/**
- * Wraps a codebase auto-registration failure. Preserves the original error message;
- * a refusal already says what to do, other failures get a workspace-root pointer.
- */
-function buildRegistrationFailureError(error: Error): Error {
-  let hint = '';
-  if (!(error instanceof ProjectRegistrationError)) {
-    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
-    // the registration error we're wrapping is the load-bearing one — we'd
-    // rather lose the exact path in the hint than replace it with a secondary
-    // home-resolution error that masks the root cause.
-    try {
-      const workspacesPath = join(getArchonHome(), 'workspaces');
-      hint = `\nHint: Check your Archon workspace registration under ${workspacesPath} and retry.`;
-    } catch {
-      hint = '\nHint: Check your Archon workspace registration and retry.';
-    }
-  }
-
-  return new Error(
-    `Cannot run workflow: project registration failed.\nError: ${error.message}${hint}`
-  );
-}
-
-/** Error for --branch/--from/--base used against a folder project (no worktree). */
-function folderWorktreeOptionError(): Error {
-  return new Error(
-    'Worktree options require a git-repo project.\n' +
-      '  --branch/--from/--base act on an isolated git worktree, which folder projects do not use.\n' +
-      '  Drop --branch/--from/--base — folder projects always run in place.'
-  );
-}
-
-/**
- * Warn that `--base` is only HALF applied when an existing worktree is adopted
- * (`--branch` reuse or `--resume`): its cut-from is already fixed, but the
- * override still reaches `$BASE_BRANCH` and retargets the PR.
- *
- * Deliberately not `--from`'s "was not applied" wording — that is accurate for
- * `--from`, which is wholly inert on reuse, and would understate this case.
- */
-function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
-  getLog().warn(
-    { path: workingPath, baseBranch: flagBase },
-    'worktree.reuse_base_override_partial'
-  );
-  console.warn(
-    `Warning: Reusing existing worktree at ${workingPath}. ` +
-      `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
-      'it still applies to the PR target.'
-  );
-}
-
-/** Error for a worktree-pinned workflow run against a folder project. */
-function folderWorktreePolicyError(workflowName: string): Error {
-  return new Error(
-    `Workflow '${workflowName}' requires a worktree (worktree.enabled: true), ` +
-      'which is not available for folder projects (no Archon-managed worktree).\n' +
-      '  Run this workflow against a git-repo project, or change its worktree policy.'
-  );
-}
-
-/**
- * Error for a failed `--folder` project registration. Distinct from
- * {@link buildRegistrationFailureError} because a folder project has no workspace
- * `source` link, so its workspace hints would be misleading here.
- */
-function buildFolderRegistrationFailureError(error: Error): Error {
-  return new Error(
-    'Cannot register folder project.\n' +
-      `Error: ${error.message}\n` +
-      'Hint: Check that the directory is readable and your Archon home ' +
-      '(~/.archon) is writable, then retry.'
-  );
-}
-
-/**
- * Refuse an isolated run that has no project to isolate, naming which step failed.
- *
- * One owner because two callers enforce the same policy at different times: the
- * `--detach` pre-flight, which must refuse before the fork (#2872), and the isolation
- * block, which is where a foreground run reaches it. Two copies of this decision is
- * exactly how the detached path came to skip it.
- *
- * A no-op once a codebase resolved — the isolation block only reaches it with none, and
- * the pre-flight calls it unconditionally for an isolating run.
- */
-function assertCodebaseResolvedForIsolation(resolved: { codebase: Codebase | null }): void {
-  if (resolved.codebase) return;
-  throw new Error(
-    'Cannot create worktree: not in a git repository.\n' +
-      'Run from within a git repo, or use --no-worktree to skip isolation.'
-  );
-}
-
-/** The refusal when `--resume` finds nothing to continue. */
-function buildNoResumableRunError(workflowName: string, cwd: string): Error {
-  return new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
-}
-
-/** The refusal when the resumable-run lookup itself could not answer. */
-function buildResumeLookupFailureError(error: Error): Error {
-  return new Error(
-    'Cannot resume: Database lookup failed.\n' +
-      `Error: ${error.message}\n` +
-      'Hint: Check your database connection before using --resume.'
-  );
-}
-
-/**
- * Validate a `--supersedes` declaration (#2747): the run must exist and be terminal.
- * Supersede inherits nothing, so existence and terminality are the whole contract.
- *
- * One owner for the refusals because two callers need them: the `--detach` pre-flight,
- * which refuses before forking (#2872), and the run path that records the provenance.
- */
-async function resolveSupersededRun(host: WorkflowHost, runId: string): Promise<WorkflowRun> {
-  const superseded = await host.deps.store.getWorkflowRun(runId);
-  if (!superseded) {
-    throw new Error(`Cannot supersede: no workflow run '${runId}' exists.`);
-  }
-  if (!TERMINAL_WORKFLOW_STATUSES.includes(superseded.status)) {
-    throw new Error(`Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`);
-  }
-  return superseded;
-}
-
-/**
- * The acting CLI user's Archon id, or undefined when `ARCHON_USER_ID`/`$USER` is unset
- * or the identity cannot be resolved. Attribution is best-effort by design — a run must
- * not fail because the user table could not be reached.
- */
-async function resolveCliUserRecordId(host: WorkflowHost): Promise<string | undefined> {
-  const cliId = resolveCliUserId();
-  if (!cliId) return undefined;
-  try {
-    const cliUser = await host.records.users.findOrCreateUserByPlatformIdentity(
-      'cli',
-      cliId,
-      cliId
-    );
-    return cliUser?.id;
-  } catch (error) {
-    getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
-    return undefined;
-  }
-}
-
-/**
- * Fail fast if `--branch`/`--from`/`--base` (git-worktree-only options) are used
- * against a folder project. Called at three sites — flag-declared (pre-detach), the
- * detach fast-path, and post-lookup (authoritative) — so the check lives in one place.
- *
- * `--base` belongs here even though a folder run creates no worktree for it to
- * redirect: it would still reach `$BASE_BRANCH`, giving the run a PR target with
- * no worktree behind it.
- */
-function assertNoWorktreeOptionsForFolder(
-  isFolderProject: boolean,
-  options: WorkflowRunOptions
-): void {
-  if (
-    isFolderProject &&
-    (options.branchName !== undefined ||
-      options.fromBranch !== undefined ||
-      options.baseBranch !== undefined)
-  ) {
-    throw folderWorktreeOptionError();
-  }
-}
-
-/** Fail fast if a `worktree.enabled: true` workflow is run against a folder project. */
-function assertWorkflowNotWorktreePinnedForFolder(
-  isFolderProject: boolean,
-  pinnedEnabled: boolean | undefined,
-  workflowName: string
-): void {
-  if (isFolderProject && pinnedEnabled === true) {
-    throw folderWorktreePolicyError(workflowName);
-  }
-}
-
-/**
- * Capability gate for the CLI run path.
- *
- * Mirrors the orchestrator's `requires: [github]` enforcement
- * (workflow-dispatch.ts `dispatchOrchestratorWorkflow`) so a workflow that
- * declares `requires: [github]` is hard-blocked BEFORE any worktree/clone/AI
- * cost — and before the `--detach` fork — when the acting CLI user hasn't
- * connected their GitHub identity. Throws WorkflowRequirementError, surfaced by
- * the CLI top-level handler (cli.ts) as a clean, actionable `Error: ...` line.
- *
- * No-op on solo PAT installs: `host.deps.isPerUserGitHubEnabled?.()` is false unless the
- * GitHub App + TOKEN_ENCRYPTION_KEY are both configured — identical semantics
- * to the orchestrator gate.
- */
-async function assertCliWorkflowRequirementsMet(
-  host: WorkflowHost,
-  workflow: RequirementBearingWorkflow
-): Promise<void> {
-  if (!host.deps.isPerUserGitHubEnabled?.() || !workflow.requires?.length) return;
-
-  // Resolve the acting CLI user (ARCHON_USER_ID, else $USER/$USERNAME) → Archon
-  // user id, then check for a stored GitHub connection. An unresolvable user or
-  // a lookup failure means "not connected" — fail closed, never silently allow.
-  const cliId = resolveCliUserId();
-  let githubConnected = false;
-  if (cliId) {
-    try {
-      const cliUser = await host.records.users.findOrCreateUserByPlatformIdentity(
-        'cli',
-        cliId,
-        cliId
-      );
-      githubConnected =
-        cliUser !== null && Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
-    } catch (error) {
-      getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
-    }
-  }
-
-  assertWorkflowRequirementsMet(workflow, { githubConnected });
-}
+  TRANSCRIPT_POLL_INTERVAL_MS,
+  type TranscriptFormat,
+  type TranscriptReadState,
+  transcriptOutput,
+  drainTranscript,
+  finishTranscriptDecode,
+  transcriptUnavailableMessage,
+} from './workflow-transcript';
+import {
+  usageLimitWaitLine,
+  formatToolAttention,
+  formatWaitOutcome,
+  announceWaitAttached,
+  describeCheckoutBaseline,
+  describeRunStopReason,
+  type LeaveBehind,
+  buildLeaveBehind,
+  readParseWarningEvents,
+} from './workflow-inspect';
+import {
+  type WorkflowAttentionOptions,
+  resolveAttentionRunId,
+  attentionScope,
+  printAttentionItem,
+  workflowAttentionWatch,
+} from './workflow-attention';
+import {
+  spawnDetachedWorkflowRun,
+  recordDetachedChildStartupFailure,
+  runDetachedControlCommand,
+} from './workflow-detach';
+import {
+  resolveContainerBackendConfig,
+  hasUnresolvedWriteback,
+  warnBaseOverrideOnReuse,
+  assertCodebaseResolvedForIsolation,
+  assertNoWorktreeOptionsForFolder,
+  assertWorkflowNotWorktreePinnedForFolder,
+  resolveRunCodebase,
+  assertResumeWorkingPathExists,
+} from './workflow-isolation';
+import {
+  buildNoResumableRunError,
+  buildResumeLookupFailureError,
+  resolveSupersededRun,
+  resolveCliUserRecordId,
+  assertCliWorkflowRequirementsMet,
+  maybePrintTierNotice,
+  emitParseWarnings,
+  emitDeprecationNotice,
+  countWorkflowSources,
+} from './workflow-run-preflight';
 
 async function resolveCliDryRunAiPrefs(
   host: WorkflowHost
@@ -823,278 +268,6 @@ async function resolveCliDryRunAiPrefs(
     getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
     return {};
   }
-}
-
-/**
- * Print a one-time per-version tier notice to stderr when the workflow uses
- * unconfigured tier-keyword nodes (small/medium/large resolving via built-in
- * defaults). Suppressed under --quiet. Uses the same 7-char tier column as
- * `archon ai tier list`.
- */
-export async function maybePrintTierNotice(
-  host: WorkflowHost,
-  workflow: Pick<WorkflowDefinition, 'model'> & {
-    readonly nodes: readonly WorkflowDefinition['nodes'][number][];
-  },
-  cwd: string,
-  cliUserId: string | undefined,
-  quiet: boolean | undefined
-): Promise<void> {
-  if (quiet) return;
-
-  // Collect tier keywords used by the workflow — check the workflow-level default
-  // first (model: large at the top level applies to all nodes without overrides),
-  // then per-node overrides.
-  const usedTiers = new Set<TierName>();
-  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
-    usedTiers.add(workflow.model);
-  }
-  for (const node of workflow.nodes) {
-    if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
-      usedTiers.add(node.model);
-    }
-  }
-  if (usedTiers.size === 0) return;
-
-  // Load install config to see which tiers are explicitly configured.
-  let config: Awaited<ReturnType<WorkflowDeps['loadConfig']>>;
-  try {
-    config = await host.deps.loadConfig(cwd);
-  } catch (err) {
-    getLog().debug({ err }, 'tier_notice.config_load_failed');
-    return;
-  }
-  const configuredTiers: RawTiersConfig = config.tiers ?? {};
-
-  // Layer in the CLI user's personal tier prefs (best-effort, non-fatal).
-  let userTiers: RawTiersConfig = {};
-  let userDefaultProvider: string | undefined;
-  if (cliUserId) {
-    try {
-      const prefs = (await host.deps.getUserAiPrefs?.(cliUserId)) ?? {};
-      userTiers = prefs.tiers ?? {};
-      userDefaultProvider = prefs.defaultProvider;
-    } catch {
-      // Non-fatal — proceed without user tier info.
-    }
-  }
-
-  // Only notify when at least one used tier is unconfigured (built-in default).
-  const hasUnconfigured = [...usedTiers].some(t => !configuredTiers[t] && !userTiers[t]);
-  if (!hasUnconfigured) return;
-
-  // One-time per Archon version (a version bump may ship new tier defaults).
-  const version = BUNDLED_VERSION;
-  if (readTierNoticeState()?.shownForVersion === version) return;
-
-  // Build the resolved profile for the effective default assistant.
-  const effectiveAssistant = userDefaultProvider ?? config.assistant;
-  let aliases: ReturnType<typeof buildAiProfile>['aliases'];
-  try {
-    aliases = buildAiProfile(effectiveAssistant, {
-      globalTiers: configuredTiers,
-      userTiers,
-    }).aliases;
-  } catch (err) {
-    // Non-fatal: a corrupt tier/alias config can make buildAiProfile throw —
-    // skip the notice rather than blocking the run.
-    getLog().debug({ err }, 'tier_notice.build_profile_failed');
-    return;
-  }
-
-  const tierLines: string[] = [];
-  for (const t of TIER_NAMES) {
-    const preset = aliases[t];
-    if (preset) tierLines.push(`     ${t.padEnd(7)} → ${preset.provider}/${preset.model}`);
-  }
-  // Only claude and codex ship built-in tier defaults. With none for this
-  // provider there is nothing truthful to announce — the run's tier
-  // resolution fails loudly with the full configuration guidance, and this
-  // notice must not claim defaults are in play. Not marked shown: once the
-  // operator configures tiers for a provider WITH built-ins, the one-time
-  // notice should still fire.
-  if (tierLines.length === 0) return;
-  const lines: string[] = [
-    "ℹ️  This workflow uses model tiers (small/medium/large). You haven't configured them —",
-    `   using built-in defaults for '${effectiveAssistant}':`,
-    ...tierLines,
-  ];
-  // Plan-dependent 1M note for the large→opus row (the CLI can't detect the plan).
-  const largePreset = aliases.large;
-  if (largePreset?.provider === 'claude' && largePreset.model === 'opus') {
-    lines.push(
-      '   (Opus runs a 1M context window on API keys and Max/Team/Enterprise;',
-      "    on Pro it's 200K unless you set the `large` tier to `opus[1m]`.)"
-    );
-  }
-  lines.push(
-    '   Customize: `archon ai tier set <tier> <provider> <model>`',
-    '              or `tiers:` in .archon/config.yaml',
-    '   See anytime: `archon ai tier list`           (shown once per version)',
-    ''
-  );
-  process.stderr.write(lines.join('\n') + '\n');
-
-  markTierNoticeShown(version);
-}
-
-/**
- * Tool calls this subscription saw start and not yet close, keyed by attempt and call id,
- * so a completion line can name its tool and duration. One per run subscription.
- */
-type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
-
-/**
- * The wording of a node's progress lines. A foreground run renders them from persisted
- * event rows and `workflow logs --format text` from transcript rows; both call these so
- * the lines are worded alike. The label differs: the foreground names a command node by
- * its command, the transcript by its node id, which is all its failure and skip rows record.
- */
-const nodeLine = {
-  started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
-  completed: (name: string, durationMs?: number): string =>
-    `[${name}] Completed${durationMs === undefined ? '' : ` (${formatDuration(durationMs)})`}`,
-  failed: (name: string, error: string): string => `[${name}] Failed: ${error}`,
-  skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
-};
-
-function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
-  switch (event.type) {
-    case 'node_started': {
-      let suffix = '';
-      if (event.provider !== undefined && event.model !== undefined) {
-        const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
-        suffix = `  (${event.provider}/${event.model}${tierPart})`;
-      }
-      return nodeLine.started(event.nodeName, suffix);
-    }
-    case 'node_completed':
-      return nodeLine.completed(event.nodeName, event.duration);
-    case 'node_failed':
-      return nodeLine.failed(event.nodeName, event.error);
-    case 'node_skipped':
-      return nodeLine.skipped(event.nodeName, formatSkipCause(event.cause));
-    case 'node_skipped_prior_success':
-      return nodeLine.skipped(event.nodeName, 'prior_success');
-    default:
-      return undefined;
-  }
-}
-
-function containerLine(phase: string, data: Record<string, unknown>): string {
-  const id = typeof data.containerId === 'string' ? data.containerId : '';
-  const idPart = id ? ` ${id.slice(0, 12)}` : '';
-  return `[container] ${phase}${idPart}`;
-}
-
-function toolLine(row: WorkflowEventRow, openToolCalls: OpenToolCalls): string | undefined {
-  // A row this build cannot read (another build's provider events) is skipped, as the
-  // transcript reader does; a throw here would only log once per row.
-  const parsed = providerEventEnvelopeSchema.safeParse(row.data);
-  if (!parsed.success) return undefined;
-  const envelope = parsed.data;
-  const providerEvent = envelope.event;
-  // A call id is unique within its attempt; parallel nodes can repeat one.
-  const callKey = JSON.stringify([
-    envelope.attemptId,
-    'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
-  ]);
-  if (providerEvent.type === 'tool_call') {
-    const name = toolCallDisplayName(providerEvent);
-    openToolCalls.set(callKey, { name, observedAt: envelope.observedAt });
-    return `[${row.step_name}] tool: ${name} (started, ${providerEvent.toolCallId})`;
-  }
-  if (providerEvent.type !== 'tool_call_update') return undefined;
-  const started = openToolCalls.get(callKey);
-  openToolCalls.delete(callKey);
-  const duration =
-    started === undefined
-      ? ''
-      : `${String(Date.parse(envelope.observedAt) - Date.parse(started.observedAt))}ms, `;
-  const exitCode =
-    providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
-  return `[${row.step_name}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})`;
-}
-
-/** The progress line a persisted workflow event renders as, if any. */
-function workflowEventLine(
-  row: WorkflowEventRow,
-  verbose: boolean,
-  openToolCalls: OpenToolCalls
-): string | undefined {
-  const nodeEvent = readNodeEmitterEvent(row);
-  if (nodeEvent !== undefined) return nodeEventLine(nodeEvent);
-  switch (row.event_type) {
-    case 'workflow_started':
-      return typeof row.data.transcriptPath === 'string'
-        ? `[workflow] Transcript: ${row.data.transcriptPath}`
-        : undefined;
-    case 'approval_requested':
-      return typeof row.data.message === 'string'
-        ? `[${row.step_name}] Waiting for approval: ${row.data.message}`
-        : undefined;
-    case 'pause_notice_undelivered':
-      return `[${row.step_name}] Pause notice not delivered; the run is still waiting`;
-    case 'container_created':
-    case 'container_stopped':
-    case 'container_resumed':
-    case 'container_destroyed':
-      return containerLine(row.event_type.slice('container_'.length), row.data);
-    case 'writeback_requested':
-    case 'writeback_applied':
-    case 'writeback_discarded':
-      return containerLine(row.event_type, row.data);
-    case 'provider_event':
-      return verbose ? toolLine(row, openToolCalls) : undefined;
-    default:
-      // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
-      return undefined;
-  }
-}
-
-/**
- * Print a workflow's parse warnings (keys the engine silently drops) to stderr.
- *
- * stderr rather than stdout so `--json` callers keep a parseable payload while
- * still being told; `console.warn` rather than the logger because `--json` sets
- * the log level to silent, which is exactly the case this has to survive.
- */
-export function emitParseWarnings(
-  parseWarnings: readonly string[] | undefined,
-  workflowName: string
-): void {
-  if (!parseWarnings || parseWarnings.length === 0) return;
-  console.warn(`Warning: '${workflowName}' declares keys the engine ignores:`);
-  for (const warning of parseWarnings) {
-    console.warn(`  - ${warning}`);
-  }
-}
-
-/**
- * Print a deprecated workflow's removal notice (#2781) to stderr.
- *
- * Same channel as emitParseWarnings: stderr keeps `--json` stdout parseable,
- * and `console.warn` survives `--json`'s log silencing. Not gated on --quiet —
- * a user driving runs programmatically still has to learn the default they
- * picked is scheduled for removal.
- */
-export function emitDeprecationNotice(
-  workflow: Pick<WorkflowDefinition, 'name' | 'deprecated'>
-): void {
-  const notice = formatDeprecationNotice(workflow);
-  if (notice) console.warn(notice);
-}
-
-function countWorkflowSources(
-  workflows: readonly WorkflowWithSource[]
-): Record<WorkflowSource, number> {
-  return workflows.reduce<Record<WorkflowSource, number>>(
-    (counts, entry) => {
-      counts[entry.source] += 1;
-      return counts;
-    },
-    { bundled: 0, global: 0, project: 0, installed: 0 }
-  );
 }
 
 export interface WorkflowListOptions {
@@ -1307,127 +480,6 @@ export async function workflowListCommand(
       console.log(`  ${e.filename}: ${e.error}`);
     }
     console.log('');
-  }
-}
-
-/**
- * Resolve the project this run belongs to: look it up, else register it.
- *
- * Registered folders own descendants unless a nested repository starts inside
- * them. Repository checkouts resolve through Git identity.
- *
- * One implementation because two callers need the same answer: the `--detach`
- * pre-flight, which must resolve the project before it can create the run row or
- * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
- * so the detached child's own call finds what the parent registered.
- *
- * Explicit folder selection fails on unknown or conflicting registration. Any lookup
- * or registration failure is fatal. First-time folder registration is returned too,
- * because detached JSON output cannot include a prose notice.
- */
-async function resolveRunCodebase(
-  host: WorkflowHost,
-  cwd: string,
-  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
-): Promise<{
-  codebase: Codebase | null;
-  /** Set only when THIS call registered a new folder project. */
-  registeredFolder?: { name: string; defaultCwd: string };
-}> {
-  let codebase: Codebase | null = null;
-  let registeredFolder: { name: string; defaultCwd: string } | undefined;
-  cwd = await canonicalizeProjectPath(cwd);
-  let repoRoot: string | null = null;
-  try {
-    if (options.codebaseId) {
-      codebase = await host.records.codebases.getCodebase(options.codebaseId);
-    } else if (options.folder) {
-      codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
-    } else {
-      ({ codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases));
-    }
-  } catch (error) {
-    if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-    const err = error as Error;
-    getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
-    if (
-      err.message.includes('connect') ||
-      err.message.includes('ECONNREFUSED') ||
-      err.message.includes('ETIMEDOUT')
-    ) {
-      getLog().warn(
-        { hint: 'Check DATABASE_URL and that the database is running.' },
-        'cli.db_connection_hint'
-      );
-    }
-    throw new Error(`Cannot run workflow: project lookup failed.\nError: ${err.message}`, {
-      cause: err,
-    });
-  }
-  if (options.codebaseId && !codebase)
-    throw new Error(`Project "${options.codebaseId}" no longer exists.`);
-
-  if (options.registrationBaseBranch !== undefined) {
-    if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
-      throw new Error('Folder projects have no base branch; remove --base-branch.');
-    if (codebase)
-      throw new Error(
-        '--base-branch applies only to initial registration. This project is already registered; use --base for a run override.'
-      );
-  }
-
-  if (options.folder) {
-    if (codebase && codebase.kind !== 'folder') {
-      throw new Error(
-        `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
-      );
-    }
-  }
-
-  if (!codebase && (options.folder || repoRoot)) {
-    try {
-      const result = options.folder
-        ? await registerFolder(host.records.codebases, cwd)
-        : await registerRepository(host.records.codebases, repoRoot ?? cwd, {
-            baseBranch: options.registrationBaseBranch,
-          });
-      codebase = await host.records.codebases.getCodebase(result.codebaseId);
-      if (!codebase)
-        throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
-      if (!result.alreadyExisted) {
-        if (options.folder) registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
-        getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
-      }
-    } catch (error) {
-      if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-      const err = error as Error;
-      if (options.registrationBaseBranch !== undefined) throw err;
-      // Running unregistered would file the run under `_cwd/<folder name>`, storage
-      // and state that every checkout with the same folder name shares (#1192).
-      throw options.folder
-        ? buildFolderRegistrationFailureError(err)
-        : buildRegistrationFailureError(err);
-    }
-  }
-
-  return { codebase, registeredFolder };
-}
-
-/**
- * A resume continues in the run's own checkout. Cleanup removes a failed run's
- * worktree once its outcome is settled or stale (#4090), and nothing can recreate it.
- */
-function assertResumeWorkingPathExists(workingPath: string): void {
-  try {
-    statSync(workingPath);
-  } catch (error) {
-    // Only absence means cleanup removed it; a permission error or symlink loop is the operator's to fix.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-    throw new Error(
-      `Cannot resume: the working path from the run no longer exists: ${workingPath}\n` +
-        'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-    );
   }
 }
 
@@ -3648,42 +2700,6 @@ export async function workflowRunCommand(
   }
 }
 
-/**
- * Record why a handed-over run never started (#2872).
- *
- * A detached child is given a row its launcher already created, and everything between
- * that handover and the executor taking over — project resolution, the live re-check of
- * an adoption, isolation — can throw. The launcher is long gone by then, so without this
- * the row sits `pending` forever while the reason exists only in the child's log: the
- * same silent failure this issue closed at launch, moved one process later.
- *
- * `pending` is the whole guard, and it is what keeps this from guessing at a lifecycle
- * it does not own: the executor flips the row to `running` before any node executes, so
- * a row still `pending` here is one no execution ever claimed. Anything else belongs to
- * the run and is left alone — `failWorkflowRun`'s own status CAS closes the race.
- */
-async function recordDetachedChildStartupFailure(
-  host: WorkflowHost,
-  detachedRunId: string | undefined,
-  error: Error
-): Promise<void> {
-  if (detachedRunId === undefined) return;
-  try {
-    const status = await host.deps.store.getWorkflowRunStatus(detachedRunId);
-    if (status !== 'pending') return;
-    await host.deps.store.failWorkflowRun(
-      detachedRunId,
-      `Detached run failed to start: ${error.message}`,
-      { exitReason: 'launch_failed' }
-    );
-  } catch (dbError) {
-    getLog().error(
-      { err: dbError as Error, workflowRunId: detachedRunId },
-      'cli.detached_startup_failure_record_failed'
-    );
-  }
-}
-
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
@@ -3777,129 +2793,6 @@ export async function workflowStatusCommand(
   }
 }
 
-function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
-  return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
-}
-
-function formatToolAttention(
-  attention: Extract<RunAttention, { kind: 'stalled_tool_calls' }>
-): string {
-  return (
-    `Run ${attention.runId} is still running; tool calls need attention:\n` +
-    attention.calls
-      .map(
-        call =>
-          `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
-      )
-      .join('\n') +
-    `\nInspect with archon workflow logs ${attention.runId}, or explicitly cancel the run.`
-  );
-}
-
-/**
- * One human-readable line naming the run and what it needs.
- *
- * `awaiting_response` deliberately names TWO runs when they differ: a parent blocked on
- * a sub-run wakes on the child's gate, and the address in the value is the whole
- * reason the caller can act on it.
- */
-function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string {
-  switch (result.kind) {
-    case 'deadline':
-      return `Timed out waiting on run ${watchedRunId} — still ${result.observedStatus}.`;
-    case 'aborted':
-      return `Stopped waiting on run ${watchedRunId}.`;
-    case 'not_found':
-      return `Workflow run not found: ${watchedRunId}`;
-    case 'owner_lost':
-      return (
-        `Run ${watchedRunId} lost its execution owner while still ${result.observedStatus}. ` +
-        'The run was not changed. After verifying its work has stopped, run: ' +
-        `archon workflow abandon ${watchedRunId}`
-      );
-    case 'attention':
-      break;
-  }
-  const attention = result.attention;
-  switch (attention.kind) {
-    case 'stalled_tool_calls':
-      return formatToolAttention(attention);
-    case 'terminal':
-      return `Run ${watchedRunId} ${attention.status}.`;
-    case 'awaiting_response':
-      return attention.respondTo.runId === watchedRunId
-        ? `Run ${watchedRunId} is waiting for a response at gate '${attention.respondTo.nodeId}'.`
-        : `Run ${watchedRunId} is blocked on sub-run ${attention.respondTo.runId}, which is waiting ` +
-            `for a response at gate '${attention.respondTo.nodeId}'.`;
-    case 'attention':
-      return [
-        `Run ${watchedRunId} needs attention: ${attention.message}`,
-        ...attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention),
-      ].join('\n');
-    case 'blocked_on_child':
-      // Unreachable through the waiter, which resolves the chain before returning.
-      return `Run ${watchedRunId} is blocked on sub-run ${attention.childRunId}.`;
-    case 'blocked_on_children':
-      // Unreachable through the waiter, which resolves every child before returning.
-      return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
-    case 'usage_limit':
-      return (
-        `Run ${watchedRunId} hit a provider usage or rate limit and tries again by itself at ` +
-        `${attention.resumeAt}.`
-      );
-    case 'unreadable':
-      return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
-  }
-}
-
-/**
- * Say once, on stderr, that the wait is now watching the run.
- *
- * Until this line the command is completely silent, and neither a human nor a host
- * can tell an attached wait from one still resolving the id — or from one that died
- * on the way. It also fixes the instant the watch began: a transition after this line
- * reached the caller as a wake, where the same transition before it would have been
- * an ordinary read of an already-settled row.
- *
- * stderr, not stdout, because `--json` promises exactly one document on stdout. The
- * shape follows the same split as the answer itself: the JSON envelope for a machine,
- * one plain sentence for a person.
- *
- * Through `writeStderr` rather than `console.error`/`console.warn`, and awaited: this
- * line exists to tell a host when the watch began, and `console.error` to a pipe whose
- * reader has gone is a silent no-op under Bun. A line that can vanish without a trace
- * cannot carry an ordering.
- */
-function announceWaitAttached(
-  watchedRunId: string,
-  observedStatus: WorkflowRunStatus,
-  json?: boolean,
-  ownerLiveness?: UnknownOwnerLiveness
-): Promise<void> {
-  const recordedOwner = ownerLiveness?.recordedOwner;
-  const line = json
-    ? JSON.stringify({
-        ok: true,
-        action: 'wait',
-        runId: watchedRunId,
-        result: 'waiting',
-        observedStatus,
-        ...(ownerLiveness ? { ownerLiveness: ownerLiveness.kind } : {}),
-        ...(recordedOwner ? { recordedOwner } : {}),
-      })
-    : `Waiting on run ${watchedRunId} — currently ${observedStatus}.${
-        ownerLiveness ? ` ${describeUnknownOwner(recordedOwner)}` : ''
-      }`;
-  return writeStderr(`${line}\n`);
-}
-
-function describeUnknownOwner(owner: ExecutionOwnerRecord | undefined): string {
-  if (!owner)
-    return 'It records no execution owner, so whether its owner is still alive is unknown.';
-  const uid = owner.uid === undefined ? '' : ` (uid ${String(owner.uid)})`;
-  return `Its owner ran on host ${owner.host}${uid}, whose endpoint this host cannot reach, so whether it is still alive is unknown.`;
-}
-
 /**
  * Block until a run needs attention, loses its owner, or reaches the caller's deadline.
  *
@@ -3970,88 +2863,6 @@ export async function workflowWaitCommand(
   // 3 keeps "the run is still live" distinguishable from both a real answer (0) and a
   // broken wait (1).
   return result.kind === 'deadline' ? 3 : 0;
-}
-
-export interface WorkflowAttentionOptions {
-  json?: boolean;
-  project?: string;
-  all?: boolean;
-  /** `k=v` filters; every one must match. */
-  labels: readonly string[];
-  sort?: string;
-  countBy?: string;
-  /** Stream every change in scope instead of reading the queue once. */
-  watch?: boolean;
-  /** With `watch`: replay readable feed events strictly after this cursor. */
-  after?: string;
-}
-
-/**
- * `workflow attention` skips the CLI's project gate, so `cwd` is the raw working
- * directory, not its project root. Resolve its codebase the way the gate does, so a
- * short run id still matches from a project subdirectory.
- */
-async function resolveAttentionRunId(
-  host: WorkflowHost,
-  runId: string,
-  cwd: string
-): Promise<string> {
-  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
-}
-
-/** The scope a list or count covers: `--all`, `--project`, or the working directory's project. */
-async function attentionScope(
-  host: WorkflowHost,
-  cwd: string,
-  opts: Pick<WorkflowAttentionOptions, 'project' | 'all'>
-): Promise<AttentionQueueScope> {
-  if (opts.all) return { kind: 'all' };
-  const project =
-    opts.project === undefined
-      ? await attentionProjectForCwd(host.records.codebases, cwd)
-      : await resolveAttentionProject(host.records.codebases, opts.project);
-  return { kind: 'project', project };
-}
-
-function attentionItemLines(item: AttentionQueueItem): string[] {
-  const paused =
-    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  const lines = [
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
-  ];
-  if (item.fanOut !== null)
-    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
-  const labels = Object.entries(item.labels);
-  if (labels.length > 0)
-    lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  switch (item.kind) {
-    case 'attention':
-      lines.push(`    ${item.node}: ${item.message}`);
-      for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
-        lines.push(`    ${line}`);
-      break;
-    case 'awaiting_response':
-      lines.push(
-        `    gate '${item.node}': ${item.message}`,
-        `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
-      );
-      break;
-    case 'usage_limit':
-      lines.push(
-        `    ${item.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
-        `    Retry sooner with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `resume ${item.runId}`)}, or stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
-      );
-      break;
-    case 'unreadable':
-      lines.push(`    needs a look: ${item.detail}`);
-      break;
-  }
-  return lines;
-}
-
-function printAttentionItem(item: AttentionQueueItem): void {
-  for (const line of attentionItemLines(item)) console.log(line);
 }
 
 /**
@@ -4158,119 +2969,6 @@ export async function workflowAttentionCommand(
   }
 }
 
-/** The text for one stream line; none for a bookmark. */
-function attentionStreamText(
-  line: Exclude<AttentionStreamLine, { type: 'error' }>,
-  scope: AttentionQueueScope
-): string[] {
-  switch (line.type) {
-    case 'attention':
-      return [
-        line.snapshot ? 'Needs attention:' : 'Needs attention now:',
-        ...attentionItemLines(line.item),
-      ];
-    case 'resolved':
-      return [
-        line.reason === 'answered'
-          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
-          : `Run ${line.runId} no longer needs attention.`,
-      ];
-    case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.`];
-    case 'terminal':
-      return [
-        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
-      ];
-    case 'resumed':
-      return [`Run ${line.runId} resumed (${line.status}).`];
-    case 'owner_lost':
-      return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`,
-      ];
-    case 'ready':
-      return [
-        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
-      ];
-    case 'degraded':
-      return [
-        'Attention stream coverage may be incomplete because a run could not be read. Check the operator log; reconnect after repairing the read failure.',
-      ];
-    case 'bookmark':
-      return [];
-  }
-}
-
-/**
- * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
- * (from `--after`, or the tail's own position) is not one this install's store can read,
- * so the fix is to rerun without it. Read-only: stopping the stream affects no run.
- */
-async function workflowAttentionWatch(
-  host: WorkflowHost,
-  cwd: string,
-  opts: WorkflowAttentionOptions
-): Promise<number> {
-  const { labels } = parseAttentionQueueRequest(opts);
-  const scope = await attentionScope(host, cwd, opts);
-  if (opts.after === '') throw new Error('--after needs a cursor from an earlier line');
-  let stop!: () => void;
-  const stopped = new Promise<void>(resolve => {
-    stop = resolve;
-  });
-  const write = (line: AttentionStreamLine): Promise<void> => {
-    if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
-    if (line.type === 'error')
-      return writeStderr(
-        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
-      );
-    const text = attentionStreamText(line, scope);
-    return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
-  };
-  let exitCode = 0;
-  const listener = async (line: AttentionStreamLine): Promise<void> => {
-    if (line.type === 'error') {
-      exitCode = 4;
-      stop();
-    }
-    try {
-      await write(line);
-    } catch (error) {
-      stop();
-      if (error instanceof Error && 'code' in error && error.code === 'EPIPE') {
-        getLog().debug({ err: error }, 'cli.workflow_attention_watch_stdout_closed');
-        return;
-      }
-      exitCode = 1;
-      getLog().error({ err: error as Error }, 'cli.workflow_attention_watch_write_failed');
-      throw error;
-    }
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-  try {
-    let watch: AttentionWatch;
-    try {
-      watch = await host.engine.watchAttention(listener, {
-        scope,
-        labels,
-        ...(opts.after === undefined ? {} : { after: workflowEventCursor(opts.after) }),
-      });
-    } catch (error) {
-      if (!(error instanceof WorkflowEventCursorError)) throw error;
-      await listener({ type: 'error', error: 'cursor_invalid' });
-      return exitCode;
-    }
-    await stopped;
-    await watch.close();
-    return exitCode;
-  } finally {
-    process.off('SIGINT', stop);
-    process.off('SIGTERM', stop);
-  }
-}
-
 /**
  * Merge a label write into the attention wait a run is paused at: `set` pairs replace
  * the same keys, `unset` keys are removed, nothing else changes. Refused when the run is
@@ -4309,322 +3007,6 @@ export async function workflowAttentionLabelCommand(
     await printJsonWriteError(runId, 'attention_label', error);
     return 1;
   }
-}
-
-const TRANSCRIPT_POLL_INTERVAL_MS = 500;
-const TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
-
-/** How `workflow logs` prints a transcript: its exact JSONL, or rendered for a human. */
-export type TranscriptFormat = 'jsonl' | 'text';
-
-interface TranscriptReadState {
-  offset: number;
-  decoder: TextDecoder;
-  output: TranscriptOutput;
-}
-
-/** Where decoded transcript text goes. `end` flushes anything held back at a line boundary. */
-interface TranscriptOutput {
-  write(text: string): Promise<void>;
-  end(): Promise<void>;
-}
-
-/** Longest line a tool call renders to; a Codex tool name can be a whole shell script. */
-const TRANSCRIPT_TOOL_LINE_MAX = 160;
-
-function indentLines(text: string, prefix: string): string {
-  return text
-    .replace(/\n+$/, '')
-    .split('\n')
-    .map(line => (line.length > 0 ? `${prefix}${line}` : line))
-    .join('\n');
-}
-
-function oneLine(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
-}
-
-/** Compile-time check only: a new row or provider event type must be decided where it renders. */
-function typeDecided(_type: never): void {
-  // Nothing to do at runtime.
-}
-
-/** Output lines a tool call's outcome shows: the end of its output, where errors land. */
-const TRANSCRIPT_TOOL_OUTPUT_LINES = 3;
-
-/** What rendering a row needs from the rows before it. One per rendered transcript. */
-interface TranscriptRenderState {
-  /** Tool names by attempt and call id, so a call's outcome can name its tool. */
-  toolNames: Map<string, string>;
-  /** The node of the last rendered row, so a switch to another node's activity is labelled. */
-  lastStep?: string;
-}
-
-function toolCallKey(attemptId: string, toolCallId: string): string {
-  // A call id is unique within its attempt; parallel nodes can repeat one.
-  return JSON.stringify([attemptId, toolCallId]);
-}
-
-function toolOutputTail(output: string): string | undefined {
-  const lines = output.replace(/\n+$/, '').split('\n');
-  if (lines.length === 1 && lines[0] === '') return undefined;
-  const shown = lines.slice(-TRANSCRIPT_TOOL_OUTPUT_LINES);
-  const hidden = lines.length - shown.length;
-  return [
-    ...(hidden > 0 ? [`(${String(hidden)} earlier lines)`] : []),
-    ...shown.map(line =>
-      line.length > TRANSCRIPT_TOOL_LINE_MAX
-        ? `${line.slice(0, TRANSCRIPT_TOOL_LINE_MAX - 3)}...`
-        : line
-    ),
-  ]
-    .map(line => `    ${line}`)
-    .join('\n');
-}
-
-/**
- * One provider event, indented under its node like the node's other activity. Events that
- * only mark progress (a running subtask, a hook that started or succeeded, a connected MCP
- * server) render nothing, so a transcript reads as what the agent said and did.
- */
-function formatProviderEvent(
-  line: ProviderEventLine,
-  state: TranscriptRenderState
-): string | undefined {
-  const event = line.event;
-  switch (event.type) {
-    case 'agent_message_chunk':
-      return indentLines(event.text, '  ');
-    case 'agent_thought_chunk':
-      return `  ${oneLine(`thinking: ${event.text}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'tool_call': {
-      const name = toolCallDisplayName(event);
-      state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
-      // A title is already what the call does, such as the command a Codex shell runs.
-      const brief =
-        !event.title && event.rawInput !== undefined
-          ? formatToolInputBrief(name, event.rawInput)
-          : null;
-      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'tool_call_update': {
-      const key = toolCallKey(line.attemptId, event.toolCallId);
-      const name = state.toolNames.get(key) ?? event.toolCallId;
-      state.toolNames.delete(key);
-      const details = [
-        ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
-        ...(event.outputTruncated ? ['output truncated'] : []),
-      ];
-      const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
-      const tail = event.output ? toolOutputTail(event.output) : undefined;
-      return tail ? `${outcome}\n${tail}` : outcome;
-    }
-    case 'warning':
-      return `  ${oneLine(`warning: ${event.message} (${event.code})`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'mcp_server_status':
-      if (event.status === 'connected' || event.status === 'pending') return undefined;
-      return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'compaction': {
-      const tokens =
-        event.tokensBefore !== undefined && event.tokensAfter !== undefined
-          ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
-          : '';
-      return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
-    }
-    case 'subtask': {
-      if (event.status === 'running') return undefined;
-      const about =
-        event.status === 'started' ? event.description : (event.summary ?? event.description);
-      return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'hook':
-      if (event.status === 'started' || event.status === 'succeeded') return undefined;
-      return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
-    case 'state_update':
-      return event.state === 'requires_action' ? '  waiting on the user' : undefined;
-    default:
-      typeDecided(event);
-      return undefined;
-  }
-}
-
-/**
- * One transcript row as the text `workflow logs --format text` prints, or `undefined` for a
- * row that renders nothing. Node lines share their wording with the foreground renderer.
- * A node's agent text and tool calls are indented beneath it. A `provider_event` row names
- * its node, so when activity switches to another node (parallel nodes interleave) a
- * `[node]` line labels it. The historical `assistant` and `tool` rows record no node and
- * stay unlabelled rather than attributed to a guessed one.
- */
-function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): string | undefined {
-  if (isWorktreeSetupEventType(row.type)) return row.setup?.message;
-  const step = row.step ?? '?';
-  switch (row.type) {
-    case 'workflow_start':
-      return `[workflow] Started ${row.workflow_name ?? ''}`.trimEnd();
-    case 'workflow_resume':
-      return `[workflow] Resumed ${row.workflow_name ?? ''}`.trimEnd();
-    case 'workflow_complete':
-      return '[workflow] Completed';
-    case 'workflow_error':
-      return `[workflow] Failed: ${row.error ?? ''}`;
-    case 'node_start':
-      // `content` is the command a command node runs, or a `<inline>`-style kind marker.
-      return nodeLine.started(
-        step,
-        row.content && !row.content.startsWith('<') ? ` (${row.content})` : ''
-      );
-    case 'node_complete':
-      return nodeLine.completed(step, row.duration_ms);
-    case 'node_error':
-      return nodeLine.failed(step, row.error ?? '');
-    case 'node_skipped':
-      return nodeLine.skipped(
-        step,
-        row.cause ? formatSkipCause(row.cause) : (row.content ?? 'skipped')
-      );
-    case 'node_suspended':
-      return `[${step}] Waiting (${row.content ?? 'wait'})`;
-    case 'gate_decision': {
-      // The comment is the operator's verbatim text and may span lines.
-      const decision = `[${step}] Gate: ${row.decision ?? ''}`;
-      if (!row.content) return decision;
-      return row.content.includes('\n')
-        ? `${decision}\n${indentLines(row.content, '  ')}`
-        : `${decision} (${row.content})`;
-    }
-    case 'provider_event': {
-      // Unlike the rows above, a provider event is read field by field, so a line that
-      // does not match the schema this build knows renders nothing instead of throwing.
-      const parsed = providerEventLineSchema.safeParse(row);
-      if (!parsed.success) return undefined;
-      const text = formatProviderEvent(parsed.data, state);
-      if (text === undefined) return undefined;
-      return parsed.data.step === state.lastStep ? text : `[${parsed.data.step}]\n${text}`;
-    }
-    case 'assistant':
-      return row.content ? indentLines(row.content, '  ') : undefined;
-    case 'tool': {
-      const name = row.tool_name ?? '?';
-      const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
-      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'exec_output': {
-      const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
-      if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));
-      if (row.stderr_tail) lines.push('  stderr:', indentLines(row.stderr_tail, '    '));
-      return lines.join('\n');
-    }
-    // Liveness bookkeeping and a historical row: nothing a reader of the run needs.
-    case 'watchdog_reset':
-    case 'validation':
-      return undefined;
-    default:
-      // At runtime a type this build does not know (an older or newer transcript)
-      // renders nothing.
-      typeDecided(row.type);
-      return undefined;
-  }
-}
-
-/**
- * A JSONL line rendered for a human. A line that is not a JSON object, or a row type this
- * build does not know (older transcripts hold `step_start`, newer engines may add more),
- * renders nothing: the text view is a reading aid, and the JSONL default keeps every row.
- */
-function renderTranscriptLine(line: string, state: TranscriptRenderState): string | undefined {
-  if (line.trim().length === 0) return undefined;
-  let row: unknown;
-  try {
-    row = JSON.parse(line);
-  } catch {
-    return undefined;
-  }
-  if (typeof row !== 'object' || row === null || Array.isArray(row)) return undefined;
-  const event = row as WorkflowEvent;
-  const text = formatTranscriptRow(event, state);
-  if (text !== undefined && event.step !== undefined) state.lastStep = event.step;
-  return text;
-}
-
-function transcriptOutput(format: TranscriptFormat): TranscriptOutput {
-  if (format === 'jsonl') {
-    return { write: writeStdout, end: (): Promise<void> => Promise.resolve() };
-  }
-  // A read can end mid-row while the run is still appending, so only whole lines render.
-  let partial = '';
-  const state: TranscriptRenderState = { toolNames: new Map() };
-  const render = async (lines: string[]): Promise<void> => {
-    const rendered = lines.flatMap(line => renderTranscriptLine(line, state) ?? []);
-    if (rendered.length > 0) await writeStdout(`${rendered.join('\n')}\n`);
-  };
-  return {
-    async write(text: string): Promise<void> {
-      const lines = (partial + text).split('\n');
-      partial = lines.pop() ?? '';
-      await render(lines);
-    },
-    async end(): Promise<void> {
-      const last = partial;
-      partial = '';
-      await render([last]);
-    },
-  };
-}
-
-async function drainTranscript(
-  transcriptPath: string,
-  state: TranscriptReadState
-): Promise<boolean> {
-  let file;
-  try {
-    file = await openFile(transcriptPath, 'r');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-
-  try {
-    const { size } = await file.stat();
-    if (size < state.offset) {
-      throw new Error(
-        `Transcript was truncated from ${String(state.offset)} to ${String(size)} bytes: ${transcriptPath}`
-      );
-    }
-
-    const buffer = new Uint8Array(TRANSCRIPT_READ_CHUNK_BYTES);
-    while (state.offset < size) {
-      const bytesToRead = Math.min(buffer.byteLength, size - state.offset);
-      const { bytesRead } = await file.read(buffer, 0, bytesToRead, state.offset);
-      if (bytesRead === 0) break;
-      state.offset += bytesRead;
-      const text = state.decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      if (text.length > 0) await state.output.write(text);
-    }
-    return true;
-  } finally {
-    await file.close();
-  }
-}
-
-async function finishTranscriptDecode(state: TranscriptReadState): Promise<void> {
-  const text = state.decoder.decode();
-  if (text.length > 0) await state.output.write(text);
-  await state.output.end();
-}
-
-function transcriptUnavailableMessage(
-  run: WorkflowRun,
-  transcriptPath: string,
-  follow: boolean
-): string {
-  if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
-    return `Run ${run.id} is ${run.status}, but its transcript is missing or empty: ${transcriptPath}`;
-  }
-  return follow
-    ? `Run ${run.id} ended before producing transcript content: ${transcriptPath}`
-    : `Transcript is not available yet for ${run.id}. Use --follow to wait for it: ${transcriptPath}`;
 }
 
 /** Print or follow one run's append-only JSONL transcript, verbatim or as text, without mutating the run. */
@@ -4690,49 +3072,6 @@ export async function workflowLogsCommand(
     await writeStderr(`Failed to read workflow transcript: ${err.message}\n`);
     return 1;
   }
-}
-
-/** One line for the checkout a run started from (#3305); `--json` carries the full record. */
-export function describeCheckoutBaseline(baseline: WorkflowRun['checkout_baseline']): string {
-  if (baseline === null) return '(not recorded)';
-  switch (baseline.kind) {
-    case 'not_git':
-      return 'not a Git checkout';
-    case 'unavailable':
-      return `checkout unavailable (${baseline.reason})`;
-    case 'git': {
-      const worktree = baseline.worktree;
-      const state =
-        worktree.status === 'clean'
-          ? 'clean'
-          : `dirty: ${String(worktree.staged)} staged, ${String(worktree.unstaged)} unstaged, ${String(worktree.untracked)} untracked` +
-            (worktree.content === 'incomplete' ? ', content not fully identified' : '');
-      const cut =
-        baseline.cutFromCommit !== undefined ? `, branch cut from ${baseline.cutFromCommit}` : '';
-      return `${baseline.commit ?? '(unborn branch)'} (${state}${cut})`;
-    }
-  }
-}
-
-/**
- * The `Stopped:` line for a run a signal ended, or null for every other stop reason.
- *
- * Only `process_terminated` gets prose here: it is the one stop reason whose whole
- * point is that the run did not break, so an operator reading `failed` needs to be
- * told. The rest are execution failures the `Error:` line already describes, and
- * inventing operator wording for them is nobody's validated language.
- *
- * SIGINT reaching a foreground process is the terminal's interrupt character, so
- * naming the operator there is a fact. A SIGTERM's sender is genuinely unknown —
- * a supervisor, a shell, a `kill` — and the stop reason is never inferred, so it
- * gets neutral wording and lets the signal do the disambiguating.
- */
-function describeRunStopReason(metadata: Record<string, unknown>): string | null {
-  const stopReason = readRunStopReason(metadata);
-  if (stopReason?.reason !== 'process_terminated') return null;
-  const who = stopReason.signal === 'SIGINT' ? 'the operator' : 'a signal';
-  const signal = stopReason.signal === undefined ? '' : ` (${stopReason.signal})`;
-  return `interrupted by ${who}${signal}`;
 }
 
 /**
@@ -4979,155 +3318,6 @@ export async function workflowGetCommand(
 }
 
 /**
- * Pull the dropped-key warnings out of a run's event log (#2213).
- *
- * The engine records them once at run start as `workflow_parse_warnings`,
- * whatever surface started the run — so this is the read path for a run that
- * had no conversation to post into (CLI, REST) or whose chat delivery failed.
- */
-/**
- * Leave-behind view (#2747): what a run concluded and what it left undone —
- * outcome, branch, worktree (live or gone), adoption chain, and its artifact
- * file list. Artifacts resolve through the persisted `output_root` and are
- * read-only here: the adopting run references them via `$ADOPTED_RUN_DIR`, it
- * never writes into them.
- */
-interface LeaveBehind {
-  branch?: string;
-  worktree?: string;
-  worktreeLive?: boolean;
-  adopted_from?: string;
-  adopted_by: string[];
-  artifactFiles: string[];
-  artifactFilesOmitted: ArtifactOmissions;
-}
-
-/**
- * What the artifact walk left out of `artifactFiles`, so a reader is never
- * quietly handed a partial list (#3450).
- */
-interface ArtifactOmissions {
-  /** Files under the engine's own artifacts child, summarized rather than listed. */
-  internalFiles: number;
-  /** The display cap stopped the listing before the run's files ran out. */
-  truncated: boolean;
-  /** Directories the walk could not read, relative to `$ARTIFACTS_DIR`. */
-  unreadable: string[];
-}
-
-async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Promise<LeaveBehind> {
-  const codebase = run.codebase_id
-    ? await host.records.codebases.getCodebase(run.codebase_id)
-    : null;
-
-  const leaveBehind: LeaveBehind = {
-    adopted_by: [],
-    artifactFiles: [],
-    artifactFilesOmitted: { internalFiles: 0, truncated: false, unreadable: [] },
-  };
-
-  if (run.working_path) {
-    leaveBehind.worktree = run.working_path;
-    leaveBehind.worktreeLive = existsSync(run.working_path);
-  }
-  if (run.adopted_from_run_id) leaveBehind.adopted_from = run.adopted_from_run_id;
-  leaveBehind.adopted_by = (await host.deps.store.findAdoptingRuns(run.id)).map(r => r.id);
-
-  // Branch from the isolation record that owned the working path, if any.
-  if (run.codebase_id && run.working_path) {
-    try {
-      const envs = await host.records.isolation.listByCodebase(run.codebase_id);
-      const env = envs.find(e => e.working_path === run.working_path);
-      if (env) leaveBehind.branch = env.branch_name;
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'cli.workflow_get_branch_lookup_failed');
-    }
-  }
-
-  // Artifact file list — operator-facing files, capped for display.
-  // #3097: route the persisted `output_root` through the shared resolver so
-  // the same `ARCHON_HOME` containment check every other persisted-root
-  // reader in this file already enforces applies here. An unresolvable root
-  // (out-of-tree persisted value with no codebase row to re-derive from)
-  // yields the same null-root refusal the transcript reader exposes.
-  const artifactsRoot = archonPaths.resolveRunStorageRoot(run, codebase);
-  if (artifactsRoot) {
-    try {
-      const artifactsDir = archonPaths.getRunArtifactsDirForRoot(artifactsRoot, run.id);
-      const listing = listArtifactFiles(artifactsDir);
-      leaveBehind.artifactFiles = listing.files;
-      leaveBehind.artifactFilesOmitted = listing.omitted;
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'cli.workflow_get_artifact_walk_failed');
-    }
-  }
-  return leaveBehind;
-}
-
-/**
- * The operator-facing files under `dir`, relative and capped for display (#2747).
- *
- * The engine writes its own bookkeeping under `RUN_ARTIFACTS_ENGINE_SUBDIR` —
- * one typed-artifact listing per node invocation, node-output spills — which on
- * a pack run outnumbers the reports a person reads and used to consume the whole
- * cap. Those files are counted rather than listed (#3450); their content is
- * already reachable through the engine's own `nodes/` sidecars.
- *
- * The walk stays exhaustive so the counts are true: it is the same tree the
- * console's artifacts route already walks in full on every run page. Each
- * directory yields its own files before its subdirectories, sorted, so the cap
- * and the human preview fall on nested content rather than on whichever entries
- * `readdir` happened to return first — a run's reports sit at the top level.
- */
-function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
-  const files: string[] = [];
-  const omitted: ArtifactOmissions = { internalFiles: 0, truncated: false, unreadable: [] };
-  const walk = (current: string, prefix: string, internal: boolean): void => {
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch (error) {
-      // A directory that is simply gone dropped nothing an operator could open.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') omitted.unreadable.push(prefix);
-      return;
-    }
-    // Order only matters where entries reach the list; inside the engine's child
-    // they are counted, and a pack run leaves hundreds of them there.
-    if (!internal) entries.sort((left, right) => left.name.localeCompare(right.name));
-    const relative = (entry: Dirent): string => (prefix ? `${prefix}/${entry.name}` : entry.name);
-    const isEngineOwned = (entry: Dirent): boolean =>
-      internal || archonPaths.isRunArtifactsEngineEntry(prefix, entry.name);
-    for (const entry of entries) {
-      if (entry.isDirectory()) continue;
-      if (isEngineOwned(entry)) omitted.internalFiles++;
-      else if (files.length >= maxFiles) omitted.truncated = true;
-      else files.push(relative(entry));
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      walk(join(current, entry.name), relative(entry), isEngineOwned(entry));
-    }
-  };
-  walk(dir, '', false);
-  return { files, omitted };
-}
-
-interface ArtifactListing {
-  files: string[];
-  omitted: ArtifactOmissions;
-}
-
-function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
-  const out: string[] = [];
-  for (const event of events) {
-    if (event.event_type !== 'workflow_parse_warnings') continue;
-    const raw: unknown = (event.data as Record<string, unknown> | null)?.warnings;
-    if (Array.isArray(raw)) out.push(...raw.filter((w): w is string => typeof w === 'string'));
-  }
-  return out;
-}
-
-/**
  * List recent workflow runs for the current project (all statuses, cwd-scoped).
  *
  * Complements `status` (active-only): resolves the codebase from `cwd` the same
@@ -5282,88 +3472,6 @@ export async function workflowRunsCommand(
     );
   }
   console.log('');
-  return 0;
-}
-
-/**
- * Shared `--detach` front half for `approve`/`reject`/`resume`. Validates the run
- * READ-ONLY via `precheck`, then hands the whole command to a detached child that
- * re-invokes the same argv (minus `--detach`/`--json`) and owns ALL state mutation
- * in its own process group — so killing the shell that hosted the parent cannot
- * zombie the run mid-resume. The parent must never call
- * approveWorkflow/rejectWorkflow/resumeWorkflow itself, or the decision would be
- * recorded twice (mirrors workflowRunCommand's detach shape: the parent does nothing).
- *
- * Spawns with the command's `cwd` (falling back to `process.cwd()`), never the run's
- * working_path: the child re-resolves everything by run-id, and a container run's
- * working_path is a distro path the host cannot spawn into (ENOENT → the detach would
- * silently no-op). Reuses upstream's spawnDetachedWorkflowRun, which rebuilds the child
- * command from process.argv. Resume success requires engine admission; the other verbs
- * retain the startup window (#2279). Awaiting that boundary keeps a launch failure from
- * arriving after the parent has already printed `{ ok: true }`.
- */
-async function runDetachedControlCommand(
-  runId: string,
-  action: 'approve' | 'reject' | 'respond' | 'resume',
-  json: boolean | undefined,
-  cwd: string | undefined,
-  precheck: () => Promise<WorkflowRun>
-): Promise<number> {
-  try {
-    const run = await spelledForCli(precheck);
-    // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
-    // appended --cwd is last-wins on the child's argv, so discarding it here
-    // strands the child in the parent's directory (possibly outside any git
-    // repo) after the parent has already acked success. The run's working_path
-    // is still never a candidate: a container run's working_path is a distro
-    // path the host cannot spawn into, so the child re-resolves by run id.
-    const logPath = await spawnDetachedWorkflowRun(
-      cwd ?? process.cwd(),
-      runId,
-      [],
-      undefined,
-      action === 'resume'
-    );
-    if (json) {
-      // Through writeJsonLine, like every other --json ack: it writes with a
-      // completion callback so a piped consumer can't receive a truncated
-      // document (#2384). console.log does not give that guarantee.
-      await writeJsonLine({
-        ok: true,
-        runId,
-        action,
-        detached: true,
-        // The child is spawned WITHOUT --json (buildDetachedRunCmd strips it),
-        // so it takes the inline path and DRIVES THE RUN ONWARD — approve's
-        // auto-resume, reject's on_reject rework, resume's re-run. This is the
-        // opposite of bare `--json`, which withholds continuation on purpose.
-        // Surfaced so an automation knows it does not own continuation here.
-        continues: true,
-        workflowName: run.workflow_name,
-        // null when the log file could not be opened — the child still runs, but
-        // its output is discarded. Same contract as `run --detach`.
-        logPath,
-      });
-      return 0;
-    }
-    console.log(`Started '${action}' for run ${runId} in the background.`);
-    console.log(`Track it with: archon workflow get ${runId}`);
-    if (logPath) {
-      console.log(`Child output: ${logPath}`);
-    } else {
-      // Mirrors `run --detach`: with no log file the child's output is discarded,
-      // so a failure after the startup window leaves no trail to read.
-      console.warn('Warning: could not open a log file — child output will not be captured.');
-    }
-  } catch (error) {
-    // Precheck failures follow each mode's error contract: --json emits the
-    // standard { ok: false } line; human mode throws like the inline path.
-    if (json) {
-      await printJsonWriteError(runId, action, error);
-      return 1;
-    }
-    throw error;
-  }
   return 0;
 }
 
