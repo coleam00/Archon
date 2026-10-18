@@ -67,7 +67,7 @@ exactly one disposition, and list them in your output:
 
 - `blocks`: it is this change's to fix. You send the change back.
 - `rechecked`: you checked it yourself and the app check was wrong. `ref` is the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now.
-- `pre-existing`: the default branch has the same failure, which you showed. `ref` is the file in `$ARTIFACTS_DIR` where you saved your default-branch run, written now, then the issue that tracks the failure: `<file> #<number>` (an existing issue, or one you open now).
+- `pre-existing`: for a holdout or defect line only (never a criterion of this work item, which this change must meet), the default branch has the same failure, which you showed. `ref` is the file in `$ARTIFACTS_DIR` where you saved your default-branch run, written now, then the issue that tracks the failure: `<file> #<number>` (an existing issue, or one you open now).
 - `accepted`: only for a `QUESTION` line you judge is not a defect. `ref` is the reason, in a sentence a reader can check against the work item or the product document.
 - `issue`: a `QUESTION` line worth doing later, or a failure the default branch has too (the app check proved it with a citation, or you did) and an open issue tracks it. `ref` is `#<number>`: an existing issue, or one you open now with what a user sees, never quoting a holdout.
 

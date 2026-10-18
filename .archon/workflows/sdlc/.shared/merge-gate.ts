@@ -136,6 +136,14 @@ export function recordRefusals(facts: GateFacts): string[] {
     if (blocksPass(line)) {
       const [file = '', ...rest] = (disposition?.ref ?? '').split(/\s+/);
       if (disposition?.action === 'rechecked' && facts.reviewerFile(file)) continue;
+      // A criterion of the work item being delivered is this change's to meet, whatever the
+      // default branch does (seen live: an unmet criterion passed off as pre-existing).
+      if (line.kind === 'C') {
+        refusals.push(
+          `${line.id} (${line.verdict}): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item`
+        );
+        continue;
+      }
       if (disposition?.action === 'pre-existing' && facts.reviewerFile(file)) {
         const issue = rest.find(token => /^#\d+$/.test(token));
         if (issue === undefined || !facts.issueExists(issue)) {

@@ -226,9 +226,19 @@ describe('merge gate', () => {
   it('a failed criterion cannot be dispositioned away with "blocks" and merged', () => {
     const report = CLEAN.replace('C1 PASS', 'C1 FAIL').replace('Overall: PASS', 'Overall: FAIL (C1)');
     const blocks = parseDispositions(JSON.stringify([{ line: 'C1', action: 'blocks', ref: '' }]));
-    expect(gate(report, { dispositions: blocks, reviewerFile: () => true })).toEqual([
-      'C1 (FAIL) has no re-check or default-branch proof the reviewer wrote',
+    const unmet =
+      'C1 (FAIL): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item';
+    expect(gate(report, { dispositions: blocks, reviewerFile: () => true })).toEqual([unmet]);
+    // Seen live (North Star #399): the default branch lacking it too does not excuse it.
+    const preExisting = parseDispositions(
+      JSON.stringify([{ line: 'C1', action: 'pre-existing', ref: 'main.txt #404' }])
+    );
+    expect(gate(report, { dispositions: preExisting, reviewerFile: () => true, issueExists: () => true })).toEqual([
+      unmet,
     ]);
+    // The reviewer's own re-check showing it met still clears it.
+    const rechecked = parseDispositions(JSON.stringify([{ line: 'C1', action: 'rechecked', ref: 'recheck.md' }]));
+    expect(gate(report, { dispositions: rechecked, reviewerFile: () => true })).toEqual([]);
   });
 
   it('a shipping pipeline whose review step failed never merges (the #362 case)', () => {
