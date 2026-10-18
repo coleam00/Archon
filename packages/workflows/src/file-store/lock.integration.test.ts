@@ -656,6 +656,48 @@ describe('file store filesystem primitives', () => {
     }
   });
 
+  test('the sweep recovers empty and torn names from both real scratch producers', async () => {
+    const root = await fixture();
+    const child = spawn(
+      `
+      import { spyOn } from 'bun:test';
+      import * as fs from 'node:fs/promises';
+      import { basename } from 'node:path';
+      import { probeFileStoreFilesystem, withFileStoreLock } from ${JSON.stringify(lockModule)};
+      const unlink = fs.unlink;
+      // Leave the real producers' scratch entries behind, without stranding lock itself.
+      spyOn(fs, 'unlink').mockImplementation(path =>
+        basename(String(path)).startsWith('.') ? Promise.resolve() : unlink(path)
+      );
+      await probeFileStoreFilesystem(process.argv[1]);
+      await withFileStoreLock(process.argv[1], async () => {});
+      `,
+      root
+    );
+    await succeeds(child);
+    const names = await readdir(root);
+    expect(names).toHaveLength(3);
+    expect(names.filter(name => name.startsWith('.lock-'))).toHaveLength(1);
+    expect(names.filter(name => name.startsWith('.probe-'))).toHaveLength(2);
+    expect(names.filter(name => name.endsWith('.link'))).toHaveLength(1);
+
+    const lines = captureLogs();
+    for (const contents of ['', '{']) {
+      for (const name of names) await writeFile(join(root, name), contents);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await withFileStoreLock(root, async () => 'swept')).toBe('swept');
+        expect(await readdir(root)).toEqual([]);
+      }
+    }
+    expect(
+      lines.filter(
+        line =>
+          line.msg === 'file_store.scratch_sweep_skipped' ||
+          line.msg === 'file_store.cleanup_failed'
+      )
+    ).toEqual([]);
+  });
+
   test('the next locked operation sweeps scratch files only of provably dead owners', async () => {
     const root = await fixture();
     const dead = JSON.stringify({
