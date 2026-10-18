@@ -13,17 +13,13 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     mkdirSync(join(root, path, '..'), { recursive: true });
     writeFileSync(join(root, path), content);
   };
-  write(
-    'tsconfig.json',
-    JSON.stringify({
-      compilerOptions: {
-        target: 'ESNext',
-        module: 'Preserve',
-        moduleResolution: 'Bundler',
-        strict: true,
-      },
-    })
-  );
+  const compilerOptions = {
+    target: 'ESNext',
+    module: 'Preserve',
+    moduleResolution: 'Bundler',
+    strict: true,
+  };
+  write('tsconfig.json', JSON.stringify({ compilerOptions }));
   write(
     'packages/core/src/db/store.ts',
     'export const store = 1; export default store; export type Store = number;'
@@ -51,6 +47,7 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     "import { register } from '../packages/core/src/handlers/sql-registration';",
     "import { contract } from '../packages/core/src/index';",
     "import { workflows } from '../packages/core/src/workflows';",
+    "import {} from '../packages/core/src/index';",
     "import { alias as local } from '../barrel';",
     "import { renamed } from '../second';",
     "import * as ns from '../barrel';",
@@ -79,19 +76,13 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     "import type { contract } from '../packages/core/src/index';",
     "import { type contract } from '../packages/core/src/index';",
   ];
-  const cases = [
-    ...rejected.map(source => ({ source, rejected: true })),
-    ...accepted.map(source => ({ source, rejected: false })),
-  ];
-  const files = cases.map((item, index) => {
-    write(`consumers/${index}.ts`, item.source);
-    return `consumers/${index}.ts`;
-  });
-
+  const cases = [...rejected, ...accepted];
+  const files = cases.map((_, index) => `consumers/${index}.ts`);
+  for (const [index, source] of cases.entries()) write(files[index], source);
   const violations = findPersistenceImports(root, files);
-  for (const [index, item] of cases.entries()) {
+  for (const [index, source] of cases.entries()) {
     const hits = violations.filter(line => line.startsWith(`consumers/${index}.ts:`));
-    expect(hits.length, item.source).toBe(item.rejected ? 1 : 0);
+    expect(hits.length, source).toBe(index < rejected.length ? 1 : 0);
   }
 });
 

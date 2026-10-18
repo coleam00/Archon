@@ -51,6 +51,12 @@ function isPersistence(path: string): boolean {
   return path.startsWith('packages/core/src/db/') || SQL_COMPOSITION.has(path);
 }
 
+/** `names` is `[]` for an import of inline types only, which Bun erases; `import {}` loads. */
+function bannedModule(path: string, names?: readonly ts.Node[]): string | undefined {
+  if (isPersistence(path)) return 'SQL persistence';
+  return CORE_BARRELS.has(path) && names?.length !== 0 ? 'Core barrel' : undefined;
+}
+
 function loadOptions(configPath: string): ts.CompilerOptions {
   const parsed = ts.getParsedCommandLineOfConfigFile(
     configPath,
@@ -68,10 +74,10 @@ function loadOptions(configPath: string): ts.CompilerOptions {
 
 /**
  * Returns one `file:line:column message` entry per runtime import, re-export, dynamic
- * `import()` or `require()` in `consumers` that reaches persistence or a core barrel. The type checker
- * follows aliases and barrel re-exports, so a persistence symbol re-exported through
- * `@archon/core` is caught. Type-only imports are allowed. Each consumer is resolved
- * with the tsconfig that owns it, the same resolution type-check uses.
+ * `import()` or `require()` in `consumers` that reaches persistence or a core barrel. The
+ * type checker follows aliases and barrel re-exports, so a persistence symbol re-exported
+ * through `@archon/core` is caught. Type-only imports are allowed. Each consumer is
+ * resolved with the tsconfig that owns it, the same resolution type-check uses.
  */
 export function findPersistenceImports(root: string, consumers: readonly string[]): string[] {
   const groups = new Map<string, string[]>();
@@ -129,21 +135,10 @@ export function findPersistenceImports(root: string, consumers: readonly string[
         );
       };
       const checkModule = (specifier: ts.StringLiteralLike, names?: ts.Node[]): void => {
-        const resolved = ts.resolveModuleName(
-          specifier.text,
-          source.fileName,
-          program.getCompilerOptions(),
-          ts.sys
-        ).resolvedModule;
-        const target = resolved && pathOf(resolved.resolvedFileName);
-        if (target && isPersistence(target)) {
-          report(specifier, specifier.text);
-          return;
-        }
-        if (target && CORE_BARRELS.has(target) && (names === undefined || names.length > 0)) {
-          report(specifier, specifier.text, 'Core barrel');
-          return;
-        }
+        const target = ts.resolveModuleName(specifier.text, source.fileName, options, ts.sys)
+          .resolvedModule?.resolvedFileName;
+        const banned = target && bannedModule(pathOf(target), names);
+        if (banned) return report(specifier, specifier.text, banned);
         for (const node of names ?? [specifier]) {
           const symbol = checker.getSymbolAtLocation(node);
           if (symbol && reachesPersistence(symbol)) report(node, specifier.text);
@@ -153,20 +148,12 @@ export function findPersistenceImports(root: string, consumers: readonly string[
         if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
           const clause = node.importClause;
           if (clause?.isTypeOnly) return;
-          const names: ts.Node[] = [];
+          const bindings = clause?.namedBindings;
+          const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
+          const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
           if (clause?.name) names.push(clause.name);
-          if (clause?.namedBindings) {
-            if (ts.isNamespaceImport(clause.namedBindings)) names.push(clause.namedBindings.name);
-            else {
-              names.push(
-                ...clause.namedBindings.elements
-                  .filter(item => !item.isTypeOnly)
-                  .map(item => item.name)
-              );
-            }
-          }
-          checkModule(node.moduleSpecifier, clause ? names : undefined);
-          return;
+          if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
+          return checkModule(node.moduleSpecifier, names.length + named.length ? names : undefined);
         }
         if (
           ts.isExportDeclaration(node) &&
@@ -174,21 +161,15 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           ts.isStringLiteral(node.moduleSpecifier) &&
           !node.isTypeOnly
         ) {
-          checkModule(node.moduleSpecifier);
-          return;
+          return checkModule(node.moduleSpecifier);
         }
         if (
           ts.isCallExpression(node) &&
           (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
             (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
         ) {
-          const argument = node.arguments[0];
-          if (
-            argument &&
-            (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
-          ) {
-            checkModule(argument);
-          }
+          const [argument] = node.arguments;
+          if (argument && ts.isStringLiteralLike(argument)) checkModule(argument);
         }
         ts.forEachChild(node, visit);
       };
