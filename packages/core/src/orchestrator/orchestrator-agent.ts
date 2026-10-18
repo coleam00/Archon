@@ -32,23 +32,7 @@ import { loadConfig } from '../config/config-loader';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
 import { getLog } from './agent-log';
 import { type ChatTurn, handleBatchMode, handleStreamMode, reportChatTurn } from './chat-turn';
-import {
-  applyPresetToRequestOptions,
-  resolveChatModelRequest,
-  resolveModelRequest,
-  resolveUserAiPrefsForChat,
-  resolveUserProviderEnvForChat,
-} from './chat-request';
-import { getRegistration, getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
-import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import {
-  ConnectedCredentialUnavailableError,
-  type CredentialFailure,
-} from '../credentials/unavailable-error';
-import { generateTitleForUser } from '../services/user-title-generator';
-import { buildOrchestratorSystemAppend, buildRunManagementSection } from './prompt-builder';
-import { getCodebaseEnvVars } from '../db/env-vars';
-import { buildAiProfile } from '@archon/workflows/model-validation';
+import { prepareChatTurnRequest, type ChatTurnRequest } from './chat-request';
 import {
   buildFullPrompt,
   discoverAllWorkflows,
@@ -72,13 +56,6 @@ import {
   handleWorkflowRunCommand,
   type ResolvedGate,
 } from './workflow-dispatch';
-
-/**
- * Conversations (DB ids) already nudged about a tier fallback. Process-lifetime
- * memory is intentional and sufficient: the nudge is a discovery aid, not
- * state — a server restart re-nudging once per conversation is acceptable.
- */
-const tierFallbackNudgedConversations = new Set<string>();
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
@@ -131,7 +108,7 @@ export async function handleMessage(
     // userId is recorded on the conversation row only on first creation —
     // first-user-wins. The row's user_id is provenance plus a fallback for
     // execution identity; each turn's prefs/credentials resolve from the
-    // SENDER when the adapter supplied one (see executionUserId below).
+    // SENDER when the adapter supplied one (see executionUserId in prepareChatTurnRequest).
     // Per-message attribution happens on workflow_runs.
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
@@ -263,201 +240,18 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    // Execution identity: the message sender when the adapter resolved one,
-    // else the conversation creator (solo installs / legacy rows / surfaces
-    // without auth). Sender-first mirrors the workflow executor, which
-    // resolves prefs from the run starter — without it, a multi-user thread
-    // would execute every turn on the creator's credentials (#1976).
-    const executionUserId = userId ?? conversation.user_id ?? undefined;
-    if (!userId && conversation.user_id && isPerUserProviderKeysEnabled()) {
-      // No sender identity arrived with this turn while per-user credentials
-      // are active — the turn executes (and bills) as the conversation
-      // CREATOR. Distinguishes a degraded auth resolution from the normal
-      // solo-install path (where per-user keys are off and this stays silent).
-      getLog().warn(
-        { conversationId, fallbackUserId: conversation.user_id },
-        'orchestrator.execution_identity_creator_fallback'
-      );
-    }
-    // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
-    // override install config (highest precedence). `{}` (no identity, no row,
-    // or DB failure) keeps config-only behavior byte-for-byte.
-    const userAiPrefs = executionUserId ? await resolveUserAiPrefsForChat(executionUserId) : {};
-    let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
-    let aiProfile: ReturnType<typeof buildAiProfile>;
-    try {
-      aiProfile = buildAiProfile(configuredProviderKey, {
-        repoTiers: config.tiers,
-        repoAliases: config.aliases,
-        userTiers: userAiPrefs.tiers,
-        userAliases: userAiPrefs.aliases,
-      });
-    } catch (profileErr) {
-      // Structurally invalid STORED prefs (corrupt DB row) must not break the
-      // user's chat — degrade to config-only. A broken config layer still
-      // fails fast: the rebuild rethrows the same error.
-      getLog().error(
-        { err: profileErr as Error, userId: executionUserId },
-        'orchestrator.user_ai_prefs_profile_invalid'
-      );
-      configuredProviderKey = conversation.ai_assistant_type;
-      aiProfile = buildAiProfile(configuredProviderKey, {
-        repoTiers: config.tiers,
-        repoAliases: config.aliases,
-      });
-    }
-    // Main chat model: per-user default_model > configured `large` tier >
-    // install assistants.<p>.model > built-in tier default (#1998).
-    const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
-      assistants: config.assistants,
-      tiers: config.tiers,
-    });
-    // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
-    // 'large'; when that tier is unset and a sibling preset answered, tell the
-    // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
-    // keeps it from becoming a per-message banner (review C1). Only the main
-    // chat request nags — the background title model ('small') falls back
-    // silently. Delivery failure must never fail the chat turn.
-    if (
-      chatRequest.matchedTier !== undefined &&
-      chatRequest.matchedTier !== 'large' &&
-      !tierFallbackNudgedConversations.has(conversation.id)
-    ) {
-      // Mark BEFORE attempting delivery: a failed send shouldn't retry the
-      // nudge on every subsequent message either.
-      tierFallbackNudgedConversations.add(conversation.id);
-      getLog().warn(
-        {
-          requestedTier: 'large',
-          matchedTier: chatRequest.matchedTier,
-          provider: chatRequest.provider,
-          model: chatRequest.model,
-        },
-        'orchestrator.tier_fallback_nudge'
-      );
-      try {
-        await platform.sendMessage(
-          conversationId,
-          `ℹ️ Model tier 'large' isn't configured — using the '${chatRequest.matchedTier}' preset ` +
-            `(${chatRequest.provider}/${chatRequest.model ?? ''}). Set it in Settings → Model Tiers ` +
-            'or `archon ai tier set large <provider> <model>`.'
-        );
-      } catch (nudgeErr) {
-        getLog().warn(
-          { err: nudgeErr as Error, conversationId },
-          'orchestrator.tier_fallback_nudge_delivery_failed'
-        );
-      }
-    }
-    const providerKey = chatRequest.provider;
-    let dbEnvVars: Record<string, string> = {};
-    if (conversation.codebase_id) {
-      try {
-        dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
-      } catch (error) {
-        getLog().warn(
-          { err: error as Error, codebaseId: conversation.codebase_id },
-          'codebase_env_vars_load_failed'
-        );
-      }
-    }
-    // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
-    // so a connected user's keys win over file/db env. No-op when the feature is
-    // disabled or no execution identity resolved (sender, else creator).
-    //
-    // A request whose vendor has a connected credential that failed must not run: it
-    // would authenticate with the host's login. A provider whose credentials have no
-    // static vendor for the model (OpenCode, an unparsed Pi model) consumes no stored
-    // credential, so it is not checked, as in workflow preflight.
-    const delivery =
-      isPerUserProviderKeysEnabled() && executionUserId
-        ? await resolveUserProviderEnvForChat(executionUserId)
-        : { env: {}, failed: new Map<string, CredentialFailure>(), credentials: undefined };
-    const failedVendorFor = (
-      provider: string,
-      model: string | undefined
-    ): { vendor: string; failure: CredentialFailure } | undefined => {
-      // An unregistered provider fails where it is used (title generation falls back
-      // to a truncated title); this check must not turn that into a failed turn.
-      if (delivery.failed.size === 0 || !isRegisteredProvider(provider)) return undefined;
-      const vendor = getRegistration(provider).credentials.vendorFor(model);
-      const failure = vendor !== undefined ? delivery.failed.get(vendor) : undefined;
-      return vendor !== undefined && failure !== undefined ? { vendor, failure } : undefined;
-    };
-    const failedTurnVendor = failedVendorFor(providerKey, chatRequest.model);
-    if (failedTurnVendor) {
-      throw new ConnectedCredentialUnavailableError(
-        failedTurnVendor.vendor,
-        failedTurnVendor.failure
-      );
-    }
-    const userProviderEnv: Record<string, string> = delivery.env;
-    const protectedEnvKeys = Object.keys(userProviderEnv);
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
-
-    const caps = getProviderCapabilities(providerKey);
-    // Warn if provider doesn't support env injection but env vars are configured
-    if (Object.keys(effectiveEnv).length > 0) {
-      if (!caps.envInjection) {
-        getLog().warn(
-          { provider: providerKey, envVarCount: Object.keys(effectiveEnv).length },
-          'orchestrator.unsupported_env_injection'
-        );
-      }
-    }
-
-    // Providers with in-process tools launch and register through typed tools; the
-    // others still write command lines that the command scan reads from the reply.
-    let systemAppend = await buildOrchestratorSystemAppend(
+    const { providerKey, requestOptions, caps } = await prepareChatTurnRequest({
+      platform,
+      conversationId,
       conversation,
+      message,
+      trimmedMessage,
+      userId,
       codebases,
       workflows,
-      caps.nativeTools ? 'tools' : 'commands'
-    );
-    // Providers WITHOUT the in-process manage_run tool (OpenCode/Copilot) get a
-    // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
-    // project's runs over bash. Native-tool providers get the tool below and are nudged to it
-    // — adding the CLI pointer there would be redundant and steer them onto a bash path
-    // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
-    // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
-    if (conversation.codebase_id !== null && !caps.nativeTools) {
-      systemAppend += `\n\n${buildRunManagementSection()}`;
-    }
-    const requestOptions: SendQueryOptions = {
-      assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
-      env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-      protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
-      userCredentialEnvKeys: Object.keys(userProviderEnv),
-      model: chatRequest.model,
-      appendSystemPrompt: systemAppend,
-    };
-    if (chatRequest.preset) {
-      applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
-    }
-
-    const titleRequest =
-      !conversation.title && !trimmedMessage.startsWith('/')
-        ? resolveModelRequest(aiProfile, 'small', configuredProviderKey)
-        : undefined;
-    if (titleRequest) {
-      const titleOptions: SendQueryOptions = {
-        model: titleRequest.model,
-        assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
-        env: { ...(config.envVars ?? {}), ...dbEnvVars },
-      };
-      if (titleRequest.preset) {
-        applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
-      }
-      void generateTitleForUser(
-        conversation.id,
-        message,
-        { provider: titleRequest.provider, options: titleOptions },
-        cwd,
-        executionUserId,
-        undefined,
-        delivery.credentials
-      );
-    }
+      config,
+      cwd,
+    });
 
     // 5. Send to AI provider
     const aiClient = getAgentProvider(providerKey);
@@ -849,7 +643,7 @@ function attachNativeTools(
   conversation: Conversation,
   actor: HandleMessageContext['actor'],
   workflowsWithSource: readonly WorkflowWithSource[],
-  caps: ReturnType<typeof getProviderCapabilities>,
+  caps: ChatTurnRequest['caps'],
   requestOptions: SendQueryOptions
 ): {
   gateResolution: { resolved: ResolvedGate | null };
