@@ -1,4 +1,4 @@
-import * as source from '@archon/workflows/run-source';
+import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
@@ -33,7 +33,7 @@ const log = createLogger('workflow-continuation-host');
 /** Operator guidance for a run whose frozen source cannot be verified, shared by every host. */
 export function unverifiableSourceGuidance(
   runId: string,
-  error: source.WorkflowSourceIntegrityError
+  error: runSource.WorkflowSourceIntegrityError
 ): string {
   return `frozen workflow source cannot be verified (${error.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${runId}, or abandon with archon workflow abandon ${runId}.`;
 }
@@ -55,7 +55,7 @@ export type ContinuationAdmission =
       refusal: Exclude<ResumeRefusal, 'waiting'>;
       message: string;
     }
-  | { kind: 'unavailable'; reason: string; sourceError?: source.WorkflowSourceIntegrityError };
+  | { kind: 'unavailable'; reason: string; sourceError?: runSource.WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
   | { kind: 'unavailable'; reason: string };
@@ -86,9 +86,9 @@ export async function resumeRunContinuation(
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
   try {
-    await source.resolveRunSourceCapture(run.metadata);
+    await runSource.resolveRunSourceCapture(run.metadata);
   } catch (error) {
-    if (!(error instanceof source.WorkflowSourceIntegrityError)) throw error;
+    if (!(error instanceof runSource.WorkflowSourceIntegrityError)) throw error;
     return {
       kind: 'unavailable',
       reason: `its recorded workflow source is unavailable: ${error.message}`,
@@ -226,7 +226,7 @@ export async function wakeDueWorkflowContinuations(
       try {
         outcome = { runId: run.id, ...(await resume(run, cursor)) };
       } catch (error) {
-        if (!(error instanceof source.WorkflowSourceIntegrityError))
+        if (!(error instanceof runSource.WorkflowSourceIntegrityError))
           log.warn({ err: error, runId: run.id }, 'workflow_continuation_resume_failed');
         outcome = { runId: run.id, kind: 'failed', error };
       }
@@ -239,7 +239,7 @@ export async function wakeDueWorkflowContinuations(
         outcome.kind === 'unavailable'
           ? outcome.sourceError
           : outcome.kind === 'failed' &&
-              outcome.error instanceof source.WorkflowSourceIntegrityError
+              outcome.error instanceof runSource.WorkflowSourceIntegrityError
             ? outcome.error
             : undefined;
       if (sourceError) {
