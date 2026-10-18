@@ -186,7 +186,7 @@ describe('validateContent', () => {
   });
 
   test('a cancel body is scanned — the engine rejects a dangling ref there', () => {
-    // `loader.ts` pushes `{ field: 'cancel', text: node.cancel }` into its ref scan, and
+    // `loader/dag-structure.ts` pushes `{ field: 'cancel', text: node.cancel }` into its ref scan, and
     // the executor substitutes it, so a dangling ref fails the workflow at load. The
     // builder used to stay silent about it, which is the gap this closes.
     const issues = validateContent(

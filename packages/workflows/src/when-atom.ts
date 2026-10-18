@@ -4,7 +4,7 @@
  *
  * Two consumers share it on purpose:
  *   - `condition-evaluator.ts` EVALUATES atoms at run time;
- *   - `loader.ts` VALIDATES them at load time (#2566), which needs the same
+ *   - `loader/dag-structure.ts` VALIDATES them at load time (#2566), which needs the same
  *     decomposition to tell a whole-output `$node.output` from a field access
  *     `$node.output.field` — a distinction the loader's coarse `WHEN_REF_SOURCE`
  *     ref sweep cannot make, because it captures only the first path segment.
@@ -29,7 +29,7 @@ import {
 } from './output-ref';
 
 /**
- * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
+ * The reserved scope name for workflow inputs. `loader/dag-structure.ts` imports this rather than
  * re-typing the literal in its two ref scans. It is NOT the only spelling in the tree —
  * `include-expander.ts` and `executor-shared.ts` still hardcode the word, and
  * `dagNodeSchema` (which enforces the reservation) cannot import it back without a cycle.
