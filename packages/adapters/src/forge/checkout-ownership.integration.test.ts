@@ -323,7 +323,7 @@ test.each(readiness)(
       error: { code: 'not_a_repo', path: 'acme/api' },
     });
     try {
-      const codebase = { name: 'acme/api', default_cwd: getProjectSourcePath('acme', 'api') };
+      const codebase = { name: 'local-api', default_cwd: getProjectSourcePath('acme', 'api') };
       for (let attempt = 1; attempt <= 2; attempt++) {
         await mkdir(codebase.default_cwd, { recursive: true });
         await expect(prepare(codebase)).rejects.toThrow('not found');

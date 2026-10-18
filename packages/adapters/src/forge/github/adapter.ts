@@ -741,7 +741,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     projectName: string,
     shouldSync: boolean
   ): Promise<void> {
-    if (await isExistingCheckout(repoPath, projectName)) {
+    if (await isExistingCheckout(repoPath, owner, repo)) {
       await addSafeDirectory(toRepoPath(repoPath));
       await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
