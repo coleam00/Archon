@@ -23,7 +23,7 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - Concrete Markdown paths read by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
-const BUILD_INPUTS = [
+export const BUILD_INPUTS = [
   '.claude/skills/',
   '.archon/architecture.md',
   'packages/providers/src/codex/protocol/README.md',

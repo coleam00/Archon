@@ -11,6 +11,7 @@ import {
 } from '../packages/workflows/src/defaults/bundle-inventory';
 import { ROOT_TEST_PLAN } from './repo-tests';
 import {
+  BUILD_INPUTS,
   changedFilesBetween,
   diffRange,
   proofFromPullRequestRun,
@@ -101,6 +102,24 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
     checker.getSymbolAtLocation(node)?.declarations?.[0];
   const imported = (node: ts.Expression): { module: string; name: string } | undefined => {
     const binding = declaration(ts.isPropertyAccessExpression(node) ? node.expression : node);
+    if (binding && ts.isBindingElement(binding) && ts.isObjectBindingPattern(binding.parent)) {
+      const variable = binding.parent.parent;
+      if (ts.isVariableDeclaration(variable)) {
+        let initializer = variable.initializer;
+        if (initializer && ts.isAwaitExpression(initializer)) initializer = initializer.expression;
+        if (
+          initializer &&
+          ts.isCallExpression(initializer) &&
+          initializer.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          initializer.arguments[0] &&
+          ts.isStringLiteral(initializer.arguments[0])
+        )
+          return {
+            module: initializer.arguments[0].text,
+            name: (binding.propertyName ?? binding.name).getText(),
+          };
+      }
+    }
     if (binding && ts.isImportSpecifier(binding) && ts.isIdentifier(node)) {
       const owner = binding.parent.parent.parent;
       if (ts.isStringLiteral(owner.moduleSpecifier)) {
@@ -122,12 +141,37 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
     }
     return undefined;
   };
+  const targetDeclaration = (node: ts.Expression): ts.Declaration | undefined => {
+    const origin = imported(node);
+    const source = origin && localSource(node.getSourceFile(), origin.module);
+    const symbol = source && checker.getSymbolAtLocation(source);
+    return symbol
+      ? checker.getExportsOfModule(symbol).find(item => item.name === origin?.name)
+          ?.valueDeclaration
+      : declaration(node);
+  };
+  const parameters = new Map<ts.Declaration, string>();
+  const activeFunctions = new Set<ts.FunctionDeclaration>();
   const active = new Set<ts.Node>();
   function value(node: ts.Expression | undefined, cwd: string): string | undefined {
     if (!node || active.has(node)) return undefined;
     active.add(node);
     try {
       if (ts.isStringLiteralLike(node)) return node.text;
+      if (ts.isTemplateExpression(node)) {
+        let result = node.head.text;
+        for (const span of node.templateSpans) {
+          const part = value(span.expression, cwd);
+          if (part === undefined) return undefined;
+          result += part + span.literal.text;
+        }
+        return result;
+      }
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        const left = value(node.left, cwd);
+        const right = value(node.right, cwd);
+        return left !== undefined && right !== undefined ? left + right : undefined;
+      }
       if (
         ts.isParenthesizedExpression(node) ||
         ts.isAsExpression(node) ||
@@ -138,6 +182,7 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
         return value(node.expression, cwd);
       if (ts.isIdentifier(node)) {
         const binding = declaration(node);
+        if (binding && parameters.has(binding)) return parameters.get(binding);
         if (
           binding &&
           ts.isVariableDeclaration(binding) &&
@@ -224,19 +269,29 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
           getNewLine: () => '\n',
         })
       );
-    const record = (candidate: string | undefined): void => {
-      if (candidate === undefined) return;
+    const trackedMarkdown = (candidate: string | undefined): string | undefined => {
+      if (candidate === undefined) return undefined;
       const absolute = candidate.startsWith('file:')
         ? fileURLToPath(candidate)
         : resolve(cwd, candidate);
       const path = relative(repo, absolute).replaceAll('\\', '/');
-      if (!path.endsWith('.md') || !tracked.has(path)) return;
+      return path.endsWith('.md') && tracked.has(path) ? path : undefined;
+    };
+    const record = (candidate: string | undefined): void => {
+      const path = trackedMarkdown(candidate);
+      if (!path) return;
       const readers = found.get(path) ?? new Set<string>();
       readers.add(relative(repo, file).replaceAll('\\', '/'));
       found.set(path, readers);
     };
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) || ts.isNewExpression(node)) record(value(node, cwd));
+      if (
+        ts.isCallExpression(node) ||
+        ts.isNewExpression(node) ||
+        ts.isTemplateExpression(node) ||
+        ts.isBinaryExpression(node)
+      )
+        record(value(node, cwd));
       if (ts.isCallExpression(node)) {
         const origin = imported(node.expression);
         const fsRead =
@@ -249,7 +304,51 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
           node.expression.expression.text === 'Bun' &&
           !declaration(node.expression.expression) &&
           node.expression.name.text === 'file';
-        if (fsRead || bunRead) record(value(node.arguments[0], cwd));
+        if (fsRead || bunRead) {
+          const argument = node.arguments[0];
+          const candidate = value(argument, cwd);
+          if (candidate === undefined && argument) {
+            const inspectUnresolved = (part: ts.Node): void => {
+              if (ts.isCallExpression(part)) {
+                const origin = imported(part.expression);
+                if (
+                  origin &&
+                  ['node:path', 'path'].includes(origin.module) &&
+                  ['join', 'resolve'].includes(origin.name) &&
+                  value(part.arguments[0], cwd) === undefined
+                )
+                  return;
+              }
+              if (ts.isExpression(part) && trackedMarkdown(value(part, cwd))) {
+                throw new Error(
+                  `Cannot resolve Markdown read in ${relative(repo, file)}: ${argument.getText()}`
+                );
+              }
+              ts.forEachChild(part, inspectUnresolved);
+            };
+            inspectUnresolved(argument);
+          }
+          record(candidate);
+        }
+        const fn = targetDeclaration(node.expression);
+        if (fn && ts.isFunctionDeclaration(fn) && fn.body && !activeFunctions.has(fn)) {
+          const arguments_ = node.arguments.map(argument => value(argument, cwd));
+          if (arguments_.some(argument => argument?.endsWith('.md'))) {
+            const previous = new Map(parameters);
+            fn.parameters.forEach((parameter, index) => {
+              const argument = arguments_[index];
+              if (argument !== undefined) parameters.set(parameter, argument);
+            });
+            activeFunctions.add(fn);
+            try {
+              visit(fn.body);
+            } finally {
+              activeFunctions.delete(fn);
+              parameters.clear();
+              for (const [parameter, argument] of previous) parameters.set(parameter, argument);
+            }
+          }
+        }
       }
       ts.forEachChild(node, visit);
     };
@@ -257,7 +356,9 @@ function markdownTestInputs(repo: string): Map<string, Set<string>> {
     for (const statement of source.statements) {
       if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
         continue;
-      const target = localSource(source, statement.moduleSpecifier.text);
+      const specifier = statement.moduleSpecifier.text;
+      if (specifier.endsWith('.md')) record(resolve(dirname(source.fileName), specifier));
+      const target = localSource(source, specifier);
       if (target) {
         const key = JSON.stringify([target.fileName, cwd]);
         if (!inspected.has(key)) {
@@ -276,18 +377,6 @@ function omittedMarkdownInputs(inputs: Map<string, Set<string>>): string[] {
     .map(([path, readers]) => `${path} read by ${[...readers].join(', ')}`);
 }
 
-const MARKDOWN_INPUT_CASES = [
-  '.archon/architecture.md',
-  'packages/providers/src/codex/protocol/README.md',
-  'packages/docs-web/src/content/docs/reference/database.md',
-  'packages/docs-web/src/content/docs/reference/api.md',
-  'packages/docs-web/src/content/docs/reference/node-execution.md',
-  'packages/docs-web/src/content/docs/deployment/docker.md',
-  'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
-  'packages/docs-web/src/content/docs/guides/attention-queue.md',
-  'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
-];
-
 describe('test-suite change decision', () => {
   const trackTempRoot = trackTempRoots();
   const workspaceInputs = workspaceTestInputs(resolve(import.meta.dir, '..'));
@@ -298,10 +387,13 @@ describe('test-suite change decision', () => {
     expect(omittedMarkdownInputs(inputs)).toEqual([]);
   });
 
-  test.each(MARKDOWN_INPUT_CASES)('runs suite and workspace tests for Markdown input %s', file => {
-    expect(shouldRunTestSuite([file])).toBe(true);
-    expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
-  });
+  test.each(BUILD_INPUTS.filter(path => path.endsWith('.md')))(
+    'runs suite and workspace tests for Markdown input %s',
+    file => {
+      expect(shouldRunTestSuite([file])).toBe(true);
+      expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
+    }
+  );
 
   test('an unknown source file runs the suite', () => {
     expect(shouldRunTestSuite(['unknown.ts'])).toBe(true);
@@ -317,6 +409,12 @@ describe('test-suite change decision', () => {
       'docs/direct.md': '',
       'docs/bun.md': '',
       'docs/helper-read.md': '',
+      'docs/template.md': '',
+      'docs/concat.md': '',
+      'docs/text.md': '',
+      'docs/indirect.md': '',
+      'docs/returned.md': '',
+      'docs/dynamic.md': '',
       'docs/unread.md': '',
       'README.md': '',
       'packages/a/package.json': '{}',
@@ -330,13 +428,22 @@ describe('test-suite change decision', () => {
         import { readFileSync } from 'node:fs';
         export const doc = paths.resolve(import.meta.dir, '..', 'docs', 'imported.md');
         readFileSync('docs/helper-read.md', 'utf8');
+        export function readDoc(path: string) { return readFileSync(path, 'utf8'); }
+        export function docsInput() { return import.meta.dir + '/../docs/returned.md'; }
       `,
       'scripts/new-reader.test.ts': `
         import { readFileSync as read } from 'node:fs';
         import { readFile } from 'node:fs/promises';
         import { join as assemble, dirname } from 'node:path';
         import * as urls from 'node:url';
-        import { doc as importedPath } from './helper';
+        import { doc as importedPath, readDoc, docsInput } from './helper';
+        import text from '../docs/text.md' with { type: 'text' };
+        const { readFileSync: dynamicRead } = await import('node:fs');
+        dynamicRead('docs/dynamic.md', 'utf8');
+        readDoc('docs/indirect.md');
+        read(docsInput(), 'utf8');
+        read(import.meta.dir + '/../docs/concat.md', 'utf8');
+        read(\`\${import.meta.dir}/../docs/template.md\`, 'utf8');
         import { mkdtempSync } from 'node:fs';
         import { tmpdir } from 'node:os';
         const root = dirname(import.meta.dir);
@@ -372,11 +479,17 @@ describe('test-suite change decision', () => {
     const inputs = markdownTestInputs(repo);
     expect([...inputs.keys()].sort()).toEqual([
       'docs/bun.md',
+      'docs/concat.md',
       'docs/converted.md',
       'docs/direct.md',
+      'docs/dynamic.md',
       'docs/helper-read.md',
       'docs/imported.md',
+      'docs/indirect.md',
+      'docs/returned.md',
       'docs/split.md',
+      'docs/template.md',
+      'docs/text.md',
       'docs/url.md',
       'packages/a/docs/relative.md',
     ]);
@@ -386,6 +499,29 @@ describe('test-suite change decision', () => {
     );
     expect(omittedMarkdownInputs(inputs)).toHaveLength(inputs.size);
   });
+
+  test.each(['readFileSync', 'readFile', 'Bun.file'])(
+    'an unresolved %s of a tracked Markdown reference fails with its consumer',
+    reader => {
+      const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-unresolved-')));
+      mkdirSync(join(repo, 'docs'));
+      writeFileSync(join(repo, 'docs/input.md'), 'input');
+      writeFileSync(
+        join(repo, 'reader.test.ts'),
+        `
+      import { readFileSync } from 'node:fs';
+      import { readFile } from 'node:fs/promises';
+      import { transform } from 'external-reader';
+      ${reader}(transform('docs/input.md'), 'utf8');
+    `
+      );
+      gitIn(repo, 'init', '-q');
+      gitIn(repo, 'add', '.');
+      expect(() => markdownTestInputs(repo)).toThrow(
+        "Cannot resolve Markdown read in reader.test.ts: transform('docs/input.md')"
+      );
+    }
+  );
 
   test.each(['push', 'pull_request'])('%s skips Markdown-only changes', () => {
     expect(shouldRunTestSuite(['README.md', 'packages/core/notes.md'])).toBe(false);
