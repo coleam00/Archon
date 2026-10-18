@@ -23,7 +23,7 @@ export const CANCEL_CHECK_INTERVAL_MS = 10_000;
  *   state → abort the stream.
  *
  * Exported for unit testing; the full streaming-cancel branch in
- * `executeNodeInternal` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
+ * `executeAgentNode` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
  * integration-level coverage of the policy is timing-sensitive and flaky.
  */
 export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | null): boolean {
