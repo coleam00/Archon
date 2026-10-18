@@ -74,9 +74,12 @@ if (pr === '') {
     state: string;
   };
   const base = view.baseRefName;
-  const head = view.headRefOid;
-  // Bring both tips into this checkout without touching its working tree.
-  run(['git', 'fetch', '--quiet', 'origin', base, `+refs/pull/${view.number}/head:refs/remotes/origin/loop-subject-${view.number}`]);
+  // Bring both tips into this checkout without touching its working tree. The fetched ref
+  // is the head as git has it now; the API's head can lag a push made moments ago.
+  const ref = `refs/remotes/origin/loop-subject-${view.number}`;
+  run(['git', 'fetch', '--quiet', 'origin', base, `+refs/pull/${view.number}/head:${ref}`]);
+  const fetched = run(['git', 'rev-parse', '--verify', '--quiet', ref]);
+  const head = fetched.code === 0 && fetched.out.trim() !== '' ? fetched.out.trim() : view.headRefOid;
   const behindResult = run(['git', 'rev-list', '--count', `${head}..origin/${base}`]);
   const behind = behindResult.code === 0 ? behindResult.out.trim() : 'unknown';
   // merge-tree exits 1 when the two tips conflict and writes nothing to the checkout.

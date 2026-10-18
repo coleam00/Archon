@@ -170,6 +170,9 @@ describe('merge gate', () => {
     const linked = parseDispositions(JSON.stringify([{ line: 'H1', action: 'issue', ref: '#12' }]));
     expect(gate(report, { dispositions: linked, issueExists: () => false })).toHaveLength(1);
     expect(gate(report, { dispositions: linked, issueExists: () => true })).toEqual([]);
+    // Seen live: the reviewer called it pre-existing with its own run and the issue.
+    const named = parseDispositions(JSON.stringify([{ line: 'H1', action: 'pre-existing', ref: 'main-run.txt #12' }]));
+    expect(gate(report, { dispositions: named, issueExists: ref => ref === '#12' })).toEqual([]);
   });
 
   it('a failed criterion cannot be dispositioned away with "blocks" and merged', () => {

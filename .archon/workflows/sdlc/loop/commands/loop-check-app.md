@@ -10,7 +10,7 @@ The move this run:
 
 - Route: $INPUTS.route
 - Work item: $INPUTS.target
-- Pull request: $INPUTS.pr (empty: nothing was delivered)
+- Pull request: $INPUTS.pr
 - Its head commit: $INPUTS.head, against the default branch `$INPUTS.base`
 - Commits the default branch has that the head does not: $INPUTS.behind
 - Conflicts with the default branch: $INPUTS.conflicts
@@ -20,7 +20,7 @@ The move this run:
 $INPUTS.files
 ```
 
-If the pull request is empty, nothing was delivered: report `NO PR` with what you can see (the work
+If no pull request URL is named above (the line ends at the colon), nothing was delivered: report `NO PR` with what you can see (the work
 item's latest comments, whether a branch was pushed) and stop.
 
 ## What to test

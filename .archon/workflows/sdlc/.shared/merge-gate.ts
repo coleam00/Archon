@@ -142,7 +142,9 @@ export function recordRefusals(facts: GateFacts): string[] {
         refusals.push(`${line.id} is an open question the review did not decide (an issue, or accepted with a reason)`);
       }
     } else if (isProvenPreExisting(line)) {
-      if (disposition?.action !== 'issue' || !facts.issueExists(disposition.ref)) {
+      // Whatever the reviewer called it, what counts is an existing issue that tracks it.
+      const issue = (disposition?.ref ?? '').split(/\s+/).find(token => /^#\d+$/.test(token));
+      if (issue === undefined || !facts.issueExists(issue)) {
         refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
       }
     }
