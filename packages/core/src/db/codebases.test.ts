@@ -590,19 +590,23 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([{ name: 'other' }]))
         .mockResolvedValueOnce(createQueryResult([], 1))
         .mockResolvedValueOnce(createQueryResult([{ ...adoCodebase, name: 'qes' }]));
 
       const renamed = await renameCodebase(adoCodebase.id, 'qes');
 
       expect(renamed.name).toBe('qes');
-      // The PostgreSQL rename lock is taken before the conditional UPDATE.
+      // The PostgreSQL identity lock is taken before the duplicate check reads names.
       expect(mockQuery.mock.calls[1]?.[0]).toBe(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))'
       );
+      expect(mockQuery.mock.calls[2]).toEqual([
+        'SELECT name FROM remote_agent_codebases WHERE id <> $1',
+        [adoCodebase.id],
+      ]);
       expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2 ' +
-          'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2',
         ['qes', adoCodebase.id]
       );
     });
@@ -620,25 +624,24 @@ describe('codebases', () => {
       await expect(renameCodebase('missing', 'qes')).rejects.toBeInstanceOf(CodebaseNotFoundError);
     });
 
-    test('rejects a name another codebase already uses', async () => {
-      // The conditional UPDATE matches nothing while the codebase still exists.
+    test('rejects a name another codebase uses in any case, without updating', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
         .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult([], 0))
-        .mockResolvedValueOnce(createQueryResult([adoCodebase]));
+        .mockResolvedValueOnce(createQueryResult([{ name: 'QES' }]));
 
       await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
         CodebaseNameTakenError
       );
+      expect(mockQuery).toHaveBeenCalledTimes(3);
     });
 
     test('throws CodebaseNotFoundError when the codebase disappears before the update', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
         .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult([], 0))
-        .mockResolvedValueOnce(createQueryResult([]));
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
         CodebaseNotFoundError
