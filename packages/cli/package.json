@@ -67,6 +67,12 @@
       "src/commands/workflow-list.test.ts"
     ],
     [
+      "src/commands/workflow-run-output.test.ts"
+    ],
+    [
+      "src/commands/workflow-transcript.test.ts"
+    ],
+    [
       "src/commands/doctor-dispatch.test.ts",
       "src/commands/doctor-forge-parity.test.ts"
     ],
