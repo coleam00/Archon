@@ -50,14 +50,8 @@ const MAX_BATCH_TOTAL_CHUNKS = 200;
  * but garble batch-mode text output on platforms like Slack/GitHub/CLI.
  */
 export function filterToolIndicators(assistantMessages: string[]): string {
-  if (assistantMessages.length === 0) return '';
-
   const separator = '\n\n---\n\n';
 
-  // Tool indicators from Claude Code SDK responses:
-  // 🔧 (U+1F527) - tool usage, 💭 (U+1F4AD) - thinking, 📝 (U+1F4DD) - writing,
-  // ✏️ (U+270F+FE0F) - editing, 🗑️ (U+1F5D1+FE0F) - deleting,
-  // 📂 (U+1F4C2) - folder, 🔍 (U+1F50D) - search
   const toolIndicatorRegex =
     /^(?:\u{1F527}|\u{1F4AD}|\u{1F4DD}|\u{270F}\u{FE0F}|\u{1F5D1}\u{FE0F}|\u{1F4C2}|\u{1F50D})/u;
 
@@ -74,7 +68,6 @@ export function filterToolIndicators(assistantMessages: string[]): string {
     .filter(message => message !== '')
     .join(separator);
 
-  // If we filtered everything out, fall back to all messages joined
   return finalMessage || assistantMessages.join(separator);
 }
 
@@ -540,11 +533,8 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
     return;
   }
 
-  // Parse commands from raw joined text — filterToolIndicators inserts '\n\n---\n\n'
-  // separators between array elements and then splits/rejoins with '\n\n', creating
-  // separator lines that break multi-chunk command text (name and path appear on
-  // separate lines from '/register-project'). Raw join preserves the command as a
-  // contiguous string. User-visible output still comes from filterToolIndicators.
+  // Raw join keeps multi-chunk commands contiguous; the display separators
+  // from filterToolIndicators would break command names and arguments apart.
   const commands = commandScan
     ? parseOrchestratorCommands(
         assistantMessages.join(''),

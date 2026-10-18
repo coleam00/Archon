@@ -103,20 +103,14 @@ describe('filterToolIndicators', () => {
   });
 
   test('preserves text that contains tool emoji but does not START with it', () => {
-    // The regex requires the emoji at the START of the section
     const result = filterToolIndicators(['Here is a 🔧 wrench emoji mid-text.']);
     expect(result).toContain('🔧');
   });
 
   test('falls back to all messages when everything gets filtered out', () => {
+    expect(filterToolIndicators(['🔧 Tool call one'])).toBe('🔧 Tool call one');
     expect(filterToolIndicators(['🔧 Tool call one', '💭 Thinking...'])).toBe(
       '🔧 Tool call one\n\n---\n\n💭 Thinking...'
-    );
-  });
-
-  test('drops the separator of a message that held only tool indicators', () => {
-    expect(filterToolIndicators(['First part.', '🔧 Some tool usage here', 'Second part.'])).toBe(
-      'First part.\n\n---\n\nSecond part.'
     );
   });
 
@@ -127,13 +121,10 @@ describe('filterToolIndicators', () => {
       'Second part of the response.',
     ];
     const result = filterToolIndicators(messages);
-    expect(result).toContain('First part of the response.');
-    expect(result).toContain('Second part of the response.');
-    expect(result).not.toContain('🔧 Some tool usage here');
+    expect(result).toBe('First part of the response.\n\n---\n\nSecond part of the response.');
   });
 
   test('sections within a single message are split by double newlines', () => {
-    // A single message with embedded double-newline creates multiple sections
     const messages = ['Normal text.\n\n🔧 Tool output.\n\nMore normal text.'];
     const result = filterToolIndicators(messages);
     expect(result).toContain('Normal text.');
