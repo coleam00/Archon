@@ -5,7 +5,7 @@ import {
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
 } from '../../pause';
-import { type RawSubprocessRejection } from '../../../subprocess';
+import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
 import {
@@ -571,10 +571,7 @@ async function executeLoopGroupBody(
               ...usage,
             };
           }
-          if (
-            execContext.kind === 'host' &&
-            (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR')
-          ) {
+          if (hostSpawnFailure(execContext, bashErr) !== undefined) {
             getLog().error(
               { err: bashErr, nodeId: node.id, iteration: resumedIteration },
               'loop_group.until_bash_failed'
@@ -1063,11 +1060,8 @@ async function executeLoopGroupBody(
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
-        // executeLoopNode's until_bash handling, including its host-only scope).
-        if (
-          execContext.kind === 'host' &&
-          (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR')
-        ) {
+        // executeLoopNode's until_bash handling).
+        if (hostSpawnFailure(execContext, bashErr) !== undefined) {
           getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_group.until_bash_failed'

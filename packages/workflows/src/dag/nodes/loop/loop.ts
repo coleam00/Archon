@@ -13,7 +13,7 @@ import {
   type LoopCompletionCheck,
 } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
-import { type RawSubprocessRejection } from '../../../subprocess';
+import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import { requireProvider } from '@archon/provider-contract';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
@@ -1442,12 +1442,8 @@ export async function executeLoopNode(
         }
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
-        // out of the loop with a clear actionable error instead. In a container the
-        // spawned binary is docker, so its spawn error falls through unrenamed.
-        if (
-          execContext.kind === 'host' &&
-          (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR')
-        ) {
+        // out of the loop with a clear actionable error instead.
+        if (hostSpawnFailure(execContext, bashErr) !== undefined) {
           getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
           throw new Error(
             `Loop node '${node.id}' until_bash failed: cannot execute bash at ` +
