@@ -58,7 +58,7 @@ Each item is a direction, not a fact about today's code. The why is in [`directi
 - **Isolation beyond worktrees is plugins.** Containers, VMs and remote execution attach behind `IIsolationBackend`.
 - **Lifecycle has pluggable hosts.** Continuations, schedules and triggers are core surfaces that the server, the CLI, an OS timer or a third party can drive.
 - **One owner per plugin's config.** Chat and forge plugins follow the single config owner providers already have.
-- **Large modules split along their seams.** `dag-executor.ts` becomes one file or folder per node type with shared execution code beside them, following existing patterns rather than a new architecture. `orchestrator-agent.ts` and `server/src/routes/api.ts` split the same way when work touches them.
+- **Large modules split along their seams.** `dag-executor.ts` becomes one file or folder per node type with shared execution code beside them, following existing patterns rather than a new architecture. `orchestrator-agent.ts` splits the same way when work touches it. Current state: [`server/src/routes/api.ts`](../packages/server/src/routes/api.ts) is an ordered list of per-area registrars, each in an `api.<area>.ts` module beside it.
 
 ## Boundaries
 
