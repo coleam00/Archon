@@ -395,7 +395,7 @@ export async function cancelWorkflowRun(
     // still cancellable (it remains a resumable state, so the user must be able
     // to discard it), and a 'running' run stays cancellable — that is
     // cooperative cancellation, which the executor honors via its between-layer
-    // status check (dag-executor).
+    // status check (workflows dag/run-layers.ts).
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs

@@ -1845,7 +1845,7 @@ export function parseWorkflow(
     // persisted session, so each run of that node starts fresh. Both outcomes come from
     // `persistedSessionHandling`, the same answer the executor acts on. When the
     // provider is implicit (set via .archon/config.yaml defaults), the check defers to
-    // runtime in dag-executor.
+    // runtime in agent dispatch (dag/nodes/agent/dispatch.ts).
     //
     // `nodeUsesPersistedScope` skips nodes that never use a persisted session (non-agent
     // nodes, context: 'fresh'), so workflow-level `persist_sessions: true` next to,

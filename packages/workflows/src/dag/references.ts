@@ -38,6 +38,7 @@ import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../ex
 import { substituteWorkflowVariables, type TemplateReferences } from '../executor-shared';
 import { type AttentionOption, attentionOptionsSchema } from '../schemas/dag-node';
 import { getLog } from './log';
+import type { RunLayersContext } from './run-context';
 import { NODE_OUTPUT_FILE_THRESHOLD } from './node-output';
 
 /**
@@ -525,7 +526,7 @@ export function nodeOutputRefToken(
     // structuredOutput payload, falls back to parsing `output`, and THROWS an
     // OutputRefError for an unresolvable reference (field not in the producer's
     // declared schema, or a schemaless node whose output isn't JSON / lacks the
-    // key). The throw propagates to the dag-executor's per-node catch → the
+    // key). The throw propagates to runLayers' per-node catch → the
     // consuming node fails visibly instead of receiving a poisoned ''. The only
     // value that resolves to empty is an author-declared-optional field.
     let resolution: ReturnType<typeof resolveNodeOutputField>;
@@ -845,4 +846,46 @@ export function resolveAttentionOptions(
     );
   }
   return parsed.data;
+}
+
+/**
+ * Resolve a node's AI-configuration text (`systemPrompt:`, `agents.*`), which goes
+ * straight to the provider, exactly as a `prompt:` resolves (#2476). Inside a loop_group
+ * body this reads the body's scoped `nodeOutputs` and loop scopes, matching every other
+ * surface. `typedArtifactsFile` is the listing the node materialized before it resolves
+ * its provider.
+ */
+export function aiConfigTextResolver(
+  ctx: Pick<
+    RunLayersContext,
+    | 'workflowRun'
+    | 'artifactsDir'
+    | 'baseBranch'
+    | 'docsDir'
+    | 'issueContext'
+    | 'stateDir'
+    | 'nodeOutputs'
+    | 'loopBodyScopes'
+  >,
+  typedArtifactsFile: string
+): (text: string) => string {
+  return text =>
+    substituteWorkflowVariables(
+      text,
+      ctx.workflowRun.id,
+      ctx.workflowRun.user_message,
+      ctx.artifactsDir,
+      ctx.baseBranch,
+      ctx.docsDir,
+      ctx.issueContext,
+      undefined,
+      undefined,
+      undefined,
+      {
+        stateDir: ctx.stateDir,
+        inputs: resolveRunInputs(ctx.workflowRun),
+        typedArtifactsFile,
+        references: nodeTemplateReferences(text, ctx),
+      }
+    ).prompt;
 }

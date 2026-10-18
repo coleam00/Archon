@@ -298,3 +298,25 @@ export function aiNodeEnvironment(
     ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
   );
 }
+
+/**
+ * The checkpoint through which a node another node names in `context: { resume }` records
+ * its provider session as soon as the provider reports it. Undefined for every other node.
+ */
+export function sessionCheckpoint(
+  ctx: RunLayersContext,
+  node: DagNode,
+  provider: string
+): SessionCheckpoint | undefined {
+  if (ctx.nodeSessionHandles === undefined || ctx.namedResumeSourceIds?.has(node.id) !== true) {
+    return undefined;
+  }
+  return async (sessionId: string): Promise<void> => {
+    await ctx.deps.store.upsertWorkflowRunNodeSession({
+      workflow_run_id: ctx.workflowRun.id,
+      node_id: ctx.stepNamePrefix + node.id,
+      provider,
+      provider_session_id: sessionId,
+    });
+  };
+}
