@@ -22,8 +22,8 @@ export const CANCEL_CHECK_INTERVAL_MS = 10_000;
  * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
  *   state → abort the stream.
  *
- * Exported for unit testing; the full streaming-cancel branch in
- * `executeAgentNode` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
+ * Exported for unit testing; the agent node's streaming-cancel check
+ * (`dag/nodes/agent/agent-stream.ts`) only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
  * integration-level coverage of the policy is timing-sensitive and flaky.
  */
 export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | null): boolean {
