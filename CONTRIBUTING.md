@@ -41,10 +41,13 @@ Git still normalizes text through the existing `.gitattributes`. `.archon/**` re
 excluded from formatting while its TypeScript scripts remain linted. Markdown and HTML
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
-The ratchet (`bun run check:ratchet`) refuses a change that raises the cognitive complexity
-of a function in a file it touches, or makes a touched source file longer, compared with the
-merge base with `origin/dev` (fetch it locally). It scores the TS/JS files Biome lints. To
-land an increase on purpose, add a trailer to one of the change's commits:
+The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
+it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
+touched source file is refused when it ends above 800 lines and has more lines than at the
+merge base. Test files have no line ceiling. It scores the TS/JS files
+Biome lints. To land an increase above a ceiling on purpose, add a trailer to one of the
+change's commits:
 `Ratchet-Allow: <path>` for a file's length, `Ratchet-Allow: <path>:<function>` for a function,
 using the names the failure prints.
 

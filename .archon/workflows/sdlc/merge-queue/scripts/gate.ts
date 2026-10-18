@@ -4,7 +4,7 @@
  *   gate.ts --method <squash|merge> --receipts <dir> --pr <url> --head <sha> [--merge]
  *
  * It reads the pull request fresh and refuses unless the trusted review verdict says
- * Ready, CI is green at `head`, no review thread is unresolved, and the pull
+ * Ready, CI is green at `head`, and the pull
  * request is open, not a draft, into the default branch, still at `head`, and `head`
  * contains the default branch's head. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
