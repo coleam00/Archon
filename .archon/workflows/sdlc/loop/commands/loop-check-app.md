@@ -73,7 +73,7 @@ you test:
 - Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run the scenarios this change could affect: judge from the work item and the list of changed files, and when unsure, run it. List the ones you skipped and why in one line. The manager runs the whole set on the default branch on its own schedule. The holdout is private to the reviewers: never quote it, its scenario text, its steps or its thresholds anywhere public (pull requests, issues, commits), and never in your report. A holdout line carries only the scenario id, the verdict and what a user sees.
   - Run each scenario exactly as written: a fresh start where it says fresh, the starting values it names, its mode. A run that deviates from its steps is `INCOMPLETE`, which counts as a failure.
   - When a scenario fails, find out whether the default branch fails it the same way. First read `holdout-baseline.md` in the holdout file's directory, if it exists: the manager records there how every scenario ran on the default branch, by commit and date. If it shows the same failure on a default-branch commit from the last 24 hours, cite that row. Otherwise run the scenario on the default branch yourself and cite that run. `FAIL (pre-existing: <the citation>)` needs one of the two; without it the failure is new.
-- A measurement that depends on timing or frame rate, taken while the machine is loaded (other app instances running, the frame rate below what the check expects), is inconclusive, not a FAIL: say so, rerun it once, and if the load persists report the line `INCOMPLETE` with the reason.
+- A measurement that depends on timing or frame rate, taken while the machine is loaded (other app instances running, the frame rate below what the check expects), is inconclusive, not a FAIL: say so, rerun it once, and if the load persists report the line `INCOMPLETE` with the reason. When the default branch, run under the same conditions, cannot finish it either, write `INCOMPLETE (pre-existing: <that run>)`: it is not this change's, and an issue must track it.
 - Only then, if a failure needs explaining, look at the diff to locate it.
 
 ## Never
@@ -88,7 +88,7 @@ you test:
 ```
 APP CHECK <pull request URL> at <head commit> merged with <default branch> at <merged commit>
 C1 PASS|FAIL|INCOMPLETE  <criterion, short>  <the command or observation, the value seen>  [evidence: <file>, <file>]
-H1 PASS|FAIL|FAIL (pre-existing: <baseline row or default-branch run>)|INCOMPLETE  <holdout id>  <what a user sees>  [evidence: <file>]
+H1 PASS|FAIL|FAIL (pre-existing: <baseline row or default-branch run>)|INCOMPLETE|INCOMPLETE (pre-existing: <default-branch run>)  <holdout id>  <what a user sees>  [evidence: <file>]
 PROBES
 P1 OK|SURPRISE (D<n>)  <state> / <action>: <what happened>  [evidence: <file>]
 DEFECTS SEEN

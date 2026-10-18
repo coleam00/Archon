@@ -139,6 +139,14 @@ describe('evidence check', () => {
     expect(evidenceProblems(bare, STARTED, () => fresh)).toEqual(['Overall says PASS over H1']);
     const deviated = parseAppCheck(CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE  notes'));
     expect(evidenceProblems(deviated, STARTED, () => fresh)).toEqual(['Overall says PASS over H1']);
+    // Seen live: a timing holdout neither the change nor main could finish on a loaded machine.
+    const sharedLoad = parseAppCheck(
+      CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE (pre-existing: main-motion.txt)  notes')
+    );
+    expect(evidenceProblems(sharedLoad, STARTED, () => fresh)).toEqual([]);
+    expect(gate(CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE (pre-existing: main-motion.txt)  notes'))).toEqual([
+      'H1 is a failure the default branch has too, but no issue that exists tracks it',
+    ]);
   });
 
   it('a probe surprise must name its defect line, and the defects section must be there', () => {

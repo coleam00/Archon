@@ -144,7 +144,9 @@ export function isAdverse(line: ReportLine): boolean {
 
 /** A holdout failure the default branch already has, with the citation that shows it. */
 export function isProvenPreExisting(line: ReportLine): boolean {
-  if (line.kind === 'H') return line.verdict === 'FAIL' && /^pre-existing\s*:\s*\S/i.test(line.qualifier);
+  // A holdout the default branch fails, or cannot finish under the same conditions, too.
+  if (line.kind === 'H')
+    return ['FAIL', 'INCOMPLETE'].includes(line.verdict) && /^pre-existing\s*:\s*\S/i.test(line.qualifier);
   if (line.kind === 'D') return line.verdict === 'PRE-EXISTING' && line.qualifier.trim() !== '';
   return false;
 }
