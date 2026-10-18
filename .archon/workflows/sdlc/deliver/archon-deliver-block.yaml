@@ -107,8 +107,8 @@ nodes:
               causal finding records a finite affected-member inventory, the
               finding is not fixed until every affected member is handled and the
               smallest relevant proof passes. Do not cross an explicit boundary to
-              make a finding disappear; the following review must return replan if
-              the requested outcome requires that expansion. When
+              make a finding disappear; the following review must return needs_human
+              if the requested outcome requires that expansion. When
               $ARTIFACTS_DIR/ci.md records CI red that this change caused on the
               pull request's current head, fix that too, at its cause, never by
               weakening a test. Removing or replacing a test this pull request
