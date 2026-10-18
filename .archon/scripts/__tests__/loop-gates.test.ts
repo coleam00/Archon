@@ -50,6 +50,11 @@ describe('app check report', () => {
     expect(byId.H2.qualifier).toBe('pre-existing: holdout-baseline.md 2026-10-17 row 4');
     expect(byId.C2.carriedFrom).toBe('0123abcd');
   });
+
+  it('a path annotated by the agent is read as the path (seen live: "drive-diff.txt (0 bytes)")', () => {
+    const report = parseAppCheck('C4 PASS  outputs match  identical  [evidence: drive-diff.txt (0 bytes), `run.log`]');
+    expect(report.lines[0].evidence).toEqual(['drive-diff.txt', 'run.log']);
+  });
 });
 
 describe('evidence check', () => {

@@ -88,7 +88,13 @@ export function parseAppCheck(report: string): AppCheckReport {
           ? []
           : evidence[1]
               .split(',')
-              .map(path => path.trim().replace(/^`|`$/g, ''))
+              // An agent annotates a path ("diff.txt (0 bytes)"); the path is what is cited.
+              .map(path =>
+                path
+                  .trim()
+                  .replace(/\s*\([^)]*\)\s*$/, '')
+                  .replace(/^`|`$/g, '')
+              )
               .filter(path => path !== ''),
       carriedFrom: CARRIED.exec(raw)?.[1] ?? null,
     });
