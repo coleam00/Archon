@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { readNodeRecordEvent } from '../node-record-reader';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
-import { inspectResumableRun } from '../executor';
+import { inspectResumableRun } from '../run-resume';
 import { NodeEventWriteError } from '../node-event-write';
 import {
   describe,

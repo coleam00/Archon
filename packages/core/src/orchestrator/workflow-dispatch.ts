@@ -44,7 +44,7 @@ import {
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
 } from '@archon/workflows/run-source';
-import { inspectResumableRun } from '@archon/workflows/executor';
+import { inspectResumableRun } from '@archon/workflows/run-resume';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import {

@@ -405,6 +405,8 @@ mock.module('@archon/workflows/executor', () => ({
     if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
     return Promise.resolve({ success: true, workflowRunId: 'test-run-id' });
   }),
+}));
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/run-source', () => ({

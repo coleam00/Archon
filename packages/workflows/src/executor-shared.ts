@@ -23,7 +23,7 @@ import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
-import type { LoadCommandResult } from './schemas';
+import type { LoadCommandResult, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import {
@@ -996,3 +996,62 @@ export async function safeSendMessage(
     return false;
   }
 }
+
+/**
+ * Delay execution for specified milliseconds
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Send a critical message with retry logic.
+ * Used for failure/completion notifications that the user must receive.
+ */
+export async function sendCriticalMessage(
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  message: string,
+  context?: SendMessageContext,
+  maxRetries = 3,
+  metadata?: WorkflowMessageMetadata
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await platform.sendMessage(conversationId, message, metadata);
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        {
+          err,
+          conversationId,
+          messageLength: message.length,
+          platformType: platform.getPlatformType(),
+          ...context,
+          attempt,
+          maxRetries,
+        },
+        'platform.critical_message_send_failed'
+      );
+
+      // Wait before retry (linear backoff: 1s × attempt)
+      if (attempt < maxRetries) {
+        await delay(1000 * attempt);
+      }
+    }
+  }
+
+  // Log prominently so operators can manually notify user
+  getLog().error(
+    { conversationId, messageLength: message.length, ...context },
+    'critical_message_delivery_failed'
+  );
+
+  return false;
+}
+
+/** A phase of `executeWorkflow` either hands its value on or ends the execution with a result. */
+export type RunPhase<T> =
+  | { stopped: false; value: T }
+  | { stopped: true; result: WorkflowExecutionResult };

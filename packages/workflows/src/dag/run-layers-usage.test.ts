@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
-import { inspectResumableRun } from '../executor';
+import { inspectResumableRun } from '../run-resume';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';

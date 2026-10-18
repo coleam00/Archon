@@ -41,7 +41,7 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   message: 'unused',
 }));
 const mockHydrateResumableRun = mock<
-  typeof import('@archon/workflows/executor')['hydrateResumableRun']
+  typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
 >(async () => null);
 const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({
@@ -98,6 +98,8 @@ mock.module('@archon/workflows/run-source', () => ({
 }));
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+}));
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
 }));
 

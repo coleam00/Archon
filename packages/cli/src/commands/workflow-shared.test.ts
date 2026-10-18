@@ -541,7 +541,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
 
 describe('workflowRunCommand — continuation conversation lookup', () => {
   it('refuses before opening a new conversation when the lookup fails', async () => {
-    const { hydrateResumableRun } = await import('@archon/workflows/executor');
+    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
