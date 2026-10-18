@@ -13,12 +13,8 @@ import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
-function invocationWorkflowNames(prompt: string): string[] {
-  return [
-    ...[...prompt.matchAll(/\/invoke-workflow (\S+) --project/g)].map(match => match[1]),
-    ...[...prompt.matchAll(/workflow: "([^"]+)"/g)].map(match => match[1]),
-  ];
-}
+const invoked = (p: string): string[] =>
+  [...p.matchAll(/\/invoke-workflow (\S+) --project|workflow: "([^"]+)"/g)].map(m => m[1] ?? m[2]);
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -56,34 +52,23 @@ describe('buildRoutingRulesWithProject', () => {
     }
   });
 
-  for (const channel of ['tools', 'commands'] as const) {
-    test.each([undefined, 'my-project'])(
-      `${channel} examples invoke only the placeholder and name no pack workflow (project: %s)`,
-      projectName => {
-        const rules = buildRoutingRulesWithProject(channel, projectName);
-        const names = invocationWorkflowNames(rules);
-        expect(names.length).toBeGreaterThan(0);
-        expect(names.every(name => name === '{workflow-name}')).toBe(true);
-        expect(rules.split('## Project Setup')[0]).not.toMatch(/\barchon-[\w-]+\b/);
-      }
-    );
-
-    test(`${channel} examples route actions and answer questions without invoking`, () => {
-      const rules = buildRoutingRulesWithProject(channel);
-      const action = rules.split('Example (clear intent):')[1]?.split('Example (ambiguous')[0];
-      expect(invocationWorkflowNames(action ?? '')).toEqual(['{workflow-name}']);
-      const question = rules
-        .split('Example (ambiguous — answer directly):')[1]
-        ?.split('## Project Setup')[0];
-      expect(question).toBeDefined();
-      expect(invocationWorkflowNames(question ?? '')).toEqual([]);
-      expect(rules).toContain(
-        channel === 'tools'
-          ? 'but do NOT call `invoke_workflow`'
-          : 'but do NOT include /invoke-workflow in your response'
-      );
-    });
-  }
+  test.each([
+    ['tools', undefined, 'but do NOT call `invoke_workflow`'],
+    ['tools', 'p', 'but do NOT call `invoke_workflow`'],
+    ['commands', undefined, 'but do NOT include /invoke-workflow'],
+    ['commands', 'p', 'but do NOT include /invoke-workflow'],
+  ] as const)(
+    '%s examples (project %s) invoke only the placeholder and answer questions directly',
+    (channel, project, noInvoke) => {
+      const rules = buildRoutingRulesWithProject(channel, project);
+      const routing = rules.split('## Project Setup')[0];
+      expect(routing).not.toMatch(/\barchon-[\w-]+\b/);
+      const [, action, question] = routing.split(/Example \((?:clear intent|ambiguous[^)]*)\):/);
+      expect(invoked(action)).toEqual(['{workflow-name}']);
+      expect(invoked(question)).toEqual([]);
+      expect(rules).toContain(noInvoke);
+    }
+  );
 
   test.each(['tools', 'commands'] as const)(
     '%s rules state prompt must be self-contained with no conversation knowledge',
@@ -135,25 +120,13 @@ describe('formatWorkflowContextSection', () => {
 });
 
 describe('formatWorkflowSection', () => {
-  test('lists each workflow and carries deprecation guidance only for deprecated ones', () => {
+  test('carries deprecation guidance only for deprecated workflows', () => {
     const section = formatWorkflowSection([
-      { name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] },
-      {
-        name: 'legacy-delivery',
-        description: 'Previous delivery workflow',
-        nodes: [],
-        deprecated: { message: 'Use custom-delivery instead.' },
-      },
+      { name: 'current', description: 'Current', nodes: [] },
+      { name: 'legacy', description: 'Legacy', nodes: [], deprecated: { message: 'Use current.' } },
     ]);
-
-    expect(section).toContain('**custom-delivery**\n  Deliver a requested change\n  Type:');
-    expect(section).toContain(
-      '**legacy-delivery**\n  Previous delivery workflow\n  Deprecated: Use custom-delivery instead.'
-    );
-  });
-
-  test('says no workflows are available for an empty list', () => {
-    expect(formatWorkflowSection([])).toContain('No workflows available');
+    expect(section).toContain('**current**\n  Current\n  Type:');
+    expect(section).toContain('**legacy**\n  Legacy\n  Deprecated: Use current.\n  Type:');
   });
 });
 

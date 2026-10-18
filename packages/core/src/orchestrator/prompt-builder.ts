@@ -53,15 +53,12 @@ export function formatWorkflowSection(workflows: readonly PromptWorkflow[]): str
     return 'No workflows available. Users can create workflows in `.archon/workflows/` as YAML files.\n';
   }
 
-  let section = '';
-  for (const w of workflows) {
-    section += `**${w.name}**\n`;
-    section += `  ${w.description}\n`;
-    if (w.deprecated) section += `  Deprecated: ${w.deprecated.message}\n`;
-    section += `  Type: DAG (${String(w.nodes.length)} nodes)\n`;
-    section += '\n';
-  }
-  return section;
+  return workflows
+    .map(w => {
+      const deprecation = w.deprecated ? `  Deprecated: ${w.deprecated.message}\n` : '';
+      return `**${w.name}**\n  ${w.description}\n${deprecation}  Type: DAG (${String(w.nodes.length)} nodes)\n\n`;
+    })
+    .join('');
 }
 
 /** WorkflowResult type for prompt context injection */
