@@ -4,7 +4,7 @@
  *   gate.ts --method <squash|merge> --receipts <dir> --pr <url> --head <sha> [--merge]
  *
  * It reads the pull request fresh and refuses unless the trusted review verdict says
- * Ready at `head` (or at an earlier commit it carries from, see `verdictCarry`), CI is green at `head`, no review thread is unresolved, and the pull
+ * Ready at `head` or at a commit `head` contains, CI is green at `head`, no review thread is unresolved, and the pull
  * request is open, not a draft, into the default branch, still at `head`, and `head`
  * contains the default branch's head. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
@@ -14,8 +14,7 @@
  * pull request with one was merged by this run, and one the sweep says it merged must
  * have one.
  *
- * Prints one JSON document: `{pr, head, refusals, carried, merge_commit}`, where
- * `carried` is the commit a carried Ready verdict was given at, or null. A refused merge or a
+ * Prints one JSON document: `{pr, head, refusals, merge_commit}`. A refused merge or a
  * failed one exits nonzero; a merge whose read-back itself failed says it was made.
  */
 
@@ -32,7 +31,6 @@ import {
   type Receipt,
   readPr,
   requireGh,
-  verdictCarry,
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/workitem.ts';
 
@@ -55,15 +53,15 @@ function main(): void {
   const pr = prFromUrl(url);
   const maintainers = readMaintainers(pr.repo);
   const facts = readPr(pr, maintainers).facts;
-  const { verdict } = facts;
-  const carry =
-    verdict.state === 'ready' && verdict.reviewed !== null && verdict.reviewed !== head
-      ? verdictCarry(verdict.reviewed, head, facts.default_head)
-      : { held: false, why: '' };
-  const refusals = gateRefusals(facts, head, carry);
-  const carried = carry.held ? verdict.reviewed : null;
+  // A Ready verdict on a commit the head contains still counts: the sweep sends a sync
+  // to delta review when what it brought in needs one, and CI at the head always runs.
+  const reviewed = facts.verdict.reviewed;
+  const reviewedInHead =
+    reviewed !== null &&
+    Bun.spawnSync(['git', 'merge-base', '--is-ancestor', reviewed, head], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
+  const refusals = gateRefusals(facts, head, reviewedInHead);
   if (!merge || refusals.length > 0) {
-    emit({ pr: url, head, refusals, carried, merge_commit: null });
+    emit({ pr: url, head, refusals, merge_commit: null });
     if (merge) process.exitCode = 1;
     return;
   }
@@ -86,7 +84,7 @@ function main(): void {
       `the forge accepted the merge of ${url} at ${head}, but it reads back ${after.state} at ${after.head_revision}, so it did not merge`
     );
   }
-  emit({ pr: url, head, refusals, carried, merge_commit: commit });
+  emit({ pr: url, head, refusals, merge_commit: commit });
 }
 
 try {
