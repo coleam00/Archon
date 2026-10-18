@@ -62,6 +62,9 @@
       "src/commands/workflow-shared.test.ts"
     ],
     [
+      "src/commands/workflow-list.test.ts"
+    ],
+    [
       "src/commands/doctor-dispatch.test.ts",
       "src/commands/doctor-forge-parity.test.ts"
     ],

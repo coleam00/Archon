@@ -14,7 +14,6 @@ import {
 } from '@archon/core/workflows/worktree-setup';
 import { checkoutSharedEventDataSchema } from '@archon/workflows/schemas/workflow-event';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
@@ -32,9 +31,6 @@ import {
 
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
-import type { NodeState } from '@archon/workflows/schemas/node-state';
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -57,7 +53,6 @@ import {
   WorkflowEventCursorError,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
-  PROVIDER_EVENT_ROW_TYPES,
   workflowEventCursor,
   deadlineWaitCursor,
   resumeCursorMatches,
@@ -72,7 +67,6 @@ import {
   sealWorkflowRunConfig,
 } from '@archon/core/config';
 import {
-  NODE_STATE_EVENT_TYPES,
   WORKFLOW_EVENT_TYPES,
   isDurableWorkflowEventType,
   type WorkflowEventType,
@@ -174,7 +168,6 @@ import {
   findWorkflowLoadError,
   type WorkflowDefinition,
   type WorkflowLoadError,
-  type WorkflowLoadResult,
   type WorkflowSource,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
@@ -186,7 +179,6 @@ import {
   workflowWaitStepName,
   isScheduledWorkflowResume,
   readRunStopReason,
-  skipCauseSchema,
   runAttention,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
@@ -196,10 +188,8 @@ import type {
   WorkflowRunStatus,
   ContinuationMode,
   RunAttention,
-  SkipCause,
   ExecutionOwnerRecord,
 } from '@archon/workflows/schemas/workflow-run';
-import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   isTerminalRunStatus,
@@ -238,6 +228,20 @@ import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
+import {
+  loadWorkflows,
+  projectWorkflowDescription,
+  WORKFLOW_DESCRIPTION_TRUNCATION_MARKER,
+  type WorkflowJsonEntry,
+} from './workflow-list';
+import {
+  buildNodeSummaries,
+  fetchVerboseEvents,
+  formatSkipCause,
+  listRunEvents,
+  printVerboseNodes,
+  withRunDetail,
+} from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
@@ -1049,27 +1053,6 @@ function workflowEventLine(
 }
 
 /**
- * Load workflows from the DISCOVERY root with standardized error handling.
- *
- * The root passed here owns both the workflow files and the `defaults:` /
- * `commands.folder` settings that govern how they are discovered — a workflow's own
- * checkout decides which command folder its command nodes name. What the run then DOES
- * is governed separately by the target's config, loaded inside `executeWorkflow`.
- */
-async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
-  try {
-    // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
-    // no option needed since the discovery helper reads them unconditionally.
-    return await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(
-      `Error loading workflows: ${err.message}\nHint: Check permissions on .archon/workflows/ directory.`
-    );
-  }
-}
-
-/**
  * Print a workflow's parse warnings (keys the engine silently drops) to stderr.
  *
  * stderr rather than stdout so `--json` callers keep a parseable payload while
@@ -1114,65 +1097,10 @@ function countWorkflowSources(
   );
 }
 
-interface WorkflowJsonEntry {
-  name: string;
-  description: string;
-  descriptionTruncated: boolean;
-  provider?: string;
-  model?: string;
-  /** Reasoning depth — the one spelling, on every provider that has one (#2556).
-   *  A workflow written with the deprecated `modelReasoningEffort:` reports its
-   *  value here, since the loader translates the two into one field. */
-  effort?: string;
-  webSearchMode?: string;
-  /** Keys the workflow's YAML declares that the engine drops (#2213). */
-  parseWarnings?: string[];
-}
-
 export interface WorkflowListOptions {
   json?: boolean;
   name?: string;
   full?: boolean;
-}
-
-const WORKFLOW_DESCRIPTION_PREVIEW_LIMIT = 160;
-const WORKFLOW_DESCRIPTION_TRUNCATION_MARKER = ' [truncated]';
-
-interface WorkflowDescriptionProjection {
-  description: string;
-  truncated: boolean;
-}
-
-function projectWorkflowDescription(
-  description: string,
-  full: boolean
-): WorkflowDescriptionProjection {
-  if (full || Array.from(description).length <= WORKFLOW_DESCRIPTION_PREVIEW_LIMIT) {
-    return { description, truncated: false };
-  }
-
-  const normalized = description.trim().replace(/\s+/gu, ' ');
-  const codePoints = Array.from(normalized);
-  if (codePoints.length <= WORKFLOW_DESCRIPTION_PREVIEW_LIMIT) {
-    return { description: normalized, truncated: true };
-  }
-
-  const firstSentenceEnd = codePoints
-    .slice(0, WORKFLOW_DESCRIPTION_PREVIEW_LIMIT)
-    .findIndex(character => character === '.' || character === '?' || character === '!');
-  if (firstSentenceEnd !== -1) {
-    return {
-      description: codePoints.slice(0, firstSentenceEnd + 1).join(''),
-      truncated: true,
-    };
-  }
-
-  let preview = codePoints.slice(0, WORKFLOW_DESCRIPTION_PREVIEW_LIMIT);
-  if (codePoints[WORKFLOW_DESCRIPTION_PREVIEW_LIMIT] !== ' ') {
-    const lastWordBoundary = preview.lastIndexOf(' ');
-    if (lastWordBoundary > 0) preview = preview.slice(0, lastWordBoundary);
-  }
-  return { description: preview.join(''), truncated: true };
 }
 
 export class WorkflowListLookupError extends Error {
@@ -3753,307 +3681,6 @@ async function recordDetachedChildStartupFailure(
       { err: dbError as Error, workflowRunId: detachedRunId },
       'cli.detached_startup_failure_record_failed'
     );
-  }
-}
-
-export interface NodeSummary {
-  nodeId: string;
-  state: NodeState;
-  startedAt?: string;
-  durationMs?: number;
-  outputPreview?: string;
-  error?: string;
-  /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
-  blockedOnChildRunId?: string;
-  cause?: SkipCause;
-  execution?: NodeExecutionMetadata;
-  /** Every provider session id the node's attempts and loop iterations recorded, in order. */
-  sessionIds?: string[];
-}
-
-function formatSkipCause(cause: SkipCause): string {
-  switch (cause.kind) {
-    case 'condition':
-      return `condition: ${cause.expr}`;
-    case 'condition_parse_error':
-      return `condition parse error: ${cause.expr}`;
-    case 'timeout':
-      return 'timeout';
-    case 'upstream_failed':
-      return `upstream failed: ${cause.origin}`;
-    case 'upstream_skipped':
-      return `upstream skipped: ${cause.origin}`;
-  }
-}
-
-/**
- * Bounded preview of a node's persisted output, shared by the two events that
- * report a success so both render the same cap.
- */
-function outputPreviewOf(rawOutput: unknown): string | undefined {
-  if (typeof rawOutput !== 'string') return undefined;
-  return rawOutput.slice(0, 200) + (rawOutput.length > 200 ? '...' : '');
-}
-
-/**
- * The event types `buildNodeSummaries` reads: every node-state record
- * `readNodeRecordEvent` accepts, plus loop iterations for their session ids. A caller
- * that fetches only these gets the same summaries as one that fetches the whole log.
- */
-export const NODE_SUMMARY_EVENT_TYPES = [
-  ...NODE_STATE_EVENT_TYPES,
-  'loop_iteration_completed',
-] as const satisfies readonly WorkflowEventType[];
-
-/**
- * Derive per-node summaries from a run's workflow events.
- * Processes node_started / node_completed / node_failed / node_skipped /
- * node_skipped_prior_success events — the last two mean opposite things and are
- * handled separately — loop iterations' session ids, and the resume resets
- * (node_always_run_reset, node_prior_cache_invalidated) that send a node back
- * to pending, as the run's terminal record does.
- */
-export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
-  const startTimes = new Map<string, number>();
-  const summaries = new Map<string, NodeSummary>();
-  // Kept apart from `summaries`, which a retry's node_started resets: earlier attempts'
-  // sessions stay listed.
-  const sessionIds = new Map<string, string[]>();
-  const recordSession = (nodeId: string, sessionId: unknown): void => {
-    if (typeof sessionId !== 'string') return;
-    const ids = sessionIds.get(nodeId) ?? [];
-    if (!ids.includes(sessionId)) sessionIds.set(nodeId, [...ids, sessionId]);
-  };
-
-  for (const event of events) {
-    const nodeId = event.step_name;
-    if (!nodeId) continue;
-    if (event.event_type === 'loop_iteration_completed') {
-      recordSession(nodeId, readNodeRecordData(event.data).session_id);
-      continue;
-    }
-    const record = readNodeRecordEvent(event);
-    if (!record) continue;
-    recordSession(nodeId, record.data.session_id);
-    const execution = record.metadata;
-
-    switch (record.eventType) {
-      case 'node_started': {
-        startTimes.set(nodeId, new Date(event.created_at).getTime());
-        // A retry is a new active attempt, so stale terminal details must not
-        // leak into the compact current-state summary.
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'running',
-          startedAt: event.created_at,
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_always_run_reset':
-      case 'node_prior_cache_invalidated': {
-        startTimes.delete(nodeId);
-        summaries.set(nodeId, { nodeId, state: 'pending' });
-        break;
-      }
-      case 'node_suspended': {
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'running',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_completed': {
-        const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'completed',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs:
-            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
-          outputPreview: outputPreviewOf(record.data.node_output),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_failed': {
-        const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'failed',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs:
-            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
-          error: record.data.error ?? 'Unknown error',
-          ...(record.data.blocked_on_child_run_id === undefined
-            ? {}
-            : { blockedOnChildRunId: record.data.blocked_on_child_run_id }),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_skipped': {
-        const parsedCause = skipCauseSchema.safeParse(record.data.cause);
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'skipped',
-          ...(parsedCause.success ? { cause: parsedCause.data } : {}),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_skipped_prior_success': {
-        // The opposite of node_skipped: the node ran and succeeded on an earlier
-        // pass, and this resume declined to re-run it. The engine re-emits one per
-        // resume pass — including its own durable-wait continuation — so folding
-        // these into `skipped` reported completed work as never run, and the last
-        // write erased the original duration and output (#2973). The earlier
-        // node_completed summary is the truth about the run, so never overwrite it.
-        // A reset left nothing to keep: the prior attempt's details went with it.
-        const existing = summaries.get(nodeId);
-        if (existing !== undefined && existing.state !== 'pending') break;
-        // The original node_completed is not in this log or was reset. The
-        // replay still carries the prior output, so report the success it
-        // describes; there is no start time to derive a duration from.
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'completed',
-          outputPreview: outputPreviewOf(record.data.node_output),
-        });
-        break;
-      }
-    }
-  }
-
-  return [...summaries.values()].map(summary => {
-    const ids = sessionIds.get(summary.nodeId);
-    return ids === undefined ? summary : { ...summary, sessionIds: ids };
-  });
-}
-
-/**
- * A run's event rows. Provider events (every agent text block, tool call and output)
- * are left out unless the caller prints raw rows: node summaries and terminal records
- * never read them, and a long run has thousands.
- */
-function listRunEvents(
-  host: WorkflowHost,
-  runId: string,
-  rawEvents: boolean
-): Promise<WorkflowEventRow[]> {
-  return rawEvents
-    ? host.deps.store.listWorkflowEvents(runId)
-    : host.deps.store.listWorkflowEvents(runId, {
-        excludeEventTypes: PROVIDER_EVENT_ROW_TYPES,
-      });
-}
-
-/**
- * Per-node state for `workflow runs --json --verbose`: every node the run declared in
- * its `terminal_graph`, in declared order and `pending` until an event reaches it,
- * folded with `buildNodeSummaries`. A node that ran but is not declared (a loop body
- * such as `candidates.step`) follows the declared ones in first-event order — the same
- * ordering `buildTerminalRecord` gives finished runs. A run without a recorded graph
- * reports only the nodes its events reached.
- */
-export function buildRunNodes(
-  run: Pick<WorkflowRun, 'metadata'>,
-  events: WorkflowEventRow[]
-): NodeSummary[] {
-  const nodes = new Map<string, NodeSummary>();
-  const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
-  if (graph.success)
-    for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
-  for (const summary of buildNodeSummaries(events)) nodes.set(summary.nodeId, summary);
-  return [...nodes.values()];
-}
-
-/**
- * `workflow runs --json --verbose` adds `nodes` and `attention` to each run. Node
- * events for every listed run come from one query, filtered to the types
- * `buildNodeSummaries` reads.
- */
-async function withRunDetail<
-  Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
->(
-  host: WorkflowHost,
-  runs: Run[]
-): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
-  const eventsByRun = await host.deps.store.listEventsForRuns(
-    runs.map(run => run.id),
-    NODE_SUMMARY_EVENT_TYPES
-  );
-  return runs.map(run => ({
-    ...run,
-    nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),
-    attention: runAttention(run),
-  }));
-}
-
-/**
- * Fetch a run's events for `--verbose` rendering. A failed event query must not
- * abort the command (the run summary itself is still useful), but it must NOT be
- * indistinguishable from "this run has no events" — so log a warn and flag the
- * failure to the caller, which prints a visible note. (In `--json` mode logs are
- * silenced; an empty derived/raw payload is the documented signal there.)
- */
-async function fetchVerboseEvents(
-  host: WorkflowHost,
-  runId: string,
-  rawEvents: boolean
-): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
-  try {
-    return { events: await listRunEvents(host, runId, rawEvents), failed: false };
-  } catch (error) {
-    getLog().warn({ err: error as Error, runId }, 'cli.workflow_events_fetch_failed');
-    return { events: [], failed: true };
-  }
-}
-
-/**
- * Render per-node summaries for a run's events as an indented "Nodes:" block.
- * Shared by `workflow status --verbose` and `workflow get --verbose`.
- * Prints nothing when the run has no node events.
- */
-function printVerboseNodes(events: WorkflowEventRow[]): void {
-  const nodes = buildNodeSummaries(events);
-  if (nodes.length === 0) return;
-  console.log('  Nodes:');
-  for (const node of nodes) {
-    const iconMap: Record<NodeSummary['state'], string> = {
-      completed: '✓',
-      failed: '✗',
-      skipped: '-',
-      running: '◌',
-      pending: '○',
-    };
-    const icon = iconMap[node.state];
-    const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel =
-      node.state === 'running' || node.state === 'pending' ? ` (${node.state})` : '';
-    const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
-    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
-    if (node.outputPreview !== undefined) {
-      console.log(`        Output: ${node.outputPreview}`);
-    }
-    if (node.error !== undefined) {
-      console.log(`        Error:  ${node.error}`);
-    }
-    if (node.sessionIds !== undefined) {
-      const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
-      console.log(`        ${label}: ${node.sessionIds.join(', ')}`);
-    }
-    if (node.blockedOnChildRunId !== undefined) {
-      const abandon = spellWorkflowCommand(
-        CLI_WORKFLOW_SURFACE,
-        `abandon ${node.blockedOnChildRunId}`
-      );
-      console.log(`        Abandon: ${abandon}`);
-    }
   }
 }
 

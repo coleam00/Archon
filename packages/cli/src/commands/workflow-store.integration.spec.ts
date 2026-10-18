@@ -245,6 +245,8 @@ test('CLI run commands and reusable persistence helpers have no SQL imports or r
   const files = [
     'cli/src/commands/workflow.ts',
     'cli/src/commands/workflow-shared.ts',
+    'cli/src/commands/workflow-list.ts',
+    'cli/src/commands/workflow-node-summaries.ts',
     'cli/src/adapters/cli-adapter.ts',
     'cli/src/utils/owned-run-termination.ts',
     'cli/src/utils/cli-user.ts',

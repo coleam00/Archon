@@ -379,6 +379,7 @@ describe('workflow fixture selection', () => {
     'packages/workflows/src/fixture-runner.ts',
     'packages/workflows/src/dry-run.ts',
     'packages/cli/src/commands/workflow.ts',
+    'packages/cli/src/commands/workflow-list.ts',
     'packages\\workflows\\src\\schema.ts',
   ])('runs for %s', file => {
     expect(shouldRunWorkflowFixtures([file])).toBe(true);

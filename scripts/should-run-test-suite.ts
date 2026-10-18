@@ -76,7 +76,8 @@ export function shouldRunWorkflowFixtures(files: Iterable<string>): boolean {
     if (
       file.startsWith('.archon/workflows/sdlc/') ||
       file.startsWith('packages/workflows/src/') ||
-      file === 'packages/cli/src/commands/workflow.ts'
+      file === 'packages/cli/src/commands/workflow.ts' ||
+      file === 'packages/cli/src/commands/workflow-list.ts'
     )
       return true;
   }
