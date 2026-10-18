@@ -361,7 +361,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
 // numeric half is the dangerous one: SQLite's json_patch is RFC 7396 and
 // recurses, so before the wholesale-replace write, interior keys of the nested
 // `signaledTokens` object survived from the previous gate and became real token
-// accounting on resume (readSignaledTokens in dag-executor). Only a real engine
+// accounting on resume (readSignaledTokens in dag/nodes/loop). Only a real engine
 // can catch this; the mock suite runs the Postgres dialect, where `||` already
 // replaced the object.
 // ---------------------------------------------------------------------------
