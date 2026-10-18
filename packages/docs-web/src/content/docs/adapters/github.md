@@ -96,7 +96,7 @@ WEBHOOK_SECRET=your_secret_from_step_1
 
 ## Step 5: Configure Streaming (Optional)
 
-The GitHub adapter always uses `batch` mode (hardcoded) since GitHub issues and PRs are best served by single complete comments rather than streaming updates.
+The GitHub adapter always uses `batch` mode (hardcoded). It assembles the reply before delivery and splits long replies into multiple comments.
 
 ## Usage
 
