@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach, type Mock } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -390,6 +390,66 @@ describe('interactive loop node', () => {
       .mock.calls;
     expect(pauseCalls.length).toBe(0);
   });
+
+  // Spawns real `bash -c`: LOOP_PREV_OUTPUT only exists in until_bash's environment.
+  it.each(['loop', 'loop_group'] as const)(
+    'a resumed interactive %s gives its first iteration the paused iteration output',
+    async kind => {
+      const prevFile = join(testDir, `${kind}-prev-output`);
+      const untilBash = `printf %s "$LOOP_PREV_OUTPUT" > "${prevFile.replace(/\\/g, '/')}"; exit 1`;
+      const gate = { interactive: true, gate_message: 'Review.', max_iterations: 5 };
+      const node: DagNode =
+        kind === 'loop'
+          ? {
+              id: 'refine',
+              kind: 'loop',
+              loop: { ...gate, fresh_context: false, prompt: 'Draft.', until_bash: untilBash },
+            }
+          : {
+              id: 'refine',
+              kind: 'loop_group',
+              loop_group: {
+                ...gate,
+                fresh_context: false,
+                until_bash: untilBash,
+                nodes: [
+                  { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Draft.' } },
+                ],
+              },
+            };
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'draft one' };
+        yield { type: 'result', sessionId: 'prev-output-session' };
+      });
+
+      const firstDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: firstDeps,
+          cwd: testDir,
+          workflow: { name: 'resume-prev-output', nodes: [node] },
+          workflowRun: makeWorkflowRun('resume-prev-output-run'),
+        })
+      );
+      expect(await readFile(prevFile, 'utf8')).toBe('');
+      const approval = firstDeps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(approval).toBeDefined();
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          workflow: { name: 'resume-prev-output', nodes: [node] },
+          workflowRun: makeWorkflowRun('resume-prev-output-run', {
+            metadata: { approval, loop_user_input: 'tighten it', loop_feedback_given: true },
+          }),
+          // The body row a loop_group iteration persisted, as a real resume reads it back.
+          priorCompletedNodes: new Map([['refine.work', { output: 'draft one' }]]),
+        })
+      );
+      expect(await readFile(prevFile, 'utf8')).toBe('draft one');
+    }
+  );
 
   it('interactive loop resumes from stored iteration with user input', async () => {
     let callCount = 0;

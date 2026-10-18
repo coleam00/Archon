@@ -442,7 +442,9 @@ export async function executeLoopNode(
     );
   }
 
-  let lastIterationOutput = '';
+  // A resumed loop continues from the paused iteration, so its output stays the
+  // previous output for $LOOP_PREV_OUTPUT and until_bash.
+  let lastIterationOutput = isLoopResume ? (loopGateMeta.iterationOutput ?? '') : '';
   let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined = persistedLoopCostUsd;
   let loopTotalTokens: TokenUsage | undefined = persistedLoopTokens;
@@ -744,9 +746,7 @@ export async function executeLoopNode(
           // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
           // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
           // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
-          // the first iteration (no prior output exists). Across an interactive resume, the
-          // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
-          // the resume also receives an empty $LOOP_PREV_OUTPUT.
+          // the first iteration (no prior output exists).
           const { prompt: basePrompt } = substituteWorkflowVariables(
             loopPromptTemplate,
             workflowRun.id,
@@ -757,7 +757,7 @@ export async function executeLoopNode(
             issueContext,
             i === startIteration ? loopUserInput : '',
             undefined, // rejectionReason
-            i === startIteration ? '' : lastIterationOutput,
+            lastIterationOutput,
             {
               stateDir,
               inputs: resolveRunInputs(workflowRun),
@@ -1609,6 +1609,7 @@ export async function executeLoopNode(
         signaledStructuredOutput: completionDetected
           ? (lastIterationStructuredOutput ?? null)
           : null,
+        iterationOutput: lastIterationOutput,
         // Cumulative usage consumed through this gate. A resumed loop seeds its
         // totals from these values so later gates and terminal metadata preserve
         // every pre-gate iteration; bare approval uses the same values directly.

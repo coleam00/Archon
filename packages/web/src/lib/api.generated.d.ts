@@ -5492,6 +5492,7 @@ export interface components {
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
+        iterationOutput?: string;
         signaledTokens?: {
           input: number;
           output: number;

@@ -622,7 +622,15 @@ async function executeLoopGroupBody(
     }
   }
 
-  let lastIterationOutput = '';
+  // A resumed group continues from the iteration it paused in; that iteration's
+  // restored body outputs give until_bash its LOOP_PREV_OUTPUT.
+  let lastIterationOutput =
+    loopPrevOutputs === undefined
+      ? ''
+      : stripCompletionTags(
+          loopGroupIterationOutput(bodyNodes, loopPrevOutputs)?.output ?? '',
+          group.until
+        );
   // The terminal sink's structured payload for the same iteration (#2637) — tracked
   // beside the text so the group's completed NodeOutput carries the logical value
   // (sibling `loop:` has done this since #2563; the group used to discard it).
