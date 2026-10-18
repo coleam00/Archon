@@ -30,6 +30,9 @@ test('the persistence boundary follows resolved modules and symbols', () => {
   );
   write('packages/core/src/workflows/sql-host.ts', 'export const sqlHost = 1;');
   write('packages/core/src/workflows/store-adapter.ts', 'export const adapter = 1;');
+  write('packages/core/src/handlers/sql-registration.ts', 'export const register = 1;');
+  write('packages/core/src/index.ts', 'export const contract = 1;');
+  write('packages/core/src/workflows/index.ts', 'export const workflows = 1;');
   write('safe.ts', 'export const safe = 1;');
   write(
     'barrel.ts',
@@ -45,6 +48,9 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     `import { store } from ${JSON.stringify(absolute)};`,
     "import { sqlHost } from '../packages/core/src/workflows/sql-host';",
     "import { adapter } from '../packages/core/src/workflows/store-adapter';",
+    "import { register } from '../packages/core/src/handlers/sql-registration';",
+    "import { contract } from '../packages/core/src/index';",
+    "import { workflows } from '../packages/core/src/workflows';",
     "import { alias as local } from '../barrel';",
     "import { renamed } from '../second';",
     "import * as ns from '../barrel';",
@@ -70,6 +76,7 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     "import { type Store } from '../barrel';",
     'const path = "store"; import(path); require(path);',
     "import '../safe';",
+    "import type { contract } from '../packages/core/src/index';",
   ];
   const cases = [
     ...rejected.map(source => ({ source, rejected: true })),

@@ -5,8 +5,8 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
 
 /**
  * Workflow-facing code that reaches persistence only through the workflow host contract.
- * Each listed file must exist: a renamed consumer fails the check instead of silently
- * dropping out of it.
+ * This is the only list of these files. Each listed file must exist: a renamed consumer
+ * fails the check instead of silently dropping out of it.
  */
 export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/operations/workflow-operations.ts',
@@ -27,6 +27,7 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
   'packages/cli/src/utils/owned-run-termination.ts',
+  'packages/cli/src/utils/cli-user.ts',
   'packages/server/src/services/resource-start-hosting.ts',
   'packages/server/src/services/webhook-source-plugins.ts',
 ];
@@ -34,6 +35,16 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
 const SQL_COMPOSITION = new Set([
   'packages/core/src/workflows/sql-host.ts',
   'packages/core/src/workflows/store-adapter.ts',
+  'packages/core/src/handlers/sql-registration.ts',
+]);
+
+/**
+ * `@archon/core` and `@archon/core/workflows` re-export SQL-backed operations next to the
+ * contract, so a consumer takes no runtime import from them even of a symbol that is safe.
+ */
+const CORE_BARRELS = new Set([
+  'packages/core/src/index.ts',
+  'packages/core/src/workflows/index.ts',
 ]);
 
 function isPersistence(path: string): boolean {
@@ -57,7 +68,7 @@ function loadOptions(configPath: string): ts.CompilerOptions {
 
 /**
  * Returns one `file:line:column message` entry per runtime import, re-export, dynamic
- * `import()` or `require()` in `consumers` that reaches persistence. The type checker
+ * `import()` or `require()` in `consumers` that reaches persistence or a core barrel. The type checker
  * follows aliases and barrel re-exports, so a persistence symbol re-exported through
  * `@archon/core` is caught. Type-only imports are allowed. Each consumer is resolved
  * with the tsconfig that owns it, the same resolution type-check uses.
@@ -111,10 +122,10 @@ export function findPersistenceImports(root: string, consumers: readonly string[
     for (const file of files) {
       const source = program.getSourceFile(file);
       if (source === undefined) throw new Error(`TypeScript did not load ${pathOf(file)}`);
-      const report = (node: ts.Node, specifier: string): void => {
+      const report = (node: ts.Node, specifier: string, what = 'SQL persistence'): void => {
         const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
         violations.push(
-          `${pathOf(file)}:${line + 1}:${character + 1} SQL persistence import from '${specifier}'; use the workflow host contract.`
+          `${pathOf(file)}:${line + 1}:${character + 1} ${what} import from '${specifier}'; use the workflow host contract.`
         );
       };
       const checkModule = (specifier: ts.StringLiteralLike, names?: ts.Node[]): void => {
@@ -124,8 +135,13 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           program.getCompilerOptions(),
           ts.sys
         ).resolvedModule;
-        if (resolved && isPersistence(pathOf(resolved.resolvedFileName))) {
+        const target = resolved && pathOf(resolved.resolvedFileName);
+        if (target && isPersistence(target)) {
           report(specifier, specifier.text);
+          return;
+        }
+        if (target && CORE_BARRELS.has(target)) {
+          report(specifier, specifier.text, 'Core barrel');
           return;
         }
         for (const node of names ?? [specifier]) {
