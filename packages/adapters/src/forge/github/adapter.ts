@@ -7,6 +7,7 @@ import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
+import { isExistingCheckout } from './checkout-readiness';
 import { readdir, access, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
@@ -703,7 +704,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready
-   * For new codebases: clone when git metadata is absent
+   * Clone when no checkout exists (see isExistingCheckout)
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
    * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
@@ -740,24 +741,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     projectName: string,
     shouldSync: boolean
   ): Promise<void> {
-    let repositoryExists = false;
-    try {
-      await access(join(repoPath, '.git'));
-      repositoryExists = true;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') {
-        // Real error - permission denied, I/O failure, etc.
-        getLog().error({ repoPath, errorCode: err.code, err }, 'github.repo_path_access_failed');
-        throw new Error(
-          `Cannot access repository at ${repoPath}: ${err.code ?? err.message}. ` +
-            'Check permissions and disk health.'
-        );
-      }
-      // Missing git metadata includes the empty source/ left by a failed clone.
-    }
-
-    if (repositoryExists) {
+    if (await isExistingCheckout(repoPath, owner, repo, projectName)) {
       await addSafeDirectory(toRepoPath(repoPath));
       await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
