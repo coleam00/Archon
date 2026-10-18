@@ -3,7 +3,7 @@ import { NoDefaultProviderError } from '@archon/provider-contract';
  * Which provider and model a node will actually run on — and where each value came from.
  *
  * This is the resolution chain ALONE, extracted from `resolveNodeProviderAndModel`
- * (dag-executor.ts) so a dry run can report the same answer the executor will produce
+ * (dag/provider-resolution.ts) so a dry run can report the same answer the executor will produce
  * (#1764). The executor's own function is `async` and takes a platform + conversation id
  * because it MESSAGES the user about capability mismatches; calling it from a dry run
  * would send chat messages for a run that never happens. Reimplementing the chain in
@@ -71,11 +71,11 @@ export interface WorkflowModelScope {
 /**
  * Resolve one node's provider, model and reasoning depth.
  *
- * Mirrors dag-executor's chain exactly, including the two conditions that are easy to get
- * wrong: a workflow-level model applies only when the node resolves to the workflow's own
- * provider, and a workflow-level PRESET applies only when the node declares no `model:`
- * of its own. Both exist so a node that switches provider never inherits the other
- * provider's model string.
+ * This is the one chain execution, dry run and run preflight share, including the two
+ * conditions that are easy to get wrong: a workflow-level model applies only when the
+ * node resolves to the workflow's own provider, and a workflow-level PRESET applies only
+ * when the node declares no `model:` of its own. Both exist so a node that switches
+ * provider never inherits the other provider's model string.
  */
 export function resolveNodeModel(
   node: DagNode,

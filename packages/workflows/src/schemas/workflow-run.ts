@@ -37,7 +37,7 @@ import { isAbsolute } from 'path';
  * `'paused'` is treated as a still-live status for in-flight sibling node streaming:
  * a concurrent gate pausing the run must not tear down an unrelated node's
  * already-streaming output in the same topological layer. See
- * `shouldContinueStreamingForStatus` in dag-executor.ts, which encodes this policy.
+ * `shouldContinueStreamingForStatus` in dag/run-control.ts, which encodes this policy.
  */
 export const workflowRunStatusSchema = z.enum([
   'pending',
