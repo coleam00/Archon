@@ -1010,7 +1010,7 @@ export function inputEnvKey(name: string): string {
  * graph fields (id / depends_on / when / trigger_rule) attach the expanded sub-DAG.
  * `expandWorkflowIncludes` (include-expander.ts) consumes every `IncludeDirective`
  * at discovery time; by the time a `WorkflowDefinition` reaches the executor, none
- * survive — `dag-executor.ts` asserts this defensively rather than dispatching on it,
+ * survive — `dag/dispatch.ts` asserts this defensively rather than dispatching on it,
  * since `IncludeDirective` is not a member of the `DagNode` union it type-checks against.
  */
 export const includeDirectiveSchema = dagNodeBaseSchema

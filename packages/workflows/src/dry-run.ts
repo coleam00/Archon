@@ -1074,7 +1074,7 @@ async function simulateLoopGroup(
   if (!isLoopGroupNode(node)) return;
   const bodyNodes = resolvedBodyNodes(node.loop_group);
   // The executor builds the body's per-iteration context from the group's OWN resolved
-  // provider and model (dag-executor.ts), so the body must simulate against those rather
+  // provider and model (dag/dispatch.ts), so the body must simulate against those rather
   // than the enclosing workflow's scope. Everything the executor leaves alone — the
   // workflow-level effort and options — stays as it is. Reporting fields that describe
   // where the inherited model came from travel with it, or a body node would be

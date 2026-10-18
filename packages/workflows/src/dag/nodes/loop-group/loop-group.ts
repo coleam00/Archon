@@ -60,7 +60,7 @@ import {
 } from '../../../executor-shared';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
-import { runLayers } from '../../../dag-executor';
+import { runLayers } from '../../run-layers';
 import { sumTokenUsage } from '../../usage';
 import { RunSourceUnreadableError } from '../../node-source';
 import {
@@ -427,7 +427,7 @@ async function executeLoopGroupBody(
   // (#2748). The pause boundary discards this function's local state, but the last
   // iteration's direct body-node outputs already survive as persisted
   // `<groupId>.<bodyId>` node_completed rows — `outerNodeOutputs` was ALREADY
-  // pre-populated from them (executeDagWorkflow's resume pre-population, itself
+  // pre-populated from them (the run's resume pre-population in restoreRunState, itself
   // sourced from getDagResumeSnapshot's #2726/#2732 bounded-rows + spill/rehydrate
   // read), keyed by that full step name. Re-key to the bare body id so
   // the loop scope finds them exactly as it would mid-loop.
@@ -437,7 +437,7 @@ async function executeLoopGroupBody(
     for (const id of directBodyIds) {
       const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
       if (!prior) continue;
-      // Same rule as executeDagWorkflow's resume loop: the body node's OWN current
+      // Same rule as restoreRunState's resume pre-population: the body node's OWN current
       // definition owns its contract — the source a live iteration uses — so a resumed
       // $LOOP_PREV.<id>.output.<path> ref keeps the same strictness, and a row an older
       // binary wrote (top-level fields only) cannot narrow it. The persisted row supplies
