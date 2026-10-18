@@ -9,27 +9,20 @@ import {
 import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
-import type { WorkflowDeps } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { WorkflowNode, FanOutConfig, WorkflowRun } from '../../../schemas';
-import { readSubrunMetadata, isTerminalRunStatus } from '../../../schemas';
-import { FAN_OUT_CANCEL_REASONS } from '../../../store';
 import type { FanOutCancelReason } from '../../../store';
 import {
   TerminalStatusWriteError,
   requireTerminalStatusWrite,
 } from '../../../terminal-status-write';
-import { canonicalValueText, type JsonValue } from '../../../output-ref';
+import { type JsonValue } from '../../../output-ref';
 import { mapWithHeldSlots } from '../../../utils/map-with-limit';
 import { substituteWorkflowVariables, safeSendMessage } from '../../../executor-shared';
 import { getLog } from '../../log';
 import { sumFanOutCost, sumFanOutTokens } from '../../usage';
-import {
-  childOutcomeFromRun,
-  type ChildWorkflowOutcome,
-  type RunChildWorkflowFn,
-} from '../../child-run';
+import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { type RunLayersContext } from '../../run-context';
 import {
@@ -38,107 +31,201 @@ import {
   type ShellInputContext,
   resolveWorkflowValue,
 } from '../../references';
+import {
+  classifyExistingChildren,
+  fanOutItemInput,
+  findAmbiguousChild,
+  findFanOutChildRuns,
+  hashFanOutItem,
+  indexExistingChildren,
+  settleFinishedHeldChildren,
+  unclaimedIndices,
+  type FanOutChildState,
+} from './fan-out-children';
+import { joinFanOutOutcomes } from './fan-out-join';
 
 /**
- * The child's terminal LOGICAL value as a fan-out aggregate element: prefer the typed
- * `structuredOutput` (#2637); fall back to parsing the text summary, and keep non-JSON
- * text as the raw string, since a string IS what the child returned.
+ * Resolve `fan_out.items` → a JSON array. Workflow vars and $node.output refs, exactly as
+ * the input surface resolves them. A `.field` ref that can't be honored throws an
+ * OutputRefError → caught → fail closed. Never silently zero items: a resolution that
+ * isn't a JSON array fails the node.
  */
-function subrunLogicalValue(outcome: ChildWorkflowOutcome): unknown {
-  if (outcome.structuredOutput !== undefined) return outcome.structuredOutput;
-  try {
-    return JSON.parse(outcome.output ?? '') as unknown;
-  } catch {
-    return outcome.output ?? '';
-  }
-}
-
-/**
- * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
- * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
- * recoverable on resume). `fan_out_orphan`: a child whose `child_index` fell out of range
- * when the item list shrank. `fan_out_checkout_check`: a child whose path-lock or
- * checkout-sharing store access failed before it ran any node (executor.ts).
- *
- * `fan_out_sibling` and `fan_out_gate` are READ-ONLY legacy. `fan_out_sibling` marked an
- * in-flight sibling cancelled once an earlier revision's fail-fast sealed the node's fate;
- * `fan_out_gate` marked a child cancelled because it paused, before a paused child could
- * wait as its own run (#4044). Nothing writes either any more. They stay in the type and
- * in the recoverable set on purpose: a run from before the upgrade has rows carrying
- * them, and dropping them would make those children read as user-cancelled — terminal,
- * never re-driven, so the parent would fail every resume with no way back. Delete them
- * only once no resumable run can predate the change.
- */
-const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set(FAN_OUT_CANCEL_REASONS);
-
-/**
- * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
- * pass, or a live execution in another process. Past this idle window (no
- * `last_activity_at` heartbeat — written ≤ every 60s while a child runs) it reads as an
- * orphan; within it, as possibly still live. Only the MESSAGE differs — per AGENTS.md
- * "Do not guess lifecycle ownership", NEITHER branch cancels.
- */
-const FAN_OUT_CHILD_STALE_MS = 5 * 60_000;
-
-/** The fan-out cancel reason stamped on a child, if any. */
-function fanOutCancelReason(run: WorkflowRun): string | undefined {
-  const reason = (run.metadata as Record<string, unknown> | undefined)?.cancelled_reason;
-  return typeof reason === 'string' ? reason : undefined;
-}
-
-/** True when a cancelled child was cancelled BY the fan-out path → recoverable on resume. */
-function isFanOutRecoverableCancel(run: WorkflowRun): boolean {
-  const reason = fanOutCancelReason(run);
-  return reason !== undefined && FAN_OUT_RECOVERABLE_CANCEL_REASONS.has(reason);
-}
-
-/** True when a `running`/`pending` child has had no activity within the idle window. */
-function isFanOutChildStale(run: WorkflowRun, now = Date.now()): boolean {
-  const last = run.last_activity_at ?? run.started_at;
-  return last === null || now - last.getTime() > FAN_OUT_CHILD_STALE_MS;
-}
-
-/**
- * Cheap, dependency-free content hash (djb2) of a fan-out child's input string, stamped
- * at spawn so resume can detect a non-deterministic items producer (same index, changed
- * content) and WARN (never re-key). Collision-tolerant: a warn-only signal, not identity.
- */
-function hashFanOutItem(input: string): string {
-  let h = 5381;
-  for (let i = 0; i < input.length; i++) h = (h * 33) ^ input.charCodeAt(i);
-  return (h >>> 0).toString(16);
-}
-
-/**
- * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
- * auto-cancelled (AGENTS.md "Do not guess lifecycle ownership"). Names the state and the
- * run to act on, with wording keyed to `last_activity_at` staleness (fresh → likely live;
- * stale → likely orphaned). This text is persisted as the node failure and read on every surface, so it
- * names the run in full and leaves the abandon command to whichever surface renders it.
- */
-function fanOutAmbiguousChildMessage(
+function resolveFanOutItems(
   node: WorkflowNode,
-  child: WorkflowRun,
-  index: number,
-  stale: boolean
-): string {
-  const ref = `child ${String(index)} (run ${child.id.slice(0, 8)})`;
-  return stale
-    ? `fan_out node '${node.id}': ${ref} of '${node.workflow}' is still '${child.status}' with no ` +
-        'recent activity — it appears orphaned by an interrupted run. Abandon run ' +
-        `${child.id}, then resume the parent to re-drive it.`
-    : `fan_out node '${node.id}': ${ref} of '${node.workflow}' may still be running (recent activity) — ` +
-        `wait for it to finish and resume, or abandon run ${child.id} if it is stuck.`;
+  ctx: RunLayersContext,
+  fanOut: FanOutConfig
+): { items: unknown[] } | { error: string } {
+  const parentRun = ctx.workflowRun;
+  let parsedItems: unknown;
+  try {
+    const { prompt: itemsResolved } = substituteWorkflowVariables(
+      fanOut.items,
+      parentRun.id,
+      parentRun.user_message ?? '',
+      ctx.artifactsDir,
+      ctx.baseBranch,
+      ctx.docsDir,
+      ctx.issueContext,
+      undefined,
+      undefined,
+      undefined,
+      { references: nodeTemplateReferences(fanOut.items, ctx) }
+    );
+    parsedItems = JSON.parse(itemsResolved);
+  } catch (err) {
+    return {
+      error: `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`,
+    };
+  }
+  if (!Array.isArray(parsedItems)) {
+    return {
+      error:
+        `fan_out.items on '${node.id}' resolved to ${typeof parsedItems}, not a JSON array. ` +
+        `'${fanOut.items}' must reference a node output that produces a JSON array.`,
+    };
+  }
+  return { items: parsedItems };
 }
 
-export async function findFanOutChildRuns(
-  store: WorkflowDeps['store'],
-  parentRunId: string,
-  nodePath: string
-): Promise<WorkflowRun[]> {
-  return (await store.findChildRuns(parentRunId)).filter(
-    child => readSubrunMetadata(child.metadata).parentNodeId === nodePath
+/**
+ * Resolve the node's static `with:` map (#2470) once — the same $INPUTS applied to EVERY
+ * fan-out child. Per-item, the `fan_out.as` channel adds `$INPUTS.<as> = <item>` on top
+ * (load-time collision-checked so `as` never overwrites a `with:` key). Resolved once
+ * rather than per-child because the values don't depend on the item. Same three-tier
+ * value resolution as the 1:1 path (#2637): literals typed, whole refs logical,
+ * templates text.
+ */
+function resolveFanOutStaticInputs(
+  node: WorkflowNode,
+  ctx: RunLayersContext
+): { inputs: Record<string, JsonValue> } | { error: string } {
+  const parentRun = ctx.workflowRun;
+  const inputs: Record<string, JsonValue> = {};
+  const parentInputs = resolveRunInputs(parentRun);
+  try {
+    if (node.with !== undefined) {
+      const resolutionCtx: ShellInputContext = {
+        workflowRun: parentRun,
+        artifactsDir: ctx.artifactsDir,
+        stateDir: ctx.stateDir,
+        baseBranch: ctx.baseBranch,
+        docsDir: ctx.docsDir,
+        issueContext: ctx.issueContext,
+        nodeOutputs: ctx.nodeOutputs,
+        loopBodyScopes: ctx.loopBodyScopes,
+      };
+      for (const [name, rawValue] of Object.entries(node.with)) {
+        inputs[name] = resolveWorkflowValue(rawValue, resolutionCtx, parentInputs, false);
+      }
+    }
+  } catch (err) {
+    return {
+      error: `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`,
+    };
+  }
+  return { inputs };
+}
+
+/**
+ * Spawn or re-drive every unsettled index through a `max_parallel` window, recording each
+ * outcome in `state`. Returns the store error when a held-child lookup between rounds
+ * fails.
+ *
+ * The window bounds UNFINISHED children, not only executing ones: a child that pauses
+ * keeps its slot (#4044 D2), because it may hold half-done edits in a shared checkout,
+ * and `max_parallel: 1` promises the children run one at a time. Items past a full
+ * window get no run row until a held child finishes and the parent continues.
+ */
+async function driveChildWindow(
+  itemCount: number,
+  maxParallel: number,
+  state: FanOutChildState,
+  spawn: (index: number) => Promise<ChildWorkflowOutcome>,
+  findChildren: () => Promise<WorkflowRun[]>,
+  parentRunId: string
+): Promise<{ lookupError: unknown } | undefined> {
+  for (
+    let waiting = unclaimedIndices(itemCount, state);
+    waiting.length > 0 && state.heldByIndex.size < maxParallel;
+    waiting = unclaimedIndices(itemCount, state)
+  ) {
+    const settled = await mapWithHeldSlots(
+      waiting,
+      maxParallel - state.heldByIndex.size,
+      spawn,
+      outcome => outcome.status === 'paused'
+    );
+    const claimed = settled.flatMap((result, k) =>
+      result === undefined ? [] : [{ index: waiting[k], result }]
+    );
+    const outcomes = settledValuesOrThrow(
+      claimed.map(c => c.result),
+      parentRunId
+    );
+    claimed.forEach(({ index }, k) => {
+      const outcome = outcomes[k];
+      if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
+      else state.settledByIndex.set(index, outcome);
+    });
+
+    if (state.heldByIndex.size === 0) break;
+    let rows: WorkflowRun[];
+    try {
+      rows = await findChildren();
+    } catch (lookupError) {
+      return { lookupError };
+    }
+    settleFinishedHeldChildren(rows, state);
+  }
+  return undefined;
+}
+
+/**
+ * Some children are unfinished: pause the parent on them. Each child is its own run and
+ * queue item, answered by its own run id; the engine never ends one for pausing. The
+ * parent continues through `maybeResumeParentRun` once `isFanOutBlockReleased` holds,
+ * re-enters as a continuation, and joins when no child is held.
+ */
+async function suspendOnHeldChildren(
+  node: WorkflowNode,
+  ctx: RunLayersContext,
+  execution: NodeExecutionRecord,
+  stepName: string,
+  state: FanOutChildState,
+  itemCount: number,
+  notify: (text: string) => Promise<void>
+): Promise<NodeExecutionResult> {
+  const held = [...state.heldByIndex.entries()].sort(([a], [b]) => a - b);
+  const unspawnedItems = unclaimedIndices(itemCount, state).length;
+  const message =
+    `fan_out node '${node.id}' is waiting on ${String(held.length)} unfinished sub-run(s) of ` +
+    `'${node.workflow}': ${held.map(([i, id]) => `item ${String(i)}: run ${id}`).join(', ')}` +
+    (unspawnedItems > 0 ? `; ${String(unspawnedItems)} item(s) not started yet` : '') +
+    '. Answer each paused sub-run by its own run id; this run continues when they finish.';
+  const suspended = finishNodeExecution(
+    execution,
+    { status: 'suspended', point: 'fan_out' },
+    { output: { text: '' }, diagnostics: { fanOut: true } }
   );
+  const paused = await pauseGateRespectingExternalTransition(
+    ctx.deps,
+    ctx.workflowRun.id,
+    {
+      type: 'fan_out',
+      nodeId: stepName,
+      message,
+      childRunIds: held.map(([, id]) => id),
+      unspawnedItems,
+    },
+    { event: serializeNodeStateRecord(suspended) }
+  );
+  if (!paused) return serializeNodeOutput(execution);
+  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+  await notify(
+    `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
+      `See them with \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
+  );
+  return serializeNodeOutput(suspended);
 }
 
 /**
@@ -243,6 +330,17 @@ export async function executeFanOutWorkflowNode(
     await safeSendMessage(platform, conversationId, text, msgContext);
   };
 
+  const failConfig = async (msg: string): Promise<NodeExecutionResult> => {
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'config');
+  };
+
+  const failChildLookup = async (error: unknown): Promise<NodeExecutionResult> => {
+    const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'unknown');
+  };
+
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume.
   let childCancellationFailure: TerminalStatusWriteError | undefined;
@@ -259,80 +357,12 @@ export async function executeFanOutWorkflowNode(
     }
   };
 
-  // Item → child input/$ARGUMENTS (canonical value text: strings raw, objects JSON).
-  // Also the pre-image for the resume item-hash (S2) — identity unchanged by #2637,
-  // since canonicalValueText is byte-identical to the previous inline mapping.
-  const itemToInput = (item: unknown): string => canonicalValueText(item);
-
-  // 1. Resolve `fan_out.items` → a JSON array. Workflow vars and $node.output refs,
-  //    exactly as the input surface resolves them. A `.field` ref that
-  //    can't be honored throws an OutputRefError → caught → fail closed. Never silently
-  //    zero items: a resolution that isn't a JSON array fails the node.
-  let parsedItems: unknown;
-  try {
-    const { prompt: itemsResolved } = substituteWorkflowVariables(
-      fanOut.items,
-      parentRun.id,
-      parentRun.user_message ?? '',
-      ctx.artifactsDir,
-      ctx.baseBranch,
-      ctx.docsDir,
-      ctx.issueContext,
-      undefined,
-      undefined,
-      undefined,
-      { references: nodeTemplateReferences(fanOut.items, ctx) }
-    );
-    parsedItems = JSON.parse(itemsResolved);
-  } catch (err) {
-    const msg = `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
-
-  if (!Array.isArray(parsedItems)) {
-    const msg =
-      `fan_out.items on '${node.id}' resolved to ${typeof parsedItems}, not a JSON array. ` +
-      `'${fanOut.items}' must reference a node output that produces a JSON array.`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
-  const items: unknown[] = parsedItems;
-
-  // Resolve the node's static `with:` map (#2470) once — the same $INPUTS applied to EVERY
-  // fan-out child. Per-item, the `fan_out.as` channel adds `$INPUTS.<as> = <item>` on top
-  // (load-time collision-checked so `as` never overwrites a `with:` key). Resolved here
-  // rather than per-child because the values don't depend on the item. Same three-tier
-  // value resolution as the 1:1 path (#2637): literals typed, whole refs logical,
-  // templates text.
-  const fanOutStaticInputs: Record<string, JsonValue> = {};
-  const parentInputs = resolveRunInputs(parentRun);
-  try {
-    if (node.with !== undefined) {
-      const fanOutResolutionCtx: ShellInputContext = {
-        workflowRun: parentRun,
-        artifactsDir: ctx.artifactsDir,
-        stateDir: ctx.stateDir,
-        baseBranch: ctx.baseBranch,
-        docsDir: ctx.docsDir,
-        issueContext: ctx.issueContext,
-        nodeOutputs: ctx.nodeOutputs,
-        loopBodyScopes: ctx.loopBodyScopes,
-      };
-      for (const [name, rawValue] of Object.entries(node.with)) {
-        fanOutStaticInputs[name] = resolveWorkflowValue(
-          rawValue,
-          fanOutResolutionCtx,
-          parentInputs,
-          false
-        );
-      }
-    }
-  } catch (err) {
-    const msg = `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
+  // 1. Resolve the item list and the static `with:` inputs.
+  const resolvedItems = resolveFanOutItems(node, ctx, fanOut);
+  if ('error' in resolvedItems) return failConfig(resolvedItems.error);
+  const { items } = resolvedItems;
+  const staticInputs = resolveFanOutStaticInputs(node, ctx);
+  if ('error' in staticInputs) return failConfig(staticInputs.error);
 
   // 2. Empty array → a valid zero-width expansion (#977 acceptance): complete with '[]'.
   if (items.length === 0) {
@@ -340,81 +370,23 @@ export async function executeFanOutWorkflowNode(
     return writeCompleted('[]', undefined, undefined, []);
   }
 
-  // 3. Re-entry: find THIS node's existing children (a parent may run several workflow
-  //    nodes → filter by parent_node_id) and index them by metadata.child_index. Empty
-  //    on the first run; carries the ordered instance set on resume.
-  const existingByIndex = new Map<number, WorkflowRun>();
+  // 3. Re-entry: index this node's existing children by child_index.
+  let existingByIndex: Map<number, WorkflowRun>;
   try {
-    const children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
-    for (const child of children) {
-      const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
-      const idx = meta.childIndex;
-      // A child of THIS node with no `child_index`: it was spawned when the node was a 1:1
-      // sub-run (that path stamps `parent_node_id` and no index), and the node has since
-      // grown a `fan_out:`. Dropping it silently left a live, billing, untracked child that
-      // nothing would ever cancel — so it gets the same treatment as an out-of-range index.
-      if (idx === undefined) {
-        getLog().warn(
-          {
-            parentRunId: parentRun.id,
-            nodeId: node.id,
-            childRunId: child.id,
-            status: child.status,
-          },
-          'workflow.fan_out_child_missing_index'
-        );
-        if (child.status === 'running' || child.status === 'pending' || child.status === 'paused') {
-          await cancelChild(child.id, 'fan_out_orphan');
-        }
-        continue;
-      }
-      // I2: a child_index beyond the (now-shorter) item list — the items producer shrank
-      // between attempts. Never silently dropped: WARN for visibility, and cancel a
-      // still-live orphan (tagged) so it stops billing (a terminal one no-ops).
-      if (idx < 0 || idx >= items.length) {
-        getLog().warn(
-          {
-            parentRunId: parentRun.id,
-            nodeId: node.id,
-            childRunId: child.id,
-            childIndex: idx,
-            itemCount: items.length,
-          },
-          'workflow.fan_out_child_index_out_of_range'
-        );
-        if (child.status === 'running' || child.status === 'pending' || child.status === 'paused') {
-          await cancelChild(child.id, 'fan_out_orphan');
-        }
-        continue;
-      }
-      // S4: a duplicate child_index (two rows for one index) is anomalous — last write
-      // wins (as the 1:1 precedent does), but log it rather than swallow it silently.
-      if (existingByIndex.has(idx)) {
-        getLog().debug(
-          { parentRunId: parentRun.id, nodeId: node.id, childIndex: idx, childRunId: child.id },
-          'workflow.fan_out_duplicate_child_index'
-        );
-      }
-      // S2: a non-deterministic items producer may have changed the item at this index
-      // between attempts. Resume still re-keys by index (safe under the cached-output
-      // invariant), but WARN so the content drift is visible.
-      const priorHash = meta.fanOutItemHash;
-      if (priorHash !== undefined && priorHash !== hashFanOutItem(itemToInput(items[idx]))) {
-        getLog().warn(
-          { parentRunId: parentRun.id, nodeId: node.id, childIndex: idx, childRunId: child.id },
-          'workflow.fan_out_item_content_changed'
-        );
-      }
-      existingByIndex.set(idx, child);
-    }
+    existingByIndex = await indexExistingChildren(
+      deps.store,
+      parentRun.id,
+      node,
+      stepName,
+      items,
+      childId => cancelChild(childId, 'fan_out_orphan')
+    );
   } catch (err) {
     if (err instanceof TerminalStatusWriteError) throw err;
     // Notify like every other early-failure branch — this one was the odd one out, so a
     // store error was the single fan-out failure that reached the user only via the
     // end-of-run digest.
-    const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(err as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown');
+    return failChildLookup(err);
   }
 
   // 4. Classify the existing children (#4044 D3). The node's own latest lifecycle record
@@ -432,58 +404,17 @@ export async function executeFanOutWorkflowNode(
     nodeInvocationKey(stepName, ctx.loopGroupPath)
   )?.lifecycle;
   const continuing = prior?.status === 'suspended' && prior.point === 'fan_out';
-  if (!continuing) {
-    const ambiguous = [...existingByIndex.entries()].filter(
-      ([, c]) => c.status === 'running' || c.status === 'pending'
+  const ambiguous = continuing
+    ? undefined
+    : findAmbiguousChild(existingByIndex, parentRun.id, node);
+  if (ambiguous !== undefined) {
+    await notify(
+      `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${ambiguous.message} ` +
+        `Abandon: \`${spellWorkflowCommand(platform, `abandon ${ambiguous.child.id}`)}\``
     );
-    if (ambiguous.length > 0) {
-      const [index, child] = ambiguous[0];
-      const stale = isFanOutChildStale(child);
-      getLog().warn(
-        {
-          parentRunId: parentRun.id,
-          nodeId: node.id,
-          childRunId: child.id,
-          childIndex: index,
-          status: child.status,
-          stale,
-        },
-        'workflow.fan_out_child_nonterminal_on_resume'
-      );
-      const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
-      await notify(
-        `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg} ` +
-          `Abandon: \`${spellWorkflowCommand(platform, `abandon ${child.id}`)}\``
-      );
-      return failResult(msg, 'unknown', undefined, undefined, child.id);
-    }
+    return failResult(ambiguous.message, 'unknown', undefined, undefined, ambiguous.child.id);
   }
-
-  const settledByIndex = new Map<number, ChildWorkflowOutcome>();
-  /** Child run id of every held (non-terminal) child, by item index. */
-  const heldByIndex = new Map<number, string>();
-  for (const [index, child] of existingByIndex) {
-    switch (child.status) {
-      case 'paused':
-      case 'running':
-      case 'pending':
-        heldByIndex.set(index, child.id);
-        break;
-      case 'completed':
-        settledByIndex.set(index, childOutcomeFromRun(child));
-        break;
-      case 'failed':
-        if (continuing) settledByIndex.set(index, childOutcomeFromRun(child));
-        break;
-      case 'cancelled':
-        // A user-cancelled child (no fan-out tag) is terminal in either mode — it fails
-        // all_success and is represented in all_done.
-        if (continuing || !isFanOutRecoverableCancel(child)) {
-          settledByIndex.set(index, childOutcomeFromRun(child));
-        }
-        break;
-    }
-  }
+  const state = classifyExistingChildren(existingByIndex, continuing);
 
   if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
     await notify(
@@ -501,11 +432,6 @@ export async function executeFanOutWorkflowNode(
   //    be siblings, not a competition. An earlier revision fail-fasted here, deciding one
   //    child's fate from another's, which is not the engine's call to make.
   //
-  //    The window bounds UNFINISHED children, not only executing ones: a child that pauses
-  //    keeps its slot (#4044 D2), because it may hold half-done edits in a shared checkout,
-  //    and `max_parallel: 1` promises the children run one at a time. Items past a full
-  //    window get no run row until a held child finishes and the parent continues.
-  //
   //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
   //    child fails still runs every remaining child. The workflow `budget:` does not cover
   //    fan-out yet; a budgeted workflow rejects it at load (#2815).
@@ -515,14 +441,14 @@ export async function executeFanOutWorkflowNode(
     if (childCancellationFailure) throw childCancellationFailure;
     const item = items[i];
     const existing = existingByIndex.get(i);
-    const input = itemToInput(item);
+    const input = fanOutItemInput(item);
     // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
     // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
     // collide with a `with:` key, so this spread order is unambiguous. The item travels
     // LOGICALLY under `as` (#2637 — an object item stays an object for the child);
-    // `itemToInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
+    // `fanOutItemInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
     const childInputs: Record<string, JsonValue> = {
-      ...fanOutStaticInputs,
+      ...staticInputs.inputs,
       ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
     };
     const resumeChild =
@@ -553,92 +479,23 @@ export async function executeFanOutWorkflowNode(
     });
   };
 
-  const unclaimed = (): number[] =>
-    items.flatMap((_, i) => (settledByIndex.has(i) || heldByIndex.has(i) ? [] : [i]));
-  for (
-    let waiting = unclaimed();
-    waiting.length > 0 && heldByIndex.size < fanOut.max_parallel;
-    waiting = unclaimed()
-  ) {
-    const settled = await mapWithHeldSlots(
-      waiting,
-      fanOut.max_parallel - heldByIndex.size,
-      spawn,
-      outcome => outcome.status === 'paused'
-    );
-    const claimed = settled.flatMap((result, k) =>
-      result === undefined ? [] : [{ index: waiting[k], result }]
-    );
-    const outcomes = settledValuesOrThrow(
-      claimed.map(c => c.result),
-      parentRun.id
-    );
-    claimed.forEach(({ index }, k) => {
-      const outcome = outcomes[k];
-      if (outcome.status === 'paused') heldByIndex.set(index, outcome.childRunId);
-      else settledByIndex.set(index, outcome);
-    });
+  const windowFailure = await driveChildWindow(
+    items.length,
+    fanOut.max_parallel,
+    state,
+    spawn,
+    () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
+    parentRun.id
+  );
+  if (windowFailure !== undefined) return failChildLookup(windowFailure.lookupError);
 
-    // A held child may have finished while this pass ran (answered and continued in
-    // another process). Take its row's outcome so its slot frees for the next round.
-    if (heldByIndex.size === 0) break;
-    let rows: WorkflowRun[];
-    try {
-      rows = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
-    } catch (error) {
-      const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
-      await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg, 'unknown');
-    }
-    for (const [index, childRunId] of heldByIndex) {
-      const row = rows.find(r => r.id === childRunId);
-      if (row !== undefined && isTerminalRunStatus(row.status)) {
-        settledByIndex.set(index, childOutcomeFromRun(row));
-        heldByIndex.delete(index);
-      }
-    }
-  }
-
-  // 6. Some children are unfinished: pause the parent on them. Each child is its own run
-  //    and queue item, answered by its own run id; the engine never ends one for pausing.
-  //    The parent continues through `maybeResumeParentRun` once `isFanOutBlockReleased`
-  //    holds, re-enters here as a continuation, and joins when no child is held.
-  if (heldByIndex.size > 0) {
-    const held = [...heldByIndex.entries()].sort(([a], [b]) => a - b);
-    const unspawnedItems = unclaimed().length;
-    const message =
-      `fan_out node '${node.id}' is waiting on ${String(held.length)} unfinished sub-run(s) of ` +
-      `'${node.workflow}': ${held.map(([i, id]) => `item ${String(i)}: run ${id}`).join(', ')}` +
-      (unspawnedItems > 0 ? `; ${String(unspawnedItems)} item(s) not started yet` : '') +
-      '. Answer each paused sub-run by its own run id; this run continues when they finish.';
-    const suspended = finishNodeExecution(
-      execution,
-      { status: 'suspended', point: 'fan_out' },
-      { output: { text: '' }, diagnostics: { fanOut: true } }
-    );
-    const paused = await pauseGateRespectingExternalTransition(
-      deps,
-      parentRun.id,
-      {
-        type: 'fan_out',
-        nodeId: stepName,
-        message,
-        childRunIds: held.map(([, id]) => id),
-        unspawnedItems,
-      },
-      { event: serializeNodeStateRecord(suspended) }
-    );
-    if (!paused) return serializeNodeOutput(execution);
-    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-    await notify(
-      `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
-        `See them with \`${spellWorkflowCommand(platform, 'status')}\`.`
-    );
-    return serializeNodeOutput(suspended);
+  // 6. Some children are unfinished: pause the parent on them.
+  if (state.heldByIndex.size > 0) {
+    return suspendOnHeldChildren(node, ctx, execution, stepName, state, items.length, notify);
   }
 
   const outcomes = items.map((_, i) => {
-    const outcome = settledByIndex.get(i);
+    const outcome = state.settledByIndex.get(i);
     if (outcome === undefined) {
       throw new Error(`fan_out node '${node.id}': item ${String(i)} has no settled outcome`);
     }
@@ -649,90 +506,23 @@ export async function executeFanOutWorkflowNode(
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
-  // A completed child's aggregate ELEMENT (#2637): its terminal LOGICAL value via
-  // {@link subrunLogicalValue}, so a structured child lands single-encoded
-  // (`[{"v":1}]`, never `["{\"v\":1}"]`), a text-only child whose summary happens
-  // to be JSON lands parsed, and any other child stays the exact string it always was.
-  // Each child certified its own element against its own `returns:` contract (#2453);
-  // the aggregate is engine-owned and asserts nothing further.
-  // I3: parity with the 1:1 asCompleted path — a completed child with no terminal
-  // output is indistinguishable downstream from an intentional empty result, so
-  // leave a trace before falling back to ''. A structured child always has text too
-  // (the canonical serialization), so this warn still covers every genuinely empty
-  // completion.
-  const childElement = (o: ChildWorkflowOutcome, index: number): JsonValue => {
-    if (o.status === 'completed' && o.output === undefined) {
-      getLog().warn(
-        { parentRunId: parentRun.id, nodeId: node.id, childRunId: o.childRunId, childIndex: index },
-        'workflow.subrun_completed_without_output'
-      );
-    }
-    return o.structuredOutput !== undefined
-      ? (o.structuredOutput as JsonValue)
-      : (subrunLogicalValue(o) as JsonValue);
-  };
-
   // 7. Join.
-  if (fanOut.join === 'all_success') {
-    // Every child ran to its own terminal state, so the lowest-index non-completed outcome
-    // IS the causal one — nothing here is a casualty of another child's failure.
-    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
-    if (firstBad !== -1) {
-      const bad = outcomes[firstBad];
-      const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
-      await notify(
-        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${ref} ${bad.status}` +
-          (bad.error ? ` — ${bad.error}` : '')
-      );
-      return failResult(
-        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
-          (bad.error ? `: ${bad.error}` : ''),
-        'child_failed',
-        totalCostUsd,
-        totalTokens
-      );
-    }
-    // All completed → aggregate the child results in item order: a LOGICAL array
-    // (#2637), serialized once for the text channel.
-    const elements = outcomes.map((o, i) => childElement(o, i));
-    const aggregate = JSON.stringify(elements);
-    return writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
-  }
-
-  let children: WorkflowRun[];
-  try {
-    children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
-  } catch (error) {
-    const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(error as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown', totalCostUsd, totalTokens);
-  }
-  const anyChildStarted = children.some(child => {
-    const index = readSubrunMetadata(child.metadata).childIndex;
-    return index !== undefined && index >= 0 && index < items.length;
-  });
-  if (!anyChildStarted) {
-    const reason = outcomes[0].error ?? `child ${outcomes[0].status}`;
-    const msg = `fan_out node '${node.id}' refused all ${String(items.length)} children at spawn: ${reason}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'child_failed', totalCostUsd, totalTokens);
-  }
-
-  // join: all_done — node succeeds once all children are terminal; a failed/cancelled
-  // entry is represented as a failure-marker object in the aggregate array (so a
-  // collector can reconcile partial results). Never fails the node on a partial failure.
-  //
-  // `archon_failed: true` is the marker's reserved discriminator (#2637): now that a
-  // completed structured child's slot is its payload OBJECT, a child whose own schema
-  // happens to carry `error` + `status` fields (a natural verifier shape) would be
-  // indistinguishable from a failed slot by shape alone. No key can be made literally
-  // unproducible through `output_format`, but no schema grows an `archon_failed`
-  // field by accident — collectors check `r?.archon_failed === true`, nothing else.
-  const elements = outcomes.map((o, i) =>
-    o.status === 'completed'
-      ? childElement(o, i)
-      : { archon_failed: true, error: o.error ?? `child ${o.status}`, status: o.status }
+  const joined = await joinFanOutOutcomes(
+    deps.store,
+    parentRun.id,
+    node,
+    stepName,
+    fanOut.join,
+    outcomes
   );
-  const aggregate = JSON.stringify(elements);
-  return writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  if (joined.status === 'failed') {
+    await notify(joined.notice);
+    return failResult(joined.error, joined.failureKind, totalCostUsd, totalTokens);
+  }
+  return writeCompleted(
+    JSON.stringify(joined.elements),
+    totalCostUsd,
+    totalTokens,
+    joined.elements
+  );
 }
