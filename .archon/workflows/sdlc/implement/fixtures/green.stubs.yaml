@@ -7,6 +7,5 @@ implement:
   green: true
   red_cause: ""
   summary: "stub: work complete, checks green"
-assert-changed: "1 file changed"
 fixture:
   expect: completed

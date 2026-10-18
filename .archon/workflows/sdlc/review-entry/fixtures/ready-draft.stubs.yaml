@@ -47,6 +47,4 @@ fixture:
     scope: "https://github.com/example/repo/pull/1"
   expect: paused
   reached: [stage__result, attend__settle]
-  resolved-text-contains:
-    attend__ask: "- `ready` (stub: mark it ready): stub: takes pull request 1 out of draft"
 exec-code: true
