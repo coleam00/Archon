@@ -14,7 +14,7 @@ import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixtu
 import * as plugin from './plugin';
 
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
-const { collectAIConfig } = await import('./setup');
+const { collectAIConfig } = await import('./setup-ai');
 
 test.skipIf(process.platform === 'win32')(
   'binary setup adds a provider through the real command and loads its receipt',
