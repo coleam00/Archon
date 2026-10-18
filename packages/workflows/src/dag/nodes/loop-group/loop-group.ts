@@ -5,7 +5,7 @@ import {
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
 } from '../../pause';
-import { type RawSubprocessRejection } from '../../../subprocess';
+import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
 import {
@@ -571,11 +571,7 @@ async function executeLoopGroupBody(
               ...usage,
             };
           }
-          if (
-            bashErr.code === 'ENOENT' ||
-            bashErr.code === 'EACCES' ||
-            bashErr.code === 'ENOTDIR'
-          ) {
+          if (hostSpawnFailure(execContext, bashErr) !== undefined) {
             getLog().error(
               { err: bashErr, nodeId: node.id, iteration: resumedIteration },
               'loop_group.until_bash_failed'
@@ -623,7 +619,15 @@ async function executeLoopGroupBody(
     }
   }
 
-  let lastIterationOutput = '';
+  // A resumed group continues from the iteration it paused in; that iteration's
+  // restored body outputs give until_bash its LOOP_PREV_OUTPUT.
+  let lastIterationOutput =
+    loopPrevOutputs === undefined
+      ? ''
+      : stripCompletionTags(
+          loopGroupIterationOutput(bodyNodes, loopPrevOutputs)?.output ?? '',
+          group.until
+        );
   // The terminal sink's structured payload for the same iteration (#2637) — tracked
   // beside the text so the group's completed NodeOutput carries the logical value
   // (sibling `loop:` has done this since #2563; the group used to discard it).
@@ -1057,7 +1061,7 @@ async function executeLoopGroupBody(
         // is unreachable — looping forever on bashComplete=false is wrong. Throw
         // out of the group with a clear actionable error instead (mirrors
         // executeLoopNode's until_bash handling).
-        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
+        if (hostSpawnFailure(execContext, bashErr) !== undefined) {
           getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_group.until_bash_failed'

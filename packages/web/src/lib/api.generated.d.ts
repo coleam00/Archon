@@ -5492,6 +5492,7 @@ export interface components {
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
+        iterationOutput?: string;
         signaledTokens?: {
           input: number;
           output: number;
@@ -6803,6 +6804,8 @@ export interface components {
             /** @enum {string} */
             type: 'agent_message_chunk';
             text: string;
+            /** @enum {boolean} */
+            continuesPreviousBlock?: true;
           }
         | {
             /** @enum {string} */

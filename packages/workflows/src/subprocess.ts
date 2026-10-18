@@ -74,6 +74,19 @@ export type RawSubprocessRejection = Error & {
   signal?: string | null;
 };
 
+/**
+ * The errno of a host command that could not be spawned. In a container the spawned
+ * binary is `docker`, so its spawn errno says nothing about the node's own command.
+ */
+export function hostSpawnFailure(
+  execContext: ExecutionContext,
+  error: RawSubprocessRejection
+): 'ENOENT' | 'EACCES' | 'ENOTDIR' | undefined {
+  if (execContext.kind !== 'host') return undefined;
+  const { code } = error;
+  return code === 'ENOENT' || code === 'EACCES' || code === 'ENOTDIR' ? code : undefined;
+}
+
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   if (error.treeSurvived || error.cancelled) return false;
   return error.timedOut === true || (error.killed === true && error.code === null);
