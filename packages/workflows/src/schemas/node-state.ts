@@ -29,7 +29,7 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  * values are persisted verbatim into `workflow_runs.metadata.approval.type`, so they
  * cannot change without breaking reads of already-paused runs. Every pause site now
  * writes through one shared helper (`pauseGateRespectingExternalTransition` in
- * dag-executor.ts), but each reason's RESUME path stays deliberately separate and
+ * dag/pause.ts), but each reason's RESUME path stays deliberately separate and
  * lives at its own named site:
  *  - `'approval'` / `'interactive_loop'` — resolved externally by a human decision:
  *    `approveWorkflow`/`rejectWorkflow` (operations/workflow-operations.ts).
@@ -38,11 +38,11 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  *    (dag-executor.ts, `raiseWriteBackGate`'s sibling).
  *  - `'child_workflow'` — never resolved by the approve/reject endpoints directly
  *    (redirected instead — `assertApprovable`/`assertRejectable`); re-inspected by
- *    `executeWorkflowNode` re-running on parent resume (dag-executor.ts).
+ *    `executeWorkflowNode` re-running on parent resume (dag/nodes/workflow).
  *  - `'fan_out'` — a `fan_out:` workflow node waiting on its non-terminal children.
  *    Resolved only by those children reaching terminal states, never by approve/reject
  *    (redirected like `'child_workflow'`); re-inspected by `executeFanOutWorkflowNode`
- *    on parent re-entry (dag-executor.ts).
+ *    on parent re-entry (dag/nodes/workflow).
  */
 export const suspendReasonSchema = z.enum([
   'approval',

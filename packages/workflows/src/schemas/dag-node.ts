@@ -1093,7 +1093,7 @@ export const composeFanOutConfigSchema = fanOutConfigSchema.extend({
 
 /**
  * Workflow (sub-run) node schema — starts another workflow as a CHILD RUN of the
- * current run at execution time (see executeWorkflowNode in dag-executor.ts). Unlike
+ * current run at execution time (see executeWorkflowNode in dag/nodes/workflow). Unlike
  * `include:` (which flattens another workflow's nodes into ONE run at load time), a
  * `workflow:` node spawns a genuinely separate `workflow_runs` row with its own
  * artifacts, gates, cost line, and audit trail (#2121 Phase 2). `workflow` is the

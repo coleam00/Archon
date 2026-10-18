@@ -1321,7 +1321,7 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
  * or merely still running (`pauseParentOnChild` is reached from two sites in
- * dag-executor.ts, the second on a child that is `paused`, `running`, OR `pending`),
+ * `executeWorkflowNode`, the second on a child that is `paused`, `running`, OR `pending`),
  * and the parent row cannot tell those apart. Claiming `awaiting_response` here would
  * wake a host for normal progress; returning null would strand one when the child
  * really is on a gate. So the projection reports what it knows — this run is blocked
@@ -1567,7 +1567,7 @@ export function isAttentionQueueRow(run: RunAttentionInput): boolean {
  * - `interactive_loop` / `child_workflow` / `fan_out` — always true: these kinds
  *   are re-entered by the node executor's own re-read of its state,
  *   independent of `priorCompletedNodes` (`executeLoopNode`/
- *   `executeLoopGroupNode`/`executeWorkflowNode` in dag-executor.ts).
+ *   `executeLoopGroupNode`/`executeWorkflowNode` under dag/nodes/).
  * - `writeback` — always false: there is no DAG node behind this gate to
  *   re-run (`nodeId` is the synthetic `__writeback__`); resolving it flows
  *   through the container write-back resume path, never a node re-run.

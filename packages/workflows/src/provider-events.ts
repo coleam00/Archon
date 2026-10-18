@@ -1,7 +1,7 @@
 import type { createRunToolCallAttention } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
- * loops in `dag-executor.ts` (the agent node and the loop node) hand every event to one
+ * loops (the agent node and the loop node, under `dag/nodes/`) hand every event to one
  * handler, so neither keeps its own per-type branches.
  *
  * Every event is recorded unchanged inside the engine envelope (see
