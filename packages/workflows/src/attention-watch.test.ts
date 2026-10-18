@@ -130,6 +130,59 @@ const attentionOf =
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
+  test('a rejected degradation warning retains the cursor until the consumer accepts it', async () => {
+    const store = await makeStore();
+    const a = await running(store);
+    const b = await running(store);
+    const start = await store.getWorkflowEventHead();
+    const feed: IWorkflowStore = Object.create(store);
+    let broken = false;
+    feed.getWorkflowRun = id =>
+      broken && id === a ? Promise.reject(new Error('unreadable')) : store.getWorkflowRun(id);
+    const reads: string[] = [];
+    feed.readWorkflowEventsAfter = (cursor, options) => {
+      reads.push(cursor);
+      return store.readWorkflowEventsAfter(cursor, options);
+    };
+    const lines: AttentionStreamLine[] = [];
+    let attempts = 0;
+    let accepting = false;
+    const stream = await watchAttentionQueue(
+      feed,
+      host,
+      async line => {
+        if (line.type === 'degraded') {
+          attempts++;
+          if (!accepting) throw new Error('consumer unavailable');
+        }
+        lines.push(attentionStreamLineSchema.parse(line));
+      },
+      { scope: { kind: 'all' }, pollIntervalMs: 5 }
+    );
+    const until = async (condition: () => boolean): Promise<void> => {
+      for (let waited = 0; waited < 1000; waited += 5) {
+        if (condition()) return;
+        await Bun.sleep(5);
+      }
+      throw new Error('consumer did not reach the expected delivery');
+    };
+    try {
+      broken = true;
+      await store.failWorkflowRun(a, 'failed');
+      await store.failWorkflowRun(b, 'failed');
+      await store.resumeWorkflowRun(b);
+      await until(() => attempts >= 3);
+      expect(lines.map(line => line.type)).toEqual(['ready']);
+      expect(reads.every(cursor => cursor === start)).toBe(true);
+      accepting = true;
+      await until(() => lines.some(ofRun(b, 'resumed')));
+      expect(lines.map(line => line.type)).toEqual(['ready', 'degraded', 'terminal', 'resumed']);
+      expect(lines[1]).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: start });
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['all', 'project'] as const)(
     'an unreadable run cannot block independent lifecycle lines (%s)',
     async kind => {

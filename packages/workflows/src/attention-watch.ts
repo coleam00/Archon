@@ -1,6 +1,6 @@
 /**
- * The attention queue as a stream (#3050): every change to the items in scope, across
- * every run, including runs started after the stream did.
+ * The attention queue as a stream (#3050), across runs including those started later.
+ * Unreadable run deliveries may be omitted after a `degraded` warning.
  *
  * Queue items reflect the current row; lifecycle lines follow committed events so
  * transitions survive even when the row has already moved on. Out-of-process runs are
@@ -69,7 +69,7 @@ const lineBase = { cursor: cursorSchema, project: projectRefSchema.nullable(), r
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
- * `--after` it replays what followed. `attention` carries the queue item exactly as the
+ * `--after` it replays readable deliveries that followed. `attention` carries the queue item exactly as the
  * snapshot and `workflow attention <run>` build it.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
@@ -273,19 +273,17 @@ export async function watchAttentionQueue(
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
   // listener sees one line at a time, and the tail awaits it.
-  function emit(line: AttentionStreamLine): void {
-    if (closed) return;
+  function emit(line: AttentionStreamLine): Promise<void> {
+    if (closed) return Promise.resolve();
     lastLineAt = Date.now();
-    chain = chain.then(async () => {
-      try {
-        await listener(line);
-      } catch (error) {
-        getLog().warn(
-          { err: error as Error, type: line.type },
-          'workflow.attention_watch_listener_failed'
-        );
-      }
+    const delivery = chain.then(() => listener(line));
+    chain = delivery.catch(error => {
+      getLog().warn(
+        { err: error as Error, type: line.type },
+        'workflow.attention_watch_listener_failed'
+      );
     });
+    return delivery;
   }
 
   const inQuery = (item: AttentionQueueItem): boolean =>
@@ -451,9 +449,8 @@ export async function watchAttentionQueue(
         throw error;
       }
       if (!blocked.warned && !closed) {
+        await emit({ type: 'degraded', reason: 'run_unreadable', cursor: position() });
         blocked.warned = true;
-        emit({ type: 'degraded', reason: 'run_unreadable', cursor: position() });
-        await chain;
       }
       if (closed || !(await hasReadableWitness(delivery))) throw error;
       try {

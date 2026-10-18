@@ -177,15 +177,17 @@ host on the same database.
   when the run resumed, ended, was deleted, or moved to a different pause. A usage-limit
   wait that resumes is withdrawn, with null occurrence. `answeredAt` is null when the
   row had moved past the answer before the stream read it.
-- **Delivery is at least once.** Replacing the open item by run ID is idempotent; do not
-  dedupe all kinds by occurrence or revision, since usage-limit waits have no occurrence
+- **Readable deliveries are at least once.** Unreadable deliveries may be omitted after
+  a `degraded` warning; follow the repair instructions below. Replacing the open item by
+  run ID is idempotent; do not dedupe all kinds by occurrence or revision, since usage-limit waits have no occurrence
   and their reset time can change at revision 1. Use `(runId, occurrence, revision)` only
   for answerable pauses. Dedupe `terminal` and `resumed` on `(runId, cursor)`. `owner_lost` is a live
   observation: it is not replayed, and the next connection reports it again if the owner
   is still gone.
 - **Resume where you stopped.** Persist the `cursor` of the last line you handled and
   restart with `--after <cursor>`. The new stream sends the snapshot and `ready`, then
-  replays every change after that cursor. `bookmark` lines keep the cursor moving while
+  replays readable changes after that cursor. A `degraded` warning means replay may have
+  gaps; follow the repair instructions below. `bookmark` lines keep the cursor moving while
   the queue is quiet. A stream that cannot read the store sends no `bookmark` until a read
   succeeds, so no line for well over 30 seconds means the stream is not reading. If the
   cursor is rejected, rerun without `--after`.

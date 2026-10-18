@@ -125,7 +125,7 @@ export interface IWorkflowEngine {
    * Unreadable deliveries may be omitted after an independent fresh projection succeeds;
    * outages affecting all projections retain the cursor and retry. Reconnect after repair
    * for a fresh open set, or replay from before the gap for history. Later bookmarks do
-   * not restore coverage. Successful delivery is at least once and one line at a time;
+   * not restore coverage. Readable delivery is at least once and one line at a time;
    * the listener's promise is awaited before the next line. Observes only: no run state
    * is written. Rejects with
    * `WorkflowEventCursorError`, before any line, when `after` cannot be read; a tail that
