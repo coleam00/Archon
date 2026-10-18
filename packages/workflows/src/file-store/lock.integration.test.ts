@@ -2,10 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fsPromises from 'node:fs/promises';
 import { mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { basename, join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
-import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { captureLogLines, removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import {
   FileStoreLockHeldError,
   FileStoreLockReleaseError,
@@ -107,6 +107,17 @@ async function ready(child: Child): Promise<void> {
   } finally {
     reader.releaseLock();
   }
+}
+
+function scratchName(kind: 'lock' | 'probe', owner = currentProcessOwner): string {
+  const host = createHash('sha256').update(owner.host).digest('hex');
+  return `.${kind}-v1-${host}-${String(owner.pid)}-${owner.instance}-${randomUUID()}`;
+}
+
+function captureLogs(): Record<string, unknown>[] {
+  const capture = captureLogLines();
+  spies.push({ mockRestore: capture.restore });
+  return capture.lines;
 }
 
 describe('file store filesystem primitives', () => {
@@ -532,6 +543,119 @@ describe('file store filesystem primitives', () => {
     expect(left).not.toContain('lock.break');
   });
 
+  test('scratch names recover empty and torn residue only of provably dead owners', async () => {
+    const root = await fixture();
+    const lines = captureLogs();
+    const dead = { ...currentProcessOwner, pid: await deadPid(), instance: randomUUID() };
+    const removed: string[] = [];
+    const kept: string[] = [];
+    for (const contents of ['', '{']) {
+      for (const kind of ['lock', 'probe'] as const) {
+        for (const suffix of kind === 'probe' ? ['', '.link'] : ['']) {
+          const gone = scratchName(kind, dead) + suffix;
+          const live = scratchName(kind) + suffix;
+          await writeFile(join(root, gone), contents);
+          await writeFile(join(root, live), contents);
+          removed.push(gone);
+          kept.push(live);
+        }
+      }
+    }
+    const remote = scratchName('probe', { ...dead, host: 'remote-host' });
+    await writeFile(join(root, remote), '');
+    kept.push(remote);
+    const misleading = scratchName('lock');
+    await writeFile(join(root, misleading), JSON.stringify(dead));
+    kept.push(misleading);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await withFileStoreLock(root, async () => 'swept')).toBe('swept');
+      const names = await readdir(root);
+      for (const name of removed) expect(names).not.toContain(name);
+      expect(names.sort()).toEqual(kept.sort());
+    }
+    expect(
+      lines.filter(
+        line =>
+          line.msg === 'file_store.scratch_sweep_skipped' ||
+          line.msg === 'file_store.cleanup_failed'
+      )
+    ).toEqual([]);
+  });
+
+  test('malformed versioned scratch names stay and warn without failing the operation', async () => {
+    const root = await fixture();
+    const lines = captureLogs();
+    const dead = { ...currentProcessOwner, pid: await deadPid(), instance: randomUUID() };
+    const names = [
+      scratchName('lock', { ...dead, pid: 0 }),
+      scratchName('probe', { ...dead, pid: Number.MAX_SAFE_INTEGER + 1 }),
+      '.lock-v1-truncated',
+      `${scratchName('lock', dead)}.link`,
+    ];
+    for (const name of names) await writeFile(join(root, name), JSON.stringify(dead));
+    expect(await withFileStoreLock(root, async () => 'ran')).toBe('ran');
+    expect((await readdir(root)).sort()).toEqual(names.sort());
+    expect(
+      lines
+        .filter(line => line.msg === 'file_store.scratch_sweep_skipped')
+        .map(line => line.path)
+        .sort()
+    ).toEqual(names.map(name => join(root, name)).sort());
+  });
+
+  test('failed deletion of dead named scratch preserves the operation and warns', async () => {
+    const root = await fixture();
+    const lines = captureLogs();
+    const name = scratchName('probe', { ...currentProcessOwner, pid: await deadPid() });
+    const path = join(root, name);
+    await writeFile(path, '');
+    failUnlink(candidate => candidate === path);
+    expect(await withFileStoreLock(root, async () => 'done')).toBe('done');
+    expect(await readdir(root)).toContain(name);
+    expect(
+      lines.filter(line => line.msg === 'file_store.cleanup_failed').map(line => line.path)
+    ).toEqual([path]);
+  });
+
+  test('lock and probe producers name scratch for this process before writing', async () => {
+    const root = await fixture();
+    const paths: string[] = [];
+    const links: [string, string][] = [];
+    const realOpen = fsPromises.open;
+    const realLink = fsPromises.link;
+    spies.push(
+      spyOn(fsPromises, 'open').mockImplementation((...args) => {
+        paths.push(String(args[0]));
+        return realOpen(...args);
+      })
+    );
+    spies.push(
+      spyOn(fsPromises, 'link').mockImplementation((source, target) => {
+        links.push([String(source), String(target)]);
+        return realLink(source, target);
+      })
+    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await probeFileStoreFilesystem(root);
+      await withFileStoreLock(root, async () => {
+        expect(JSON.parse(await readFile(join(root, 'lock'), 'utf8'))).toEqual(currentProcessOwner);
+      });
+    }
+    expect(paths).toHaveLength(4);
+    expect(new Set(paths).size).toBe(4);
+    const host = createHash('sha256').update(currentProcessOwner.host).digest('hex');
+    for (const path of paths) {
+      const kind = basename(path).startsWith('.lock-') ? 'lock' : 'probe';
+      expect(basename(path)).toStartWith(
+        `.${kind}-v1-${host}-${String(currentProcessOwner.pid)}-${currentProcessOwner.instance}-`
+      );
+      expect(basename(path).slice(-36)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
+      expect(links).toContainEqual([path, kind === 'probe' ? `${path}.link` : join(root, 'lock')]);
+    }
+  });
+
   test('the next locked operation sweeps scratch files only of provably dead owners', async () => {
     const root = await fixture();
     const dead = JSON.stringify({
@@ -540,6 +664,7 @@ describe('file store filesystem primitives', () => {
       instance: randomUUID(),
     });
     const live = JSON.stringify(currentProcessOwner);
+    const lines = captureLogs();
     const unreadable = `.lock-${randomUUID()}`;
     const files: Record<string, string> = {
       [`.lock-${randomUUID()}`]: dead,
@@ -557,6 +682,10 @@ describe('file store filesystem primitives', () => {
     const kept = Object.keys(files).filter(name => files[name] !== dead);
     expect((await readdir(root)).filter(name => name.startsWith('.')).sort()).toEqual(kept.sort());
     expect(await readFile(join(root, 'lock.break'), 'utf8')).toBe(dead);
+    expect(await withFileStoreLock(root, async () => 'again')).toBe('again');
+    expect(
+      lines.filter(line => line.msg === 'file_store.scratch_sweep_skipped').map(line => line.path)
+    ).toEqual([join(root, unreadable), join(root, unreadable)]);
   });
 
   test('a scratch sweep that cannot list the store still runs the operation', async () => {
