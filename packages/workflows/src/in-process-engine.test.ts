@@ -86,10 +86,6 @@ const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async input => {
 });
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
-  childOutcomeFromRun: mock((run: { id: string; status: string }) => ({
-    childRunId: run.id,
-    status: run.status,
-  })),
 }));
 
 mock.module('./logger', () => ({

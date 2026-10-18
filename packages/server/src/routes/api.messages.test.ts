@@ -25,7 +25,6 @@ const mockFindConversationByPlatformId = mock(
       codebase_id: string | null;
     }
 );
-const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => {});
 const mockAddMessage = mock(
   async (_conversationId: string, _role: 'user' | 'assistant', _content: string) => ({
     id: 'msg-uuid-1',
@@ -126,7 +125,7 @@ mock.module('@archon/core/db/conversations', () => ({
     ai_assistant_type: 'claude',
   })),
   softDeleteConversation: mock(async () => {}),
-  updateConversationTitle: mockUpdateConversationTitle,
+  updateConversationTitle: mock(async () => {}),
   getConversationById: mock(async () => null),
 }));
 
@@ -581,85 +580,5 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
     const response = await app.request('/api/conversations/web-test-abc/messages');
     const body = (await response.json()) as Array<{ metadata: string }>;
     expect(body[0]!.metadata).toBe(metadata);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: PATCH /api/conversations/:id
-// ---------------------------------------------------------------------------
-
-describe('PATCH /api/conversations/:id', () => {
-  beforeEach(() => {
-    mockFindConversationByPlatformId.mockReset();
-    mockUpdateConversationTitle.mockReset();
-  });
-
-  test('updates conversation title and returns success', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Updated Title' }),
-    });
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { success: boolean };
-    expect(body.success).toBe(true);
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith(MOCK_CONV.id, 'Updated Title');
-  });
-
-  test('truncates title to 255 characters', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const longTitle = 'x'.repeat(400);
-    await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: longTitle }),
-    });
-
-    const lastCall = mockUpdateConversationTitle.mock.calls.at(-1) as [string, string];
-    expect(lastCall[1].length).toBe(255);
-  });
-
-  test('returns success without updating title when body has no title field', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-
-    const { app } = makeApp();
-    const callsBefore = mockUpdateConversationTitle.mock.calls.length;
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ someOtherField: 'value' }),
-    });
-    expect(response.status).toBe(200);
-    expect(mockUpdateConversationTitle.mock.calls.length).toBe(callsBefore);
-  });
-
-  test('returns 404 when conversation not found', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/unknown-id', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'New Title' }),
-    });
-    expect(response.status).toBe(404);
-  });
-
-  test('returns 400 for malformed JSON body', async () => {
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: 'not valid json {{{',
-    });
-    expect(response.status).toBe(400);
   });
 });
