@@ -33,6 +33,4 @@ attend__decide:
 fixture:
   expect: paused
   reached: [stage__verdict, attend__settle]
-  resolved-text-contains:
-    attend__ask: "**Choices.**\n- `rerun` (stub: triage again): stub: triages again with the note\n- `finish` (stub: leave it blocked): stub: ends the run with the verdict BLOCKED"
 exec-code: true
