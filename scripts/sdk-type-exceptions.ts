@@ -28,7 +28,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     reason: 'Derived Slack Bolt command handler, not an OpenCode command.',
   },
   {
-    file: 'packages/cli/src/commands/workflow.ts',
+    file: 'packages/cli/src/commands/workflow-shared.ts',
     name: 'WorkflowRunOptions',
     kind: 'independent',
     reason: 'Archon CLI dispatch flags, not Copilot workflow execution options.',
