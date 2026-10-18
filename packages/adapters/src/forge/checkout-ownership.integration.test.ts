@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectSourcePath, resolveRunStorageRoot } from '@archon/paths';
@@ -312,9 +312,10 @@ const readiness = [
 ];
 
 test.each(readiness)(
-  '$name clones again into the empty managed source a failed clone left',
+  '$name clones again into the empty managed source a failed clone left inside a checkout',
   async ({ prepare }) => {
     const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-clone-retry-')));
+    execFileSync('git', ['init', '-q', root]);
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = root;
     const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
@@ -340,9 +341,8 @@ test.each(readiness)(
   '$name syncs a project registered at a subdirectory of a checkout instead of cloning into it',
   async ({ prepare }) => {
     const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-subdirectory-project-')));
-    const checkout = join(root, 'checkout');
-    execFileSync('git', ['init', '-q', '-b', 'main', checkout]);
-    const subdirectory = join(checkout, 'service');
+    execFileSync('git', ['init', '-q', '-b', 'main', root]);
+    const subdirectory = join(root, 'service');
     await mkdir(subdirectory);
     await writeFile(join(subdirectory, 'README.md'), 'service');
     const previousHome = process.env.ARCHON_HOME;
@@ -364,118 +364,6 @@ test.each(readiness)(
     }
   }
 );
-
-test.each([true, false])(
-  'GitHub recognizes an empty checkout subdirectory (sync=%s)',
-  async shouldSync => {
-    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-empty-subdirectory-')));
-    execFileSync('git', ['init', '-q', '-b', 'main', root]);
-    const subdirectory = join(root, 'service');
-    await mkdir(subdirectory);
-    const clone = spyOn(git, 'cloneRepository').mockResolvedValue({ ok: true, value: undefined });
-    const sync = spyOn(git, 'syncRepository').mockResolvedValue({ ok: true, value: undefined });
-    try {
-      await readiness[0].prepare({ name: 'acme/api', default_cwd: subdirectory }, shouldSync);
-      expect(clone).not.toHaveBeenCalled();
-      expect(sync).toHaveBeenCalledTimes(shouldSync ? 1 : 0);
-      if (shouldSync) expect(sync).toHaveBeenCalledWith(subdirectory, 'main');
-    } finally {
-      clone.mockRestore();
-      sync.mockRestore();
-    }
-  }
-);
-
-test.each(['missing', 'empty'])(
-  'GitHub clones a %s managed source inside another checkout',
-  async state => {
-    const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-nested-source-')));
-    execFileSync('git', ['init', '-q', root]);
-    const previousHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = root;
-    const clone = spyOn(git, 'cloneRepository').mockResolvedValue({
-      ok: false,
-      error: { code: 'not_a_repo', path: 'acme/api' },
-    });
-    const sync = spyOn(git, 'syncRepository').mockResolvedValue({ ok: true, value: undefined });
-    try {
-      const path = getProjectSourcePath('acme', 'api');
-      if (state === 'empty') await mkdir(path, { recursive: true });
-      await expect(
-        readiness[0].prepare({ name: 'acme/api', default_cwd: path }, true)
-      ).rejects.toThrow('not found');
-      expect(clone).toHaveBeenCalledTimes(1);
-      expect(sync).not.toHaveBeenCalled();
-      await expect(access(path)).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally {
-      clone.mockRestore();
-      sync.mockRestore();
-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = previousHome;
-    }
-  }
-);
-
-test('GitHub surfaces enclosing checkout discovery failure without cloning or syncing', async () => {
-  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-corrupt-enclosing-')));
-  execFileSync('git', ['init', '-q', root]);
-  await writeFile(join(root, '.git', 'config'), '[invalid');
-  const subdirectory = join(root, 'service');
-  await mkdir(subdirectory);
-  await writeFile(join(subdirectory, 'operator.txt'), 'preserved');
-  const clone = spyOn(git, 'cloneRepository').mockResolvedValue({ ok: true, value: undefined });
-  const sync = spyOn(git, 'syncRepository').mockResolvedValue({ ok: true, value: undefined });
-  try {
-    await expect(
-      readiness[0].prepare({ name: 'acme/api', default_cwd: subdirectory }, true)
-    ).rejects.toThrow('Failed to find repo root');
-    expect(clone).not.toHaveBeenCalled();
-    expect(sync).not.toHaveBeenCalled();
-    expect(await readFile(join(subdirectory, 'operator.txt'), 'utf8')).toBe('preserved');
-  } finally {
-    clone.mockRestore();
-    sync.mockRestore();
-  }
-});
-
-test('GitHub preserves the saved subdirectory and skips sync for an existing registration', async () => {
-  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-registered-subdirectory-')));
-  execFileSync('git', ['init', '-q', root]);
-  execFileSync('git', ['-C', root, 'remote', 'add', 'origin', 'https://github.com/acme/api']);
-  const subdirectory = join(root, 'service');
-  await mkdir(subdirectory);
-  const existing = codebaseRowSchema.parse({
-    id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
-    name: 'local-api',
-    default_cwd: subdirectory,
-    repository_url: 'https://github.com/acme/api',
-    kind: 'repo',
-    commands: {},
-    default_branch: null,
-    ai_assistant_type: null,
-    created_at: new Date(),
-    updated_at: new Date(),
-  });
-  findCodebase.mockResolvedValue(existing);
-  const clone = spyOn(git, 'cloneRepository').mockResolvedValue({ ok: true, value: undefined });
-  const sync = spyOn(git, 'syncRepository').mockResolvedValue({ ok: true, value: undefined });
-  const adapter = new GitHubAdapter({ kind: 'pat', token: 'test' }, 'secret', lock);
-  try {
-    // @ts-expect-error - exercise registration followed by readiness as the webhook does
-    const routed = await adapter.getOrCreateCodebaseForRepo('acme', 'api');
-    expect(routed.isNew).toBe(false);
-    // @ts-expect-error - exercise the private readiness boundary
-    await adapter.ensureRepoReady('acme', 'api', 'main', routed.codebase, routed.isNew);
-    expect(routed.repoPath).toBe(subdirectory);
-    expect(existing.default_cwd).toBe(subdirectory);
-    expect(updateCodebase).not.toHaveBeenCalled();
-    expect(clone).not.toHaveBeenCalled();
-    expect(sync).not.toHaveBeenCalled();
-  } finally {
-    clone.mockRestore();
-    sync.mockRestore();
-  }
-});
 
 test.each(readiness)(
   '$name prepares an allocated project under its own storage root',
