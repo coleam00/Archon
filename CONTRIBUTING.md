@@ -42,9 +42,10 @@ excluded from formatting while its TypeScript scripts remain linted. Markdown an
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
 The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
-it: a touched function may not end above cognitive complexity 15 with a higher score than at
-the merge base with `origin/dev` (fetch it locally), and a touched source file may not end
-above 800 lines longer than it was. Test files have no line ceiling. It scores the TS/JS files
+it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
+touched source file is refused when it ends above 800 lines and has more lines than at the
+merge base. Test files have no line ceiling. It scores the TS/JS files
 Biome lints. To land an increase above a ceiling on purpose, add a trailer to one of the
 change's commits:
 `Ratchet-Allow: <path>` for a file's length, `Ratchet-Allow: <path>:<function>` for a function,
