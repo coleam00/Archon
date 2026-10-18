@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import { captureStubLogOutput } from '@archon/paths/test-utils';
 import type { MessageChunk, SendQueryOptions } from '@archon/providers/types';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
@@ -56,9 +57,6 @@ describe('title-generator', () => {
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
-    for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
-      mockLogger[level].mockClear();
-    }
 
     // Reset to default happy-path behavior
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
@@ -145,35 +143,28 @@ describe('title-generator', () => {
         };
       });
 
-      await generateAndSetTitle('conv-private', userMessage, 'claude', '/tmp');
+      const logOutput = captureStubLogOutput(mockLogger);
+      try {
+        await generateAndSetTitle('conv-private', userMessage, 'claude', '/tmp');
+      } finally {
+        logOutput.restore();
+      }
 
       expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
       expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-private', expectedTitle);
+      const output = logOutput.output();
+      expect(output).toContain('"conversationDbId":"conv-private"');
       if (scenario === 'provider error' || scenario === 'failed turn') {
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          { conversationDbId: 'conv-private' },
-          'title.generate_failed'
-        );
-        expect(mockLogger.info).toHaveBeenCalledWith(
-          { conversationDbId: 'conv-private' },
-          'title.fallback_set'
-        );
+        expect(output).toContain('"msg":"title.generate_failed"');
+        expect(output).toContain('"msg":"title.fallback_set"');
       } else if (scenario === 'empty title') {
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          { conversationDbId: 'conv-private' },
-          'title.generate_empty'
-        );
+        expect(output).toContain('"msg":"title.generate_empty"');
       } else {
-        expect(mockLogger.info).toHaveBeenCalledWith(
-          { conversationDbId: 'conv-private' },
-          'title.generate_completed'
-        );
+        expect(output).toContain('"msg":"title.generate_completed"');
       }
-      for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
-        expect(Bun.inspect(mockLogger[level].mock.calls)).not.toContain(
-          scenario === 'empty title' ? userMessage : 'PRIVATE_MESSAGE_4397'
-        );
-      }
+      expect(output).not.toContain(
+        scenario === 'empty title' ? userMessage : 'PRIVATE_MESSAGE_4397'
+      );
     }
   );
 
@@ -299,18 +290,18 @@ describe('title-generator', () => {
       Promise.reject(new Error(`DB write failure: ${userMessage}`))
     );
 
-    // Should NOT throw despite both failures
-    await generateAndSetTitle('conv-12', userMessage, 'claude', '/tmp');
-
-    // Verify it attempted the fallback write
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-12', userMessage);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { conversationDbId: 'conv-12' },
-      'title.fallback_also_failed'
-    );
-    for (const level of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
-      expect(Bun.inspect(mockLogger[level].mock.calls)).not.toContain(userMessage);
+    const logOutput = captureStubLogOutput(mockLogger);
+    try {
+      await generateAndSetTitle('conv-12', userMessage, 'claude', '/tmp');
+    } finally {
+      logOutput.restore();
     }
+
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-12', userMessage);
+    const output = logOutput.output();
+    expect(output).toContain('"conversationDbId":"conv-12"');
+    expect(output).toContain('"msg":"title.fallback_also_failed"');
+    expect(output).not.toContain(userMessage);
   });
 
   test('collects text from multiple streaming chunks', async () => {
