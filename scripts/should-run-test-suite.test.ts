@@ -51,8 +51,84 @@ function runDecision(
   };
 }
 
+/** Bare filenames refer to fixtures; directory-qualified tracked paths count even in comments. */
+function markdownTestInputs(repo: string): Map<string, Set<string>> {
+  const tracked = gitIn(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+  const markdown = tracked.filter(file => file.includes('/') && file.endsWith('.md'));
+  const tests = tracked.filter(file => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file));
+  const inputs = new Map<string, Set<string>>();
+  for (const test of tests) {
+    const source = readFileSync(join(repo, test), 'utf8');
+    for (const path of markdown) {
+      if (!source.includes(path)) continue;
+      const readers = inputs.get(path) ?? new Set<string>();
+      readers.add(test);
+      inputs.set(path, readers);
+    }
+  }
+  return inputs;
+}
+
+function omittedMarkdownInputs(inputs: Map<string, Set<string>>): string[] {
+  return [...inputs]
+    .filter(([path]) => !shouldRunTestSuite([path]))
+    .map(([path, readers]) => `${path} named by ${[...readers].join(', ')}`);
+}
+
 describe('test-suite change decision', () => {
   const trackTempRoot = trackTempRoots();
+  const workspaceInputs = workspaceTestInputs(resolve(import.meta.dir, '..'));
+
+  test('every directory-qualified tracked Markdown path named by tests runs the suite', () => {
+    const inputs = markdownTestInputs(resolve(import.meta.dir, '..'));
+    expect(inputs.size).toBeGreaterThan(0);
+    expect(omittedMarkdownInputs(inputs)).toEqual([]);
+  });
+
+  test.each([
+    'packages/docs-web/src/content/docs/reference/database.md',
+    'packages/docs-web/src/content/docs/guides/attention-queue.md',
+    'packages/docs-web/src/content/docs/deployment/docker.md',
+    '.archon/architecture.md',
+    'packages/providers/src/codex/protocol/README.md',
+    'packages/docs-web/src/content/docs/reference/api.md',
+    'packages/docs-web/src/content/docs/reference/node-execution.md',
+    'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
+    'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
+  ])('runs suite and workspace tests for required Markdown input %s', file => {
+    expect(shouldRunTestSuite([file])).toBe(true);
+    expect(shouldRunWorkspaceTests([file], workspaceInputs)).toBe(true);
+  });
+
+  test('an unknown source file runs the suite', () => {
+    expect(shouldRunTestSuite(['unknown.ts'])).toBe(true);
+  });
+
+  test('named collection members and comments expose omissions, while bare filenames do not', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-inputs-')));
+    mkdirSync(join(repo, 'docs'));
+    writeFileSync(join(repo, 'docs/new-input.md'), 'input');
+    writeFileSync(join(repo, 'docs/comment.md'), 'prose');
+    writeFileSync(join(repo, 'docs/unread.md'), 'prose');
+    writeFileSync(join(repo, 'README.md'), 'prose');
+    writeFileSync(
+      join(repo, 'reader.test.ts'),
+      `
+      import { readFileSync } from 'node:fs';
+      const paths = ['docs/new-input.md'];
+      for (const path of paths) readFileSync(path, 'utf8');
+      // docs/comment.md
+      readFileSync('README.md', 'utf8');
+    `
+    );
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'add', '.');
+
+    expect(omittedMarkdownInputs(markdownTestInputs(repo))).toEqual([
+      'docs/comment.md named by reader.test.ts',
+      'docs/new-input.md named by reader.test.ts',
+    ]);
+  });
 
   test.each(['push', 'pull_request'])('%s skips Markdown-only changes', () => {
     expect(shouldRunTestSuite(['README.md', 'packages/core/notes.md'])).toBe(false);
@@ -94,17 +170,13 @@ describe('test-suite change decision', () => {
       shouldRunTestSuite([
         'README.md',
         'AGENTS.md',
-        'packages/docs-web/src/content/docs/guides/authoring-workflows.md',
+        'packages/docs-web/src/content/docs/guides/unread-page.md',
       ])
     ).toBe(false);
   });
 
-  test.each([
-    '.archon/workflows/sdlc/README.md',
-    '.archon/workflows/sdlc/CONSTITUTION.md',
-    '.archon/workflows/sdlc/validate/README.md',
-  ])('skips pack prose %s, which the bundle does not embed', file => {
-    expect(shouldRunTestSuite([file])).toBe(false);
+  test('skips pack prose outside commands and .shared directories', () => {
+    expect(shouldRunTestSuite(['.archon/workflows/example/README.md'])).toBe(false);
   });
 
   /** `bundle-inventory.ts` selects what the binary embeds, so it owns this family. */
