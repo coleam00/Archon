@@ -32,15 +32,9 @@ import * as archonPaths from '@archon/paths';
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { OverlayMode } from '@archon/workflows/container-context';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
-import {
-  WorkflowNotResumableError,
-  WorkflowResourceBusyError,
-  deadlineWaitCursor,
-  resumeCursorMatches,
-} from '@archon/workflows/store';
+import { WorkflowResourceBusyError, resumeCursorMatches } from '@archon/workflows/store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import {
@@ -53,14 +47,7 @@ import {
   isDurableWorkflowEventType,
   type WorkflowEventType,
 } from '@archon/workflows/store';
-import {
-  applyResolvedRunModelOverrides,
-  buildAiProfile,
-  parseRunModelAssignments,
-  resolveRunModelOverrides,
-  type BuildAiProfileOptions,
-  type ResolvedAiProfile,
-} from '@archon/workflows/model-validation';
+import { parseRunModelAssignments } from '@archon/workflows/model-validation';
 import {
   getIsolationProvider,
   resolveFolderBackend,
@@ -69,20 +56,14 @@ import {
 import type { ExecutionContext, ContainerBackend } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import { isAbsolute, join } from 'node:path';
-import {
-  applyWorkflowRunConfigLayer,
-  WORKFLOW_RUN_CONFIG_METADATA_KEY,
-} from '@archon/workflows/run-config';
+import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { rmSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
-import {
-  startRunLiveOwner,
-  RunLiveOwnerAlreadyOwnedError,
-} from '@archon/core/services/run-live-owner';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
@@ -99,12 +80,6 @@ import {
 } from '@archon/workflows/run-source';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
-import {
-  dryRunWorkflow,
-  formatDryRunTrace,
-  loadDryRunStubs,
-  writeDryRunStubScaffold,
-} from '@archon/workflows/dry-run';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import {
@@ -116,8 +91,6 @@ import {
   workflowRunStatusSchema,
   isApprovalContext,
   isWorkflowWaitContext,
-  pendingWorkflowWaitDeadline,
-  workflowWaitStepName,
   isScheduledWorkflowResume,
   runAttention,
   SUBRUN_METADATA_KEYS,
@@ -180,7 +153,6 @@ import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
-import { resolveCliUserId } from '../utils/cli-user';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
 import {
   destinationCorrelationId,
@@ -192,7 +164,6 @@ import {
   resolveRunIdArg,
   resolveRunTranscriptPath,
   spelledForCli,
-  type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
 
@@ -251,24 +222,15 @@ import {
   emitDeprecationNotice,
   countWorkflowSources,
 } from './workflow-run-preflight';
-
-async function resolveCliDryRunAiPrefs(
-  host: WorkflowHost
-): Promise<Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>> {
-  const cliId = resolveCliUserId();
-  if (!cliId) return {};
-  try {
-    const cliUser = await host.records.users.findOrCreateUserByPlatformIdentity(
-      'cli',
-      cliId,
-      cliId
-    );
-    return cliUser ? ((await host.deps.getUserAiPrefs?.(cliUser.id)) ?? {}) : {};
-  } catch (error) {
-    getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
-    return {};
-  }
-}
+import { runDryRun } from './workflow-dry-run';
+import {
+  type PendingWaitContinuation,
+  type WaitResumeAttempt,
+  pendingDurableWait,
+  awaitDurableWaitDeadline,
+  buildWaitResumeAttempt,
+  isResumeSuperseded,
+} from './workflow-wait-continuation';
 
 export interface WorkflowListOptions {
   json?: boolean;
@@ -814,136 +776,7 @@ async function runWorkflowWithOwnedSource(
   }
 
   if (options.dryRun) {
-    const incompatible = [
-      ['--branch', options.branchName !== undefined],
-      ['--from/--from-branch', options.fromBranch !== undefined],
-      ['--base', options.baseBranch !== undefined],
-      ['--no-worktree', options.noWorktree === true],
-      ['--folder', options.folder === true],
-      ['--container', options.container === true],
-      ['--resume', options.resume === true],
-      ['--detach', options.detach === true],
-    ] as const;
-    const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];
-    if (incompatibleFlag) {
-      throw new Error(`--dry-run cannot be combined with ${incompatibleFlag}.`);
-    }
-    if (options.stubsInitPath !== undefined && options.stubsPath !== undefined) {
-      throw new Error('--stubs-init cannot be combined with --stubs.');
-    }
-    if (options.stubsInitPath !== undefined && options.defaultStubs) {
-      throw new Error('--stubs-init cannot be combined with --default-stubs.');
-    }
-
-    // The IDENTICAL invocation gate a real run passes through below (#2610): parse
-    // `--input name=value`, validate against the declared `inputs:` contract, and fail
-    // with the same errors (undeclared key, missing required) before any trace output.
-    // Only the supplied entries travel; the simulator derives declared defaults itself,
-    // mirroring the executor's `defaultRunInputs` merge at run start.
-    const dryRunInputs = resolveTopLevelInputs(
-      workflow,
-      options.inputs ? parseInputAssignments(options.inputs) : undefined
-    );
-
-    // Relative stub paths resolve from `--cwd`, as the CLI reference states. They are the
-    // operator's dry-run inputs, not part of the workflow's source, so `--workflow-source`
-    // must not silently move where they are read from or written to.
-    const stubsPath = options.stubsPath
-      ? isAbsolute(options.stubsPath)
-        ? options.stubsPath
-        : join(cwd, options.stubsPath)
-      : undefined;
-    const stubsInitPath = options.stubsInitPath
-      ? isAbsolute(options.stubsInitPath)
-        ? options.stubsInitPath
-        : join(cwd, options.stubsInitPath)
-      : undefined;
-    if (stubsInitPath !== undefined) {
-      const scaffold = await writeDryRunStubScaffold(workflow, stubsInitPath);
-      const nodeCount = Object.keys(scaffold).length;
-      if (options.json) {
-        await writeJsonLine({ workflow: workflow.name, stubsPath: stubsInitPath, nodeCount });
-      } else {
-        await writeStdout(
-          `Created dry-run stub scaffold for ${workflow.name}: ${stubsInitPath} (${String(nodeCount)} nodes)\n`
-        );
-      }
-      return undefined;
-    }
-    const stubs = await loadDryRunStubs(stubsPath);
-    // The install's config + AI profile are what make the per-node provider/model report
-    // match a real run — tier keywords and `@alias` refs resolve through the same profile
-    // the executor builds.
-    //
-    // NOT wrapped in a catch: `loadConfig` returns defaults when there is no config file,
-    // so a throw means a malformed or unreadable one. Reporting against fabricated
-    // defaults would hand the user a clean-looking trace of a run that cannot happen —
-    // the same fail-fast reasoning the container-policy load below spells out.
-    // The target workspace, never the authoring root: `--exec-code` runs real bash and
-    // script nodes, and running them in the checkout the workflow was merely READ from
-    // would mutate the author's tree instead of the one they aimed the dry run at.
-    const dryRunFileConfig = await host.deps.loadConfig(cwd);
-    const dryRunConfig = applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
-    const dryRunUserPrefs = await resolveCliDryRunAiPrefs(host);
-    let dryRunDefaultProvider =
-      runConfig?.layer.assistant ?? dryRunUserPrefs.defaultProvider ?? dryRunFileConfig.assistant;
-    let dryRunProfileOptions: BuildAiProfileOptions = {
-      repoTiers: dryRunFileConfig.tiers,
-      repoAliases: dryRunFileConfig.aliases,
-      userTiers: dryRunUserPrefs.tiers,
-      userAliases: dryRunUserPrefs.aliases,
-      runTiers: runConfig?.layer.tiers,
-      runAliases: runConfig?.layer.aliases,
-    };
-    let dryRunBaseProfile: ResolvedAiProfile;
-    try {
-      dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
-    } catch (error) {
-      getLog().error({ err: error as Error }, 'cli.dry_run_user_ai_prefs_profile_invalid');
-      dryRunDefaultProvider = runConfig?.layer.assistant ?? dryRunFileConfig.assistant;
-      dryRunProfileOptions = {
-        repoTiers: dryRunFileConfig.tiers,
-        repoAliases: dryRunFileConfig.aliases,
-        runTiers: runConfig?.layer.tiers,
-        runAliases: runConfig?.layer.aliases,
-      };
-      dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
-    }
-    const dryRunModelOverrides = resolveRunModelOverrides(
-      host.deps.providers,
-      dryRunBaseProfile,
-      modelOverrides
-    );
-    const result = await dryRunWorkflow({
-      workflow,
-      userMessage,
-      cwd,
-      stubs,
-      ...(dryRunInputs ? { inputs: dryRunInputs } : {}),
-      execCode: options.execCode,
-      defaultStubs: options.defaultStubs,
-      pauseAtGates: options.pauseAtGates,
-      config: dryRunConfig,
-      aiProfile: applyResolvedRunModelOverrides(dryRunBaseProfile, dryRunModelOverrides),
-    });
-    if (options.json) {
-      await writeJsonLine(result);
-    } else {
-      await writeStdout(`${formatDryRunTrace(result)}\n`);
-    }
-    if (result.outcome === 'failed') {
-      // Same filter `checkFixture` applies: a stub an `all_done` join tolerated
-      // never blocked anything, so naming it as a cause of this failure points
-      // the reader at the wrong node (#2869).
-      const blockingMissingStubs = result.missingStubs.filter(
-        nodeId => !result.toleratedMissingStubs.includes(nodeId)
-      );
-      throw new Error(
-        blockingMissingStubs.length > 0
-          ? `Dry-run failed; missing stubs: ${blockingMissingStubs.join(', ')}`
-          : 'Dry-run failed. See the trace for details.'
-      );
-    }
+    await runDryRun(host, workflow, cwd, userMessage, options, runConfig, modelOverrides);
     return undefined;
   }
 
@@ -2482,148 +2315,6 @@ async function runWorkflowWithOwnedSource(
   } finally {
     await closeRunLiveOwner();
   }
-}
-
-/**
- * The durable cursor of a wait that this run's own process must wake. `attention`
- * waits are excluded at the source: they are a decision, not a deadline.
- */
-export interface DurableWaitCursor {
-  stepName: string;
-  cursor: ReturnType<typeof deadlineWaitCursor>;
-  signaled: boolean;
-}
-
-/** A run this process should resume itself once its wait's deadline arrives. */
-export interface PendingWaitContinuation {
-  run: WorkflowRun;
-  wait: DurableWaitCursor;
-  /**
-   * The platform conversation the first attempt ran under. Threaded into every
-   * continuation so the resumed segment's dispatch and result card stay in the run's
-   * original thread instead of generating a second conversation. An origin-free run
-   * stays headless.
-   */
-  destination: RunDestination;
-}
-
-/**
- * Read the wait this process owns off a run row, if any.
- *
- * `undefined` means the run is not paused on a time, event or usage-limit wait — a terminal
- * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
- */
-export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
-  const wait = pendingWorkflowWaitDeadline(run);
-  if (!wait) return undefined;
-  return {
-    stepName: workflowWaitStepName(wait),
-    cursor: deadlineWaitCursor(wait),
-    signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
-  };
-}
-
-/** How soon a sleeping owner notices that another host moved or released its run. */
-const WAIT_CONTINUATION_POLL_MS = 5_000;
-
-/**
- * Sleep until this run's wait is due, then let the caller resume it.
- *
- * The row is re-read every poll rather than trusting the cursor copied at pause
- * time: `archon serve`'s scan, an operator's `resume`/`resignal`/`abandon`, or a
- * crash can move or end the wait. A superseded cursor stops the loop instead of
- * executing a run this process no longer owns; the resume's own compare-and-swap
- * is the final guard.
- */
-async function awaitDurableWaitDeadline(
-  host: WorkflowHost,
-  runId: string,
-  wait: DurableWaitCursor
-): Promise<'resume' | 'stop'> {
-  if (wait.signaled) return 'resume';
-  for (;;) {
-    const remainingMs = Date.parse(wait.cursor.resumeAt) - Date.now();
-    if (remainingMs <= 0) return 'resume';
-    await new Promise<void>(resolve =>
-      setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
-    );
-    const latest = await host.deps.store.getWorkflowRun(runId);
-    const next = latest === null ? undefined : pendingDurableWait(latest);
-    if (
-      !latest ||
-      !next ||
-      next.stepName !== wait.stepName ||
-      !resumeCursorMatches(latest, wait.cursor)
-    ) {
-      return 'stop';
-    }
-    if (next.signaled) return 'resume';
-  }
-}
-
-/** The invocation parameters of one continuation attempt, in `workflowRunCommand`'s shape. */
-interface WaitResumeAttempt {
-  cwd: string;
-  workflowName: string;
-  userMessage: string;
-  options: WorkflowRunOptions;
-}
-
-/** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
-async function buildWaitResumeAttempt(
-  host: WorkflowHost,
-  run: WorkflowRun,
-  destination: RunDestination,
-  wait: DurableWaitCursor
-): Promise<WaitResumeAttempt> {
-  if (!run.working_path) {
-    throw new Error(
-      `Workflow run '${run.id}' has no working path recorded.\n` +
-        'Cannot determine where to resume. The run may be too old.'
-    );
-  }
-  const discoveryCwd = run.codebase_id
-    ? await resolveDiscoveryCwdForCodebase(host, run.id, run.codebase_id, 'resume')
-    : undefined;
-  return {
-    cwd: run.working_path,
-    workflowName: run.workflow_name,
-    userMessage: run.user_message ?? '',
-    options: {
-      continuationRun: run,
-      continuationCursor: wait.cursor,
-      resume: true,
-      codebaseId: run.codebase_id ?? undefined,
-      ...(destination.kind === 'conversation'
-        ? { conversationId: destinationCorrelationId(destination) }
-        : {}),
-      discoveryCwd,
-    },
-  };
-}
-
-/**
- * True when a resume attempt lost the run to another owner rather than failing.
- *
- * Both signals mean another process is executing the run — it won the claim (the
- * compare-and-swap left the row `running`) or still holds its endpoint — so this
- * process should say so and stop instead of reporting a failure. A claim lost to a
- * cancel, failure or completion is not that: nothing continues the run, so it stays
- * an error.
- */
-function isResumeSuperseded(error: unknown): boolean {
-  const MAX_CAUSE_DEPTH = 5;
-  for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
-    if (
-      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
-      current instanceof RunLiveOwnerAlreadyOwnedError
-    ) {
-      return true;
-    }
-    if (depth >= MAX_CAUSE_DEPTH) return false;
-    current = current.cause;
-  }
-  return false;
 }
 
 /**

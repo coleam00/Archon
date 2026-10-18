@@ -31,6 +31,8 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/commands/workflow-detach.ts',
   'packages/cli/src/commands/workflow-isolation.ts',
   'packages/cli/src/commands/workflow-run-preflight.ts',
+  'packages/cli/src/commands/workflow-dry-run.ts',
+  'packages/cli/src/commands/workflow-wait-continuation.ts',
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
   'packages/cli/src/utils/owned-run-termination.ts',
