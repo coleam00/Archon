@@ -9,9 +9,10 @@ const track = trackTempRoots();
 
 test('the persistence boundary follows resolved modules and symbols', () => {
   const root = track(mkdtempSync(join(tmpdir(), 'workflow-persistence-')));
-  const write = (path: string, content: string): void => {
+  const write = (path: string, content: string): string => {
     mkdirSync(join(root, path, '..'), { recursive: true });
     writeFileSync(join(root, path), content);
+    return path;
   };
   const compilerOptions = {
     target: 'ESNext',
@@ -77,8 +78,7 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     "import { type contract } from '../packages/core/src/index';",
   ];
   const cases = [...rejected, ...accepted];
-  const files = cases.map((_, index) => `consumers/${index}.ts`);
-  for (const [index, source] of cases.entries()) write(files[index], source);
+  const files = cases.map((source, index) => write(`consumers/${index}.ts`, source));
   const violations = findPersistenceImports(root, files);
   for (const [index, source] of cases.entries()) {
     const hits = violations.filter(line => line.startsWith(`consumers/${index}.ts:`));
