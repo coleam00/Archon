@@ -9,10 +9,7 @@
  * request is already merged or closed, or that names none, is settled without the
  * sweep, and one whose pull request cannot be read waits for the next sweep with the
  * reason, so it never stops the rest of the batch; when it could not be read the sweep
- * before either, it is parked with the reason instead. Live writes only the claims.
- *
- * Eval claims and reads nothing but each named pull request's URL: the sweep decides
- * from the facts the replay recorded, as of the time it recorded them.
+ * before either, it is parked with the reason instead. It writes only the claims.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -35,20 +32,17 @@ import {
   UNREADABLE,
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
-import { isObject } from '../../.shared/typed.ts';
-import { claimNext, parseMode, parseOrder, readMaintainers, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, parseOrder, readMaintainers, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
-  /** The issue whose work item the queue claimed; null in eval. */
-  readonly item: QualifiedPr | null;
+  /** The issue whose work item the queue claimed. */
+  readonly item: QualifiedPr;
   readonly pr: QualifiedPr;
   readonly url: string;
-  /** Null in eval, which decides from `recorded`. */
-  readonly facts: PrFacts | null;
+  readonly facts: PrFacts;
   readonly record: MergeRecord | null;
   /** The trusted review report a delta review continues from; empty when there is none. */
   readonly prior_report: string;
-  readonly recorded: { readonly at: string; readonly facts: string } | null;
 }
 
 function positive(name: string, value: string): number {
@@ -61,30 +55,6 @@ function parseMethod(value: string): MergeMethod {
   const method = MERGE_METHODS.find(candidate => candidate === value);
   if (method === undefined) throw new Error(`merge_method must be one of ${MERGE_METHODS.join(', ')}, not "${value}"`);
   return method;
-}
-
-/** The `replay` input: the decisions to replay, each with the facts recorded when it was made. */
-function parseReplay(value: string): { number: number; at: string; facts: string }[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value.trim() === '' ? '[]' : value);
-  } catch {
-    throw new Error('replay is not a JSON array');
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('eval needs a non-empty replay array');
-  return parsed.map((entry, index) => {
-    if (
-      !isObject(entry) ||
-      typeof entry.number !== 'number' ||
-      !Number.isInteger(entry.number) ||
-      entry.number <= 0 ||
-      typeof entry.at !== 'string' ||
-      typeof entry.facts !== 'string'
-    ) {
-      throw new Error(`replay[${String(index)}] is not {number, at, facts}`);
-    }
-    return { number: entry.number, at: entry.at, facts: entry.facts };
-  });
 }
 
 /** A shell word: the sweep pastes the gate command into its shell. */
@@ -112,7 +82,6 @@ function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: st
 }
 
 function main(): void {
-  const mode = parseMode(text(process.env.INPUTS_MODE));
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
@@ -120,20 +89,6 @@ function main(): void {
   if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-
-  if (mode === 'eval') {
-    const items: Item[] = parseReplay(text(process.env.INPUTS_REPLAY)).map(entry => ({
-      item: null,
-      pr: { repo, number: entry.number },
-      url: `https://${repo.host}/${repo.path}/pull/${String(entry.number)}`,
-      facts: null,
-      record: null,
-      prior_report: '',
-      recorded: { at: entry.at, facts: entry.facts },
-    }));
-    emit({ path: 'sweep', base: null, items, settled: [], gate: '', policy_defaults: POLICY_DEFAULTS });
-    return;
-  }
 
   requireGh();
   const maintainers = readMaintainers(repo);
@@ -172,7 +127,6 @@ function main(): void {
       facts,
       record: doc.facts.merge ?? null,
       prior_report: report === null || facts.verdict.reviewed === null ? '' : writePrior(pr, facts.verdict.reviewed, report),
-      recorded: null,
     });
   }
   const gate = [

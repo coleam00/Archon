@@ -331,8 +331,6 @@ function run(
       INPUTS_ORDER: '',
       INPUTS_LIMIT: '10',
       INPUTS_MERGE_METHOD: 'squash',
-      INPUTS_MODE: 'live',
-      INPUTS_REPLAY: '[]',
       ...inputs,
     },
   });
@@ -354,7 +352,7 @@ function merges(result: ScriptRun): string[] {
 }
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
-const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, prior_report: '', recorded: null }]);
+const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, prior_report: '' }]);
 const DEV_GREEN = { state: 'green', rerun: 'none', summary: 'green after the batch', attention: null };
 
 const ATTENTION: MergeAttention = {
@@ -392,7 +390,7 @@ const OTHER = { repo: PR.repo, number: 8 };
 const OTHER_PR = { repo: PR.repo, number: 43 };
 const OTHER_URL = PR_URL.replace(/42$/, '43');
 const BOTH_ITEMS = JSON.stringify([
-  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null, prior_report: '', recorded: null },
+  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null, prior_report: '' },
   ...JSON.parse(ITEMS),
 ]);
 const RECEIPT_43 = { 'merge/receipts/43.json': JSON.stringify({ pr: OTHER_URL, head: HEAD, at: AT }) };
@@ -611,7 +609,7 @@ describe('the merge queue scripts', () => {
     expect(record.decisions.at(-1)).toMatchObject({ head: HEAD, reran: true });
 
     seed(at, { ...(stored(at).value as WorkItem), ...CLAIMED });
-    const items = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record, prior_report: '', recorded: null }]);
+    const items = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record, prior_report: '' }]);
     const again = run(at, 'record', { ...rerun, INPUTS_ITEMS: items });
     expect(again.code).not.toBe(0);
     expect(again.stderr).toContain(`the queue already re-ran the failed checks at ${HEAD}`);
@@ -703,42 +701,5 @@ describe('the merge queue scripts', () => {
     expect(ok(ruled).decision).toBe('return');
     expect(ruled.bodies[0]).toContain("The maintainer's words: Split the contract change out first.");
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
-  }, 60_000);
-});
-
-describe('eval mode', () => {
-  test('decides the replayed pull requests from their recorded facts and claims, reads and writes nothing', () => {
-    const at = install();
-    seed(at, item());
-    const before = stored(at).revision;
-    const replay = [{ number: 42, at: AT, facts: 'verdict ready at head; CI green; 0 threads' }];
-    const facts = run(at, 'facts', { INPUTS_MODE: 'eval', INPUTS_REPLAY: JSON.stringify(replay) });
-    expect(ok(facts)).toMatchObject({
-      path: 'sweep',
-      base: null,
-      gate: '',
-      items: [{ item: null, pr: PR, url: PR_URL, facts: null, recorded: { at: AT, facts: replay[0]?.facts } }],
-    });
-    const items = JSON.stringify([{ item: null, pr: PR, url: PR_URL, facts: null, record: null, prior_report: '', recorded: replay[0] }]);
-    const recorded = run(at, 'record', {
-      ...recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], { state: 'unchecked', rerun: 'none', summary: '', attention: null }),
-      INPUTS_MODE: 'eval',
-      INPUTS_ITEMS: items,
-    });
-    expect(ok(recorded)).toMatchObject({
-      attention: '',
-      asked: null,
-      evaluation: { decisions: [{ number: 42, action: 'ask' }], asked: 'pr' },
-    });
-    for (const result of [facts, recorded]) expect([...result.gh, ...forgeCalls(result)]).toEqual([]);
-    expect(stored(at).revision).toBe(before);
-  }, 60_000);
-
-  test('replays a merge without a receipt, a work item or a dev check, and reads and writes nothing', () => {
-    const at = install();
-    const items = JSON.stringify([{ item: null, pr: PR, url: PR_URL, facts: null, record: null, prior_report: '', recorded: { at: AT, facts: 'ready' } }]);
-    const recorded = run(at, 'record', { ...recordInputs([decision({})], DEV_GREEN), INPUTS_MODE: 'eval', INPUTS_ITEMS: items });
-    expect(ok(recorded)).toMatchObject({ merged: [], evaluation: { decisions: [{ number: 42, action: 'merged' }], dev: { state: 'green' } } });
-    expect([...recorded.gh, ...forgeCalls(recorded)]).toEqual([]);
   }, 60_000);
 });

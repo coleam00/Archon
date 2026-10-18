@@ -21,9 +21,6 @@
  * that cannot be written is reported and left for the next sweep; neither stops the
  * rest of the batch from being recorded.
  *
- * Eval writes nothing and returns the decisions, with the attention item live would
- * raise, as `evaluation`.
- *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS and INPUTS_SETTLED from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
  */
@@ -53,7 +50,7 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { attentionOptions, checkAttention, renderAttention, withOther } from '../../.shared/queue.ts';
-import { type IntakeMode, parseMode, readMaintainers, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { readMaintainers, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   readonly item: QualifiedPr | null;
@@ -93,7 +90,7 @@ function message(error: unknown): string {
 }
 
 /** Refuse a sweep output the queue cannot act on, before anything is written. */
-function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts: Receipts): void {
+function check(items: readonly Item[], sweep: Sweep, receipts: Receipts): void {
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const seen = new Set<number>();
   for (const decision of sweep.decisions) {
@@ -109,7 +106,6 @@ function check(mode: IntakeMode, items: readonly Item[], sweep: Sweep, receipts:
     if (decision.action === 'return' && decision.brief.trim() === '') {
       throw new Error(`${name}: a return has no brief for the build queue`);
     }
-    if (mode === 'eval') continue;
     if (item.item === null) throw new Error(`${name} has no work item`);
     const reranBefore = item.record?.decisions.some(entry => entry.reran && entry.head === decision.head) ?? false;
     if (decision.reran && reranBefore) {
@@ -237,7 +233,6 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
 }
 
 function main(): void {
-  const mode = parseMode(text(process.env.INPUTS_MODE));
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
@@ -251,14 +246,13 @@ function main(): void {
       options: [],
       class: '',
       asked: null,
-      evaluation: null,
     });
     return;
   }
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const decisions = sweep?.decisions ?? [];
   const receipts = readReceipts();
-  if (sweep !== null) check(mode, items, sweep, receipts);
+  if (sweep !== null) check(items, sweep, receipts);
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
   const devAttention = sweep?.dev.attention ?? null;
@@ -283,25 +277,6 @@ function main(): void {
       : raised.by === 'dev'
         ? renderAttention('Merge queue: the default branch is red after a batch', raised.attention)
         : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
-
-  if (mode === 'eval') {
-    emit({
-      merged: [],
-      summary: sweep?.summary ?? '',
-      attention: '',
-      options: [],
-      class: '',
-      asked: null,
-      evaluation: {
-        decisions,
-        dev: sweep?.dev ?? null,
-        review_url: sweep?.review_url ?? '',
-        asked: asked?.by ?? null,
-        attention: render(asked),
-      },
-    });
-    return;
-  }
 
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
@@ -343,7 +318,6 @@ function main(): void {
     options: asked === null ? [] : attentionOptions<string>(asked.attention),
     class: asked?.by ?? '',
     asked,
-    evaluation: null,
   });
 }
 
