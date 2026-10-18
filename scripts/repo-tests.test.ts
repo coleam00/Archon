@@ -250,14 +250,7 @@ describe('repo-tests exit codes', () => {
     // one cheap test instead of the whole directory, and the exit code reads the same
     // whether or not Bun quiets its console output for an agent caller.
     const { exitCode } = Bun.spawnSync(
-      [
-        'bun',
-        'run',
-        'test',
-        '.archon/scripts/',
-        '-t',
-        'reads one repository from every URL form a remote can have',
-      ],
+      ['bun', 'run', 'test', '.archon/scripts/', '-t', 'a blocked item closes nothing'],
       { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'ignore' }
     );
 
