@@ -23,6 +23,12 @@ import type { DagNode, WorkflowRun, WorkflowDefinition } from '../schemas';
 import { dagNodeSchema } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 
+// ---------------------------------------------------------------------------
+// #2637 — workflow values survive every boundary; resource-backed nodes bind
+// them by name. AC1 (persistence round-trip), AC4 (node-local bindings),
+// AC5 (skipped-branch reads).
+// ---------------------------------------------------------------------------
+
 describe('value transport (#2637): persistence, resume, and node-local bindings', () => {
   let testDir: string;
 
@@ -811,13 +817,6 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
     expect(sent).toContain('failed');
   });
 });
-
-// ---------------------------------------------------------------------------
-// #2453 — a result may point at a file instead of carrying it. The producing node
-// proves every reserved `archon_artifact` pointer names its own run and a real
-// regular file under that run's artifacts directory, before the value is
-// persisted, and keeps the value a run id plus a relative path.
-// ---------------------------------------------------------------------------
 
 describe('executeDagWorkflow -- substituted values reach the node verbatim (#4046)', () => {
   let testDir: string;

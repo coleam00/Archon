@@ -317,12 +317,10 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Include expansion — the "zero new runtime machinery" proof.
-//
-// Expand a parent that `include:`s a child (via expandWorkflowIncludes, exactly
-// as discovery does), then run the flattened definition through executeDagWorkflow.
-// The executor never sees an include node; the namespaced nodes behave as ordinary
-// top-level nodes for events, terminal-output selection, resume-skip, and always_run.
+// #2453 — a result may point at a file instead of carrying it. The producing node
+// proves every reserved `archon_artifact` pointer names its own run and a real
+// regular file under that run's artifacts directory, before the value is
+// persisted, and keeps the value a run id plus a relative path.
 // ---------------------------------------------------------------------------
 
 describe('artifact pointers (#2453)', () => {
@@ -531,13 +529,3 @@ describe('artifact pointers (#2453)', () => {
     expect(resumed.prompts).toEqual(fresh.prompts);
   });
 });
-
-// ---------------------------------------------------------------------------
-// #2453 — the composed proof. One run carries a result contract across every
-// surface the earlier phases delivered: a `script:` node certifies its own stdout,
-// the result points at a file instead of carrying it, an `include:` alias exposes
-// that contract to the parent, `fan_out.items` consumes one of its declared fields
-// as a real array, each instance certifies its own per-item result, and a cold
-// resume reproduces all of it. This is the executable twin of the reference fixture
-// `.archon/workflows/test-workflows/e2e-contract-fanout.yaml`.
-// ---------------------------------------------------------------------------

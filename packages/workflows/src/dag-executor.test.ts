@@ -469,12 +469,6 @@ describe('TokenUsage axis seam guard', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// #2637 — workflow values survive every boundary; resource-backed nodes bind
-// them by name. AC1 (persistence round-trip), AC4 (node-local bindings),
-// AC5 (skipped-branch reads).
-// ---------------------------------------------------------------------------
-
 describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
   let testDir: string;
 

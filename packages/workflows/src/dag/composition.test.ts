@@ -97,6 +97,15 @@ it('a sub-run stamps its result contract with the legacy root fields older paren
   }
 });
 
+// ---------------------------------------------------------------------------
+// Include expansion — the "zero new runtime machinery" proof.
+//
+// Expand a parent that `include:`s a child (via expandWorkflowIncludes, exactly
+// as discovery does), then run the flattened definition through executeDagWorkflow.
+// The executor never sees an include node; the namespaced nodes behave as ordinary
+// top-level nodes for events, terminal-output selection, resume-skip, and always_run.
+// ---------------------------------------------------------------------------
+
 describe('executeDagWorkflow -- flattened include expansion', () => {
   let testDir: string;
 
@@ -1729,6 +1738,16 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2453 — the composed proof. One run carries a result contract across every
+// surface the earlier phases delivered: a `script:` node certifies its own stdout,
+// the result points at a file instead of carrying it, an `include:` alias exposes
+// that contract to the parent, `fan_out.items` consumes one of its declared fields
+// as a real array, each instance certifies its own per-item result, and a cold
+// resume reproduces all of it. This is the executable twin of the reference fixture
+// `.archon/workflows/test-workflows/e2e-contract-fanout.yaml`.
+// ---------------------------------------------------------------------------
 
 describe('a result contract survives the whole composed path (#2453)', () => {
   let testDir: string;
