@@ -14,7 +14,7 @@ afterAll(async () => {
   await db.close();
 });
 
-test('SQLite renames through the conditional UPDATE and refuses a taken name', async () => {
+test('SQLite renames a project and refuses a taken name', async () => {
   const codebases = await import('./codebases');
   const qes = await codebases.createCodebase({
     name: '_git/QUIBIQ%20EDI%20Service',
@@ -29,4 +29,22 @@ test('SQLite renames through the conditional UPDATE and refuses a taken name', a
 
   expect((await codebases.renameCodebase(qes.id, 'qes')).name).toBe('qes');
   expect((await codebases.findCodebaseByName('qes'))?.id).toBe(qes.id);
+});
+
+// Owner/repo names set the storage path, so a case change to one is refused as a
+// storage move. These names store under the checkout basename, as the rename allows.
+test('SQLite refuses a name another project uses in a different case', async () => {
+  const codebases = await import('./codebases');
+  const taken = await codebases.createCodebase({
+    name: 'acme api',
+    default_cwd: '/home/user/code/acme-api',
+  });
+  const other = await codebases.createCodebase({ name: 'b', default_cwd: '/home/user/code/b' });
+
+  await expect(codebases.renameCodebase(other.id, 'Acme API')).rejects.toBeInstanceOf(
+    codebases.CodebaseNameTakenError
+  );
+  expect((await codebases.getCodebase(other.id))?.name).toBe('b');
+
+  expect((await codebases.renameCodebase(taken.id, 'Acme API')).name).toBe('Acme API');
 });
