@@ -23,7 +23,7 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
-export const BUILD_INPUTS = [
+const BUILD_INPUTS = [
   '.claude/skills/',
   '.archon/architecture.md',
   '.archon/workflow-language-constitution.md',

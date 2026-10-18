@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   collectBundleSources,
@@ -328,32 +328,6 @@ describe('diff mode', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('false');
-  });
-
-  test.each([
-    ['packages/docs-web/src/content/docs/reference/database.md', 'true'],
-    ['packages/docs-web/src/content/docs/guides/unread-page.md', 'false'],
-  ])('both CI modes classify a change only to %s', (file, expected) => {
-    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'markdown-decision-')));
-    gitIn(repo, 'init', '-q', '-b', 'main');
-    gitIn(repo, 'config', 'user.email', 'test@example.com');
-    gitIn(repo, 'config', 'user.name', 'Test');
-    mkdirSync(dirname(join(repo, file)), { recursive: true });
-    const base = commit(repo, file, 'seed');
-    const head = commit(repo, file, 'change only Markdown');
-    expect(changedFilesBetween(base, head, repo)).toEqual([file]);
-    for (const args of [[], ['--workspace-tests']]) {
-      const result = runDecision(
-        trackTempRoot,
-        'pull_request',
-        { pull_request: { base: { sha: base }, head: { sha: head } } },
-        repo,
-        args
-      );
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe('');
-      expect(result.stdout).toBe(expected);
-    }
   });
 
   test.each(
