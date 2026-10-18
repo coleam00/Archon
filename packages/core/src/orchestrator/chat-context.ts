@@ -11,6 +11,10 @@ import type { WorkflowWithSource, WorkflowLoadError } from '@archon/workflows/sc
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
+import * as messageDb from '../db/messages';
+import * as workflowDb from '../db/workflows';
+import { formatPausedGateSection, formatWorkflowContextSection } from './prompt-builder';
+import type { WorkflowResultContext } from './prompt-builder';
 import { getLog } from './agent-log';
 
 /** Copy parent conversation's project context to child thread if missing */
@@ -154,6 +158,117 @@ export async function discoverAllWorkflows(conversation: Conversation): Promise<
   }
 
   return { workflows, errors: allErrors, syncResult, syncError, config, codebase, remote };
+}
+
+/**
+ * Emit workspace sync status only when something noteworthy happened
+ * (HEAD moved or sync failed). Skip the "up to date" case to avoid noise.
+ */
+export async function reportWorkspaceSync(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  sync: Pick<DiscoverResult, 'syncResult' | 'syncError' | 'remote'>
+): Promise<void> {
+  const { syncResult, syncError, remote: syncRemote } = sync;
+  if (syncError && platform.sendStructuredEvent) {
+    await platform.sendStructuredEvent(conversationId, {
+      type: 'system_status',
+      content: 'Sync failed \u2014 using local state',
+    });
+  } else if (syncResult?.state === 'diverged' && platform.sendStructuredEvent) {
+    await platform.sendStructuredEvent(conversationId, {
+      type: 'system_status',
+      content: `Local source/ has diverged from ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 manual merge or rebase needed`,
+    });
+  } else if (
+    syncResult?.state === 'in_sync' &&
+    syncResult.updated &&
+    platform.sendStructuredEvent
+  ) {
+    await platform.sendStructuredEvent(conversationId, {
+      type: 'system_status',
+      content: `Fast-forwarded to ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
+    });
+  }
+}
+
+/** Build workflow context for follow-up awareness. */
+export async function loadWorkflowResultContext(
+  conversation: Conversation,
+  conversationId: string
+): Promise<string | undefined> {
+  let workflowContext: string | undefined;
+  try {
+    const recentResultMessages = await messageDb.getRecentWorkflowResultMessages(
+      conversation.id,
+      3
+    );
+    if (recentResultMessages.length > 0) {
+      const workflowResults: WorkflowResultContext[] = recentResultMessages.map(msg => {
+        let workflowName = 'unknown';
+        let runId = 'unknown';
+        try {
+          const parsed = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata;
+          const meta = parsed as {
+            workflowResult?: { workflowName?: string; runId?: string };
+          };
+          workflowName = meta.workflowResult?.workflowName ?? 'unknown';
+          runId = meta.workflowResult?.runId ?? 'unknown';
+        } catch (metaErr) {
+          // Malformed metadata — use defaults
+          getLog().warn(
+            { err: metaErr as Error, conversationId, messageId: msg.id },
+            'orchestrator.workflow_result_metadata_parse_failed'
+          );
+        }
+        return { workflowName, runId, summary: msg.content };
+      });
+      workflowContext = formatWorkflowContextSection(workflowResults);
+    }
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, conversationId },
+      'orchestrator.workflow_context_fetch_failed'
+    );
+    // Non-critical — continue without context
+  }
+  return workflowContext;
+}
+
+// A human gate paused in this conversation is CONTEXT for the agent, not a
+// branch in the router (#2565). Before #2565 any non-slash message here was
+// recorded as an approval — including an objection — so an interpretation
+// step never existed. Now the agent reads the gate alongside the message and
+// resolves it (or doesn't) through the explicit approve/reject verbs it
+// already has. Best-effort: getPausedWorkflowRun swallows DB errors and
+// returns null, and a missing section only means the agent isn't told.
+export async function loadPausedGateContext(
+  platform: IPlatformAdapter,
+  conversation: Conversation,
+  conversationId: string
+): Promise<string | undefined> {
+  const pausedGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+  const pausedGateContext = pausedGateRun
+    ? formatPausedGateSection({
+        run: pausedGateRun,
+        // Both resolution routes — the `manage_run` tool and the CLI-pointer
+        // section — are gated on a scoped project; without one the section
+        // must not instruct the agent to use verbs it does not have.
+        agentCanResolve: conversation.codebase_id !== null,
+        surface: platform,
+      }) || undefined
+    : undefined;
+  if (pausedGateContext !== undefined) {
+    getLog().info(
+      {
+        conversationId,
+        workflowRunId: pausedGateRun?.id,
+        workflowName: pausedGateRun?.workflow_name,
+      },
+      'orchestrator.paused_gate_context_injected'
+    );
+  }
+  return pausedGateContext;
 }
 
 /** Build the user-facing prompt with message and optional contexts */
