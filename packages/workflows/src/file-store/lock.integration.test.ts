@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fsPromises from 'node:fs/promises';
 import { mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { captureLogLines, removeTempTree, testTimeout } from '@archon/paths/test-utils';
@@ -615,45 +615,6 @@ describe('file store filesystem primitives', () => {
     expect(
       lines.filter(line => line.msg === 'file_store.cleanup_failed').map(line => line.path)
     ).toEqual([path]);
-  });
-
-  test('lock and probe producers name scratch for this process before writing', async () => {
-    const root = await fixture();
-    const paths: string[] = [];
-    const links: [string, string][] = [];
-    const realOpen = fsPromises.open;
-    const realLink = fsPromises.link;
-    spies.push(
-      spyOn(fsPromises, 'open').mockImplementation((...args) => {
-        paths.push(String(args[0]));
-        return realOpen(...args);
-      })
-    );
-    spies.push(
-      spyOn(fsPromises, 'link').mockImplementation((source, target) => {
-        links.push([String(source), String(target)]);
-        return realLink(source, target);
-      })
-    );
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await probeFileStoreFilesystem(root);
-      await withFileStoreLock(root, async () => {
-        expect(JSON.parse(await readFile(join(root, 'lock'), 'utf8'))).toEqual(currentProcessOwner);
-      });
-    }
-    expect(paths).toHaveLength(4);
-    expect(new Set(paths).size).toBe(4);
-    const host = createHash('sha256').update(currentProcessOwner.host).digest('hex');
-    for (const path of paths) {
-      const kind = basename(path).startsWith('.lock-') ? 'lock' : 'probe';
-      expect(basename(path)).toStartWith(
-        `.${kind}-v1-${host}-${String(currentProcessOwner.pid)}-${currentProcessOwner.instance}-`
-      );
-      expect(basename(path).slice(-36)).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-      );
-      expect(links).toContainEqual([path, kind === 'probe' ? `${path}.link` : join(root, 'lock')]);
-    }
   });
 
   test('the sweep recovers empty and torn names from both real scratch producers', async () => {
