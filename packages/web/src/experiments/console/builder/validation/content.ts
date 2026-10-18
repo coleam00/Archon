@@ -5,7 +5,7 @@
  *
  * Bodies are scanned RAW, backticks included. The engine substitutes every
  * reference verbatim and fails the load on an unknown one wherever it sits
- * (`validateDagStructure` in packages/workflows/src/loader/dag-structure.ts: "runtime
+ * (`templateReferenceSources` in packages/workflows/src/loader/dag-references.ts: "runtime
  * substitution is syntax-agnostic, so this scan checks each text slot
  * verbatim"). So a ref inside a fence, inside inline backticks, or inside a
  * `script:` body's JavaScript template literal is live, and earns the same
