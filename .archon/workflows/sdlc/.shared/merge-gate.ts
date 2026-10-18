@@ -1,208 +1,209 @@
 /**
- * The two record checks that stand between an agent's report and the default branch,
- * as pure functions over what the scripts read from disk, the run log and the forge.
- * `loop/scripts/evidence.ts` and `loop/scripts/land.ts` do the reading; these decide.
+ * The record checks between an agent's report and the default branch, as pure functions.
+ * The app check's report is its structured output (`check-app` in archon-loop.yaml), so
+ * nothing here reads prose. `loop/scripts/evidence.ts` and `loop/scripts/land.ts` read the
+ * disk, the run log and the forge; these decide.
  */
 
-import { blocksPass, isAdverse, isImage, isProvenPreExisting, isQuestion, type AppCheckReport } from './app-check-report.ts';
+export interface CheckLine {
+  readonly id: string;
+  readonly kind: 'criterion' | 'holdout' | 'probe' | 'defect';
+  /** PASS, FAIL or INCOMPLETE for a criterion or holdout; OK or SURPRISE for a probe; DEFECT or QUESTION. */
+  readonly verdict: string;
+  readonly text: string;
+  readonly evidence: readonly string[];
+  /** The proof that the default branch fails the same way (a baseline row or a default-branch run). */
+  readonly pre_existing: string;
+  /** For a probe's SURPRISE, the id of the defect line it found. */
+  readonly defect: string;
+  /** The commit an earlier check observed this line at, when it was carried over. */
+  readonly carried_from: string;
+}
+
+export interface AppCheck {
+  readonly pr: string;
+  readonly overall: string;
+  readonly lines: readonly CheckLine[];
+}
+
+/** A string field of parsed JSON, trimmed; anything else is empty. */
+const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+export function readAppCheck(json: string): AppCheck {
+  try {
+    const raw = JSON.parse(json) as Record<string, unknown>;
+    const lines = (Array.isArray(raw.lines) ? (raw.lines as Record<string, unknown>[]) : []).map(line => ({
+      id: str(line.id).toUpperCase(),
+      kind: (str(line.kind) || 'defect') as CheckLine['kind'],
+      verdict: str(line.verdict).toUpperCase(),
+      text: str(line.text),
+      evidence: (Array.isArray(line.evidence) ? line.evidence : []).map(str).filter(path => path !== ''),
+      pre_existing: str(line.pre_existing),
+      defect: str(line.defect).toUpperCase(),
+      carried_from: str(line.carried_from),
+    }));
+    return { pr: str(raw.pr), overall: str(raw.overall), lines };
+  } catch {
+    return { pr: '(unreadable report)', overall: '', lines: [] };
+  }
+}
+
+export const isQuestion = (line: CheckLine): boolean => line.kind === 'defect' && line.verdict === 'QUESTION';
+
+const failure = (line: CheckLine): boolean =>
+  (line.kind === 'holdout' && line.verdict !== 'PASS') || (line.kind === 'defect' && !isQuestion(line));
+
+/** A failure the default branch has too, with its proof: not this change's, but an issue must track it. */
+export const isPreExisting = (line: CheckLine): boolean => failure(line) && line.pre_existing !== '';
+
+/**
+ * A line that makes `Overall: PASS` false. A criterion of the work item is this change's to
+ * meet whatever the default branch does, so it is never pre-existing. A probe counts through
+ * the defect line it names.
+ */
+export function blocksPass(line: CheckLine): boolean {
+  if (line.kind === 'criterion') return line.verdict !== 'PASS';
+  return failure(line) && line.pre_existing === '';
+}
+
+export const isImage = (path: string): boolean => /\.(png|jpe?g|gif|webp|bmp)$/i.test(path);
 
 export interface CitedFile {
   readonly exists: boolean;
-  /** Last write, in milliseconds since the epoch. */
   readonly mtimeMs: number;
-  /** The app check opened it with its Read tool. */
-  readonly opened: boolean;
+  /** The app check opened it with its Read tool; null when the run log cannot say. */
+  readonly opened: boolean | null;
 }
 
 /** Slack for clocks and file systems that round modification times. */
-const CLOCK_SLACK_MS = 2000;
+export const CLOCK_SLACK_MS = 2000;
 
-/**
- * Why an app-check report does not stand on its own evidence; empty when it does.
- * `look` resolves a cited path to what is on disk and in the run log.
- */
-export function evidenceProblems(
-  report: AppCheckReport,
-  startedMs: number,
-  look: (cited: string) => CitedFile
-): string[] {
-  if (report.noPr) return [];
-  const problems: string[] = [];
-  if (report.lines.length === 0) problems.push('the report has no check lines');
-  if (report.overall === null) problems.push('the report has no Overall line');
+/** Why the report does not stand on its own evidence; empty when it does. */
+export function evidenceProblems(report: AppCheck, startedMs: number, look: (path: string) => CitedFile): string[] {
+  if (report.pr === '') return [];
+  const problems: string[] = report.lines.length === 0 ? ['the report has no lines'] : [];
   for (const line of report.lines) {
-    if (line.carriedFrom !== null && line.kind !== 'D') continue;
-    if (line.evidence.length === 0) {
-      problems.push(`${line.id} cites no evidence`);
-      continue;
-    }
-    for (const cited of line.evidence) {
-      const file = look(cited);
-      if (!file.exists) {
-        problems.push(`${line.id} cites ${cited}, which does not exist`);
-        continue;
-      }
-      if (file.mtimeMs + CLOCK_SLACK_MS < startedMs) {
-        problems.push(`${line.id} cites ${cited}, which was written before this check began`);
-      }
-      if (isImage(cited) && !file.opened) {
-        problems.push(`${line.id} cites the image ${cited}, which the app check never opened`);
-      }
+    if (line.carried_from !== '' && line.kind !== 'defect') continue;
+    if (line.evidence.length === 0) problems.push(`${line.id} cites no evidence`);
+    for (const path of line.evidence) {
+      const file = look(path);
+      if (!file.exists) problems.push(`${line.id} cites ${path}, which does not exist`);
+      else if (file.mtimeMs + CLOCK_SLACK_MS < startedMs) problems.push(`${line.id} cites ${path}, written before this check began`);
+      else if (isImage(path) && file.opened === false) problems.push(`${line.id} cites the image ${path}, which the app check never opened`);
     }
   }
   const blocking = report.lines.filter(blocksPass).map(line => line.id);
-  if (report.overall === 'PASS' && blocking.length > 0) {
-    problems.push(`Overall says PASS over ${blocking.join(', ')}`);
-  }
-  const defects = new Set(report.lines.filter(line => line.kind === 'D').map(line => line.id));
-  for (const probe of report.lines.filter(line => line.kind === 'P' && isAdverse(line))) {
-    if (!defects.has(probe.qualifier.trim().toUpperCase())) {
-      problems.push(`${probe.id} is a surprise with no DEFECTS SEEN line (write it as SURPRISE (D<n>))`);
-    }
-  }
-  if (!report.defectsNone && defects.size === 0) {
-    problems.push('the report has no DEFECTS SEEN section (write "DEFECTS SEEN: none" when there are none)');
+  if (report.overall === 'PASS' && blocking.length > 0) problems.push(`Overall says PASS over ${blocking.join(', ')}`);
+  const defects = new Set(report.lines.filter(line => line.kind === 'defect').map(line => line.id));
+  for (const probe of report.lines.filter(line => line.kind === 'probe' && line.verdict !== 'OK')) {
+    if (!defects.has(probe.defect)) problems.push(`${probe.id} is a surprise that names no defect line`);
   }
   return problems;
 }
 
 export interface Disposition {
-  readonly line: string;
   readonly action: string;
-  readonly ref: string;
+  readonly file: string;
+  readonly issue: string;
+  readonly reason: string;
 }
 
-/** The reviewer's dispositions, keyed by line id; anything malformed is dropped. */
-export function parseDispositions(textValue: string): Map<string, Disposition> {
+/** The reviewer's dispositions by line id. A reviewer may quote the whole line; its leading id counts. */
+export function parseDispositions(json: string): Map<string, Disposition> {
   const found = new Map<string, Disposition>();
-  let raw: unknown = [];
+  let raw: unknown;
   try {
-    raw = textValue.trim() === '' ? [] : JSON.parse(textValue);
+    raw = JSON.parse(json);
   } catch {
-    raw = [];
+    return found;
   }
-  if (!Array.isArray(raw)) return found;
-  for (const entry of raw as Record<string, unknown>[]) {
-    if (entry === null || typeof entry !== 'object') continue;
-    // A reviewer may quote the whole report line; the id it starts with is what counts.
-    const quoted = typeof entry.line === 'string' ? entry.line.trim().toUpperCase() : '';
-    const line = /^([CHPD]\d+)(?![0-9])/.exec(quoted)?.[1] ?? '';
-    if (line === '') continue;
-    found.set(line, {
-      line,
-      action: typeof entry.action === 'string' ? entry.action.trim() : '',
-      ref: typeof entry.ref === 'string' ? entry.ref.trim() : '',
-    });
+  for (const entry of Array.isArray(raw) ? (raw as Record<string, unknown>[]) : []) {
+    const id = /^([A-Za-z]+\d+)(?![0-9])/.exec(str(entry?.line))?.[1]?.toUpperCase();
+    if (id === undefined) continue;
+    found.set(id, { action: str(entry.action), file: str(entry.file), issue: str(entry.issue), reason: str(entry.reason) });
   }
   return found;
 }
 
 export interface GateFacts {
-  readonly report: AppCheckReport;
-  readonly evidenceOk: boolean;
-  readonly evidenceProblems: string;
+  readonly report: AppCheck;
+  readonly evidenceProblems: readonly string[];
   readonly dispositions: Map<string, Disposition>;
-  /** Shipping-pipeline nodes that failed in this run, with their errors. */
+  /** Shipping-pipeline nodes that failed in this run. */
   readonly shipFailures: readonly string[];
   /** A file the reviewer wrote during its review. */
-  readonly reviewerFile: (ref: string) => boolean;
+  readonly freshFile: (path: string) => boolean;
   readonly issueExists: (ref: string) => boolean;
 }
 
-/**
- * Why the record does not support merging; empty when it does. The forge-side checks
- * (head unchanged, default branch contained) are the caller's: they need the network.
- */
+/** Why the record does not support merging; empty when it does. The forge checks are the caller's. */
 export function recordRefusals(facts: GateFacts): string[] {
+  const disposition = (id: string): Disposition | undefined => facts.dispositions.get(id);
+  const rechecked = (id: string): boolean => disposition(id)?.action === 'rechecked' && facts.freshFile(disposition(id)?.file ?? '');
+  const tracked = (id: string): boolean => facts.issueExists(disposition(id)?.issue ?? '');
   const refusals: string[] = [];
-  if (!facts.evidenceOk) {
-    // A line the evidence check flagged stands only on the reviewer's own re-check of it,
-    // written during the review. A problem with the report as a whole has no such way out.
-    const problems = facts.evidenceProblems.split('\n').filter(problem => problem.trim() !== '');
-    const unresolved = problems.filter(problem => {
-      const id = /^([CHPD]\d+)\b/.exec(problem)?.[1];
-      const disposition = id === undefined ? undefined : facts.dispositions.get(id);
-      return !(disposition?.action === 'rechecked' && facts.reviewerFile(disposition.ref.split(/\s+/)[0] ?? ''));
-    });
-    if (problems.length === 0 || unresolved.length > 0) {
-      refusals.push(
-        `the app check's report did not hold up: ${(unresolved.length > 0 ? unresolved : problems).join('; ') || 'no evidence verdict'}`
-      );
-    }
-  }
-  if (facts.report.noPr) refusals.push('the app check found no pull request to test');
+  // A flagged line stands only on the reviewer's own fresh re-check; a problem with the whole report has none.
+  const unresolved = facts.evidenceProblems.filter(problem => {
+    const id = /^([A-Z]+\d+)\b/.exec(problem)?.[1];
+    return id === undefined || !rechecked(id);
+  });
+  if (unresolved.length > 0) refusals.push(`the app check's report did not hold up: ${unresolved.join('; ')}`);
+  if (facts.report.pr === '') refusals.push('the app check found no pull request to test');
   for (const line of facts.report.lines) {
-    const disposition = facts.dispositions.get(line.id);
+    const mine = disposition(line.id);
     if (blocksPass(line)) {
-      const [file = '', ...rest] = (disposition?.ref ?? '').split(/\s+/);
-      if (disposition?.action === 'rechecked' && facts.reviewerFile(file)) continue;
-      // A criterion of the work item being delivered is this change's to meet, whatever the
-      // default branch does (seen live: an unmet criterion passed off as pre-existing).
-      if (line.kind === 'C') {
-        refusals.push(
-          `${line.id} (${line.verdict}): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item`
-        );
-        continue;
+      if (rechecked(line.id)) continue;
+      if (line.kind === 'criterion') {
+        refusals.push(`${line.id} (${line.verdict}): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item`);
+      } else if (mine?.action === 'pre-existing' && facts.freshFile(mine.file)) {
+        if (!tracked(line.id)) refusals.push(`${line.id} is pre-existing by the reviewer's run, but no issue that exists tracks it`);
+      } else {
+        refusals.push(`${line.id} (${line.verdict}) has no re-check or default-branch proof the reviewer wrote`);
       }
-      if (disposition?.action === 'pre-existing' && facts.reviewerFile(file)) {
-        const issue = rest.find(token => /^#\d+$/.test(token));
-        if (issue === undefined || !facts.issueExists(issue)) {
-          refusals.push(`${line.id} is pre-existing by the reviewer's run, but no issue that exists tracks it`);
-        }
-        continue;
-      }
-      refusals.push(`${line.id} (${line.verdict}) has no re-check or default-branch proof the reviewer wrote`);
     } else if (isQuestion(line)) {
-      const decided =
-        (disposition?.action === 'issue' && facts.issueExists(disposition.ref)) ||
-        (disposition?.action === 'accepted' && (disposition.ref ?? '').trim().length >= 12);
-      if (!decided) {
+      if (!tracked(line.id) && !(mine?.action === 'accepted' && mine.reason.length >= 12)) {
         refusals.push(`${line.id} is an open question the review did not decide (an issue, or accepted with a reason)`);
       }
-    } else if (isProvenPreExisting(line)) {
-      // Whatever the reviewer called it, what counts is an existing issue that tracks it.
-      const issue = (disposition?.ref ?? '').split(/\s+/).find(token => /^#\d+$/.test(token));
-      if (issue === undefined || !facts.issueExists(issue)) {
-        refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
-      }
+    } else if (isPreExisting(line) && !tracked(line.id)) {
+      refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
     }
   }
   for (const failed of facts.shipFailures) refusals.push(`the shipping pipeline's ${failed} failed`);
   return refusals;
 }
 
-/** Failed shipping-pipeline nodes recorded in a run's event log (JSON lines). */
+// The two readers below parse Archon's run log ($LOG_DIR/<run>.jsonl), an engine format and not
+// a pack contract; loop-gates.test.ts pins the lines they read. `ship__` is the prefix the engine
+// gives the nodes this loop's `ship` include expands to.
+
+/** Failed shipping-pipeline nodes recorded in a run's event log. */
 export function shipFailuresInLog(log: string): string[] {
-  const failed: string[] = [];
-  for (const line of log.split('\n')) {
-    if (!line.includes('"node_error"') && !line.includes('"node_failed"')) continue;
-    try {
-      const entry = JSON.parse(line) as { type?: string; step?: string; error?: string };
-      if ((entry.type === 'node_error' || entry.type === 'node_failed') && entry.step?.startsWith('ship__')) {
-        failed.push(`${entry.step}${entry.error ? `: ${entry.error.slice(0, 200)}` : ''}`);
-      }
-    } catch {
-      // A partial last line of a log still being written carries nothing to check.
-    }
-  }
-  return failed;
+  return eventsOf(log)
+    .filter(e => (e.type === 'node_error' || e.type === 'node_failed') && (e.step ?? '').startsWith('ship__'))
+    .map(e => `${e.step}${e.error ? `: ${e.error.slice(0, 200)}` : ''}`);
 }
 
-/** Files a node opened with its Read tool, from a run's event log (JSON lines). */
+/** Files a node opened with its Read tool, from a run's event log. */
 export function filesReadInLog(log: string, step: string, key: (path: string) => string): Set<string> {
-  const opened = new Set<string>();
-  for (const line of log.split('\n')) {
-    if (!line.includes(`"${step}"`) || !line.includes('"Read"')) continue;
+  const opened = eventsOf(log)
+    .filter(e => e.step === step && e.event?.name === 'Read' && typeof e.event.rawInput?.file_path === 'string')
+    .map(e => key(e.event?.rawInput?.file_path as string));
+  return new Set(opened);
+}
+
+interface LogEvent {
+  type?: string;
+  step?: string;
+  error?: string;
+  event?: { name?: string; rawInput?: { file_path?: unknown } };
+}
+
+function eventsOf(log: string): LogEvent[] {
+  return log.split('\n').flatMap(line => {
     try {
-      const entry = JSON.parse(line) as {
-        step?: string;
-        event?: { type?: string; name?: string; rawInput?: { file_path?: unknown } };
-      };
-      const path = entry.event?.rawInput?.file_path;
-      if (entry.step === step && entry.event?.name === 'Read' && typeof path === 'string') opened.add(key(path));
+      return line.trim() === '' ? [] : [JSON.parse(line) as LogEvent];
     } catch {
-      // As above.
+      return []; // the partial last line of a log still being written
     }
-  }
-  return opened;
+  });
 }

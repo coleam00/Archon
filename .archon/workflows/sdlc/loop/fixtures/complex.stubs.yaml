@@ -114,17 +114,31 @@ subject:
   pr: "https://github.com/example/repo/pull/4"
   head: "fixturehead"
   base: main
-  behind: "0"
-  conflicts: "false"
   files: "app/notes.py"
   started: "1700000000000"
-check-app: 'APP CHECK https://github.com/example/app/pull/11 at fixturehead
-
-  C1 PASS  tag a note  tagged
-
-  H1 FAIL  H1  search by tag returns notes from other users
-
-  Overall: FAIL (H1)'
+check-app:
+  pr: "https://github.com/example/app/pull/11"
+  head: "fixturehead"
+  merged_with: "fixturehead"
+  lines:
+  - id: C1
+    kind: criterion
+    verdict: PASS
+    text: "tag a note: tagged"
+    evidence: ["/artifacts/c1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  - id: H1
+    kind: holdout
+    verdict: FAIL
+    text: "H1: search by tag returns notes from other users"
+    evidence: ["/artifacts/h1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  overall: "FAIL"
+  summary: "stub: holdout H1 failed"
 evidence:
   ok: "true"
   problems: ""
@@ -138,7 +152,9 @@ review:
   dispositions:
   - line: H1
     action: blocks
-    ref: ''
+    file: ''
+    issue: ''
+    reason: ''
   reason: 'stub: holdout H1 failed'
 claim:
   held: "true"
@@ -160,7 +176,7 @@ fixture:
   - release
   resolved-text-contains:
     ship__triage__triage: https://github.com/example/app/issues/6
-    review: H1 FAIL
+    review: "search by tag returns notes from other users"
   inputs:
     runtime: /private/run-the-app.md
     holdout: /private/holdout.md

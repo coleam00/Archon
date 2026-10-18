@@ -13,15 +13,23 @@ subject:
   pr: "https://github.com/example/app/pull/9"
   head: "abc1234"
   base: main
-  behind: "0"
-  conflicts: "false"
   files: "app/notes.py"
   started: "1700000000000"
-check-app: 'APP CHECK https://github.com/example/app/pull/9 at abc1234
-
-  DEFECTS SEEN: none
-
-  Overall: PASS'
+check-app:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  merged_with: "abc1234"
+  lines:
+  - id: C1
+    kind: criterion
+    verdict: PASS
+    text: "the endpoint answers: 200"
+    evidence: ["/artifacts/c1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  overall: "PASS"
+  summary: "stub: no defects seen"
 evidence:
   ok: "true"
   problems: ""

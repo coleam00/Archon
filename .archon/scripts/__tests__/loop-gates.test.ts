@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { parseAppCheck } from '../../workflows/sdlc/.shared/app-check-report';
-import { evidenceResolver } from '../../workflows/sdlc/.shared/evidence-files';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
+  blocksPass,
   evidenceProblems,
   filesReadInLog,
   parseDispositions,
+  readAppCheck,
   recordRefusals,
   shipFailuresInLog,
+  type CheckLine,
   type CitedFile,
 } from '../../workflows/sdlc/.shared/merge-gate';
 
@@ -17,154 +17,92 @@ const pack = resolve(import.meta.dir, '../../workflows/sdlc');
 const STARTED = 1_000_000;
 const fresh: CitedFile = { exists: true, mtimeMs: STARTED + 5000, opened: true };
 
-const CLEAN = `APP CHECK https://github.com/o/r/pull/9 at abc1234 merged with main at def5678
-C1 PASS  saves a note  POST /notes returned 201  [evidence: c1-post.txt]
-H1 PASS  notes-survive-restart  the note is still listed after a restart  [evidence: h1.txt, h1.png]
-PROBES
-P1 OK  empty list / open the filter menu: the menu opens with no options  [evidence: p1.png]
-DEFECTS SEEN: none
-Overall: PASS`;
+function line(id: string, kind: CheckLine['kind'], verdict: string, more: Partial<CheckLine> = {}): CheckLine {
+  return { id, kind, verdict, text: `${id} text`, evidence: [`/run/${id.toLowerCase()}.txt`], pre_existing: '', defect: '', carried_from: '', ...more };
+}
 
-function gate(report: string, extra: Partial<Parameters<typeof recordRefusals>[0]> = {}): string[] {
+const CLEAN_LINES = [
+  line('C1', 'criterion', 'PASS'),
+  line('H1', 'holdout', 'PASS', { evidence: ['/run/h1.txt', '/run/h1.png'] }),
+  line('P1', 'probe', 'OK', { evidence: ['/run/p1.png'] }),
+];
+
+/** A structured report as the check-app node returns it, with lines replaced or added by id. */
+function report(lines: CheckLine[] = [], overall = 'PASS'): string {
+  const byId = new Map(CLEAN_LINES.map(l => [l.id, l]));
+  for (const l of lines) byId.set(l.id, l);
+  return JSON.stringify({ pr: 'https://github.com/o/r/pull/9', head: 'abc1234', merged_with: 'def5678', lines: [...byId.values()], overall, summary: '' });
+}
+
+const CLEAN = report();
+const disp = (...entries: Record<string, string>[]): ReturnType<typeof parseDispositions> => parseDispositions(JSON.stringify(entries));
+
+function gate(json: string, extra: Partial<Parameters<typeof recordRefusals>[0]> = {}): string[] {
   return recordRefusals({
-    report: parseAppCheck(report),
-    evidenceOk: true,
-    evidenceProblems: '',
+    report: readAppCheck(json),
+    evidenceProblems: [],
     dispositions: new Map(),
     shipFailures: [],
-    reviewerFile: () => false,
+    freshFile: () => false,
     issueExists: () => false,
     ...extra,
   });
 }
 
-describe('app check report', () => {
-  it('reads every line shape the prompt documents', () => {
-    const report = parseAppCheck(
-      `${CLEAN.replace('DEFECTS SEEN: none', 'DEFECTS SEEN\nD1 PRE-EXISTING (holdout-baseline.md 2026-10-17 H3)  the panel covers the map  [evidence: d1.png]')}\nH2 FAIL (pre-existing: holdout-baseline.md 2026-10-17 row 4)  h-two  slow at start  [evidence: h2.txt]\nC2 PASS (carried from 0123abcd)  older criterion`
-    );
-    expect(report.pr).toBe('https://github.com/o/r/pull/9');
-    expect(report.commit).toBe('abc1234');
-    expect(report.overall).toBe('PASS');
-    const byId = Object.fromEntries(report.lines.map(line => [line.id, line]));
-    expect(byId.H1.evidence).toEqual(['h1.txt', 'h1.png']);
-    expect(byId.D1.verdict).toBe('PRE-EXISTING');
-    expect(byId.H2.qualifier).toBe('pre-existing: holdout-baseline.md 2026-10-17 row 4');
-    expect(byId.C2.carriedFrom).toBe('0123abcd');
-  });
-
-  it('finds cited files where the report says they are (seen live: evidence in a subfolder)', () => {
-    const artifacts = mkdtempSync(join(tmpdir(), 'evidence-'));
-    mkdirSync(join(artifacts, 'appcheck', 'normal'), { recursive: true });
-    writeFileSync(join(artifacts, 'appcheck', 'town.png'), 'x');
-    writeFileSync(join(artifacts, 'appcheck', 'normal', 'spawn.png'), 'x');
-    writeFileSync(join(artifacts, 'top.txt'), 'x');
-    const report = parseAppCheck(`Evidence directory: \`${join(artifacts, 'appcheck')}\`\nC1 PASS  x  y  [evidence: town.png]`);
-    expect(report.evidenceDir).toBe(join(artifacts, 'appcheck'));
-    const withProse = parseAppCheck(
-      `Evidence directory: \`${join(artifacts, 'appcheck')}\`. The game ran in harness mode on port 8770.`
-    );
-    expect(withProse.evidenceDir).toBe(join(artifacts, 'appcheck'));
-    const declared = evidenceResolver(artifacts, report.evidenceDir);
-    expect(declared('town.png')).toBe(join(artifacts, 'appcheck', 'town.png'));
-    expect(declared('top.txt')).toBe(join(artifacts, 'top.txt'));
-    const undeclared = evidenceResolver(artifacts, '');
-    expect(undeclared('normal/spawn.png')).toBe(join(artifacts, 'appcheck', 'normal', 'spawn.png'));
-    expect(undeclared('missing.png')).toBeNull();
-    expect(declared('town*.png')).toBe(join(artifacts, 'appcheck', 'town.png'));
-    expect(declared('nothing-*.txt')).toBeNull();
-    rmSync(artifacts, { recursive: true, force: true });
-  });
-
-  it('a brace group cites each of its files (seen live: ac/landmarks-{spawn, nw}.txt)', () => {
-    const report = parseAppCheck('C1 PASS  x  y  [evidence: ac/landmarks-{spawn, nw, after-raid}.txt, ac/town.png]');
-    expect(report.lines[0].evidence).toEqual([
-      'ac/landmarks-spawn.txt',
-      'ac/landmarks-nw.txt',
-      'ac/landmarks-after-raid.txt',
-      'ac/town.png',
-    ]);
-  });
-
-  it('a path annotated by the agent is read as the path (seen live: "drive-diff.txt (0 bytes)")', () => {
-    const report = parseAppCheck('C4 PASS  outputs match  identical  [evidence: drive-diff.txt (0 bytes), `run.log`]');
-    expect(report.lines[0].evidence).toEqual(['drive-diff.txt', 'run.log']);
-  });
-});
+const problems = (json: string, look: (path: string) => CitedFile = () => fresh): string[] =>
+  evidenceProblems(readAppCheck(json), STARTED, look);
 
 describe('evidence check', () => {
   it('a clean report with fresh, opened evidence passes', () => {
-    expect(evidenceProblems(parseAppCheck(CLEAN), STARTED, () => fresh)).toEqual([]);
+    expect(problems(CLEAN)).toEqual([]);
   });
 
-  it('a PASS that cites nothing, or a file that is not there, fails', () => {
-    const report = parseAppCheck(CLEAN.replace('  [evidence: c1-post.txt]', ''));
-    expect(evidenceProblems(report, STARTED, () => fresh)).toEqual(['C1 cites no evidence']);
-    const missing = evidenceProblems(parseAppCheck(CLEAN), STARTED, cited =>
-      cited === 'h1.txt' ? { exists: false, mtimeMs: 0, opened: false } : fresh
-    );
-    expect(missing).toEqual(['H1 cites h1.txt, which does not exist']);
+  it('a line that cites nothing, or a file that is not there, fails', () => {
+    expect(problems(report([line('C1', 'criterion', 'PASS', { evidence: [] })]))).toEqual(['C1 cites no evidence']);
+    expect(problems(CLEAN, path => (path === '/run/c1.txt' ? { exists: false, mtimeMs: 0, opened: null } : fresh))).toEqual([
+      'C1 cites /run/c1.txt, which does not exist',
+    ]);
   });
 
   it('a file written before the check began is not this check’s evidence', () => {
-    const stale = evidenceProblems(parseAppCheck(CLEAN), STARTED, cited =>
-      cited === 'c1-post.txt' ? { ...fresh, mtimeMs: STARTED - 60_000 } : fresh
-    );
-    expect(stale).toEqual(['C1 cites c1-post.txt, which was written before this check began']);
+    expect(problems(CLEAN, path => (path === '/run/c1.txt' ? { ...fresh, mtimeMs: STARTED - 60_000 } : fresh))).toEqual([
+      'C1 cites /run/c1.txt, written before this check began',
+    ]);
   });
 
-  it('an image cited but never opened is not evidence', () => {
-    const unopened = evidenceProblems(parseAppCheck(CLEAN), STARTED, cited =>
-      cited === 'h1.png' ? { ...fresh, opened: false } : fresh
-    );
-    expect(unopened).toEqual(['H1 cites the image h1.png, which the app check never opened']);
+  it('an image cited but never opened is not evidence (seen live: North Star #399 screenshots)', () => {
+    const look = (path: string): CitedFile => (path.endsWith('.png') ? { ...fresh, opened: false } : fresh);
+    expect(problems(CLEAN, look)).toEqual([
+      'H1 cites the image /run/h1.png, which the app check never opened',
+      'P1 cites the image /run/p1.png, which the app check never opened',
+    ]);
+    // Without a run log nothing can say, so the rule does not apply.
+    expect(problems(CLEAN, () => ({ ...fresh, opened: null }))).toEqual([]);
   });
 
   it('Overall PASS over a new defect is refused (the observed defect graded PASS)', () => {
-    const report = parseAppCheck(
-      CLEAN.replace(
-        'DEFECTS SEEN: none',
-        'DEFECTS SEEN\nD1 NEW  walking into the shut gate carries the player through it  [evidence: d1.png]'
-      )
-    );
-    expect(evidenceProblems(report, STARTED, () => fresh)).toEqual(['Overall says PASS over D1']);
+    const lines = [line('P2', 'probe', 'SURPRISE', { defect: 'D1' }), line('D1', 'defect', 'DEFECT')];
+    expect(problems(report(lines))).toEqual(['Overall says PASS over D1']);
+    expect(problems(report(lines, 'FAIL'))).toEqual([]);
   });
 
-  it('a pre-existing holdout failure needs its citation to leave Overall PASS standing', () => {
-    const cited = parseAppCheck(
-      CLEAN.replace('H1 PASS  notes', 'H1 FAIL (pre-existing: baseline 2026-10-17 row 2)  notes')
-    );
-    expect(evidenceProblems(cited, STARTED, () => fresh)).toEqual([]);
-    const bare = parseAppCheck(CLEAN.replace('H1 PASS  notes', 'H1 FAIL (pre-existing)  notes'));
-    expect(evidenceProblems(bare, STARTED, () => fresh)).toEqual(['Overall says PASS over H1']);
-    const deviated = parseAppCheck(CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE  notes'));
-    expect(evidenceProblems(deviated, STARTED, () => fresh)).toEqual(['Overall says PASS over H1']);
-    // Seen live: a timing holdout neither the change nor main could finish on a loaded machine.
-    const sharedLoad = parseAppCheck(
-      CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE (pre-existing: main-motion.txt)  notes')
-    );
-    expect(evidenceProblems(sharedLoad, STARTED, () => fresh)).toEqual([]);
-    expect(gate(CLEAN.replace('H1 PASS  notes', 'H1 INCOMPLETE (pre-existing: main-motion.txt)  notes'))).toEqual([
-      'H1 is a failure the default branch has too, but no issue that exists tracks it',
-    ]);
+  it('a probe surprise must name its defect line', () => {
+    expect(problems(report([line('P2', 'probe', 'SURPRISE')]))).toEqual(['P2 is a surprise that names no defect line']);
   });
 
-  it('a probe surprise must name its defect line, and the defects section must be there', () => {
-    const report = parseAppCheck(
-      CLEAN.replace('P1 OK  empty list', 'P1 SURPRISE  empty list').replace('DEFECTS SEEN: none\n', '')
-    );
-    expect(evidenceProblems(report, STARTED, () => fresh)).toEqual([
-      'P1 is a surprise with no DEFECTS SEEN line (write it as SURPRISE (D<n>))',
-      'the report has no DEFECTS SEEN section (write "DEFECTS SEEN: none" when there are none)',
-    ]);
+  it('a holdout the default branch cannot finish either leaves Overall PASS standing (seen live: #400 H2)', () => {
+    const shared = line('H2', 'holdout', 'INCOMPLETE', { pre_existing: 'default-branch run under the same load: /run/main-h2.txt' });
+    expect(problems(report([shared]))).toEqual([]);
+    expect(problems(report([{ ...shared, pre_existing: '' }]))).toEqual(['Overall says PASS over H2']);
   });
 
   it('a carried line needs no new evidence; NO PR needs none at all', () => {
-    const carried = parseAppCheck(
-      CLEAN.replace('C1 PASS  saves a note  POST /notes returned 201  [evidence: c1-post.txt]', 'C1 PASS (carried from 0123abcd)  saves a note')
-    );
-    expect(evidenceProblems(carried, STARTED, () => fresh)).toEqual([]);
-    expect(evidenceProblems(parseAppCheck('NO PR nothing was pushed'), STARTED, () => fresh)).toEqual([]);
+    expect(problems(report([line('C1', 'criterion', 'PASS', { evidence: [], carried_from: '0123abcd' })]))).toEqual([]);
+    expect(problems(JSON.stringify({ pr: '', head: '', merged_with: '', lines: [], overall: 'NO PR', summary: 'nothing pushed' }))).toEqual([]);
+  });
+
+  it('an unreadable report never passes', () => {
+    expect(problems('not json')).toEqual(['the report has no lines']);
   });
 
   it('reads which files the app check opened from the run log', () => {
@@ -179,142 +117,107 @@ describe('evidence check', () => {
 });
 
 describe('merge gate', () => {
+  const defect = report([line('D1', 'defect', 'DEFECT')], 'FAIL');
+
   it('a clean, evidenced report merges', () => {
     expect(gate(CLEAN)).toEqual([]);
   });
 
   it('an evidence check that failed refuses the merge', () => {
-    expect(gate(CLEAN, { evidenceOk: false, evidenceProblems: 'C1 cites no evidence' })).toEqual([
+    expect(gate(CLEAN, { evidenceProblems: ['C1 cites no evidence'] })).toEqual([
       "the app check's report did not hold up: C1 cites no evidence",
     ]);
   });
 
   it('a new defect blocks unless the reviewer re-checked it with a file it wrote', () => {
-    const report = CLEAN.replace('DEFECTS SEEN: none', 'DEFECTS SEEN\nD1 NEW  the menu opens off screen  [evidence: d1.png]').replace(
-      'Overall: PASS',
-      'Overall: FAIL (D1)'
-    );
-    expect(gate(report)).toEqual(['D1 (NEW) has no re-check or default-branch proof the reviewer wrote']);
-    const claimed = parseDispositions(JSON.stringify([{ line: 'd1', action: 'rechecked', ref: 'review-d1.txt' }]));
-    expect(gate(report, { dispositions: claimed })).toEqual([
-      'D1 (NEW) has no re-check or default-branch proof the reviewer wrote',
-    ]);
-    expect(gate(report, { dispositions: claimed, reviewerFile: ref => ref === 'review-d1.txt' })).toEqual([]);
+    expect(gate(defect)).toEqual(['D1 (DEFECT) has no re-check or default-branch proof the reviewer wrote']);
+    const claimed = disp({ line: 'd1', action: 'rechecked', file: '/run/review-d1.txt', issue: '', reason: '' });
+    expect(gate(defect, { dispositions: claimed })).toHaveLength(1);
+    expect(gate(defect, { dispositions: claimed, freshFile: path => path === '/run/review-d1.txt' })).toEqual([]);
   });
 
   it('a defect the reviewer shows is on the default branch needs a tracking issue too', () => {
-    const report = CLEAN.replace('DEFECTS SEEN: none', 'DEFECTS SEEN\nD1 NEW  the menu opens off screen  [evidence: d1.png]');
-    const noIssue = parseDispositions(JSON.stringify([{ line: 'D1', action: 'pre-existing', ref: 'main-run.txt' }]));
-    expect(gate(report, { dispositions: noIssue, reviewerFile: () => true })).toEqual([
+    const noIssue = disp({ line: 'D1', action: 'pre-existing', file: '/run/main.txt', issue: '', reason: '' });
+    expect(gate(defect, { dispositions: noIssue, freshFile: () => true })).toEqual([
       "D1 is pre-existing by the reviewer's run, but no issue that exists tracks it",
     ]);
-    const tracked = parseDispositions(JSON.stringify([{ line: 'D1', action: 'pre-existing', ref: 'main-run.txt #41' }]));
-    expect(gate(report, { dispositions: tracked, reviewerFile: () => true, issueExists: ref => ref === '#41' })).toEqual([]);
+    const tracked = disp({ line: 'D1', action: 'pre-existing', file: '/run/main.txt', issue: '#41', reason: '' });
+    expect(gate(defect, { dispositions: tracked, freshFile: () => true, issueExists: ref => ref === '#41' })).toEqual([]);
   });
 
   it('a failure the default branch already has merges only with an issue that exists', () => {
-    const report = CLEAN.replace('H1 PASS  notes', 'H1 FAIL (pre-existing: baseline row 2)  notes');
-    expect(gate(report)).toEqual(['H1 is a failure the default branch has too, but no issue that exists tracks it']);
-    const linked = parseDispositions(JSON.stringify([{ line: 'H1', action: 'issue', ref: '#12' }]));
-    expect(gate(report, { dispositions: linked, issueExists: () => false })).toHaveLength(1);
-    expect(gate(report, { dispositions: linked, issueExists: () => true })).toEqual([]);
-    // Seen live: the reviewer called it pre-existing with its own run and the issue.
-    const named = parseDispositions(JSON.stringify([{ line: 'H1', action: 'pre-existing', ref: 'main-run.txt #12' }]));
-    expect(gate(report, { dispositions: named, issueExists: ref => ref === '#12' })).toEqual([]);
+    const json = report([line('H1', 'holdout', 'FAIL', { pre_existing: 'baseline row 2' })]);
+    expect(gate(json)).toEqual(['H1 is a failure the default branch has too, but no issue that exists tracks it']);
+    // Seen live: the reviewer named the issue under either action; the issue is what counts.
+    for (const action of ['issue', 'pre-existing']) {
+      const linked = disp({ line: 'H1', action, file: '', issue: '#12', reason: '' });
+      expect(gate(json, { dispositions: linked })).toHaveLength(1);
+      expect(gate(json, { dispositions: linked, issueExists: ref => ref === '#12' })).toEqual([]);
+    }
   });
 
-  it('a failed criterion cannot be dispositioned away with "blocks" and merged', () => {
-    const report = CLEAN.replace('C1 PASS', 'C1 FAIL').replace('Overall: PASS', 'Overall: FAIL (C1)');
-    const blocks = parseDispositions(JSON.stringify([{ line: 'C1', action: 'blocks', ref: '' }]));
-    const unmet =
-      'C1 (FAIL): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item';
-    expect(gate(report, { dispositions: blocks, reviewerFile: () => true })).toEqual([unmet]);
-    // Seen live (North Star #399): the default branch lacking it too does not excuse it.
-    const preExisting = parseDispositions(
-      JSON.stringify([{ line: 'C1', action: 'pre-existing', ref: 'main.txt #404' }])
-    );
-    expect(gate(report, { dispositions: preExisting, reviewerFile: () => true, issueExists: () => true })).toEqual([
-      unmet,
-    ]);
+  it('a failed criterion is never pre-existing (seen live: North Star #399 C2)', () => {
+    const json = report([line('C1', 'criterion', 'FAIL', { pre_existing: 'the default branch lacks it too' })], 'FAIL');
+    expect(blocksPass(readAppCheck(json).lines[0])).toBe(true);
+    const unmet = 'C1 (FAIL): a criterion of this work item is not met. Deliver it in this pull request, or ask the owner to narrow the work item';
+    const preExisting = disp({ line: 'C1', action: 'pre-existing', file: '/run/main.txt', issue: '#404', reason: '' });
+    expect(gate(json, { dispositions: preExisting, freshFile: () => true, issueExists: () => true })).toEqual([unmet]);
+    const blocks = disp({ line: 'C1', action: 'blocks', file: '', issue: '', reason: '' });
+    expect(gate(json, { dispositions: blocks, freshFile: () => true })).toEqual([unmet]);
     // The reviewer's own re-check showing it met still clears it.
-    const rechecked = parseDispositions(JSON.stringify([{ line: 'C1', action: 'rechecked', ref: 'recheck.md' }]));
-    expect(gate(report, { dispositions: rechecked, reviewerFile: () => true })).toEqual([]);
+    const rechecked = disp({ line: 'C1', action: 'rechecked', file: '/run/recheck.md', issue: '', reason: '' });
+    expect(gate(json, { dispositions: rechecked, freshFile: () => true })).toEqual([]);
   });
 
   it('a shipping pipeline whose review step failed never merges (the #362 case)', () => {
     const log = [
       JSON.stringify({ step: 'ship__deliver__review__code', type: 'node_complete' }),
-      JSON.stringify({
-        step: 'ship__deliver__review__synthesize',
-        type: 'node_error',
-        error: 'the artifact pointer at $.report refers to a file that does not exist',
-      }),
+      JSON.stringify({ step: 'ship__deliver__review__synthesize', type: 'node_error', error: 'the artifact pointer at $.report refers to a file that does not exist' }),
       JSON.stringify({ step: 'check-app', type: 'node_error', error: 'not a ship node' }),
     ].join('\n');
     const failures = shipFailuresInLog(log);
-    expect(failures).toEqual([
-      'ship__deliver__review__synthesize: the artifact pointer at $.report refers to a file that does not exist',
-    ]);
-    expect(gate(CLEAN, { shipFailures: failures })).toEqual([
-      "the shipping pipeline's ship__deliver__review__synthesize: the artifact pointer at $.report refers to a file that does not exist failed",
-    ]);
+    expect(failures).toEqual(['ship__deliver__review__synthesize: the artifact pointer at $.report refers to a file that does not exist']);
+    expect(gate(CLEAN, { shipFailures: failures })).toEqual([`the shipping pipeline's ${failures[0]} failed`]);
   });
 
   it('a question does not fail the check, but the review must decide it', () => {
-    const report = CLEAN.replace(
-      'DEFECTS SEEN: none',
-      'DEFECTS SEEN\nD1 QUESTION  a refused save drops what was typed into the edit form  [evidence: d1.txt]'
-    );
-    expect(evidenceProblems(parseAppCheck(report), STARTED, () => fresh)).toEqual([]);
-    expect(gate(report)).toEqual([
-      'D1 is an open question the review did not decide (an issue, or accepted with a reason)',
-    ]);
-    const thin = parseDispositions(JSON.stringify([{ line: 'D1', action: 'accepted', ref: 'fine' }]));
-    expect(gate(report, { dispositions: thin })).toHaveLength(1);
-    const reasoned = parseDispositions(
-      JSON.stringify([{ line: 'D1', action: 'accepted', ref: 'a locked note cannot be saved, so nothing savable is lost' }])
-    );
-    expect(gate(report, { dispositions: reasoned })).toEqual([]);
-    const filed = parseDispositions(JSON.stringify([{ line: 'D1', action: 'issue', ref: '#60' }]));
-    expect(gate(report, { dispositions: filed, issueExists: ref => ref === '#60' })).toEqual([]);
+    const json = report([line('D1', 'defect', 'QUESTION')]);
+    expect(problems(json)).toEqual([]);
+    expect(gate(json)).toEqual(['D1 is an open question the review did not decide (an issue, or accepted with a reason)']);
+    expect(gate(json, { dispositions: disp({ line: 'D1', action: 'accepted', file: '', issue: '', reason: 'fine' }) })).toHaveLength(1);
+    const reasoned = disp({ line: 'D1', action: 'accepted', file: '', issue: '', reason: 'a locked note cannot be saved, so nothing savable is lost' });
+    expect(gate(json, { dispositions: reasoned })).toEqual([]);
+    const filed = disp({ line: 'D1', action: 'issue', file: '', issue: '#60', reason: '' });
+    expect(gate(json, { dispositions: filed, issueExists: ref => ref === '#60' })).toEqual([]);
   });
 
   it('a disposition that quotes the whole report line is matched by its id (seen live)', () => {
-    const quoted = parseDispositions(
-      JSON.stringify([{ line: 'D1 NEW Export leaves out a note’s locked state', action: 'blocks', ref: 'x.txt' }])
-    );
+    const quoted = disp({ line: 'D1 NEW Export leaves out a note’s locked state', action: 'blocks', file: '', issue: '', reason: '' });
     expect([...quoted.keys()]).toEqual(['D1']);
-    expect(parseDispositions(JSON.stringify([{ line: 'D12 NEW x', action: 'issue', ref: '#1' }])).has('D12')).toBe(true);
+    expect(disp({ line: 'D12 x', action: 'issue', file: '', issue: '#1', reason: '' }).has('D12')).toBe(true);
   });
 
   it('a line the evidence check flagged is cleared only by the reviewer’s own re-check', () => {
-    const problems = 'C1 cites town.png, which does not exist\nH1 cites h1.txt, which does not exist';
-    const rechecked = parseDispositions(
-      JSON.stringify([
-        { line: 'C1', action: 'rechecked', ref: 'recheck.md' },
-        { line: 'H1', action: 'rechecked', ref: 'recheck.md' },
-      ])
-    );
-    const base = { evidenceOk: false, evidenceProblems: problems, dispositions: rechecked };
-    expect(gate(CLEAN, { ...base, reviewerFile: () => true })).toEqual([]);
-    expect(gate(CLEAN, { ...base, reviewerFile: () => false })).toHaveLength(1);
-    const half = parseDispositions(JSON.stringify([{ line: 'C1', action: 'rechecked', ref: 'recheck.md' }]));
-    expect(gate(CLEAN, { ...base, dispositions: half, reviewerFile: () => true })).toEqual([
-      "the app check's report did not hold up: H1 cites h1.txt, which does not exist",
+    const flagged = ['C1 cites /run/town.png, which does not exist', 'H1 cites /run/h1.txt, which does not exist'];
+    const recheck = (id: string): Record<string, string> => ({ line: id, action: 'rechecked', file: '/run/recheck.md', issue: '', reason: '' });
+    const base = { evidenceProblems: flagged, dispositions: disp(recheck('C1'), recheck('H1')) };
+    expect(gate(CLEAN, { ...base, freshFile: () => true })).toEqual([]);
+    expect(gate(CLEAN, { ...base, freshFile: () => false })).toHaveLength(1);
+    expect(gate(CLEAN, { ...base, dispositions: disp(recheck('C1')), freshFile: () => true })).toEqual([
+      `the app check's report did not hold up: ${flagged[1]}`,
     ]);
     // A problem with the report as a whole has no re-check that clears it.
-    expect(
-      gate(CLEAN, { ...base, evidenceProblems: 'Overall says PASS over D1', reviewerFile: () => true })
-    ).toHaveLength(1);
+    expect(gate(CLEAN, { ...base, evidenceProblems: ['Overall says PASS over D1'], freshFile: () => true })).toHaveLength(1);
   });
 
   it('malformed dispositions are ignored, never trusted', () => {
     expect(parseDispositions('not json').size).toBe(0);
     expect(parseDispositions('{"line":"D1"}').size).toBe(0);
-    expect(parseDispositions('[null, {"line": 3}, {"line":"h1","action":"issue","ref":"#2"}]').get('H1')).toEqual({
-      line: 'H1',
+    expect(parseDispositions('[null, {"line": 3}, {"line":"h1","action":"issue","issue":"#2"}]').get('H1')).toEqual({
       action: 'issue',
-      ref: '#2',
+      file: '',
+      issue: '#2',
+      reason: '',
     });
   });
 });
@@ -333,11 +236,12 @@ describe('loop wiring', () => {
     const checkApp = node('check-app');
     expect(checkApp).not.toContain('$build.output');
     expect(checkApp).not.toContain('$ship.output');
+    expect(checkApp).toContain('output_format');
     const prompt = readFileSync(resolve(pack, 'loop/commands/loop-check-app.md'), 'utf8');
     expect(prompt).not.toContain('$INPUTS.builder');
     expect(prompt).not.toContain('$INPUTS.ship');
-    expect(prompt).toContain('DEFECTS SEEN');
-    expect(prompt).toContain('PROBES');
+    expect(prompt).toContain('**Probes.**');
+    expect(prompt).toContain('QUESTION');
   });
 
   it('the merge goes through the gate: review decides, land merges, deploy follows land', () => {
@@ -348,5 +252,11 @@ describe('loop wiring', () => {
     const review = readFileSync(resolve(pack, 'loop/commands/loop-review.md'), 'utf8');
     expect(review).toContain('Never run `gh pr merge` yourself');
     expect(review).not.toMatch(/gh pr merge <n> --squash/);
+  });
+
+  it('shared pack text names no particular wrapper around Archon', () => {
+    for (const file of ['manager/commands/manage.md', 'loop/commands/loop-review.md', 'loop/commands/loop-check-app.md']) {
+      expect(readFileSync(resolve(pack, file), 'utf8')).not.toMatch(/consumer\.py|factory\//);
+    }
   });
 });

@@ -128,8 +128,8 @@ nodes:
       target: "$pick.output.target"
       publish: "false"
 
-  # What the app check tests, as facts: the pull request, its head, the files it changes
-  # and how it stands against the current default branch. The builder's report and the
+  # What the app check tests, as facts: the pull request, its head, its base and the
+  # files it changes. The builder's report and the
   # pull request's description are read here only to find the pull request; the app
   # check never sees them, so it tests what the change does, not what it says it does.
   - id: subject
@@ -149,14 +149,13 @@ nodes:
         pr: { type: string }
         head: { type: string }
         base: { type: string }
-        behind: { type: string }
-        conflicts: { type: string }
         files: { type: string }
         started: { type: string }
-      required: [pr, head, base, behind, conflicts, files, started]
+      required: [pr, head, base, files, started]
 
   # Black-box check: runs the app against the contract and the holdout before it
-  # reads any diff, on the pull request merged with the current default branch.
+  # reads any diff, on the pull request merged with the current default branch. Its
+  # report is structured, so the evidence check and the merge gate read lines, not prose.
   - id: check-app
     command: loop-check-app
     context: fresh
@@ -168,11 +167,32 @@ nodes:
       pr: "$subject.output.pr"
       head: "$subject.output.head"
       base: "$subject.output.base"
-      behind: "$subject.output.behind"
-      conflicts: "$subject.output.conflicts"
       files: "$subject.output.files"
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
+    output_format:
+      type: object
+      properties:
+        pr: { type: string }
+        head: { type: string }
+        merged_with: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              kind: { type: string, enum: [criterion, holdout, probe, defect] }
+              verdict: { type: string, enum: [PASS, FAIL, INCOMPLETE, OK, SURPRISE, DEFECT, QUESTION] }
+              text: { type: string }
+              evidence: { type: array, items: { type: string } }
+              pre_existing: { type: string }
+              defect: { type: string }
+              carried_from: { type: string }
+            required: [id, kind, verdict, text, evidence, pre_existing, defect, carried_from]
+        overall: { type: string, enum: [PASS, FAIL, NO PR] }
+        summary: { type: string }
+      required: [pr, head, merged_with, lines, overall, summary]
 
   # No model: every line of the app check's report must cite evidence written during
   # the check, every cited image must have been opened, and Overall must agree with
@@ -212,7 +232,6 @@ nodes:
       app_check: "$check-app.output"
       evidence_ok: "$evidence.output.ok"
       evidence_problems: "$evidence.output.problems"
-      behind: "$subject.output.behind"
       runtime: "$INPUTS.runtime"
       merge: "$INPUTS.merge"
       rejections: "$INPUTS.rejections"
@@ -229,20 +248,22 @@ nodes:
             type: object
             properties:
               line: { type: string }
-              action: { type: string, enum: [issue, pre-existing, rechecked, accepted, blocks] }
-              ref: { type: string }
-            required: [line, action, ref]
+              action: { type: string, enum: [blocks, rechecked, pre-existing, issue, accepted] }
+              file: { type: string }
+              issue: { type: string }
+              reason: { type: string }
+            required: [line, action, file, issue, reason]
         reason: { type: string }
       required: [outcome, pr, sha, delivers, dispositions, reason]
 
   # The merge gate (no model). Merges the reviewed commit only when the evidence held,
   # every failing line has the reviewer's re-check or default-branch proof, every
-  # pre-existing failure has an issue, no shipping node failed, and the commit
-  # contains the current default branch. Otherwise it says why on the pull request.
+  # pre-existing failure and question is tracked or decided, no shipping node failed,
+  # and the commit contains the current default branch. Otherwise it says why.
   - id: land
     script: land
     runtime: bun
-    depends_on: [subject, check-app, evidence, review]
+    depends_on: [check-app, evidence, review]
     when: "$review.output.outcome == 'merge' && $INPUTS.merge == 'auto'"
     with:
       pr: "$review.output.pr"
@@ -252,7 +273,6 @@ nodes:
       route: "$pick.output.route"
       target: "$pick.output.target"
       report: "$check-app.output"
-      evidence_ok: "$evidence.output.ok"
       evidence_problems: "$evidence.output.problems"
       review_started: "$evidence.output.checked_at"
     output_format:

@@ -15,11 +15,23 @@ subject:
   pr: "https://github.com/example/app/pull/9"
   head: "abc1234"
   base: main
-  behind: "0"
-  conflicts: "false"
   files: "app/notes.py"
   started: "1700000000000"
-check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234 merged with main at abc1234\nC1 PASS  saves a note  POST /notes returned 201  [evidence: c1.txt]\nDEFECTS SEEN: none\nOverall: PASS"
+check-app:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  merged_with: "abc1234"
+  lines:
+  - id: C1
+    kind: criterion
+    verdict: PASS
+    text: "saves a note: POST /notes returned 201"
+    evidence: ["/artifacts/c1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  overall: "PASS"
+  summary: "stub: saves a note, no defects seen"
 evidence:
   ok: "true"
   problems: ""
@@ -46,7 +58,7 @@ fixture:
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"
-    review: "C1 PASS  saves a note"
+    review: "saves a note: POST /notes returned 201"
   inputs:
     runtime: "/private/run-the-app.md"
     holdout: "/private/holdout.md"

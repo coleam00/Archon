@@ -25,19 +25,17 @@ Then ask:
 The loop's runs fail in ways no single run sees: a run that never started holds a slot, a run dies on
 a passing infrastructure fault with its work intact, an app instance outlives the run that started
 it, laps spend money picking nothing. You are the only one who looks across runs, so check every
-pass. Run Archon's CLI the way this repository's factory runs it, so it is the version the loop is
-pinned to: when the repository has a factory wrapper (`factory/consumer.py`), use
-`python factory/consumer.py <command>` with the same commands as `archon workflow <command>`;
-otherwise use `archon workflow <command>`. `runs --json --limit 60` lists recent runs with their
-status, `get <id>` shows one (its working path, its nodes, and its error), and each run's log is at
-its `transcript_path`. The scheduler already abandons runs whose launch failed and releases claims
-of runs that ended; you are the backstop for what it misses.
+pass. Run Archon's CLI the way this project runs its loop (the same pinned version, if it pins
+one): `archon workflow runs --json --limit 60` lists recent runs with their status, `archon workflow
+get <id>` shows one (its working path, its nodes, and its error), and each run's log is at its
+`transcript_path`. If the project's scheduler already abandons runs whose launch failed or releases
+claims of runs that ended, you are the backstop for what it misses.
 
 - **A run that never started.** Status pending (or running with no node ever started) and no log
-  activity for 30 minutes or more: abandon it (`abandon <id>`) so its slot frees.
+  activity for 30 minutes or more: abandon it (`archon workflow abandon <id>`) so its slot frees.
 - **A run that failed on infrastructure, not on the work.** A database error, a network or provider
   outage, a crashed process, a timeout in the engine rather than in the project's checks: if its
-  worktree still has its work, resume it once (`resume <id>`). Do not resume a run
+  worktree still has its work, resume it once (`archon workflow resume <id>`). Do not resume a run
   that failed on a used-up usage limit or on the work itself (a check, a gate, a refused change), or
   one that was already resumed; record those instead. When the same fault fails runs again and
   again, it is not passing: put it in your report as a fault the loop cannot fix.

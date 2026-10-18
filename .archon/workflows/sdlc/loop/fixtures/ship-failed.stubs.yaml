@@ -40,11 +40,15 @@ subject:
   pr: ""
   head: ""
   base: ""
-  behind: "0"
-  conflicts: "false"
   files: ""
   started: "1700000000000"
-check-app: NO PR the issue has no open pull request; the pipeline stopped before publishing
+check-app:
+  pr: ""
+  head: ""
+  merged_with: ""
+  lines: []
+  overall: "NO PR"
+  summary: "the issue has no open pull request; the pipeline stopped before publishing"
 evidence:
   ok: "true"
   problems: ""
@@ -74,5 +78,5 @@ fixture:
   - review
   - release
   resolved-text-contains:
-    review: NO PR the issue has no open pull request
+    review: "the pipeline stopped before publishing"
 exec-code: true

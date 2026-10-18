@@ -53,9 +53,9 @@ Rules that make the backlog buildable in dependency order:
 3. **Honor declared scope and invariants.** If the document conflicts with current
    project guidance, leave the conflicting work out and say so.
 4. **Order by dependency, then by value.** Earlier tickets never depend on later ones.
-   The backlog is built by several workers at once, and each one can only take a
-   ticket whose dependencies are done, so a long chain leaves all but one of them
-   idle. Prefer slices that can be built side by side once the first ticket lands:
+   A ticket can only start once its dependencies are done, so a long chain makes the
+   whole backlog wait on one ticket at a time. Prefer slices that can be built side
+   by side once the first ticket lands:
    state or data and its display as separate tickets where the display can start
    from a stub, independent capabilities in parallel, and locks or limits beside the
    feature they guard rather than after it. A chain deeper than three is a sign the

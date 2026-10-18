@@ -13,9 +13,8 @@ The move this run:
 - Pull request: $INPUTS.pr
 - Builder's report (empty when the shipping pipeline built it): $INPUTS.builder
 - Shipping pipeline's outcome (empty unless the route was complex): $INPUTS.ship
-- Commits the default branch had that the head did not, before the app check: $INPUTS.behind
 
-The app check:
+The app check's structured report (read `summary` first, then every line):
 
 $INPUTS.app_check
 
@@ -28,7 +27,7 @@ $INPUTS.evidence_problems
 
 ## When there is nothing to review
 
-If the app check says `NO PR`, nothing was delivered. Leave one comment on the work item starting
+If the app check's `overall` is `NO PR`, nothing was delivered. Leave one comment on the work item starting
 `Loop review: no pull request` with what happened this run, as far as you can see it (the route,
 what the builder or pipeline reported). That comment counts as one attempt for the dispatcher. If
 the work item now has $INPUTS.rejections or more of those attempts or send-backs with no merge,
@@ -49,7 +48,7 @@ cap. On the simple and continue routes, do the same with the builder's report.
 
 - Check out the pull request's head (if another worktree holds the branch, `git checkout -B <branch> origin/<branch> --ignore-other-worktrees`) and note the commit.
 - Read the work item and its `Contract` comment, the full diff, and the builder's latest comment. Read `engineering.md` and the product document for what the project expects, and the product document's rules for the area this change touches.
-- Look for: real bugs and regressions; scope creep beyond the work item; tests disabled, skipped, loosened or deleted to get green; edits to protected files (the harness and its scenarios, the CI workflows, the mission, the product document, and any path `engineering.md` or the harness config lists as protected); anything the app check marked FAIL, INCOMPLETE or SURPRISE, and every line under DEFECTS SEEN.
+- Look for: real bugs and regressions; scope creep beyond the work item; tests disabled, skipped, loosened or deleted to get green; edits to protected files (the harness and its scenarios, the CI workflows, the mission, the product document, and any path `engineering.md` or the harness config lists as protected); anything the app check marked FAIL, INCOMPLETE or SURPRISE, and every defect line.
 - A change the work item did not ask for ("while I was here", "an extra change") is checked against the product document's rules for that area like any other change. It is scope creep unless the work item or the product document calls for it.
 - **A change to what a check judges.** If the diff changes what an in-repository check samples, skips, excuses or measures (fewer frames, ticks or claims; a new excuse or skip list; a lower threshold, tolerance or pending constant; a rule that hides part of what was checked), that is a change to the judge, not to the product. It needs the owner's approval on the work item, or a contract criterion that explicitly asks for it, and the pull request must name it. Without either, return the item to the owner and say exactly what the check would stop catching. Nobody else can grant it: not the manager, not you.
 - **Where a criterion came from.** Before you escalate over a criterion, check who wrote it: the owner (the issue body, a comment headed `Owner decision`) or the loop (a `Contract` comment restating it). A criterion the loop restated wrongly is fixed by correcting the contract, not by asking the owner.
@@ -61,19 +60,20 @@ Every finding needs reproducible evidence: a failing command and its output, or 
 
 ## Every line gets a disposition
 
-Before you decide, give every line of the app check that is not a plain PASS (every C or H line that
-is FAIL or INCOMPLETE, and every DEFECTS SEEN line, including each `QUESTION`; a probe SURPRISE is decided through the defect line it names)
-exactly one disposition, and list them in your output:
+Before you decide, give every line of the app check that is not a plain PASS or OK (every criterion
+or holdout line that is FAIL or INCOMPLETE, and every defect line, including each `QUESTION`; a
+probe SURPRISE is decided through the defect line it names) exactly one disposition, and list them
+in your output as `{line, action, file, issue, reason}`, where `line` is the id alone (`D1`, `H2`):
 
 - `blocks`: it is this change's to fix. You send the change back.
-- `rechecked`: you checked it yourself and the app check was wrong. `ref` is the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now.
-- `pre-existing`: for a holdout or defect line only (never a criterion of this work item, which this change must meet), the default branch has the same failure, which you showed. `ref` is the file in `$ARTIFACTS_DIR` where you saved your default-branch run, written now, then the issue that tracks the failure: `<file> #<number>` (an existing issue, or one you open now).
-- `accepted`: only for a `QUESTION` line you judge is not a defect. `ref` is the reason, in a sentence a reader can check against the work item or the product document.
-- `issue`: a `QUESTION` line worth doing later, or a failure the default branch has too (the app check proved it with a citation, or you did) and an open issue tracks it. `ref` is `#<number>`: an existing issue, or one you open now with what a user sees, never quoting a holdout.
+- `rechecked`: you checked it yourself and the app check was wrong. `file` is the absolute path of the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now.
+- `pre-existing`: for a holdout or defect line only (never a criterion of this work item, which this change must meet), the default branch has the same failure, which you showed. `file` is your default-branch run, saved now; `issue` is the issue that tracks the failure (`#<number>`, an existing issue or one you open now).
+- `issue`: a `QUESTION` worth doing later, or a failure the app check already proved pre-existing, with `issue` the open issue that tracks it (existing, or one you open now with what a user sees, never quoting a holdout).
+- `accepted`: only for a `QUESTION` you judge is not a defect. `reason` says why, in a sentence a reader can check against the work item or the product document.
 
 No observation leaves this review without one of these. When the evidence check above is not ok,
-the lines it names are not evidence: check those criteria yourself and record `rechecked` with your
-own file, or send the change back for another check.
+the lines it names are not evidence: check them yourself and record `rechecked` with your own
+file, or send the change back for another check.
 
 ## Decide
 
@@ -109,4 +109,4 @@ Leave exactly one comment on the pull request (or the work item, when there is n
 
 ## Output
 
-Return the structured verdict: `outcome` (`merge`, `sent-back`, `needs-owner`, `approved` or `nothing`), `pr` (the pull request URL, or empty), `sha` (the head commit for `merge`, otherwise the head you reviewed or empty), `delivers` (`all`, `part` or `none`), `dispositions` (one `{line, action, ref}` per line above, where `line` is the id alone, such as `D1` or `H2`; empty when there are none), and `reason` (one sentence).
+Return the structured verdict: `outcome` (`merge`, `sent-back`, `needs-owner`, `approved` or `nothing`), `pr` (the pull request URL, or empty), `sha` (the head commit for `merge`, otherwise the head you reviewed or empty), `delivers` (`all`, `part` or `none`), `dispositions` (one `{line, action, file, issue, reason}` per line above, empty strings where a field does not apply; an empty list when there are none), and `reason` (one sentence).

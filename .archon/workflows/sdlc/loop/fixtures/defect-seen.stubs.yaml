@@ -1,5 +1,5 @@
 # Dry-run fixture (with --exec-code: the evidence check really runs). The app check
-# saw a new defect, wrote it under DEFECTS SEEN, and still claimed Overall: PASS, the
+# saw a new defect, reported it as a defect line, and still claimed Overall: PASS, the
 # way observed defects used to be graded PASS. Its evidence files were never written
 # either. The evidence check refuses the report, and the reviewer is told why before it
 # decides; the merge gate would refuse the same report.
@@ -15,11 +15,39 @@ subject:
   pr: "https://github.com/example/app/pull/9"
   head: "abc1234"
   base: main
-  behind: "0"
-  conflicts: "false"
   files: "app/gate.py"
   started: "1700000000000"
-check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234 merged with main at abc1234\nC1 PASS  the gate reports why it is shut  the reason is shown  [evidence: c1.txt]\nPROBES\nP1 SURPRISE (D1)  shut gate / walk into it: walked straight through  [evidence: p1.png]\nDEFECTS SEEN\nD1 NEW  walking into the shut gate carries the user through it  [evidence: p1.png]\nOverall: PASS"
+check-app:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  merged_with: "abc1234"
+  lines:
+  - id: C1
+    kind: criterion
+    verdict: PASS
+    text: "the gate reports why it is shut: the reason is shown"
+    evidence: ["/artifacts/c1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  - id: P1
+    kind: probe
+    verdict: SURPRISE
+    text: "shut gate / walk into it: walked straight through"
+    evidence: ["/artifacts/p1.png"]
+    pre_existing: ""
+    defect: "D1"
+    carried_from: ""
+  - id: D1
+    kind: defect
+    verdict: DEFECT
+    text: "walking into the shut gate carries the user through it"
+    evidence: ["/artifacts/p1.png"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  overall: "PASS"
+  summary: "stub: one defect seen, graded PASS anyway"
 review:
   outcome: sent-back
   pr: "https://github.com/example/app/pull/9"
@@ -28,7 +56,9 @@ review:
   dispositions:
   - line: D1
     action: blocks
-    ref: ""
+    file: ""
+    issue: ""
+    reason: ""
   reason: "stub: D1 is this change's to fix"
 claim:
   held: "true"

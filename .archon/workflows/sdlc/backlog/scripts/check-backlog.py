@@ -67,8 +67,8 @@ def main() -> int:
         if len(ticket["body"]) < 120:
             fail(f"ticket '{key}' body is too short to be a contract")
         seen.append(key)
-    # Several workers build the backlog at once, each only on tickets whose dependencies
-    # are done, so the longest chain bounds how much of it can be built side by side.
+    # A ticket starts only once its dependencies are done, so the longest chain bounds how
+    # much of the backlog can be built side by side.
     depth: dict[str, int] = {}
     for ticket in tickets:
         depth[ticket["key"]] = 1 + max((depth[d] for d in ticket.get("depends_on", [])), default=0)
