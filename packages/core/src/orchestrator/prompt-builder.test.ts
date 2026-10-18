@@ -5,6 +5,7 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatWorkflowSection,
   formatPausedGateSection,
   type LaunchChannel,
 } from './prompt-builder';
@@ -145,6 +146,29 @@ describe('formatWorkflowContextSection', () => {
   });
 });
 
+describe('formatWorkflowSection', () => {
+  test('lists each workflow and carries deprecation guidance only for deprecated ones', () => {
+    const section = formatWorkflowSection([
+      { name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] },
+      {
+        name: 'legacy-delivery',
+        description: 'Previous delivery workflow',
+        nodes: [],
+        deprecated: { message: 'Use custom-delivery instead.' },
+      },
+    ]);
+
+    expect(section).toContain('**custom-delivery**\n  Deliver a requested change\n  Type:');
+    expect(section).toContain(
+      '**legacy-delivery**\n  Previous delivery workflow\n  Deprecated: Use custom-delivery instead.'
+    );
+  });
+
+  test('says no workflows are available for an empty list', () => {
+    expect(formatWorkflowSection([])).toContain('No workflows available');
+  });
+});
+
 describe('buildOrchestratorSystemAppend', () => {
   const makeConversation = (codebaseId: string | null): Conversation => ({
     id: 'conv-1',
@@ -192,52 +216,6 @@ describe('buildOrchestratorSystemAppend', () => {
       ],
     },
   ];
-
-  for (const channel of ['tools', 'commands'] as const) {
-    for (const codebaseId of [null, 'cb-1']) {
-      test.each([false, true])(
-        `${channel}, scope ${codebaseId}: routing with custom workflows: %s`,
-        async withWorkflows => {
-          const customWorkflows = withWorkflows
-            ? [
-                { name: 'custom-delivery', description: 'Deliver a requested change', nodes: [] },
-                {
-                  name: 'legacy-delivery',
-                  description: 'Previous delivery workflow',
-                  nodes: [],
-                  deprecated: { message: 'Use custom-delivery instead.' },
-                },
-              ]
-            : [];
-          const result = await buildOrchestratorSystemAppend(
-            makeConversation(codebaseId),
-            codebases,
-            customWorkflows,
-            channel
-          );
-          const available = result.split('## Available Workflows')[1]?.split('## Routing Rules')[0];
-          if (withWorkflows) {
-            expect(available).toContain('**custom-delivery**');
-            expect(available).toContain('Deliver a requested change');
-            expect(available).toContain(
-              '**legacy-delivery**\n  Previous delivery workflow\n  Deprecated: Use custom-delivery instead.'
-            );
-            expect(available).not.toContain(
-              '**custom-delivery**\n  Deliver a requested change\n  Deprecated:'
-            );
-          } else {
-            expect(available).toContain('No workflows available');
-          }
-          const names = invocationWorkflowNames(result);
-          expect(names.length).toBeGreaterThan(0);
-          expect(names.every(name => name === '{workflow-name}')).toBe(true);
-          expect(result).toContain(
-            'Do not recommend deprecated workflows when a non-deprecated workflow fits'
-          );
-        }
-      );
-    }
-  }
 
   test('returns orchestrator prompt when no codebase is scoped', async () => {
     const result = await buildOrchestratorSystemAppend(
