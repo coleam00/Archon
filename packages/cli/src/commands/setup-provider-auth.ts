@@ -471,7 +471,7 @@ export async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 export function writeHomePiModelConfig(model: string): void {
   // Use the paths-package version of getArchonHome so Docker (/.archon) is
-  // handled correctly — setup.ts's local getArchonHome() always returns ~/.archon.
+  // handled correctly.
   const home = pathsGetArchonHome();
   mkdirSync(home, { recursive: true });
   const configPath = join(home, 'config.yaml');

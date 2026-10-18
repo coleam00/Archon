@@ -10,7 +10,6 @@ import type {
   GateNode,
   IncludeDirective,
   WaitNode,
-  WorkflowNodeHooks,
 } from './schemas';
 import {
   isExecNode,
@@ -65,7 +64,6 @@ import type {
   WorkflowInputSpec,
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
-import { workflowNodeHooksSchema } from './schemas/hooks';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
@@ -734,9 +732,8 @@ function collectLegacyPauseWarnings(
 }
 
 /**
- * Validate and parse a single DagNode from raw YAML data.
- * Replaces the former parseDagNode + parseRetryConfig + parseToolList +
- * parseNodeHooks + parseIdleTimeout functions.
+ * Validate and parse a single DAG node from raw YAML, recording schema errors
+ * and author-facing warnings.
  */
 function parseDagNode(
   raw: unknown,
@@ -2423,40 +2420,4 @@ export function parseWorkflow(
       },
     };
   }
-}
-
-// ---------------------------------------------------------------------------
-// parseNodeHooks is preserved as an export for backward compatibility
-// (used by hooks.test.ts). The implementation now uses workflowNodeHooksSchema.
-// ---------------------------------------------------------------------------
-
-/**
- * Parse and validate per-node hooks from raw YAML input.
- * Uses workflowNodeHooksSchema internally.
- * Returns undefined for absent, empty, or invalid hooks.
- */
-export function parseNodeHooks(
-  raw: unknown,
-  context: { id: string; errors: string[] }
-): WorkflowNodeHooks | undefined {
-  if (raw === undefined) return undefined;
-
-  const result = workflowNodeHooksSchema.safeParse(raw);
-  if (!result.success) {
-    for (const issue of result.error.issues) {
-      const pathStr = issue.path.length > 0 ? `'${issue.path.join('.')}' ` : '';
-      context.errors.push(`'${context.id}': hooks ${pathStr}${issue.message}`);
-    }
-    return undefined;
-  }
-
-  // Filter out events with empty matcher arrays and return undefined for empty result
-  // (preserves original behavior: hooks is only set when there are actual matchers)
-  const filtered = Object.fromEntries(
-    Object.entries(result.data).filter(
-      ([, matchers]) => Array.isArray(matchers) && matchers.length > 0
-    )
-  ) as WorkflowNodeHooks;
-
-  return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
