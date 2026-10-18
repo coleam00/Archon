@@ -77,6 +77,7 @@ test('the persistence boundary follows resolved modules and symbols', () => {
     'const path = "store"; import(path); require(path);',
     "import '../safe';",
     "import type { contract } from '../packages/core/src/index';",
+    "import { type contract } from '../packages/core/src/index';",
   ];
   const cases = [
     ...rejected.map(source => ({ source, rejected: true })),

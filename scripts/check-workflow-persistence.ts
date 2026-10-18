@@ -140,7 +140,7 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           report(specifier, specifier.text);
           return;
         }
-        if (target && CORE_BARRELS.has(target)) {
+        if (target && CORE_BARRELS.has(target) && (names === undefined || names.length > 0)) {
           report(specifier, specifier.text, 'Core barrel');
           return;
         }
