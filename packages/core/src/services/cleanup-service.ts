@@ -959,7 +959,7 @@ export async function cleanupStaleWorktrees(
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
-  options: { includeClosed?: boolean; keepRemote?: boolean } = {}
+  options: { includeClosed?: boolean } = {}
 ): Promise<MergedCleanupResult> {
   getRegisteredPlatformPolicies();
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
@@ -1013,12 +1013,9 @@ export async function cleanupMergedWorktrees(
       continue;
     }
 
-    // Safe to remove (also delete remote branch since it's merged, unless the caller
-    // keeps remote branches: a local sweep should not change the forge on its own)
+    // Safe to remove (also delete remote branch since it's merged)
     try {
-      const removeResult = await removeEnvironment(env.id, {
-        deleteRemoteBranch: !options.keepRemote,
-      });
+      const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {

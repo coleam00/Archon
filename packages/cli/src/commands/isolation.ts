@@ -1,7 +1,6 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { resolve as resolvePath } from 'node:path';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import { loadRepoConfig } from '@archon/core';
@@ -199,40 +198,19 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
   }
 }
 
-/** Two spellings of one checkout path (separators, a trailing slash, and on Windows case). */
-function sameProjectPath(left: string, right: string): boolean {
-  const norm = (value: string): string => {
-    const resolved = resolvePath(value).replace(/\\/g, '/').replace(/\/+$/, '');
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  return norm(left) === norm(right);
-}
-
 /**
  * Cleanup merged isolation environments (branches merged into each repo's base branch)
  * Also deletes remote branches for merged environments
  */
 export async function isolationCleanupMergedCommand(
-  options: { includeClosed?: boolean; keepRemote?: boolean; project?: string } = {}
+  options: { includeClosed?: boolean } = {}
 ): Promise<void> {
-  const { project, ...sweep } = options;
   console.log('Finding environments with branches merged into their base branch...');
 
-  const listed = (await listEnvironments()).codebases;
-  // An explicit --cwd scopes the sweep to that one project. A scheduler cleaning up
-  // after its own runs must never reach into every other project on the machine, so a
-  // --cwd that names no registered project removes nothing rather than everything.
-  const codebases =
-    project === undefined
-      ? listed
-      : listed.filter(codebase => sameProjectPath(codebase.defaultCwd, project));
+  const { codebases } = await listEnvironments();
 
   if (codebases.length === 0) {
-    console.log(
-      project === undefined
-        ? 'No codebases with active environments found.'
-        : `No active environments for ${project}.`
-    );
+    console.log('No codebases with active environments found.');
     return;
   }
 
@@ -246,7 +224,7 @@ export async function isolationCleanupMergedCommand(
       const result = await cleanupMergedEnvironments(
         codebase.codebaseId,
         codebase.defaultCwd,
-        sweep
+        options
       );
 
       // The base ref comes back from the sweep that compared against it, so the

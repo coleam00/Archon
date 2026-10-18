@@ -45,7 +45,6 @@ export const cliArgOptions: CliArgOptions = {
   force: { type: 'boolean' },
   merged: { type: 'boolean' },
   'include-closed': { type: 'boolean' },
-  'keep-remote': { type: 'boolean' },
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
   all: { type: 'boolean' },

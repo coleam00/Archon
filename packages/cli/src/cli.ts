@@ -1227,9 +1227,6 @@ async function main(): Promise<number> {
             if (values.merged) {
               await isolationCleanupMergedCommand({
                 includeClosed: Boolean(values['include-closed']),
-                ...(values['keep-remote'] ? { keepRemote: true } : {}),
-                // Only an explicit --cwd scopes the sweep; without it every project is swept, as before.
-                ...(typeof values.cwd === 'string' ? { project: cwd } : {}),
               });
             } else {
               const days = parseInt(positionals[2] ?? '7', 10);
