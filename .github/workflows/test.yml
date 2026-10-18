@@ -7,6 +7,10 @@ on:
         description: 'Also run the pack script tests under .archon/scripts/'
         type: boolean
         default: false
+      pack-fixtures:
+        description: 'Also run the workflow fixtures (bun run validate --only workflow-fixtures)'
+        type: boolean
+        default: false
   push:
     branches: [main, dev]
   # Draft pull requests skip the suite: their branches are pushed many times while the
@@ -35,7 +39,6 @@ jobs:
     outputs:
       run-tests: ${{ steps.decision.outputs.run-tests }}
       run-workspace-tests: ${{ steps.decision.outputs.run-workspace-tests }}
-      run-fixtures: ${{ steps.decision.outputs.run-fixtures }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,47 +66,6 @@ jobs:
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
           run_workspace_tests=$(bun scripts/should-run-test-suite.ts --workspace-tests)
           echo "run-workspace-tests=$run_workspace_tests" >> "$GITHUB_OUTPUT"
-          run_fixtures=$(bun scripts/should-run-test-suite.ts --workflow-fixtures)
-          echo "run-fixtures=$run_fixtures" >> "$GITHUB_OUTPUT"
-
-  # Step skipping keeps both fixture jobs successful when their paths did not change.
-  workflow-fixtures:
-    needs: changes
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        if: needs.changes.outputs.run-fixtures == 'true'
-
-      - name: Setup Bun
-        if: needs.changes.outputs.run-fixtures == 'true'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Setup uv
-        if: needs.changes.outputs.run-fixtures == 'true'
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install dependencies
-        if: needs.changes.outputs.run-fixtures == 'true'
-        run: bun install --frozen-lockfile
-
-      - name: Run workflow fixtures
-        if: needs.changes.outputs.run-fixtures == 'true'
-        run: bun run validate --only workflow-fixtures
-
-      - name: Report fixture selection
-        shell: bash
-        env:
-          RUN_FIXTURES: ${{ needs.changes.outputs.run-fixtures }}
-        run: |
-          case "$RUN_FIXTURES" in
-            true) echo "Workflow fixtures selected." ;;
-            false) echo "Workflow fixtures skipped: the changes job decided they are not needed." ;;
-            *) echo "Invalid fixture decision: $RUN_FIXTURES" >&2; exit 1 ;;
-          esac
 
   # CI splits `bun run validate` across jobs by check id so the slow checks run side by side
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
@@ -288,46 +250,20 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only pack-tests
 
-  # Windows fixtures run beside the Windows tests rather than after them: they are the
-  # second-slowest Windows check, and serial they made that leg the critical path.
-  workflow-fixtures-windows:
-    name: workflow-fixtures (windows-latest)
-    needs: changes
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        if: needs.changes.outputs.run-fixtures == 'true'
-
-      - name: Setup Bun
-        if: needs.changes.outputs.run-fixtures == 'true'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Setup uv
-        if: needs.changes.outputs.run-fixtures == 'true'
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install dependencies
-        if: needs.changes.outputs.run-fixtures == 'true'
-        run: bun install --frozen-lockfile
-
-      - name: Run workflow fixtures
-        if: needs.changes.outputs.run-fixtures == 'true'
+      # Workflow fixtures dry-run the bundled workflows, almost all of them the SDLC pack's.
+      # Like the pack tests, they run only on a dispatch that sets `pack-fixtures`.
+      - name: Workflow fixtures (Linux)
+        if: inputs.pack-fixtures && runner.os == 'Linux'
         run: bun run validate --only workflow-fixtures
 
-      - name: Report fixture selection
-        shell: bash
+      - name: Workflow fixtures (Windows)
+        if: inputs.pack-fixtures && runner.os == 'Windows'
         env:
-          RUN_FIXTURES: ${{ needs.changes.outputs.run-fixtures }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
-          case "$RUN_FIXTURES" in
-            true) echo "Workflow fixtures selected." ;;
-            false) echo "Workflow fixtures skipped: the changes job decided they are not needed." ;;
-            *) echo "Invalid fixture decision: $RUN_FIXTURES" >&2; exit 1 ;;
-          esac
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only workflow-fixtures
 
   file-store-primitives-macos:
     needs: changes
@@ -636,8 +572,6 @@ jobs:
         static,
         test,
         test-scripts,
-        workflow-fixtures,
-        workflow-fixtures-windows,
         file-store-primitives-macos,
         schema-upgrade,
         postgres-parity,

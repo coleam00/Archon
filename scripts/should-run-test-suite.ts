@@ -70,20 +70,6 @@ export function shouldRunTestSuite(files: Iterable<string>): boolean {
   return false;
 }
 
-export function shouldRunWorkflowFixtures(files: Iterable<string>): boolean {
-  for (const path of files) {
-    const file = path.replaceAll('\\', '/');
-    if (
-      file.startsWith('.archon/workflows/sdlc/') ||
-      file.startsWith('packages/workflows/src/') ||
-      file === 'packages/cli/src/commands/workflow.ts' ||
-      file === 'packages/cli/src/commands/workflow-list.ts'
-    )
-      return true;
-  }
-  return false;
-}
-
 const ROOT_SCRIPTS = 'scripts/';
 
 /** The files the workspace shards' CI step runs before any package test. */
@@ -255,9 +241,9 @@ function requireSha(value: unknown, field: string): string {
  * docs-only push cancel the run a code push had started (the workflow's concurrency group
  * cancels the older run) and then skip the suite, leaving the PR head untested.
  *
- * A push spans `before` to `after`. Its suite decision comes from `proofFromPullRequestRun`, and
- * only the fixture decision still reads the push diff. A push that creates a branch has an
- * all-zero `before`, so there is nothing to compare.
+ * A push spans `before` to `after`. Its decision comes from `proofFromPullRequestRun`, never
+ * from the push diff. A push that creates a branch has an all-zero `before`, so there is nothing
+ * to compare.
  */
 export function diffRange(eventName: string, event: EventPayload): DiffRange {
   if (eventName === 'workflow_dispatch') return null;
@@ -451,7 +437,7 @@ function githubApi(env: NodeJS.ProcessEnv = process.env): GitHubGet {
   };
 }
 
-const MODES = { '--workflow-fixtures': 'fixtures', '--workspace-tests': 'workspace' } as const;
+const MODES = { '--workspace-tests': 'workspace' } as const;
 type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
 
 function readMode(args: readonly string[]): Mode {
@@ -468,7 +454,6 @@ function readMode(args: readonly string[]): Mode {
 
 const PREDICATES: Record<Mode, (files: Iterable<string>) => boolean> = {
   suite: shouldRunTestSuite,
-  fixtures: shouldRunWorkflowFixtures,
   workspace: files => {
     const changed = [...files];
     return shouldRunWorkspaceTests(changed, workspaceTestInputs(process.cwd(), changed));
@@ -497,11 +482,9 @@ async function main(): Promise<void> {
       return;
     }
     console.error(`No pull request run proves this push: ${proof.reason}.`);
-    // A push is never path-filtered for the tests; only fixtures still follow the push diff.
-    if (mode !== 'fixtures') {
-      console.log(true);
-      return;
-    }
+    // A push is never path-filtered.
+    console.log(true);
+    return;
   }
   console.log(decideFromDiff(range.base, range.head, PREDICATES[mode]));
 }
