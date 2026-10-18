@@ -5,7 +5,7 @@
  * payload accumulates across resume segments.
  *
  * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
- * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
+ * ./connection with a real adapter, conflicting with the fake in the mock-based workflow-run-*.test.ts suites.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowTerminalProperties } from '@archon/paths';

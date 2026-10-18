@@ -4,15 +4,14 @@
  *   gate.ts --method <squash|merge> --receipts <dir> --pr <url> --head <sha> [--merge]
  *
  * It reads the pull request fresh and refuses unless the trusted review verdict says
- * Ready at `head`, CI is green at `head`, no review thread is unresolved, and the pull
+ * Ready, CI is green at `head`, no review thread is unresolved, and the pull
  * request is open, not a draft, into the default branch, still at `head`, and `head`
  * contains the default branch's head. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head`, writes a
  * receipt as soon as the forge accepts the merge, and reads the merge back. A pull
  * request that reads back unmerged, as on a branch whose merges the forge queues, loses
- * its receipt and fails the gate. The record node holds the sweep to the receipts: a
- * pull request with one was merged by this run, and one the sweep says it merged must
- * have one.
+ * its receipt and fails the gate. A receipt tells the record node this run made the
+ * merge; the forge's read-back, not the receipt, says whether it merged.
  *
  * Prints one JSON document: `{pr, head, refusals, merge_commit}`. A refused merge or a
  * failed one exits nonzero; a merge whose read-back itself failed says it was made.

@@ -1,15 +1,41 @@
 /**
  * The GitHub step of `archon setup`: choosing PAT or GitHub App
- * authentication and collecting its credentials, allowlist and webhook secret.
+ * authentication and collecting its credentials, allowlist and webhook secret,
+ * then reconciling that choice with the GitHub auth already in both Archon env
+ * files and checking the mode the written configuration will activate.
  */
-import { confirm, isCancel, log, note, password, select, spinner, text } from '@clack/prompts';
-import { readFileSync } from 'fs';
+import {
+  cancel,
+  confirm,
+  isCancel,
+  log,
+  note,
+  password,
+  select,
+  spinner,
+  text,
+} from '@clack/prompts';
+import { existsSync, readFileSync } from 'fs';
+import { parse as parseDotenv, type DotenvParseOutput } from 'dotenv';
 import { resolve } from 'path';
 import { randomBytes, createPrivateKey } from 'crypto';
 import { spawnSync } from 'child_process';
 import { execFileAsync } from '@archon/git';
 import { expandTilde } from '@archon/paths';
-import { cancelSetup, type GitHubConfig } from './setup-shared';
+import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
+import {
+  GITHUB_APP_CREDENTIAL_KEYS,
+  GITHUB_PAT_KEYS,
+  selectGitHubAuthMode,
+} from '@archon/core/utils/github-auth-mode';
+import {
+  cancelSetup,
+  exitSetup,
+  type GitHubConfig,
+  type SetupConfig,
+  type SetupOptions,
+} from './setup-shared';
+import { hasCompleteAppCredential, mergeScopedEnv, resolveScopedEnvPath } from './setup-env';
 
 /**
  * Generate a cryptographically secure webhook secret
@@ -223,4 +249,132 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
     allowedUsers: allowedUsers || '',
     botMention,
   };
+}
+
+/** What `reconcileGitHubAuth` found in the env files, read again by the write step. */
+export interface GitHubAuthReconciliation {
+  replaceGitHubAuth: boolean;
+  otherGitHubEnv: DotenvParseOutput;
+  saved: DotenvParseOutput;
+}
+
+/**
+ * Check the collected GitHub choice against the GitHub auth already saved in
+ * the target env file and the other scope's env file. Exits setup on a
+ * conflict it cannot resolve, and asks before replacing the saved auth mode.
+ */
+export async function reconcileGitHubAuth(
+  config: SetupConfig,
+  {
+    scope,
+    force,
+    repoPath,
+    targetEnvPath,
+  }: { scope: 'home' | 'project'; force: boolean; repoPath: string; targetEnvPath: string }
+): Promise<GitHubAuthReconciliation> {
+  let replaceGitHubAuth = false;
+  const otherEnvPath = resolveScopedEnvPath(scope === 'home' ? 'project' : 'home', repoPath);
+  const otherGitHubEnv =
+    otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)
+      ? parseDotenv(readFileSync(otherEnvPath, 'utf8'))
+      : {};
+  const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
+  if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
+    cancel(
+      `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
+    );
+    exitSetup(1);
+  }
+  if (config.platforms.github) {
+    const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
+    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
+      const other = otherGitHubEnv;
+      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+      if (conflictingKeys.some(key => other[key])) {
+        cancel(
+          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
+        );
+        exitSetup(1);
+      }
+    }
+    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+    const replacePartialApp =
+      config.github?.mode === 'app' &&
+      !hasCompleteAppCredential(saved) &&
+      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
+    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
+      const approved = await confirm({
+        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+        initialValue: false,
+      });
+      if (isCancel(approved) || !approved) {
+        cancel('Setup cancelled. Existing configuration was not changed.');
+        exitSetup(0);
+      }
+      replaceGitHubAuth = true;
+    }
+  }
+  return { replaceGitHubAuth, otherGitHubEnv, saved };
+}
+
+/**
+ * Throw when the env that results from writing `envContent`, layered with the
+ * inherited environment and the other scope's env file, would not activate
+ * the GitHub auth mode setup configured.
+ */
+export function assertEffectiveGitHubAuth(
+  config: SetupConfig,
+  envContent: string,
+  {
+    scope,
+    force,
+    targetEnvPath,
+    replaceGitHubAuth,
+    inheritedEnv,
+    otherGitHubEnv,
+    saved,
+  }: GitHubAuthReconciliation & {
+    scope: 'home' | 'project';
+    force: boolean;
+    targetEnvPath: string;
+    inheritedEnv: NonNullable<SetupOptions['inheritedEnv']>;
+  }
+): void {
+  const selected = parseDotenv(
+    !force && existsSync(targetEnvPath)
+      ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth).content
+      : envContent
+  );
+  const effective = {
+    ...inheritedEnv,
+    ...(scope === 'project' ? otherGitHubEnv : selected),
+    ...(scope === 'project' ? selected : otherGitHubEnv),
+  };
+  const mode = selectGitHubAuthMode(effective);
+  if (config.github?.mode === 'pat' && mode.kind !== 'pat') {
+    throw new Error(
+      mode.kind === 'conflict'
+        ? mode.message
+        : 'Effective GitHub configuration does not activate PAT mode. Check GITHUB_TOKEN and WEBHOOK_SECRET in the environment and both Archon env files.'
+    );
+  }
+  if (
+    config.github?.mode === 'app' ||
+    (!config.github &&
+      mode.kind !== 'pat' &&
+      [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
+        GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
+      ))
+  ) {
+    if (mode.kind !== 'app') {
+      throw new Error(
+        mode.kind === 'conflict'
+          ? mode.message
+          : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
+      );
+    }
+    if (!loadGitHubAppConfig(effective)) {
+      throw new Error('Effective GitHub App configuration could not be loaded.');
+    }
+  }
 }

@@ -78,23 +78,23 @@ export async function generateAndSetTitle(
     const title = cleanTitle(generatedTitle);
 
     if (!title) {
-      getLog().warn({ conversationDbId, raw: generatedTitle }, 'title.generate_empty');
+      getLog().warn({ conversationDbId }, 'title.generate_empty');
       const fallback = truncateMessage(userMessage);
       await conversationDb.updateConversationTitle(conversationDbId, fallback);
       return;
     }
 
     await conversationDb.updateConversationTitle(conversationDbId, title);
-    getLog().info({ conversationDbId, title }, 'title.generate_completed');
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, conversationDbId }, 'title.generate_failed');
+    getLog().info({ conversationDbId }, 'title.generate_completed');
+  } catch {
+    // Provider and database errors can echo the prompt or title.
+    getLog().warn({ conversationDbId }, 'title.generate_failed');
     // Fire-and-forget — do NOT re-throw.
     // Fallback: try to set a truncated message title
     try {
       const fallback = truncateMessage(userMessage);
       await conversationDb.updateConversationTitle(conversationDbId, fallback);
-      getLog().info({ conversationDbId, title: fallback }, 'title.fallback_set');
+      getLog().info({ conversationDbId }, 'title.fallback_set');
     } catch (_fallbackErr: unknown) {
       // Double failure — just log and move on
       getLog().warn({ conversationDbId }, 'title.fallback_also_failed');

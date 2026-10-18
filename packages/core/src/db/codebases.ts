@@ -345,12 +345,12 @@ const CODEBASE_IDENTITY_LOCK = JSON.stringify(['codebase-rename']);
  * and future runs across different roots.
  *
  * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
- * for `--project` and `/update-project`, so a duplicate is refused too. The
- * duplicate check lives in the UPDATE itself. On PostgreSQL that is not enough:
- * under READ COMMITTED two concurrent UPDATEs of different rows each evaluate
- * NOT EXISTS without seeing the other, so renames also take an advisory lock.
- * The waiting rename's UPDATE then reads a fresh snapshot that includes the
- * winner. SQLite serializes writers already.
+ * for `--project` and `/update-project`, so a name another project already uses
+ * is refused, compared by `toLowerCase()` as registration does. A project may
+ * still change the case of its own name. The check reads every name inside the
+ * transaction, after the PostgreSQL identity lock that registrations share, so
+ * a concurrent rename or registration cannot claim the name between the check
+ * and the UPDATE. SQLite retries a transaction whose read snapshot went stale.
  */
 export async function renameCodebase(id: string, name: string): Promise<Codebase> {
   const current = await getCodebase(id);
@@ -369,21 +369,27 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
     );
   }
 
-  const result = await getDatabase().withTransaction(async query => {
+  await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'postgresql') {
       await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         CODEBASE_IDENTITY_LOCK,
       ]);
     }
-    return query(
-      `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
-        'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+    const others = await query<Pick<Codebase, 'name'>>(
+      'SELECT name FROM remote_agent_codebases WHERE id <> $1',
+      [id]
+    );
+    const requested = name.toLowerCase();
+    if (others.rows.some(other => other.name.toLowerCase() === requested)) {
+      throw new CodebaseNameTakenError(name);
+    }
+    await query(
+      `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2`,
       [name, id]
     );
   });
   const renamed = await getCodebase(id);
   if (!renamed) throw new CodebaseNotFoundError(id);
-  if ((result.rowCount ?? 0) === 0) throw new CodebaseNameTakenError(name);
   getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
   return renamed;
 }
