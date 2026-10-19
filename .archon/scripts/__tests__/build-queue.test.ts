@@ -545,13 +545,19 @@ describe('the build queue scripts', () => {
   test("a maintainer's choice is written into the issue body as a dated scope section, and the next launch starts from it", () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const ruled = run(at, 'ruling', {
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_ASKED: ASKED,
       INPUTS_CHOICE: 'relax',
       INPUTS_TEXT: 'Only for this item.',
+      ARCHON_CALL_LOG: calls,
     });
     const output = ok(ruled);
+    // The answer continues the item at once, on the run config the answered run started with.
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
+    expect(output.summary).toContain('next round started at once (run launched-archon-build-queue)');
     const heading = output.section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)$/);
     expect(ruled.bodies).toEqual([

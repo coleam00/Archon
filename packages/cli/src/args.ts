@@ -85,6 +85,7 @@ export const cliArgOptions: CliArgOptions = {
   // Repeatable sparse tier/@alias rebinding for one workflow invocation (#2481).
   model: { type: 'string', multiple: true },
   config: { type: 'string' },
+  'config-from-run': { type: 'string' },
   host: { type: 'string' },
   'delivery-id': { type: 'string' },
   inputs: { type: 'string' },

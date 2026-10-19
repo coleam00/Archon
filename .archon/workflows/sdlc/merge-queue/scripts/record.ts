@@ -43,7 +43,8 @@ import {
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { readMaintainers, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
+import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   readonly item: QualifiedPr | null;
