@@ -11,6 +11,10 @@ interface RunActionBarProps {
   run: Run;
 }
 
+function offersRunningAbandon(run: Run, cancelRefused: boolean): boolean {
+  return run.status === 'running' && (cancelRefused || run.ownerObservation === 'unreachable');
+}
+
 /**
  * Sticky bottom action bar. Contents are state-sensitive:
  *   running   → Cancel; Abandon too when the server reports the owner unreachable or
@@ -98,7 +102,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : null}
 
-        {run.status === 'running' && (cancelRefused || run.ownerObservation === 'unreachable') ? (
+        {offersRunningAbandon(run, cancelRefused) ? (
           <button
             type="button"
             onClick={() => void call('abandon')}

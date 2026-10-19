@@ -39,12 +39,7 @@ export const statusLabel: Record<RunStatus, string> = {
  * default.
  */
 export function runStatusLabel(run: Run): string {
-  if (run.status === 'running' && run.toolCallAttention?.length)
-    return 'Running · tool call needs attention';
-  if (run.status === 'running' && run.ownerObservation === 'unreachable')
-    return 'Running · owner not answering';
-  if (run.status === 'running' && run.ownerObservation === 'unknown')
-    return 'Running · owner unknown';
+  if (run.status === 'running') return runningStatusLabel(run);
   if (run.status === 'failed') {
     const stopReason = run.stopReason;
     if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;
@@ -54,6 +49,14 @@ export function runStatusLabel(run: Run): string {
   if (run.wait.kind === 'attention') return 'Waiting for action';
   if (run.wait.kind === 'quota') return 'Waiting for provider limit';
   return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
+}
+
+// A stalled tool call outranks the owner state: it is the one the operator can act on.
+function runningStatusLabel(run: Run): string {
+  if (run.toolCallAttention?.length) return 'Running · tool call needs attention';
+  if (run.ownerObservation === 'unreachable') return 'Running · owner not answering';
+  if (run.ownerObservation === 'unknown') return 'Running · owner unknown';
+  return statusLabel.running;
 }
 
 /**
@@ -67,6 +70,14 @@ export function isRunLive(run: Pick<Run, 'status' | 'ownerObservation'>): boolea
     run.ownerObservation !== 'unreachable' &&
     run.ownerObservation !== 'unknown'
   );
+}
+
+/** A running run that is not live counts its time from launch, not as live progress. */
+export function runElapsedLabel(
+  run: Pick<Run, 'status' | 'ownerObservation'>,
+  elapsed: string
+): string {
+  return run.status === 'running' && !isRunLive(run) ? `since launch ${elapsed}` : elapsed;
 }
 
 /** Why a running run is not shown as live, for the surfaces that have room to say so. */

@@ -2,7 +2,8 @@ import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
-import { LiveDot } from './LiveDot';
+import { RunningDot } from './LiveDot';
+import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
 import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
@@ -10,12 +11,7 @@ import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import {
-  isRunLive,
-  ownerObservationHint,
-  statusTextClass,
-  runStatusLabel,
-} from '../lib/run-status';
+import { isRunLive, runElapsedLabel, statusTextClass, runStatusLabel } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 import * as skill from '../skills';
 import { invalidate } from '../store/cache';
@@ -23,6 +19,20 @@ import { K } from '../store/keys';
 
 /** Present + non-empty — narrows `string | null | undefined` to `string`. */
 const hasValue = (v: string | null | undefined): v is string => v != null && v !== '';
+
+function activeNodesLabel(count: number, live: boolean): string {
+  const noun = count === 1 ? 'node' : 'nodes';
+  return live ? noun : `last recorded ${noun}`;
+}
+
+/** The blinking cursor after the last tool name that reads as "still working". */
+function ToolCursor({ live }: { live: boolean }): ReactElement | null {
+  return live ? (
+    <span aria-hidden className="ml-1 inline-block animate-pulse">
+      ▏
+    </span>
+  ) : null;
+}
 
 interface ActiveRunCardProps {
   run: Run;
@@ -63,7 +73,6 @@ export function ActiveRunCard({
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const isLive = isRunLive(run);
-  const ownerHint = ownerObservationHint(run);
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
   const canOpen = !run.id.startsWith('demo-');
   const canOpenIde =
@@ -129,10 +138,8 @@ export function ActiveRunCard({
       <div className="pl-4 pr-4 py-3">
         {/* Header */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {isLive ? (
-            <LiveDot />
-          ) : run.status === 'running' ? (
-            <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--running)]" />
+          {run.status === 'running' ? (
+            <RunningDot live={isLive} />
           ) : (
             <span
               aria-hidden
@@ -162,7 +169,7 @@ export function ActiveRunCard({
               </span>
             ) : null}
             <span className="font-mono text-[11px] tabular-nums text-text-tertiary">
-              {run.status === 'running' && !isLive ? `since launch ${elapsed}` : elapsed}
+              {runElapsedLabel(run, elapsed)}
             </span>
             {canOpenIde && run.workingPath !== null ? (
               <button
@@ -183,15 +190,7 @@ export function ActiveRunCard({
           </div>
         </div>
 
-        {ownerHint !== null ? (
-          <p
-            className={`mt-1 text-[12px] ${
-              run.ownerObservation === 'unreachable' ? 'text-warning' : 'text-text-secondary'
-            }`}
-          >
-            {ownerHint}
-          </p>
-        ) : null}
+        <OwnerObservationHint run={run} className="mt-1" />
 
         <ToolCallAttentionSection run={run} />
 
@@ -210,8 +209,7 @@ export function ActiveRunCard({
             {run.status === 'running' && run.activeNodes.length > 0 ? (
               <>
                 <span className="font-mono text-text-tertiary">
-                  {isLive ? '' : 'last recorded '}
-                  {run.activeNodes.length === 1 ? 'node' : 'nodes'}
+                  {activeNodesLabel(run.activeNodes.length, isLive)}
                 </span>
                 <span className="font-mono text-text-primary">{run.activeNodes.join(', ')}</span>
               </>
@@ -221,11 +219,7 @@ export function ActiveRunCard({
                 <span className="font-mono text-text-tertiary">tool</span>
                 <span className="font-mono text-text-primary">
                   {run.lastTool}
-                  {isLive ? (
-                    <span aria-hidden className="ml-1 inline-block animate-pulse">
-                      ▏
-                    </span>
-                  ) : null}
+                  <ToolCursor live={isLive} />
                 </span>
               </>
             ) : null}

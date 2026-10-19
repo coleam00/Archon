@@ -44,8 +44,8 @@ export interface Run {
   origin: RunOrigin;
   status: RunStatus;
   /**
-   * What the server observes about a running run's execution owner. Null when it makes
-   * no claim: the run is not running, or the payload carries no observation.
+   * What the server observes about a running run's execution owner. Null or absent when it
+   * makes no claim: the run is not running, or the payload carries no observation.
    */
   ownerObservation?: components['schemas']['DashboardWorkflowRun']['owner_observation'];
   attention: components['schemas']['WorkflowRun']['attention'];
@@ -230,7 +230,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
-    ownerObservation: raw.owner_observation ?? null,
+    ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,
     outcome: raw.outcome ?? null,
     terminalRecord: raw.terminal_record ?? null,
