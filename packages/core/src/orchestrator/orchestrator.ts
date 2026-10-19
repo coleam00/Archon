@@ -1,4 +1,3 @@
-import { surfaceBackgroundRunResult } from './background-run-result';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -56,7 +55,12 @@ import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ResolvedWorkflow, WorkflowSource } from '@archon/workflows/schemas/workflow';
+import {
+  isSourceExecutionStopped,
+  type ResolvedWorkflow,
+  type WorkflowSource,
+} from '@archon/workflows/schemas/workflow';
+import { spellWorkflowCommand } from '@archon/workflows/deps';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { createWorkflowDeps } from '../workflows/store-adapter';
@@ -706,7 +710,30 @@ async function dispatchBackgroundWorkflowOwned(
             },
           });
           await closeRunLiveOwner();
-          await surfaceBackgroundRunResult(ctx.platform, ctx.conversationId, workflow.name, result);
+          try {
+            if (isSourceExecutionStopped(result)) {
+              await ctx.platform.sendMessage(
+                ctx.conversationId,
+                `Source execution stopped for run ${result.workflowRunId}${result.success ? '' : `: ${result.error}`}. Inspect its persisted state with \`${spellWorkflowCommand(ctx.platform, `get ${result.workflowRunId}`)}\`.`
+              );
+              return;
+            }
+            if ('paused' in result) return;
+            const text = result.success
+              ? result.summary
+              : `Workflow **${workflow.name}** failed: ${result.error}`;
+            if (!text || !result.workflowRunId) return;
+            await ctx.platform.sendMessage(ctx.conversationId, text, {
+              category: 'workflow_result',
+              segment: 'new',
+              workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+            });
+          } catch (surfaceError) {
+            getLog().warn(
+              { err: toError(surfaceError), conversationId: ctx.conversationId },
+              'workflow_output_surface_failed'
+            );
+          }
         } catch (error) {
           const err = toError(error);
           const terminalWriteFailed = error instanceof TerminalStatusWriteError;

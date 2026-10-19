@@ -349,7 +349,7 @@ export async function executeWorkflow(
     isContinuation
   );
   if (sourced.stopped) {
-    if (sourced.stopReason === 'source_release' && sourced.released) {
+    if (sourced.released) {
       await suspendReleasedSourceContainer(
         deps,
         platform,

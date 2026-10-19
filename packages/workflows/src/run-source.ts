@@ -413,14 +413,8 @@ type SourcePhase<T> =
   | { stopped: false; value: T }
   | {
       stopped: true;
-      stopReason: 'source_release';
       released: boolean;
       result: WorkflowExecutionResult;
-    }
-  | {
-      stopped: true;
-      stopReason: 'source_failure';
-      result: Extract<WorkflowExecutionResult, { success: false }>;
     };
 
 /**
@@ -504,7 +498,7 @@ export async function establishAdoptedRunSource(
     }
     return {
       stopped: true,
-      stopReason: 'source_failure',
+      released: false,
       result: failed
         ? { success: false, workflowRunId: workflowRun.id, error: message }
         : {
@@ -593,7 +587,6 @@ export async function establishRunSource(
           );
           return {
             stopped: true,
-            stopReason: 'source_release',
             released,
             result: {
               success: true,
@@ -607,7 +600,6 @@ export async function establishRunSource(
         if (current?.status === 'paused') {
           return {
             stopped: true,
-            stopReason: 'source_release',
             released,
             result: {
               success: true,
@@ -620,14 +612,12 @@ export async function establishRunSource(
         if (current?.status === 'completed') {
           return {
             stopped: true,
-            stopReason: 'source_release',
             released,
             result: { success: true, workflowRunId: workflowRun.id },
           };
         }
         return {
           stopped: true,
-          stopReason: 'source_release',
           released,
           result: {
             success: false,
