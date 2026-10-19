@@ -66,7 +66,7 @@ probe SURPRISE is decided through the defect line it names) exactly one disposit
 in your output as `{line, action, file, issue, reason}`, where `line` is the id alone (`D1`, `H2`):
 
 - `blocks`: it is this change's to fix. You send the change back.
-- `rechecked`: you checked it yourself and the app check was wrong. `file` is the absolute path of the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now.
+- `rechecked`: you checked it yourself and the app check was wrong. `file` is the absolute path of the file in `$ARTIFACTS_DIR` where you saved what you ran and saw, written now. Only a run you finished and observed counts: a claim quoted from the pull request or the builder, or a run you stopped early, is not a re-check; send it back or leave the line failing instead.
 - `pre-existing`: for a holdout or defect line only (never a criterion of this work item, which this change must meet), the default branch has the same failure, which you showed. `file` is your default-branch run, saved now; `issue` is the open issue that tracks the failure (`#<number>`, an existing one or one you open now; never a pull request or a closed issue).
 - `issue`: a `QUESTION` worth doing later, or a failure the app check already proved pre-existing, with `issue` the open issue that tracks it (existing, or one you open now with what a user sees, never quoting a holdout).
 - `accepted`: only for a `QUESTION` you judge is not a defect and a user would not notice, or that the work item, the product document or an owner decision already settles. `reason` says why, in a sentence a reader can check against them. Something a user sees and could take for a fault goes to an `issue` instead.
