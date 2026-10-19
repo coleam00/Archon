@@ -17,6 +17,8 @@ facts:
   pull_request: null
   continues: null
   branch: "build/7-stub-fixture"
+  blocked: []
+  blocked_count: 0
 route:
   decision: launch
   brief: "stub: continue PR 8"

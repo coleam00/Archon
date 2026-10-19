@@ -203,7 +203,7 @@ export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }
 
-function newest<T>(entries: readonly T[]): T[] {
+export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 

@@ -484,6 +484,17 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   `--input number=123` with the config that selects Codex. An issue that cannot be
   claimed refuses the run before any agent, with why: it has no work item, another
   run holds it, or its stage and build status show it does not wait.
+- **Blocked items.** Intake's blocked verdict can go stale while work lands in
+  parallel: a blocker's outcome can arrive another way while its issue is still open.
+  When `retriage_as` names a maintainer login, a run that names no item also revisits
+  the blocked items, beside the item it builds. `facts` lists the unclaimed blocked
+  items not revisited in the last six hours, so a scheduled queue does not judge the
+  same items every run. One `revisit` agent reads each issue, what it waits on and the
+  default branch, and names the items that no longer look blocked. `retriage` adds
+  `archon-triage` to each and starts `archon-intake` detached with that label event,
+  recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
+  that login is on the maintainer list, and its verdict decides whether the item now
+  waits for the build queue. Every listed item records the revisit.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a
