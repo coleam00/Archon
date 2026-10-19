@@ -221,7 +221,7 @@ function appRepository(url: string, options: CloneOptions): { owner: string; rep
   if (!options.githubAppAuth) return null;
   const parsed = safeParseUrl(url);
   const github = new URL(resolveGitHubHost().webUrl);
-  if (!parsed || parsed.hostname !== github.hostname) return null;
+  if (!parsed || parsed.host.toLowerCase() !== github.host) return null;
   if (parsed.protocol === 'http:' && github.protocol === 'https:')
     throw new ProjectRegistrationError('GitHub App URLs require HTTPS.');
   if (parsed.protocol !== github.protocol) return null;

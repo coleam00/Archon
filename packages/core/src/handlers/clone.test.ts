@@ -502,6 +502,20 @@ describe('cloneRepository', () => {
       }
     });
 
+    test('uses installation credentials for a ported GITHUB_URL only on that port', async () => {
+      process.env.GITHUB_URL = 'https://github.example.com:8443';
+      try {
+        await cloneRepository('https://github.example.com:8443/owner/repo', options);
+        await cloneRepository('https://github.example.com/owner/other', options);
+        await cloneRepository('https://github.example.com:9000/owner/third', options);
+        expect(getInstallationToken).toHaveBeenCalledTimes(1);
+        expect(getInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+        expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toBeUndefined();
+      } finally {
+        delete process.env.GITHUB_URL;
+      }
+    });
+
     test('fixed installation preserves missing-installation guidance for clone and inspection', async () => {
       appRequest.mockClear();
       const provider = createGitHubAppAuthProvider({
