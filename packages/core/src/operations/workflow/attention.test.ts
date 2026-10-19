@@ -11,14 +11,14 @@ import {
   type WorkflowAttentionWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { validateStructuredOutput } from '@archon/workflows/structured-output';
-import { RunActionForbiddenError } from './run-authorization';
+import { RunActionForbiddenError } from '../run-authorization';
 import {
   ResumeRefusedError,
   StaleGateAnswerError,
   createWorkflowOperations,
   expectedGateForOccurrence,
   type WorkflowOperations,
-} from './workflow-operations';
+} from '../workflow-operations';
 
 const roots = trackTempRoots();
 const operator = { kind: 'operator' } as const;
