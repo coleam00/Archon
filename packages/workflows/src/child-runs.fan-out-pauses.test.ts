@@ -52,97 +52,114 @@ describe('workflow: fan-out children that pause (#4044)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
-  it('holds a source-stopped child slot until durable completion without replaying a completed sibling', async () => {
-    await writeWorkflow(
-      'stopped-fan-child',
-      `name: stopped-fan-child
+  it.each([false, true])(
+    'holds a source-stopped child slot until durable completion (child read fails=%s)',
+    async childReadFails => {
+      await writeWorkflow(
+        'stopped-fan-child',
+        `name: stopped-fan-child
 description: child
 nodes:
   - id: done
     prompt: child work
 `
-    );
-    await writeWorkflow(
-      'stopped-fan-parent',
-      fanAskParent(
+      );
+      await writeWorkflow(
         'stopped-fan-parent',
-        'stopped-fan-child',
-        '["first","second","third"]',
-        '      max_parallel: 1\n      join: all_success'
-      )
-    );
-    const store = new InMemoryStore();
-    const update = store.updateWorkflowRun;
-    let stoppedId: string | undefined;
-    let inject = true;
-    store.updateWorkflowRun = async (id, changes) => {
-      const row = store.runs.get(id)!;
-      if (
-        inject &&
-        row.workflow_name === 'stopped-fan-child' &&
-        row.user_message === 'second' &&
-        changes.metadata?.workflow_source
-      ) {
-        row.metadata.execution_claim = 'new-owner';
-        stoppedId = id;
-        throw new Error('source record rejected');
-      }
-      return update(id, changes);
-    };
-    const deps = makeDeps(store);
-    const platform = makePlatform();
-    await executeWorkflow(
-      deps,
-      platform,
-      'source-fan',
-      cwd,
-      await discover('stopped-fan-parent'),
-      'goal'
-    );
-    const parent = [...store.runs.values()].find(
-      run => run.workflow_name === 'stopped-fan-parent'
-    )!;
-    const child = store.runs.get(stoppedId!)!;
-    expect(parent.status).toBe('paused');
-    expect(child.status).toBe('running');
-    expect(child.metadata.execution_claim).toBe('new-owner');
-    expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(2);
-    expect(store.events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(0);
-    inject = false;
-    await store.completeWorkflowRun(child.id, { duration_ms: 1 });
-    const resumed = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
-    if (!resumed) throw new Error('parent not resumable');
-    await executeWorkflow(
-      deps,
-      platform,
-      'source-fan',
-      cwd,
-      await discover('stopped-fan-parent'),
-      'goal',
-      undefined,
-      resumed
-    );
-    expect(parent.status).toBe('completed');
-    expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(3);
-    const first = [...store.runs.values()].find(run => run.user_message === 'first')!;
-    expect(
-      store.events.filter(
-        event =>
-          event.workflow_run_id === first.id &&
-          event.step_name === 'done' &&
-          event.event_type === 'node_completed'
-      )
-    ).toHaveLength(1);
-    expect(
-      store.events.filter(
-        event =>
-          event.workflow_run_id === parent.id &&
-          event.step_name === 'plan' &&
-          event.event_type === 'node_completed'
-      )
-    ).toHaveLength(1);
-    expect(store.events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(0);
-  });
+        fanAskParent(
+          'stopped-fan-parent',
+          'stopped-fan-child',
+          '["first","second","third"]',
+          '      max_parallel: 1\n      join: all_success'
+        )
+      );
+      const store = new InMemoryStore();
+      const update = store.updateWorkflowRun;
+      const read = store.getWorkflowRun;
+      let stoppedId: string | undefined;
+      let inject = true;
+      store.updateWorkflowRun = async (id, changes) => {
+        const row = store.runs.get(id)!;
+        if (
+          inject &&
+          row.workflow_name === 'stopped-fan-child' &&
+          row.user_message === 'second' &&
+          changes.metadata?.workflow_source
+        ) {
+          row.metadata.execution_claim = 'new-owner';
+          stoppedId = id;
+          throw new Error('source record rejected');
+        }
+        return update(id, changes);
+      };
+      store.getWorkflowRun = async id => {
+        if (childReadFails && id === stoppedId) throw new Error('child read rejected');
+        return read(id);
+      };
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      await executeWorkflow(
+        deps,
+        platform,
+        'source-fan',
+        cwd,
+        await discover('stopped-fan-parent'),
+        'goal'
+      );
+      const parent = [...store.runs.values()].find(
+        run => run.workflow_name === 'stopped-fan-parent'
+      )!;
+      const child = store.runs.get(stoppedId!)!;
+      expect(parent.status).toBe('paused');
+      expect(child.status).toBe('running');
+      expect(child.metadata.execution_claim).toBe('new-owner');
+      expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(
+        2
+      );
+      expect(store.events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(
+        0
+      );
+      inject = false;
+      store.getWorkflowRun = read;
+      await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+      const resumed = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+      if (!resumed) throw new Error('parent not resumable');
+      await executeWorkflow(
+        deps,
+        platform,
+        'source-fan',
+        cwd,
+        await discover('stopped-fan-parent'),
+        'goal',
+        undefined,
+        resumed
+      );
+      expect(parent.status).toBe('completed');
+      expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(
+        3
+      );
+      const first = [...store.runs.values()].find(run => run.user_message === 'first')!;
+      expect(
+        store.events.filter(
+          event =>
+            event.workflow_run_id === first.id &&
+            event.step_name === 'done' &&
+            event.event_type === 'node_completed'
+        )
+      ).toHaveLength(1);
+      expect(
+        store.events.filter(
+          event =>
+            event.workflow_run_id === parent.id &&
+            event.step_name === 'plan' &&
+            event.event_type === 'node_completed'
+        )
+      ).toHaveLength(1);
+      expect(store.events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(
+        0
+      );
+    }
+  );
 
   /** A fan-out child that pauses at an approval gate only for items where `item <op> askFor`. */
   const fanAskChild = (name: string, askFor: string, op: '==' | '!=' = '=='): string => `
