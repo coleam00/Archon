@@ -15,8 +15,8 @@
 
 import { type AskedBy, type BuildAttention, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchDetached } from '../../.shared/launch.ts';
+import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
@@ -32,21 +32,6 @@ const ABOUT: Record<AskedBy, string> = {
   stop: "the build queue's question on a stopped run",
   scope: "the build queue's scope question",
 };
-
-/** Start the item's next round now; on failure the released item waits for the next queue run. */
-function continueNow(item: ReturnType<typeof parseQualifiedPr>, runId: string): string {
-  try {
-    const next = launchDetached(
-      'archon-build-queue',
-      { repo_host: item.repo.host, repo_path: item.repo.path, number: String(item.number) },
-      { configFromRun: runId }
-    );
-    return `its next round started at once (run ${next})`;
-  } catch (error) {
-    note(`issue ${String(item.number)}: the next round did not start, so the next queue run picks it up: ${error instanceof Error ? error.message : String(error)}`);
-    return 'the next queue run picks it up';
-  }
-}
 
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
@@ -89,7 +74,7 @@ function main(): void {
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? continueNow(item, runId) : 'the queue stops working it until a re-triage'}.`,
+    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? launchNextRound(item, runId) : 'the queue stops working it until a re-triage'}.`,
   });
 }
 
