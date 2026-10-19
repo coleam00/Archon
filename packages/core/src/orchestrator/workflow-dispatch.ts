@@ -84,9 +84,8 @@ import { type RunModelOverrides } from '@archon/workflows/model-validation';
 
 export interface WorkflowDispatchOptions {
   /**
-   * Declared inputs supplied by the caller (#2554), already carried this far by
-   * `HandleMessageContext.workflowInputs`. Populated only by the run route; chat
-   * platforms have no channel and leave it unset, so their behaviour is unchanged.
+   * Declared inputs supplied by the caller (#2554): the run route's
+   * `HandleMessageContext.workflowInputs`, or the chat agent's `invoke_workflow` launch.
    * Validated at the dispatch gate before any worktree/clone/AI cost.
    */
   inputs?: Readonly<Record<string, string>>;
@@ -724,8 +723,9 @@ async function runSignatureGates(
   let deferredInputError: Error | undefined;
 
   // Resolve this invocation's declared inputs from the values its channel supplied —
-  // the run route's `inputs` map today; chat platforms supply nothing and so still
-  // refuse a required-input workflow here. The workflow still lists/loads normally.
+  // the run route's `inputs` map or the chat agent's `invoke_workflow` launch. A channel
+  // that supplies nothing still refuses a required-input workflow here. The workflow still
+  // lists/loads normally.
   try {
     resolvedInputs = resolveTopLevelInputs(definition, options?.inputs);
   } catch (err) {

@@ -357,9 +357,14 @@ export async function handleMessage(
         'orchestrator.invoke_workflow_dropped_failed_turn'
       );
     } else if (pendingLaunch.launch !== null) {
-      const { entry, codebase, prompt } = pendingLaunch.launch;
+      const { entry, codebase, prompt, inputs } = pendingLaunch.launch;
       getLog().info(
-        { conversationId, workflowName: entry.workflow.name, codebaseId: codebase.id },
+        {
+          conversationId,
+          workflowName: entry.workflow.name,
+          codebaseId: codebase.id,
+          inputNames: inputs ? Object.keys(inputs) : [],
+        },
         'orchestrator.invoke_workflow_dispatching'
       );
       await dispatchOrchestratorWorkflow(
@@ -375,7 +380,8 @@ export async function handleMessage(
         },
         actor,
         isolationHints,
-        entry.source
+        entry.source,
+        inputs ? { inputs } : undefined
       );
     }
 
