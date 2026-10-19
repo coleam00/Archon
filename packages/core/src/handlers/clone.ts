@@ -493,7 +493,11 @@ export async function cloneRepository(
     }
     if (missing) {
       const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
-      if (!identity || existing.default_cwd !== getProjectSourcePath(identity.owner, identity.repo))
+      if (
+        !identity ||
+        resolve(existing.default_cwd) !==
+          resolve(getProjectSourcePath(identity.owner, identity.repo))
+      )
         throw new ProjectRegistrationError(
           `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
         );

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { execFileAsync, getDefaultRemote, isWorktreePath, toRepoPath } from '@archon/git';
 import { createLogger, getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
@@ -98,8 +98,9 @@ export async function assertSavedCheckoutRemote(
   managedSource: string | null
 ): Promise<void> {
   if (!existsSync(path)) return;
-  if (path === managedSource && (await readdir(path)).length === 0) return;
-  await assertCheckoutRemote(path, remoteUrl, path === managedSource);
+  const isManagedSource = managedSource !== null && resolve(path) === resolve(managedSource);
+  if (isManagedSource && (await readdir(path)).length === 0) return;
+  await assertCheckoutRemote(path, remoteUrl, isManagedSource);
 }
 
 /**

@@ -653,6 +653,41 @@ describe('cloneRepository', () => {
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
   describe('HTTPS URL cloning', () => {
+    test.each(['', '/', '/./'])(
+      'reclones a missing managed checkout with suffix %j',
+      async suffix => {
+        const savedPath = `/home/test/.archon/workspaces/owner/repo/source${suffix}`;
+        const existing = makeCodebase({ default_cwd: savedPath });
+        mockListCodebaseClaims.mockResolvedValueOnce([existing]);
+
+        const result = await cloneRepository('https://github.com/owner/repo');
+
+        expect(mockEnsureProjectStructure).toHaveBeenCalledWith('owner', 'repo');
+        expect(getGitCloneCall()?.slice(0, 2)).toEqual([
+          'https://github.com/owner/repo',
+          gitUtils.toRepoPath(savedPath),
+        ]);
+        expect(result).toMatchObject({
+          codebaseId: existing.id,
+          defaultCwd: savedPath,
+          alreadyExisted: true,
+        });
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+      }
+    );
+
+    test('refuses to reclone a missing non-managed checkout with a trailing slash', async () => {
+      mockListCodebaseClaims.mockResolvedValueOnce([
+        makeCodebase({ default_cwd: '/some/local/checkout/' }),
+      ]);
+
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+        'checkout is missing'
+      );
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+    });
+
     test('clones a standard HTTPS GitHub URL', async () => {
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
