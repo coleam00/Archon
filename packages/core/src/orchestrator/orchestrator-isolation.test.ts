@@ -788,7 +788,7 @@ describe('dispatchBackgroundWorkflow', () => {
   test('does not fail a successor when background execution cannot confirm source release', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     const cause = new Error('release store unavailable');
-    mockExecuteWorkflow.mockRejectedValueOnce(new RunSourceReleaseError(cause));
+    mockExecuteWorkflow.mockRejectedValueOnce(new RunSourceReleaseError(cause, 'run-1'));
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
     expect(mockFailWorkflowRun).not.toHaveBeenCalled();

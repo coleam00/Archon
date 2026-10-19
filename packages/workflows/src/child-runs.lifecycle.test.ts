@@ -19,6 +19,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { prepareWorkflowSource, preparedWorkflowSourceRecord } from './run-source';
 import { executeWorkflow } from './executor';
+import { maybeResumeParentRun } from './child-runs';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
@@ -174,60 +175,89 @@ nodes:
         expect(fail).not.toHaveBeenCalled();
       });
 
-      it('a DAG release rejection cannot cancel a child successor', async () => {
-        await mkdir(join(cwd, '.archon/scripts'), { recursive: true });
-        await writeFile(join(cwd, '.archon/scripts/check.ts'), 'console.log("done")');
-        await writeWorkflow(
-          'release-child',
-          'name: release-child\ndescription: child\nnodes:\n  - id: check\n    script: check\n    runtime: bun\n'
-        );
-        await writeWorkflow(
-          'release-parent',
-          'name: release-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: release-child\n'
-        );
-        const store = new InMemoryStore();
-        const cause = new Error('source release store unavailable');
-        let successorId: string | undefined;
-        store.releaseRunForUnreadableSource = async id => {
-          const row = store.runs.get(id);
-          if (!row) throw new Error('missing released run');
-          row.metadata.execution_claim = 'successor';
-          successorId = id;
-          throw cause;
-        };
-        const fail = spyOn(store, 'failWorkflowRun');
-        const cancel = spyOn(store, 'cancelWorkflowRun');
-        const persist = store.persistWorkflowEvent;
-        let locked: string | undefined;
-        store.persistWorkflowEvent = async event => {
-          await persist(event);
-          if (event.event_type === 'node_started' && event.step_name === 'check') {
-            const row = store.runs.get(event.workflow_run_id);
-            const capture = await resolveRunSourceCapture(row?.metadata ?? {});
-            if (!capture) throw new Error('missing child source');
-            locked = join(capture.anchor.root, 'project/.archon/scripts/check.ts');
-            await chmod(locked, 0o000);
-          }
-        };
-        try {
-          await executeWorkflow(
-            makeDeps(store),
-            makePlatform(),
-            'conv-plat',
-            cwd,
-            await discover('release-parent'),
-            'goal',
-            { conversationId: 'conv-db' }
+      it.each([
+        [false, 'throw'],
+        [true, 'throw'],
+        [false, 'false'],
+        [true, 'false'],
+      ] as const)(
+        'an uncertain DAG release keeps the parent waiting (fan-out: %s, release: %s)',
+        async (fanOut, release) => {
+          await mkdir(join(cwd, '.archon/scripts'), { recursive: true });
+          await writeFile(join(cwd, '.archon/scripts/check.ts'), 'console.log("done")');
+          await writeWorkflow(
+            'release-child',
+            'name: release-child\ndescription: child\nnodes:\n  - id: check\n    script: check\n    runtime: bun\n'
           );
-          expect(successorId).toBeDefined();
-          expect(store.runs.get(successorId!)?.status).toBe('running');
-          expect(store.runs.get(successorId!)?.metadata.execution_claim).toBe('successor');
-          expect(fail.mock.calls.some(([id]) => id === successorId)).toBe(false);
-          expect(cancel.mock.calls.some(([id]) => id === successorId)).toBe(false);
-        } finally {
-          if (locked) await chmod(locked, 0o644);
+          await writeWorkflow(
+            'release-parent',
+            'name: release-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: release-child\n' +
+              (fanOut
+                ? `    fan_out:\n      items: '["one"]'\n      max_parallel: 1\n      join: all_done\n`
+                : '')
+          );
+          const store = new InMemoryStore();
+          const cause = new Error('source release store unavailable');
+          let successorId: string | undefined;
+          store.releaseRunForUnreadableSource = async id => {
+            const row = store.runs.get(id);
+            if (!row) throw new Error('missing released run');
+            row.metadata.execution_claim = 'successor';
+            successorId = id;
+            if (release === 'false') return { released: false };
+            throw cause;
+          };
+          const fail = spyOn(store, 'failWorkflowRun');
+          const cancel = spyOn(store, 'cancelWorkflowRun');
+          const persist = store.persistWorkflowEvent;
+          let locked: string | undefined;
+          store.persistWorkflowEvent = async event => {
+            await persist(event);
+            if (event.event_type === 'node_started' && event.step_name === 'check') {
+              const row = store.runs.get(event.workflow_run_id);
+              const capture = await resolveRunSourceCapture(row?.metadata ?? {});
+              if (!capture) throw new Error('missing child source');
+              locked = join(capture.anchor.root, 'project/.archon/scripts/check.ts');
+              await chmod(locked, 0o000);
+            }
+          };
+          try {
+            const result = await executeWorkflow(
+              makeDeps(store),
+              makePlatform(),
+              'conv-plat',
+              cwd,
+              await discover('release-parent'),
+              'goal',
+              { conversationId: 'conv-db' }
+            );
+            expect(result).toMatchObject({ success: true, paused: true });
+            if (!result.workflowRunId) throw new Error('missing parent ID');
+            const parent = store.runs.get(result.workflowRunId);
+            expect(parent?.status).toBe('paused');
+            expect(parent?.metadata.approval).toMatchObject(
+              fanOut
+                ? { type: 'fan_out', childRunIds: [successorId] }
+                : { type: 'child_workflow', childRunId: successorId }
+            );
+            expect(fail).not.toHaveBeenCalled();
+            expect(successorId).toBeDefined();
+            expect(store.runs.get(successorId!)?.status).toBe('running');
+            expect(store.runs.get(successorId!)?.metadata.execution_claim).toBe('successor');
+            expect(fail.mock.calls.some(([id]) => id === successorId)).toBe(false);
+            expect(cancel.mock.calls.some(([id]) => id === successorId)).toBe(false);
+            if (locked) await chmod(locked, 0o644);
+            const child = store.runs.get(successorId!);
+            if (!child) throw new Error('missing successor');
+            child.status = 'completed';
+            child.metadata.summary = 'done';
+            await maybeResumeParentRun(makeDeps(store), makePlatform(), 'conv-plat', child);
+            expect(store.runs.get(result.workflowRunId)?.status).toBe('completed');
+          } finally {
+            if (locked) await chmod(locked, 0o644);
+          }
         }
-      });
+      );
 
       it('a child launch that cannot read the parent source releases the parent', async () => {
         await writeWorkflow(

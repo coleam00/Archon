@@ -255,7 +255,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       await store.updateWorkflowRun(run.id, {
         metadata: { ...workflowRun.metadata, execution_claim: 'successor' },
       });
-      throw new RunSourceReleaseError(cause);
+      throw new RunSourceReleaseError(cause, workflowRun.id);
     };
     const admission = await engine.resume({
       platform,

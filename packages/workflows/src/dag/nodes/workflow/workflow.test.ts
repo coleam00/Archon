@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { RunSourceReleaseError } from '../../../run-source';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
@@ -53,6 +54,69 @@ describe('executeDagWorkflow -- workflow: node', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each([1, 4])(
+    'uncertain children hold their fan-out slots and survive sibling errors (parallel: %s)',
+    async parallel => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const pause = store.pauseWorkflowRun.getMockImplementation();
+      store.pauseWorkflowRun.mockImplementation(async (...args) => {
+        await pause?.(...args);
+        store.getWorkflowRunStatus.mockResolvedValue('paused');
+      });
+      const first = new RunSourceReleaseError(new Error('release unavailable'), 'child-1');
+      const second = new RunSourceReleaseError(new Error('lookup unavailable'), 'child-2');
+      const ordinary = new Error('sibling launch failed');
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
+        if (parallel === 1) throw first;
+        if (args.childIndex === 0) throw ordinary;
+        if (args.childIndex === 1) throw first;
+        if (args.childIndex === 2) throw second;
+        return { childRunId: 'child-3', status: 'paused' };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflowRun: makeWorkflowRun('uncertain-parent'),
+          workflow: {
+            name: 'uncertain-parent',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'workflow',
+                workflow: 'child-workflow',
+                fan_out: { items: '["a","b","c","d"]', max_parallel: parallel, join: 'all_done' },
+              },
+            ],
+          },
+        })
+      );
+      expect(runChildWorkflow).toHaveBeenCalledTimes(parallel);
+      expect(store.pauseWorkflowRun).toHaveBeenCalledWith(
+        'uncertain-parent',
+        expect.objectContaining({
+          type: 'fan_out',
+          childRunIds: parallel === 1 ? ['child-1'] : ['child-1', 'child-2', 'child-3'],
+          unspawnedItems: parallel === 1 ? 3 : 1,
+        }),
+        undefined,
+        expect.anything()
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(mockLogFn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: first }),
+        'workflow.child_source_release_uncertain'
+      );
+    }
+  );
 
   it.each(['node', 'terminal'] as const)(
     'mixed child fan-out rejections preserve the %s write failure',

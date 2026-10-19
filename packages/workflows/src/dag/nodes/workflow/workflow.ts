@@ -11,6 +11,7 @@ import {
   recordDerivedExecution,
   recordNodeState,
 } from '../../../node-event-write';
+import { RunSourceReleaseError } from '../../../run-source';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import type { WorkflowCommandSurface } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
@@ -215,8 +216,18 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
+  const pauseParentOnChild = async (
+    childRunId: string,
+    releaseError?: RunSourceReleaseError
+  ): Promise<NodeExecutionResult> => {
+    if (releaseError)
+      getLog().error(
+        { err: releaseError, childRunId, parentRunId: parentRun.id },
+        'workflow.child_source_release_uncertain'
+      );
+    const blocked = releaseError
+      ? `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) has an unconfirmed source release. Check its status before continuing. `
+      : `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
@@ -235,7 +246,7 @@ export async function executeWorkflowNode(
     await safeSendMessage(
       platform,
       conversationId,
-      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${releaseError ? blocked : approveChild(platform)}`,
       msgContext
     );
     return serializeNodeOutput(suspended);
@@ -329,6 +340,7 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
+    if (err instanceof RunSourceReleaseError) return pauseParentOnChild(err.workflowRunId, err);
     if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
 
     // Only a read of the parent's source releases the parent; a child's fault stays the

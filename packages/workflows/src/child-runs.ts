@@ -503,6 +503,12 @@ export async function runChildWorkflow(
       if (!finalChild) {
         return failOutcome('Child run row disappeared after execution.', childRunId);
       }
+      if (finalChild.status === 'running' || finalChild.status === 'pending') {
+        throw new RunSourceReleaseError(
+          new Error(`Child execution returned with run ${childRunId} still ${finalChild.status}`),
+          childRunId
+        );
+      }
       return childOutcomeFromRun(finalChild);
     } catch (err) {
       if (err instanceof TerminalStatusWriteError || err instanceof RunSourceReleaseError)

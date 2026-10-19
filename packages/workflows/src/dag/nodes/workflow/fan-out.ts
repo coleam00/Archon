@@ -8,6 +8,7 @@ import {
 } from '../../../node-record-serialization';
 import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
+import { RunSourceReleaseError } from '../../../run-source';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
@@ -140,7 +141,7 @@ async function driveChildWindow(
   itemCount: number,
   maxParallel: number,
   state: FanOutChildState,
-  spawn: (index: number) => Promise<ChildWorkflowOutcome>,
+  spawn: (index: number) => Promise<ChildWorkflowOutcome | RunSourceReleaseError>,
   findChildren: () => Promise<WorkflowRun[]>,
   parentRunId: string
 ): Promise<{ lookupError: unknown } | undefined> {
@@ -153,20 +154,28 @@ async function driveChildWindow(
       waiting,
       maxParallel - state.heldByIndex.size,
       spawn,
-      outcome => outcome.status === 'paused'
+      outcome => outcome instanceof RunSourceReleaseError || outcome.status === 'paused'
     );
     const claimed = settled.flatMap((result, k) =>
       result === undefined ? [] : [{ index: waiting[k], result }]
     );
-    const outcomes = settledValuesOrThrow(
-      claimed.map(c => c.result),
+    for (const { index, result } of claimed) {
+      if (result.status !== 'fulfilled') continue;
+      const outcome = result.value;
+      if (outcome instanceof RunSourceReleaseError)
+        state.heldByIndex.set(index, outcome.workflowRunId);
+      else if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
+      else state.settledByIndex.set(index, outcome);
+    }
+    settledValuesOrThrow(
+      claimed.map(({ result }): PromiseSettledResult<ChildWorkflowOutcome> => {
+        if (result.status === 'rejected') return result;
+        if (result.value instanceof RunSourceReleaseError)
+          return { status: 'rejected', reason: result.value };
+        return { status: 'fulfilled', value: result.value };
+      }),
       parentRunId
     );
-    claimed.forEach(({ index }, k) => {
-      const outcome = outcomes[k];
-      if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
-      else state.settledByIndex.set(index, outcome);
-    });
 
     if (state.heldByIndex.size === 0) break;
     let rows: WorkflowRun[];
@@ -435,7 +444,7 @@ export async function executeFanOutWorkflowNode(
   //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
   //    child fails still runs every remaining child. The workflow `budget:` does not cover
   //    fan-out yet; a budgeted workflow rejects it at load (#2815).
-  const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
+  const spawn = async (i: number): Promise<ChildWorkflowOutcome | RunSourceReleaseError> => {
     // A rolled-back cancellation has not released the child's working-path lock.
     // Let claimed siblings settle, but do not start another child against that lock.
     if (childCancellationFailure) throw childCancellationFailure;
@@ -472,6 +481,7 @@ export async function executeFanOutWorkflowNode(
       ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
       ...(resumeChild ? { resumeChild } : {}),
     }).catch((error: unknown) => {
+      if (error instanceof RunSourceReleaseError) return error;
       if (error instanceof WorkflowSourceUnavailableError)
         throw new RunSourceUnreadableError(stepName, error);
       if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
@@ -479,14 +489,24 @@ export async function executeFanOutWorkflowNode(
     });
   };
 
-  const windowFailure = await driveChildWindow(
-    items.length,
-    fanOut.max_parallel,
-    state,
-    spawn,
-    () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
-    parentRun.id
-  );
+  let windowFailure: Awaited<ReturnType<typeof driveChildWindow>>;
+  try {
+    windowFailure = await driveChildWindow(
+      items.length,
+      fanOut.max_parallel,
+      state,
+      spawn,
+      () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
+      parentRun.id
+    );
+  } catch (error) {
+    if (!(error instanceof RunSourceReleaseError)) throw error;
+    getLog().error(
+      { err: error, parentRunId: parentRun.id },
+      'workflow.child_source_release_uncertain'
+    );
+    return suspendOnHeldChildren(node, ctx, execution, stepName, state, items.length, notify);
+  }
   if (windowFailure !== undefined) return failChildLookup(windowFailure.lookupError);
 
   // 6. Some children are unfinished: pause the parent on them.

@@ -7,6 +7,7 @@ import {
 } from '../workflow-source';
 import { loadCommandPrompt } from '../executor-shared';
 import { NodeEventWriteError } from '../node-event-write';
+import { RunSourceReleaseError } from '../run-source';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { getLog } from './log';
@@ -105,6 +106,7 @@ export function settledValuesOrThrow<T>(
   const selected =
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures.find(result => result.reason instanceof RunSourceReleaseError) ??
     failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
     failures.find(result => result.reason instanceof RunSourceUnreadableError) ??
     failures[0];
