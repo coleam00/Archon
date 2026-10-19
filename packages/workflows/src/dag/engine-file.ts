@@ -3,7 +3,11 @@ import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 
-/** Host writes must not follow paths supplied by an earlier container node. */
+/**
+ * Reject existing parent symlinks and replace leaf links without truncating their targets.
+ * These pathname checks do not prevent concurrent parent replacement: the artifact
+ * mount is writable by container nodes, including its engine directory.
+ */
 export function writeEngineFile(artifactsDir: string, path: string, value: string): string {
   const root = resolve(artifactsDir);
   const target = resolve(root, RUN_ARTIFACTS_ENGINE_SUBDIR, path);

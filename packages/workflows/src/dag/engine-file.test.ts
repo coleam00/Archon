@@ -20,6 +20,29 @@ const script = `printf '%s' '${'x'.repeat(40_000)}'`;
 const value = 'x'.repeat(40_000);
 const hash = createHash('sha256').update(script).digest('hex');
 
+test.skipIf(process.platform === 'win32')(
+  'persisted output rejects a symlink at the inner persisted directory',
+  () => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-persisted-parent-')));
+    const artifacts = join(root, 'artifacts');
+    const spills = join(artifacts, '.archon', 'node-output-spills');
+    const other = join(root, 'other');
+    mkdirSync(spills, { recursive: true });
+    mkdirSync(other);
+    const external = join(other, 'a.nodeoutput');
+    writeFileSync(external, 'before');
+    symlinkSync(other, join(spills, 'persisted'));
+
+    const output = formatPersistedNodeOutput(value, artifacts, 'a');
+
+    expect(output.truncated).toBe(true);
+    expect(output.originalBytes).toBe(Buffer.byteLength(value, 'utf8'));
+    expect(output.spillPath).toBeUndefined();
+    expect(readFileSync(external, 'utf8')).toBe('before');
+    expect(readdirSync(other)).toEqual(['a.nodeoutput']);
+  }
+);
+
 for (const writer of ['script', 'whole', 'field', 'persisted'] as const) {
   for (const component of ['root', 'engine', 'parent', 'leaf'] as const) {
     test.skipIf(process.platform === 'win32')(
