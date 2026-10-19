@@ -253,8 +253,8 @@ export function formatSubprocessFailure(
   const rawMessage = (err.message ?? '').trim();
 
   // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
-  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
-  // body. Strip it so user-facing output never re-leaks the body.
+  // and for script nodes (`bun -e <body>` / `python -c <body>`) that line embeds
+  // the full script body. Strip it so user-facing output never re-leaks the body.
   const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
   const bodyAfterPrefix = hasCommandFailedPrefix
     ? rawMessage.split('\n').slice(1).join('\n').trim()

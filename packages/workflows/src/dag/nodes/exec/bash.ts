@@ -163,9 +163,8 @@ export async function executeBashNode(
       return recordExecTimeoutSkip(ctx, execution);
     }
     const label = `Bash node '${node.id}'`;
-    // Always run the formatter so logs get sanitized fields regardless of which
-    // user-facing branch we end up in — the timeout message also contains the
-    // full `Command failed: bash -c <body>` line and would otherwise leak.
+    // Always run the formatter so logs get sanitized, capped stderr regardless of
+    // which user-facing branch we end up in.
     const formatted = formatSubprocessFailure(err, label);
     const spawnFailure = hostSpawnFailure(execContext, err);
     let errorMsg: string;
