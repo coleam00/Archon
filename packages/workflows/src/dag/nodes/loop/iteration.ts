@@ -1,4 +1,3 @@
-import { bashScriptCommand } from '../../bash-script';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
@@ -340,16 +339,14 @@ async function runUntilBash(
         }),
       }
     );
-    const command = bashScriptCommand(substitutedBash);
     await runSubprocessUntilRunStops(
       ctx.deps.store,
       workflowRun.id,
       node.id,
       execContext,
       loopBashPath,
-      command.args,
+      ['-c', substitutedBash],
       {
-        input: command.input,
         cwd: ctx.cwd,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,

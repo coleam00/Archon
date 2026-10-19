@@ -172,8 +172,7 @@ export function resolveText(
       references: nodeTemplateReferences(
         text,
         { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
-        surface,
-        ctx.execCode ? { artifactsDir: ctx.artifactsDir } : {}
+        surface
       ),
     }
   ).prompt;

@@ -1,4 +1,5 @@
 import { join as joinPath } from 'path';
+import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { buildTruncationMarker } from '../utils/output-truncation';
 import type { WorkflowRun } from '../schemas';
 import { validateArtifactPointers } from '../artifact-pointer';
@@ -68,11 +69,13 @@ export function formatPersistedNodeOutput(
     if (headEnd - sequenceStart < expectedLength) headEnd = sequenceStart;
   }
 
-  const spillPath = writeSpillFile(
+  const spillDir = joinPath(
     artifactsDir,
-    joinPath('node-output-spills', 'persisted', `${spillKey}.nodeoutput`),
-    output
+    RUN_ARTIFACTS_ENGINE_SUBDIR,
+    'node-output-spills',
+    'persisted'
   );
+  const spillPath = writeSpillFile(spillDir, `${spillKey}.nodeoutput`, output);
 
   return {
     nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,

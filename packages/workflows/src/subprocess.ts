@@ -1,6 +1,4 @@
 import { spawn } from 'node:child_process';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
@@ -36,9 +34,9 @@ export function buildSubprocessDockerArgs(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   cmd: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; input?: string }
+  options: { cwd: string; env: NodeJS.ProcessEnv }
 ): string[] {
-  const dockerArgs = ['exec', ...(options.input !== undefined ? ['-i'] : []), '-w', options.cwd];
+  const dockerArgs = ['exec', '-w', options.cwd];
   if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
   for (const [key, value] of Object.entries(options.env)) {
     // Skip the denylist (PATH/HOME/…): a project env var must not clobber the
@@ -240,6 +238,8 @@ export async function runSubprocess(
     cwd: string;
     /** Absent means no deadline: the subprocess runs until it exits. */
     timeout?: number;
+    /** Host setup only: end the group on deadline, command exit, or owner death. */
+    ownProcessGroup?: true;
     /**
      * A host node body: its deadline ends the node's whole tree before the timeout is
      * reported. On POSIX that needs the node's own process group, which only a recording
@@ -258,7 +258,7 @@ export async function runSubprocess(
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
     retention: SubprocessRetention | { standalone: true };
-  } & ({ ownProcessGroup: true; input?: never } | { ownProcessGroup?: undefined; input?: string }) // Setup stdin carries the owner lifeline; node stdin can carry Bash source.
+  }
 ): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
   if (options.ownProcessGroup && execContext.kind === 'container') {
     throw new Error('Owned subprocess groups require host execution');
@@ -286,9 +286,8 @@ export async function runSubprocess(
             buildSubprocessDockerArgs(execContext, cmd, args, {
               cwd: options.cwd,
               env: options.env,
-              input: options.input,
             }),
-            { timeout: options.timeout, input: options.input }
+            { timeout: options.timeout }
           )
         : options.ownProcessGroup
           ? await execOwnedProcessGroup(cmd, args, {
@@ -302,7 +301,6 @@ export async function runSubprocess(
                 timeout: options.timeout,
                 env: subprocessEnv,
                 node: {
-                  input: options.input,
                   recorder: nodeProcessRecorder,
                   endTreeOnTimeout: options.endTreeOnTimeout === true,
                   abortSignal: options.abortSignal,
@@ -312,7 +310,6 @@ export async function runSubprocess(
                 cwd: options.cwd,
                 timeout: options.timeout,
                 env: subprocessEnv,
-                input: options.input,
               });
 
     result.stderr = redactCredentialValues(result.stderr, credentialValues);
@@ -389,14 +386,13 @@ export async function execOwnedProcessGroup(
     timeout?: number;
     env: NodeJS.ProcessEnv;
     /**
-     * Node mode: keep execFile's node semantics (stdin a pipe carrying only `input`, background
+     * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
      * jobs outlive the command, a deadline reports the SIGTERM documented for
      * `exit_code`) and make the tree endable through the recorder. The deadline SIGTERMs
      * the whole tree when `endTreeOnTimeout` is set, the root only otherwise. An abort
      * SIGKILLs a recorded node's whole tree.
      */
     node?: {
-      input?: string;
       recorder: NodeProcessRecorder | undefined;
       endTreeOnTimeout: boolean;
       abortSignal?: AbortSignal;
@@ -502,13 +498,6 @@ export async function execOwnedProcessGroup(
   child.once('error', error => {
     failure = error;
   });
-  const writing =
-    node?.input !== undefined && child.stdin
-      ? pipeline(Readable.from([node.input]), child.stdin).catch((error: unknown) => {
-          failure ??= error instanceof Error ? error : new Error(String(error));
-          stop(!node);
-        })
-      : undefined;
   child.once('exit', () => {
     exited = true;
     // The watcher ends leftovers from inside its group, without a stale-PID signal.
@@ -517,7 +506,6 @@ export async function execOwnedProcessGroup(
   const closed = await new Promise<{ code: number | null; signal: string | null }>(resolve => {
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
-  await writing;
   clearTimeout(timer);
   abortSignal?.removeEventListener('abort', abort);
   child.stdin?.destroy();

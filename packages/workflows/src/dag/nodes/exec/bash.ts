@@ -1,4 +1,3 @@
-import { bashScriptCommand } from '../../bash-script';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -28,7 +27,7 @@ import {
 
 /**
  * Execute a bash (shell script) DAG node.
- * Runs the script with Bash, captures stdout as node output.
+ * Runs the script via `bash -c`, captures stdout as node output.
  * No AI session is created — bash nodes are free/deterministic.
  */
 export async function executeBashNode(
@@ -109,16 +108,14 @@ export async function executeBashNode(
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
-    const command = bashScriptCommand(finalScript);
     const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
       deps.store,
       workflowRun.id,
       node.id,
       execContext,
       bashPath,
-      command.args,
+      ['-c', finalScript],
       {
-        input: command.input,
         cwd,
         timeout: node.timeout,
         endTreeOnTimeout: true,
@@ -163,8 +160,9 @@ export async function executeBashNode(
       return recordExecTimeoutSkip(ctx, execution);
     }
     const label = `Bash node '${node.id}'`;
-    // Always run the formatter so logs get sanitized, capped stderr regardless of
-    // which user-facing branch we end up in.
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bash -c <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
     const spawnFailure = hostSpawnFailure(execContext, err);
     let errorMsg: string;

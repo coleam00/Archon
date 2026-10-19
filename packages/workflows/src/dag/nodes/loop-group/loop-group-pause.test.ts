@@ -1097,7 +1097,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         })
       );
       const resumeProbe = execSpy.mock.calls.find(call =>
-        call[2]?.input?.includes('resume probe ran')
+        (call[1] as string[]).some(arg => arg.includes('resume probe ran'))
       );
       resumeProbeTimeout = resumeProbe?.[2]?.timeout;
     } finally {
@@ -1182,7 +1182,9 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
           priorCompletedNodes,
         })
       );
-      const resumeProbe = execSpy.mock.calls.find(call => call[2]?.input?.includes('UNDECLARED'));
+      const resumeProbe = execSpy.mock.calls.find(call =>
+        (call[1] as string[]).some(arg => arg.includes('UNDECLARED'))
+      );
       expect(resumeProbe).toBeDefined();
       expect(resumeProbe?.[2]?.timeout).toBeUndefined();
     } finally {

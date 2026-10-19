@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { bashScriptCommand } from './bash-script';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -530,14 +529,8 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
   });
 
   it.each([
-    { label: '32,001 bytes with newline', value: 'é'.repeat(16_000) + '\n' },
-    { label: '32,768 bytes with newline', value: 'é'.repeat(16_383) + 'x\n' },
-    { label: '40,000 bytes without newline', value: 'é'.repeat(20_000) },
-    { label: '40,001 bytes with newline', value: 'é'.repeat(20_000) + '\n' },
-    { label: '40,002 bytes with two newlines', value: 'é'.repeat(20_000) + '\n\n' },
-    { label: 'spilled output with a long newline suffix', value: 'A' + '\n'.repeat(600_000) },
-    { label: 'spilled output with newline', value: 'é'.repeat(33_000) + '\n' },
-    { label: 'spilled output with two newlines', value: 'é'.repeat(33_000) + '\n\n' },
+    { label: 'spilled ASCII output', value: 'x'.repeat(33_000) },
+    { label: 'spilled multibyte output', value: 'é'.repeat(33_000) },
   ])('delivers $label exactly through all four shell output references', async ({ value }) => {
     const outputs = new Map([['a', makeOutput('completed', value, { data: value })]]);
     const script = substituteNodeOutputRefsInScopes(
@@ -548,11 +541,8 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
       true,
       tempDir
     );
-    const { args, input } = bashScriptCommand(script);
-    expect(Buffer.byteLength(args.join(''), 'utf8')).toBeLessThan(100_000);
-    const { stdout } = await execFileAsync(resolveBashPath(), args, {
+    const { stdout } = await execFileAsync(resolveBashPath(), ['-c', script], {
       maxBuffer: 4_000_000,
-      input,
     });
     expect(stdout).toBe([value, value, value, value].join('|'));
   });
@@ -575,8 +565,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
       );
       expect(files).toHaveLength(2);
       expect(files[0]).not.toBe(files[1]);
-      const { args, input } = bashScriptCommand(script);
-      const { stdout } = await execFileAsync(resolveBashPath(), args, { input });
+      const { stdout } = await execFileAsync(resolveBashPath(), ['-c', script]);
       expect(stdout).toBe(`${value}|${value}`);
     }
   );

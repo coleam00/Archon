@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { execFileAsync, resolveBashPath } from './exec';
+import { resolveBashPath } from './exec';
 
 describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () => {
   const originalEnv = process.env.ARCHON_BASH_PATH;
@@ -47,29 +47,5 @@ describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () 
       expect(msg).toContain('/definitely/does/not/exist/bash');
       expect(msg).toContain('LOCALAPPDATA');
     }
-  });
-});
-
-describe('execFileAsync stdin', () => {
-  it('delivers input outside argv', async () => {
-    const input = 'é'.repeat(100_000);
-    const result = await execFileAsync(
-      resolveBashPath(),
-      ['-c', 'IFS= read -r -d "" value || :; printf "%s" "$value"'],
-      { input }
-    );
-    expect(result.stdout).toBe(input);
-  });
-
-  it('rejects an incomplete input write even when the child exits zero', async () => {
-    await expect(
-      execFileAsync(resolveBashPath(), ['-c', 'exit 0'], { input: 'x'.repeat(4_000_000) })
-    ).rejects.toMatchObject({ code: expect.any(String) });
-  });
-
-  it('preserves spawn failure evidence when input is supplied', async () => {
-    await expect(
-      execFileAsync('/definitely-missing-archon-command', [], { input: 'source' })
-    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

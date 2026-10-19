@@ -4,8 +4,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { resolveBashPath } from '@archon/git';
-import { bashScriptCommand } from './dag/bash-script';
 import {
   buildSubprocessDockerArgs,
   containerCommandName,
@@ -466,55 +464,4 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
     expect(joined).not.toContain('PWD=/x');
     expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
   });
-});
-
-for (const recorded of [false, true]) {
-  test(`rejects an incomplete source write with process recording ${recorded}`, async () => {
-    const owner = recorded ? recordNodeProcessTrees() : undefined;
-    try {
-      await expect(
-        runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', 'exit 0'], {
-          cwd: import.meta.dir,
-          env: {},
-          input: 'x'.repeat(4_000_000),
-          retention: { standalone: true },
-        })
-      ).rejects.toMatchObject({ code: expect.any(String) });
-    } finally {
-      owner?.release();
-    }
-  });
-
-  test(`delivers Bash source with process recording ${recorded}`, async () => {
-    const owner = recorded ? recordNodeProcessTrees() : undefined;
-    try {
-      const value = 'é'.repeat(100_000);
-      const command = bashScriptCommand(`value='${value}'; printf '%s' "$value"`);
-      const result = await runSubprocess({ kind: 'host' }, resolveBashPath(), command.args, {
-        cwd: import.meta.dir,
-        env: {},
-        input: command.input,
-        retention: { standalone: true },
-      });
-      expect(result.stdout).toBe(value);
-    } finally {
-      owner?.release();
-    }
-  });
-}
-
-test('Docker keeps source on stdin and out of argv', () => {
-  const command = bashScriptCommand('printf ok');
-  const args = buildSubprocessDockerArgs(
-    { kind: 'container', containerId: 'cid' },
-    'bash',
-    command.args,
-    {
-      cwd: '/work',
-      env: {},
-      input: command.input,
-    }
-  );
-  expect(args.slice(0, 2)).toEqual(['exec', '-i']);
-  expect(args).not.toContain(command.input);
 });

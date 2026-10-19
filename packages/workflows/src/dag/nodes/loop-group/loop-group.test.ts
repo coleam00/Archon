@@ -504,30 +504,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
       current: 'S'.repeat(33_000),
     })),
     {
-      label: 'whole spilled output with trailing newlines',
-      field: '',
-      previous: 'A'.repeat(33_000) + '\n',
-      current: 'A'.repeat(33_000) + '\n\n',
-    },
-    {
-      label: 'spilled field with trailing newlines',
-      field: '.data',
-      previous: 'A'.repeat(33_000) + '\n',
-      current: 'A'.repeat(33_000) + '\n\n',
-    },
-    {
-      label: 'whole spilled output with a long newline suffix',
-      field: '',
-      previous: 'A' + '\n'.repeat(600_000),
-      current: 'B' + '\n'.repeat(600_001),
-    },
-    {
-      label: 'spilled field with a long newline suffix',
-      field: '.data',
-      previous: 'A' + '\n'.repeat(600_000),
-      current: 'B' + '\n'.repeat(600_001),
-    },
-    {
       label: 'whole multibyte output',
       field: '',
       previous: 'é'.repeat(20_000) + '\n',
@@ -575,7 +551,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
                 kind: 'loop_group',
                 loop_group: {
                   until_bash:
-                    `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                    `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
                     `test $compare.output = done && test "$current" ${current === previous ? '=' : '!='} "$previous"`,
                   max_iterations: 2,
                   fresh_context: false,
@@ -591,7 +567,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
                       runtime: 'sh',
                       depends_on: ['work'],
                       script:
-                        `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                        `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
                         `printf '%s' "$current" > ${JSON.stringify(currentFile)}; ` +
                         `printf '%s' "$previous" > ${JSON.stringify(previousFile)}; ` +
                         'if [ -n "$previous" ]; then printf done; else printf again; fi',
