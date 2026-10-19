@@ -17,7 +17,6 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseMaintainers,
   parseOrder,
   parseTrustInput,
   parseWorkItem,
@@ -29,6 +28,7 @@ import {
   updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
+import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
 import {
   gitCheckout,
   hostCli,
@@ -384,6 +384,10 @@ describe('pickup', () => {
     expect([...parseMaintainers('[" Wirasm ", "Other"]')]).toEqual(['wirasm', 'other']);
     expect(() => parseMaintainers('{"maintainers": []}')).toThrow('JSON array of forge logins');
     expect(() => parseMaintainers('[""]')).toThrow('JSON array of forge logins');
+    const list = parseMaintainerList('["Alice", { "login": " Wirasm ", "merge_queue": "own-prs" }]');
+    expect([...list.logins]).toEqual(['alice', 'wirasm']);
+    expect([...list.ownPrs]).toEqual(['wirasm']);
+    expect(() => parseMaintainerList('[{ "login": "x", "merge_queue": "all" }]')).toThrow('JSON array of forge logins');
   });
 });
 

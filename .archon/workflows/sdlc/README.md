@@ -362,10 +362,13 @@ document is the item's state: its trust, stage, triage fields, promotion, claim 
 a short history. The issue's pack labels mirror it, and a label a person adds is a
 request, never the state.
 
-- **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` (a JSON
-  array of forge logins) at the head of the default branch and records once whether
-  the issue's author is on it. No file means an empty list, so every author is
-  outside. A file that is not an array of logins refuses the run.
+- **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
+  head of the default branch and records once whether the issue's author is on it.
+  The file is a JSON array whose entries are forge logins, or objects naming one with
+  opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
+  login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
+  open pull requests in the merge queue (see Pickup there). No file means an empty
+  list, so every author is outside. Any other shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
 - **Promotion.** A listed maintainer promotes an outside item by adding
@@ -529,9 +532,11 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   ruling, and the item continues from it. The queue never reads the answer's prose for
   a decision. The `ruling` script writes the
   choice's ruling and the person's words into the issue body as one dated "Current
-  scope" section, reads it back, and records the answer: a `continue` choice launches
-  the next round from it, and a `park` choice stops working the item until a
-  re-triage. A run cancelled while it waits leaves the item asking, and only a
+  scope" section, reads it back, and records the answer: a `continue` choice starts
+  the item's next round at once, a detached `archon-build-queue --input number=<n>`
+  run on the run config the answered run started with (`--config-from-run`), and a
+  `park` choice stops working the item until a re-triage. If that launch fails, the
+  item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
 - **Record.** The work item's `facts.build` holds the item's status (`next`,
   `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
@@ -582,7 +587,11 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   waiting or asking. When the build queue readies an item again after the merge queue
   returned or parked it, it waits again. The pull request is the one the build
   queue's last round delivered. One already merged or closed is recorded without the
-  agent.
+  agent. Before claiming, the run enrolls each open, non-draft pull request by a
+  maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
+  work item names yet: it gets a work item of its own (`facts.own_pr`). The sweep
+  reviews such a pull request in full when it has no verdict, and asks instead of
+  returning it, since no build round owns it.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -640,9 +649,10 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   links. Every pull-request item also offers `other`, which returns the pull request to
   the build queue with the answer's text as the ruling. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
-  a later sweep merges it once the gate passes there; `return` writes the choice's
+  a sweep the answer starts at once (on the answered run's config) merges it once the
+  gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
-  back to the build queue; `park` stops working it until the build queue readies it
+  back to the build queue, whose next round starts at once; `park` stops working it until the build queue readies it
   again. Any other ask waits for a later sweep, which decides it again.
 
 The pack installs no binding. A schedule sweeps the queue; each run changes its

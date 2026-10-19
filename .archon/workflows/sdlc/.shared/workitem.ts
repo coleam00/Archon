@@ -21,7 +21,6 @@ import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
-import { git, gitOrThrow } from './git.ts';
 import { note } from './io.ts';
 import {
   type LabelVerdict,
@@ -32,7 +31,6 @@ import {
   type WorkType,
   wantedLabels,
 } from './labels.ts';
-import { fetchDefaultBranch } from './remote.ts';
 import {
   claimDisposition,
   runStatus,
@@ -147,6 +145,8 @@ export interface WorkItem {
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
+    /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
+    readonly own_pr?: { readonly url: string; readonly at: string };
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -177,7 +177,6 @@ export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
   readonly report: { readonly run_id: string; readonly path: string };
 }
 
-export const MAINTAINERS_PATH = '.archon/sdlc/policy/maintainers.json';
 // History, run links and label requests are capped so a label-spamming account cannot
 // push the document past the state store's 64 KiB limit and wedge the item. `archon
 // state log` keeps every revision.
@@ -621,36 +620,6 @@ export function applyDecision(
     history: newest(history),
     links: { runs: newest([...doc.links.runs.filter(id => id !== runId), runId]) },
   };
-}
-
-// --- the maintainer list ------------------------------------------------------------
-
-/** The maintainer list's text, lower-cased logins; anything but an array of logins refuses. */
-export function parseMaintainers(text: string): Set<string> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`${MAINTAINERS_PATH} is not valid JSON`);
-  }
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every(login => typeof login === 'string' && login.trim() !== '')
-  ) {
-    throw new Error(`${MAINTAINERS_PATH} must be a JSON array of forge logins`);
-  }
-  return new Set(parsed.map(login => (login as string).trim().toLowerCase()));
-}
-
-/**
- * The maintainer list at the head of the repository's default branch, read with git
- * so it works on either forge source and whatever branch the checkout sits on. No
- * file means nobody: every author is outside.
- */
-export function readMaintainers(repo: QualifiedPr['repo']): Set<string> {
-  const { ref } = fetchDefaultBranch(repo);
-  if (git('cat-file', '-e', `${ref}:${MAINTAINERS_PATH}`).code !== 0) return new Set();
-  return parseMaintainers(gitOrThrow('show', `${ref}:${MAINTAINERS_PATH}`));
 }
 
 // --- pickup ---------------------------------------------------------------------
