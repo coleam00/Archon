@@ -28,7 +28,7 @@ import { config, parse } from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
+import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './home-paths';
 import { applyEnvLogLevel } from './logger';
 
 /**
