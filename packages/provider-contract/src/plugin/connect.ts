@@ -1,3 +1,4 @@
+import { installContainerExecHost, getContainerExecGate } from './container-exec';
 import { z } from 'zod';
 import { nativeToolInputParser } from '../native-tools';
 import {
@@ -89,6 +90,7 @@ export async function connectProvider(
 ): Promise<ConnectedProvider> {
   const rpc = new PluginRpc(io);
   const turns = new Map<string, Turn>();
+  const containerExec = installContainerExecHost(rpc);
   rpc.handle('_archon/tool_call', async raw => {
     const { sessionId, name, input } = rpc.parse(toolCallRequestSchema, raw);
     const turn = turns.get(sessionId);
@@ -215,8 +217,13 @@ export async function connectProvider(
             key === 'nodeConfig' || key === 'assistantConfig' ? omitUndefinedFields(value) : value,
           ])
       );
+      const execGate =
+        options.execContext?.kind === 'container'
+          ? getContainerExecGate(options.execContext.containerId)
+          : undefined;
       const request = providerSessionRequestSchema.parse({
         ...serializable,
+        ...(execGate ? { containerExecCoordination: true } : {}),
         ...(options.nativeTools
           ? { nativeTools: options.nativeTools.map(({ handler: _handler, ...spec }) => spec) }
           : {}),
@@ -233,7 +240,9 @@ export async function connectProvider(
           _meta: { archon: { request } },
         })
       );
+      if (execGate) containerExec.enable(sessionId, execGate);
       if (options.abortSignal?.aborted) {
+        containerExec.end(sessionId);
         await rpc.notify('session/cancel', { sessionId });
         return;
       }
@@ -277,6 +286,7 @@ export async function connectProvider(
           else finish(turn, error);
         })
         .finally(() => {
+          containerExec.end(sessionId);
           turns.delete(sessionId);
         });
       if (options.abortSignal?.aborted) cancel();

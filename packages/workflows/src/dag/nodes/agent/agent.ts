@@ -1,3 +1,4 @@
+import { ArtifactExchangeError } from '../../../artifact-exchange';
 import { finishNodeExecution } from '../../../node-execution';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
@@ -239,7 +240,7 @@ function attemptFailure(
   nodeMcp: AgentBinding['nodeMcp'],
   nodeId: string
 ): { message: string; kind: NodeFailureKind; providerFailure?: ProviderFailure } {
-  if (cancelled) {
+  if (cancelled && !(err instanceof ArtifactExchangeError)) {
     getLog().info({ nodeId }, 'dag_node_cancelled_via_abort');
     return { message: 'Cancelled by user', kind: 'cancelled' };
   }

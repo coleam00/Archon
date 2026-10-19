@@ -234,7 +234,7 @@ nodes:
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `mutates_checkout` | boolean | — | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
 | `always_run` | boolean | `false` | Not a scheduling field: it does not change whether the node runs in a normal pass (use `when:` and `trigger_rule` for that). It opts the node out of the resume cache, so on resume it is evaluated again instead of replaying a prior completion, and still runs only if its `when:` and `trigger_rule` allow it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
-| `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes (best-effort). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
+| `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes. Write failures warn for host and legacy container runs, and fail runs with separated container artifacts. Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
 
 **AI node options** — apply to `command` and `prompt` nodes:
 
@@ -1469,7 +1469,7 @@ cannot alias another execution. Metadata keeps the readable provenance as
 `loopGroupPath: [{ groupId, iteration }, ...]`. A body node expanded from an `include:` retains its
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
-This works on **every** node type, `bash`/`script` included. The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+This works on **every** node type, `bash`/`script` included. For host runs and legacy container environments, a failed write logs a warning and the node still succeeds without the sidecar. For container environments with separated artifact storage, a failed write logs a warning and fails the run. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
 #### Reading typed artifacts by type
 
@@ -1497,7 +1497,7 @@ Properties worth knowing:
 - **Failures stay visible.** `errors` lists every record the read could not turn into an artifact (malformed or foreign-run sidecar, unsafe path, missing or unreadable content). A corrupt sidecar has no trustworthy type, so it never disappears into an empty type list. An absent key means no matching readable metadata; `runId` lets a consumer reject a listing handed to it out of scope.
 - **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and deprecated `approval.on_reject` rework prompts. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
 
-Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
+Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a file sidecar that may contain the full output and is not required for ordinary bash audit retention. Sidecar write failures warn for host and legacy container runs, and fail runs with separated container artifacts.
 
 ### Retained subprocess evidence
 
@@ -2792,10 +2792,11 @@ What you get, compared with the `workflow:` fan-out above:
   aggregate value, and `$INPUTS` binding follows the block's declared `inputs:`. The item
   binding named by `fan_out.as` is required; there is no implicit `$ARGUMENTS` fallback.
 - **Ordered aggregate.** `$<id>.output` is a JSON array of the instances' terminal outputs
-  **in item order**, not completion order; under `join: all_done` a failed instance
-  contributes the `{ archon_failed: true, error, status }` marker. An empty item list
-  completes immediately with `[]`. Under `join: all_success` any failed instance fails the
-  node.
+  **in item order**, not completion order; under `join: all_done` an authored child failure
+  contributes the `{ archon_failed: true, error, status }` marker. Required artifact writes,
+  artifact exchange failures, and instance persistence errors fail either join. An empty
+  item list completes immediately with `[]`. Under `join: all_success` any failed instance
+  fails the node.
 - **Content-addressed resume.** Each instance is keyed by a hash of its item value (plus an
   ordinal for byte-identical duplicates). The first ordered snapshot is persisted before
   anything schedules and remains authoritative: a resume ignores and logs a producer list
@@ -3024,8 +3025,10 @@ is no in-workflow resolver: a pointer is for **machine readers**, and
 `GET /api/artifacts/<run_id>/<path>` serves exactly that file. The read side owns
 reachability and real-path checks by design; that route does lexical containment today, and
 real-path resolution at read time is not yet implemented (#3160). A prompt inside the
-producing run keeps using the `$ARTIFACTS_DIR/<path>` string, which is the same file on
-disk. See
+producing run keeps using the logical `$ARTIFACTS_DIR/<path>` string. New container
+environments use separate container output and host artifact stores at that path; output
+becomes visible to host readers after collection following the invocation, before pointer
+certification. Host runs and legacy container binds address the same file directly. See
 [Artifact pointers](/reference/variables/#artifact-pointers-in-a-result) for the full rule
 set.
 
