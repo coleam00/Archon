@@ -967,7 +967,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
                   max_iterations: 3,
                   fresh_context: false,
                 },
-                retry,
+                retry: { max_attempts: 2, delay_ms: 1 },
               }
             : {
                 id: 'work',

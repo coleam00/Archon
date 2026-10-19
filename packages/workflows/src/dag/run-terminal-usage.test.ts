@@ -277,7 +277,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
               max_iterations: 3,
               fresh_context: false,
             },
-            ...(test.retry ? { retry: { max_attempts: 2, on_error: 'all', delay_ms: 1 } } : {}),
+            ...(test.retry ? { retry: { max_attempts: 2, delay_ms: 1 } } : {}),
           }
         : {
             id: 'work',

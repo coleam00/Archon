@@ -4,7 +4,8 @@ import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { SendQueryOptions } from '@archon/provider-contract';
+import { sessionPreview, type SendQueryOptions } from '@archon/provider-contract';
+import { nodeExecutionMetadataSchema } from '../../../schemas/node-execution';
 import {
   createMockStore,
   mockClaudeCapabilities,
@@ -160,7 +161,10 @@ describe('loop node completion channels', () => {
       .find(event => event.event_type === 'node_started' && event.step_name === 'poll');
     expect(started?.data?.attempt).toBeDefined();
     expect(failed?.data?.attempt).toEqual(started?.data?.attempt);
-    expect(failed?.data?.binding).toEqual(started?.data?.binding);
+    expect(failed?.data?.binding).toEqual({
+      ...nodeExecutionMetadataSchema.shape.binding.parse(started?.data?.binding),
+      sessionPreview: sessionPreview('loop-required-ref'),
+    });
     expect(await Bun.file(markerPath).exists()).toBe(false);
   });
 
