@@ -610,6 +610,8 @@ The Slack chat plugin, with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the compo
 docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/chat-slack
 ```
 
+The image does not ship the Slack plugin yet ([#4674](https://github.com/coleam00/Archon/issues/4674)). Install it with this command, then restart the container. The plugin is kept in the `/.archon` volume.
+
 A workflow pack, from a public GitHub repository that publishes one:
 
 ```bash

@@ -556,6 +556,8 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Platform Adapters -- Slack
 
+These variables take effect only when the `chat-slack` plugin is installed. See the [Slack guide](/adapters/slack/).
+
 | Variable | Description | Default |
 | --- | --- | --- |
 | `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-...`) | -- |

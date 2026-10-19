@@ -229,9 +229,10 @@ Restart the server after installing, updating, or removing a chat plugin. The se
 starts one supervised process per usable chat receipt and verifies its live descriptor
 against the receipt. A receipt that is unreadable or does not own its executable starts
 no process and registers no platform policy; the server logs its path. Run
-`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed platform supersedes its bundled adapter;
-for Slack, this also skips the bundled workflow bridge. The server logs that replacement.
-Without a matching receipt, bundled adapters continue to work as before.
+`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed
+platform supersedes its bundled adapter, and the server logs that replacement. Without a
+matching receipt, bundled adapters continue to work as before. Slack has no bundled adapter:
+without the `chat-slack` plugin, Slack stays off.
 
 The host enforces the descriptor's allowlist for messages and run actions before creating
 an Archon identity. Run actions require the run's starter or an admin. Run events go only
