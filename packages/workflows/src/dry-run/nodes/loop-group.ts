@@ -3,6 +3,7 @@ import { describeUnmetCompletion } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import type { LoopGroupNode, NodeOutput } from '../../schemas';
+import { loopGroupOutputNodes } from '../../schemas';
 import { recordFailed, withResolution, type DryRunContext } from '../context';
 import { completionReason, loopIterationCompletes } from '../loop-completion';
 import { simulateNodes } from '../simulate';
@@ -62,8 +63,8 @@ export async function simulateLoopGroup(
     }
     loopPrevOutputs = bodyOutputs;
     lastOutput =
-      bodyPlan.sinks
-        .map(bodyId => bodyOutputs.get(bodyId))
+      loopGroupOutputNodes(bodyNodes)
+        .map(body => bodyOutputs.get(body.id))
         .find(output => output?.state === 'completed' && output.output.trim())?.output ?? '';
     const failed = bodyNodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
     if (failed) {
