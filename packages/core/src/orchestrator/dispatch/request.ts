@@ -149,6 +149,13 @@ export async function detectContinuation(
         'first, or declare the adoption from a conversation with no open run.'
     );
   }
+  if (options?.supersedesRunId !== undefined && willContinueExistingRun && resumableRun) {
+    throw new WorkflowAdoptionError(
+      `Cannot supersede run '${options.supersedesRunId}': this conversation already continues ` +
+        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
+        'first, or declare the supersede from a conversation with no open run.'
+    );
+  }
   return { resumableRun, explicitResumeRequested, willContinueExistingRun };
 }
 

@@ -608,6 +608,74 @@ describe('workflow dispatch routing', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test.each([
+    { label: 'paused run with resumable work', explicit: false, empty: false },
+    { label: 'paused run with nothing to resume', explicit: false, empty: true },
+    { label: 'explicit resume of a failed run', explicit: true, empty: false },
+  ])('supersede is refused before $label', async ({ explicit, empty }) => {
+    const run = makeResumableRun({ status: explicit ? 'failed' : 'paused' });
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(explicit ? { resumeRun: run } : {}));
+    if (!explicit) mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
+    const hydrate = mockHydrateResumableRun.getMockImplementation();
+    if (!hydrate) throw new Error('Missing hydration implementation');
+    if (empty) mockHydrateResumableRun.mockResolvedValue(null);
+    mockPrepareWorkflowSource.mockClear();
+    const platform = makeForegroundPlatform();
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowSupersedesRunId: 'replaced-run',
+      });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining(
+          `Cannot supersede run 'replaced-run': this conversation already continues run '${run.id}' (${run.status}). Resume or abandon that run first`
+        )
+      );
+      expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+      expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    } finally {
+      mockHydrateResumableRun.mockImplementation(hydrate);
+    }
+  });
+
+  test.each([false, true])('fresh supersede records provenance (force=%s)', async force => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult({ force }));
+    const platform = makeForegroundPlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowSupersedesRunId: 'replaced-run',
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0][7]).toMatchObject({
+      adoptedFromRunId: 'replaced-run',
+      continuationMode: 'supersede',
+    });
+  });
+
+  test('fresh background supersede forwards provenance to dispatch', async () => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowSupersedesRunId: 'replaced-run',
+    });
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ supersedesRunId: 'replaced-run' }),
+      expect.objectContaining({ name: 'test-workflow' })
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('adopt is refused when the workflow opts out of worktrees', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
