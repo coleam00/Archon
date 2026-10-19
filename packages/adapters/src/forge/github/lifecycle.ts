@@ -15,10 +15,12 @@ import { refused, unknown, unverified, type Submit } from './mutation-outcome';
 import { createPullRequest, editPullRequestBody, setDraftState } from './pull-requests';
 import { mergePullRequest } from './merge';
 import { upsertComment } from './comments';
+import { replyOnThread, resolveThread } from './review-threads';
 import {
   addLabel,
   closeWorkItem,
   createWorkItem,
+  editWorkItemBody,
   ensureLabel,
   removeLabel,
   setLabels,
@@ -62,6 +64,12 @@ export async function handleGithubMutation(
         return await upsertComment(request, fetchImpl, token, submit);
       case 'workitem.close':
         return await closeWorkItem(request, fetchImpl, token, submit);
+      case 'workitem.edit-body':
+        return await editWorkItemBody(request, fetchImpl, token, submit);
+      case 'pr.thread.reply':
+        return await replyOnThread(request, fetchImpl, token, submit);
+      case 'pr.thread.resolve':
+        return await resolveThread(request, fetchImpl, token, submit);
     }
   } catch (cause) {
     const error = githubErrorDetail(cause);

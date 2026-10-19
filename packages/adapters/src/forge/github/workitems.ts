@@ -1,4 +1,4 @@
-/** GitHub work items: reads, listing, creation, labels and closing. */
+/** GitHub work items: reads, listing, creation, labels, body edits and closing. */
 
 import { z } from 'zod';
 import {
@@ -408,6 +408,45 @@ export async function closeWorkItem(
   return observed.state === 'closed' && after.state_reason === request.reason
     ? applied(request, { changed: true, workitem: observed, reason: request.reason })
     : unverified(request, 'Issue close read-back did not match', 'the issue may be closed', {
+        workitem: observed,
+      });
+}
+
+export async function editWorkItemBody(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.edit-body' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const issue = { kind: 'issue', ref: request.ref } as const;
+  const before = await readIssue(fetchImpl, token, request.ref);
+  // subjectRecord refuses a pull request number, so the record is an issue's.
+  const workitem = { ...subjectRecord(issue, before), kind: 'issue' as const };
+  const bodyDigest = contentDigest(request.body);
+  if ((before.body ?? '') === request.body)
+    return applied(request, { changed: false, workitem, bodyDigest });
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(request.ref.number)}`,
+    { method: 'PATCH', body: JSON.stringify({ body: request.body }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const leaveBehind = 'the issue body may have changed';
+  let after: Issue;
+  try {
+    after = await readIssue(fetchImpl, token, request.ref);
+  } catch {
+    return unverified(request, 'Edited issue could not be read back', leaveBehind);
+  }
+  const observed = issueRecord(request.ref.repo, after, request.ref.number);
+  return (after.body ?? '') === request.body
+    ? applied(request, { changed: true, workitem: observed, bodyDigest })
+    : unverified(request, 'Issue body read-back did not match', leaveBehind, {
         workitem: observed,
       });
 }
