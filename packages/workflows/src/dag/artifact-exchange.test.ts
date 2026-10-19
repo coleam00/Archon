@@ -328,10 +328,10 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     const artifactsDir = join(root, 'artifacts');
     const large = 'z'.repeat(33000);
     const events: string[] = [];
-    let publishedListing = '';
+    let publishedListings: string[] = [];
     const exec = spyOnNodeExec().mockImplementation(async (_cmd, args, options) => {
       events.push('invoke');
-      expect(options?.env?.TYPED_ARTIFACTS_FILE).toBe(publishedListing);
+      expect(publishedListings).toContain(options?.env?.TYPED_ARTIFACTS_FILE ?? '');
       const spills = await readdir(join(artifactsDir, '.archon', 'node-output-spills'));
       expect(spills.some(f => args.at(-1)?.includes(f))).toBe(true);
       return { stdout: '', stderr: '' };
@@ -347,8 +347,11 @@ describe('artifact exchange at workflow invocation boundaries', () => {
               events.push('publish');
               const dir = join(artifactsDir, '.archon', 'typed-artifacts');
               const files = await readdir(dir);
-              publishedListing = join(dir, files[0]);
-              expect(await readFile(publishedListing, 'utf8')).toContain('artifactsByType');
+              publishedListings = files.map(file => join(dir, file));
+              expect(publishedListings.length).toBeGreaterThan(0);
+              for (const listing of publishedListings) {
+                expect(await readFile(listing, 'utf8')).toContain('artifactsByType');
+              }
               const spills = await readdir(join(artifactsDir, '.archon', 'node-output-spills'));
               expect(
                 await readFile(
