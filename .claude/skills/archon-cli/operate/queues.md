@@ -12,7 +12,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 |---|---|
 | `archon-intake` | Records an issue event and triages the best waiting issue. The verdict becomes the item's stage and a route label. |
 | `archon-build-queue` | Claims the best waiting triaged item and takes it to a pull request whose review says Ready, one round per run. |
-| `archon-merge-queue` | Claims the items the build queue finished and merges at most one pull request, through a gate. |
+| `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
 The pack's README (`.archon/workflows/sdlc/README.md`) is the full contract. This
