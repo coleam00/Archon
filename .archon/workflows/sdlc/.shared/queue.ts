@@ -84,7 +84,8 @@ export const OTHER = 'other';
  */
 export function withOther<Effect extends string>(
   attention: Attention<Effect>,
-  effect: Effect
+  effect: Effect,
+  does = 'Do what the answer text says. The text is written into the issue body as the ruling, and the next round works from it.'
 ): Attention<Effect> {
   // The queue owns `other`: an agent-declared one is replaced, so its effect is always this one.
   return {
@@ -94,7 +95,7 @@ export function withOther<Effect extends string>(
       {
         id: OTHER,
         label: 'Something else',
-        does: 'Do what the answer text says. The text is written into the issue body as the ruling, and the next round works from it.',
+        does,
         effect,
         ruling: '',
       },

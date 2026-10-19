@@ -45,6 +45,7 @@ export type RootTestStep =
  */
 export const ROOT_TEST_PLAN = [
   { kind: 'workspace', shard: 'cli', package: '@archon/cli' },
+  { kind: 'workspace', shard: 'core', package: '@archon/core' },
   { kind: 'workspaces', shard: 'packages' },
   { kind: 'root', shard: 'scripts', selectors: ['./scripts/'] },
   { kind: 'root', shard: 'pack', selectors: ['./.archon/scripts/'] },

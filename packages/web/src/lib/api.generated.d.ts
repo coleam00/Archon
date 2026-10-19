@@ -1773,7 +1773,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -5249,6 +5249,7 @@ export interface components {
       persist_session?: boolean;
       output_type?: string;
       command?: string;
+      with?: unknown;
       prompt?: string;
       bash?: string;
       timeout?: number;
@@ -5316,11 +5317,11 @@ export interface components {
             };
           };
       cancel?: string;
-      include?: string;
-      workflow?: string;
-      input?: string;
+      script?: string;
       /** @enum {string} */
-      isolation?: 'inherit' | 'worktree';
+      runtime?: 'bun' | 'uv';
+      deps?: string[];
+      include?: string;
       fan_out?: {
         items: string;
         as?: string;
@@ -5332,11 +5333,10 @@ export interface components {
          */
         join: 'all_success' | 'all_done' | 'first_success';
       };
-      script?: string;
+      workflow?: string;
+      input?: string;
       /** @enum {string} */
-      runtime?: 'bun' | 'uv';
-      deps?: string[];
-      with?: unknown;
+      isolation?: 'inherit' | 'worktree';
     };
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';

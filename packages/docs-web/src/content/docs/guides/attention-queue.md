@@ -92,7 +92,9 @@ they cannot disagree about what a run needs.
   the run and resume or abandon it.
 - **`occurrence`** identifies an answerable pause (`attention` or `awaiting_response`).
   Pass it back with `--occurrence`; an answer or
-  label write for a pause the run has left is refused, naming the current occurrence.
+  label write for a pause the run has left is refused. If the diagnostic read succeeds
+  and the run is awaiting another answer, the refusal names the current occurrence.
+  Otherwise, fetch the current item again before retrying.
 - **`revision`** starts at 1 and grows by one with every label write on an attention
   wait. It stays 1 for other kinds, so it does not identify every item change.
 - **`project`** is the project the run belongs to, never a label. `key` is the project

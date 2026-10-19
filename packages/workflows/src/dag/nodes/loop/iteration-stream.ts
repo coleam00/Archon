@@ -14,6 +14,7 @@ import { createProviderEventHandler, type ProviderEventHandler } from '../../../
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
+import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -125,8 +126,7 @@ export async function runIterationAttempts(
   run: LoopRun,
   state: LoopState,
   i: number,
-  iterationStart: number,
-  typedArtifactsFile: string
+  iterationStart: number
 ): Promise<IterationReply | IterationFailed> {
   const { ctx } = run;
   // Session threading: every attempt of this iteration resumes the session the previous
@@ -148,7 +148,7 @@ export async function runIterationAttempts(
         );
       }
     }
-    const outcome = await runReaskAttempts(run, state, i, iterationStart, typedArtifactsFile, {
+    const outcome = await runReaskAttempts(run, state, i, iterationStart, {
       resumeSessionId,
       retry,
     });
@@ -161,7 +161,6 @@ async function runReaskAttempts(
   state: LoopState,
   i: number,
   iterationStart: number,
-  typedArtifactsFile: string,
   iteration: { resumeSessionId: string | undefined; retry: IterationRetry }
 ): Promise<IterationReply | AttemptVerdict> {
   const { retry } = iteration;
@@ -182,6 +181,10 @@ async function runReaskAttempts(
   });
 
   while (true) {
+    const typedArtifactsFile = await writeNodeArtifactsListing(
+      run.ctx.artifactsDir,
+      run.ctx.workflowRun.id
+    );
     const attempt = await streamIterationAttempt(
       run,
       state,
