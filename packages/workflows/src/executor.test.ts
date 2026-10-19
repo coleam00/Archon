@@ -343,6 +343,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set<string>(),
       budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
@@ -3764,6 +3765,7 @@ describe('executeWorkflow', () => {
         getDagResumeSnapshot: mock(async () => ({
           completedNodeOutputs,
           fanOutSnapshots: new Map(),
+          failedNodes: new Map(),
           unresolvedNodeStarts: new Set<string>(),
           budget: { workUnits: 0, spendUsd: 0 },
           tokens,

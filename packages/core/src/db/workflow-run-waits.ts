@@ -14,6 +14,7 @@ import {
   type WorkflowRun,
   type WorkflowWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
+import { PAUSE_CAUSE_METADATA_KEY, pauseCauseOfWait } from '@archon/workflows/schemas/pause-cause';
 import {
   answeredAttentionWait,
   attentionLabeledEvent,
@@ -39,12 +40,13 @@ import {
 import { getLog, jsonIntExtract, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
 /** Replace the engine-owned wait object and remove any stale human approval. */
-function replaceWaitMetadata(paramIndex: number): string {
+function replaceWaitMetadata(paramIndex: number, causeIndex: number): string {
   const value = `$${String(paramIndex)}`;
+  const cause = `$${String(causeIndex)}`;
   const metadata = getDialect().jsonRemove('metadata', 'approval');
   return getDatabaseType() === 'postgresql'
-    ? `jsonb_set(${metadata}, '{wait}', ${value}::jsonb, true)`
-    : `json_set(${metadata}, '$.wait', json(${value}))`;
+    ? `jsonb_set(jsonb_set(${metadata}, '{wait}', ${value}::jsonb, true), '{${PAUSE_CAUSE_METADATA_KEY}}', to_jsonb(${cause}::text), true)`
+    : `json_set(${metadata}, '$.wait', json(${value}), '$.${PAUSE_CAUSE_METADATA_KEY}', ${cause})`;
 }
 
 /** Pause a running run on a persisted wait condition. */
@@ -58,9 +60,9 @@ export async function pauseWorkflowRunForWait(
     await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
-         SET status = 'paused', metadata = ${replaceWaitMetadata(2)}
+         SET status = 'paused', metadata = ${replaceWaitMetadata(2, 3)}
          WHERE id = $1 AND status = 'running'`,
-        [id, JSON.stringify(parsedWaitContext)]
+        [id, JSON.stringify(parsedWaitContext), pauseCauseOfWait(parsedWaitContext)]
       );
       if ((result.rowCount ?? 0) === 0) {
         throw new Error(`Workflow run not found or not in running state (id: ${id})`);
