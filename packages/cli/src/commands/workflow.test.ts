@@ -8,7 +8,7 @@ import {
   mockReclaimContainerEnv,
   mockRequestDetachedRunStop,
   mockRunLiveOwnerClose,
-  mockAssertDetachedRunProcessOwner,
+  mockClaimDetachedRunProcessOwner,
   mockStartRunLiveOwner,
   noOwnerAnswers,
   mockIsRunOwnerAnswering,
@@ -3723,8 +3723,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     // handler in-process doesn't kill the test runner.
     exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     setMockDetachedStopRequested(false);
-    mockAssertDetachedRunProcessOwner.mockReset();
-    mockAssertDetachedRunProcessOwner.mockImplementation(() => undefined);
+    mockClaimDetachedRunProcessOwner.mockReset();
+    mockClaimDetachedRunProcessOwner.mockImplementation(() => Promise.resolve(undefined));
     mockStartRunLiveOwner.mockClear();
     mockRunLiveOwnerClose.mockClear();
 
@@ -3879,9 +3879,9 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
   it('rejects a detached marker when this process does not own its process group', async () => {
     process.env.ARCHON_DETACHED_RUN_OWNER = '1';
-    mockAssertDetachedRunProcessOwner.mockImplementationOnce(() => {
-      throw new Error('does not own process group');
-    });
+    mockClaimDetachedRunProcessOwner.mockImplementationOnce(() =>
+      Promise.reject(new Error('does not own process group'))
+    );
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {})

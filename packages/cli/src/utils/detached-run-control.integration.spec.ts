@@ -30,7 +30,7 @@ const trackTempRoot = trackTempRoots();
 const FIXTURE_STATE_DEADLINE_MS = 5_000;
 
 /**
- * For a test that runs a real stop. On Windows the stop reads the process table through
+ * For a test that runs a real stop. On Windows the test checks for survivors through
  * `Get-CimInstance`; once WMI is warm (see `WMI_WARM_UP_TIMEOUT_MS`) a listing takes 1-3 s.
  */
 const STOP_TEST_TIMEOUT_MS = 30_000;
@@ -46,10 +46,9 @@ const STOP_TEST_TIMEOUT_MS = 30_000;
 const WMI_WARM_UP_TIMEOUT_MS = 90_000;
 
 /**
- * For the stop that races a spawning target. That stop takes up to six process listings
- * before it gives up (one before `taskkill`, five to confirm), and on a Windows runner
- * under CPU load a listing took 4-8 s and this test up to 55 s, so a correct stop there
- * can by itself outlast `STOP_TEST_TIMEOUT_MS`. This bounds a hang, not the stop's speed.
+ * For a stop against a real Windows owner fixture: the fixture's start-up, the stop, and
+ * up to two survivor listings, each of which took 4-8 s on a Windows runner under CPU
+ * load. This bounds a hang, not the stop's speed.
  */
 const RACING_STOP_TEST_TIMEOUT_MS = 90_000;
 
@@ -99,8 +98,7 @@ const execFileAsync = promisify(execFile);
  * PIDs of the live Windows processes whose command line contains `marker`. The marker
  * travels in the environment so that this query's own command line does not match it,
  * and the filter runs inside WMI so that a loaded runner is not made to serialize the
- * whole process table: the stop being checked has already spent most of the test's
- * budget listing it. `marker` must hold no WQL wildcard (`%`, `_`, `[`).
+ * whole process table. `marker` must hold no WQL wildcard (`%`, `_`, `[`).
  */
 async function windowsProcessesNaming(marker: string): Promise<number[]> {
   const script = [
@@ -157,26 +155,59 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
  *
- * `leaseMs` closes the lease that long after committing it, as a real owner's lease
- * closes when the owner exits.
+ * It reports `windowsJob` as the owner's job object name, or no job object when omitted,
+ * as an owner from an older Archon version would.
  */
-function stubOwner(pid: number, leaseMs?: number): Server {
+function stubOwner(pid: number, windowsJob?: string): Server {
   return createServer((socket: Socket): void => {
     socket.setEncoding('utf8');
     let request = '';
     socket.on('data', (chunk: string): void => {
       request += chunk;
       if (request.includes('stop\n')) {
-        socket.write(`${JSON.stringify({ kind: 'detached', pid })}\n`);
+        socket.write(`${JSON.stringify({ kind: 'detached', pid, windowsJob })}\n`);
         request = request.replace('stop\n', '');
       }
       if (request.includes('terminate\n')) {
         socket.write('ready\n');
         request = request.replace('terminate\n', '');
-        if (leaseMs !== undefined) setTimeout(() => socket.destroy(), leaseMs);
       }
     });
   });
+}
+
+/**
+ * Start `fixtures/windows-run-owner.ts` as a real detached run owner and wait until it is
+ * ready. Its fixture directory's name is on the command line of every process in its tree.
+ */
+async function startWindowsRunOwner(
+  mode: 'orphan' | 'spawner'
+): Promise<{ runId: string; dir: string; marker: string }> {
+  const runId = `windows-${mode}-${crypto.randomUUID()}`;
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), `archon-windows-${mode}-`)));
+  const fixturePath = join(import.meta.dir, 'fixtures', 'windows-run-owner.ts');
+  const owner = spawn(process.execPath, [fixturePath, runId, dir, mode], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
+  owner.unref();
+  await waitForFixtureProcess(() => existsSync(join(dir, 'ready')));
+  return { runId, dir, marker: basename(dir) };
+}
+
+/** Kill whatever `marker` still names, after a test that may have left survivors. */
+async function killWindowsProcessesNaming(
+  marker: string,
+  listed: number[] | undefined
+): Promise<void> {
+  for (const pid of listed ?? (await windowsProcessesNaming(marker))) {
+    try {
+      process.kill(pid);
+    } catch {
+      // Already gone: the test's own assertion reports a survivor.
+    }
+  }
 }
 
 describe('detached run control integration', () => {
@@ -286,7 +317,7 @@ describe('detached run control integration', () => {
         const target = await requestDetachedRunStop(runId);
         await target.stop();
         // The deadline starts once the stop resolves, so it measures the stop's effect
-        // and not fixture startup plus a slow first process listing on a loaded runner.
+        // and not fixture startup on a loaded runner.
         await waitForFixtureProcess(() => owner.exitCode !== null || owner.signalCode !== null);
         // Event-driven proof instead of a fixed sleep: wait for the descendant's
         // observable death. A dead process cannot act on any future signal. Windows
@@ -316,13 +347,40 @@ describe('detached run control integration', () => {
   );
 
   it(
+    'stops a Windows grandchild whose parent exited before the stop',
+    async () => {
+      // #3492: the owner started a child that started a grandchild and exited, so no
+      // live process links the grandchild to the owner by parent PID. The grandchild is
+      // detached, which takes it out of the runtime's own kill-on-close job.
+      if (process.platform !== 'win32') return;
+
+      const { runId, dir, marker } = await startWindowsRunOwner('orphan');
+      let survivors: number[] | undefined;
+      try {
+        const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+        // The premise, asserted rather than assumed: the orphan is alive before the stop.
+        expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+
+        const target = await requestDetachedRunStop(runId);
+        await target.stop();
+
+        survivors = await windowsProcessesNaming(marker);
+        expect(survivors).toEqual([]);
+      } finally {
+        await killWindowsProcessesNaming(marker, survivors);
+      }
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
     'treats an already-gone target as a stopped tree, not a failed stop',
     async () => {
-      // #2946: `taskkill /T` walks the tree PID by PID and exits non-zero when one of
-      // them is already gone. Reading that exit code as failure made `archon workflow
-      // cancel` report a failure on Windows for a run whose tree had in fact stopped,
-      // and left the run row saying `running`. POSIX has always tolerated the same
-      // condition as ESRCH; the contract is one tree-is-gone outcome on both branches.
+      // #2946: a gone tree must read as stopped, not as a failed stop that leaves the run
+      // row saying `running`. POSIX only: a Windows stop needs the owner's job object, and
+      // a live lease for a dead PID with no job is a state no real Windows owner produces.
+      if (process.platform === 'win32') return;
+
       const runId = `already-gone-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const doomed = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
@@ -337,12 +395,11 @@ describe('detached run control integration', () => {
       try {
         const target = await requestDetachedRunStop(runId);
         // Resolving IS the assertion, and letting a rejection through reports the real
-        // reason rather than a matcher's. The old Windows branch rejected here, carrying
-        // taskkill's "There is no running instance of the task" as a stop failure.
+        // reason rather than a matcher's.
         await target.stop();
       } finally {
         await close(server);
-        if (process.platform !== 'win32') rmSync(path, { force: true });
+        rmSync(path, { force: true });
       }
     },
     STOP_TEST_TIMEOUT_MS
@@ -351,135 +408,45 @@ describe('detached run control integration', () => {
   it(
     'does not report a Windows tree stopped while a descendant the first kill missed is alive',
     async () => {
-      // #3466: `taskkill /T` kills the tree it saw when it started. A descendant spawned
-      // while that walk runs survives it, and the old path then confirmed only the root.
-      // The target here spawns a detached child every few milliseconds, so every stop
-      // races at least one spawn. On Windows a detached child also breaks away from the
-      // runtime's kill-on-close job, so nothing but the stop itself can end it. POSIX is
-      // out of scope: a detached child there leaves the process group on purpose.
+      // #3466: a kill that walks the tree misses a descendant spawned during the walk. The
+      // owner here spawns a detached child every few milliseconds, so every stop races at
+      // least one spawn. Each child is created inside the owner's job object, so the stop
+      // keeps terminating the job until it holds no process. A detached child leaves only
+      // the runtime's own job, not the owner's. POSIX is out of scope: a detached child
+      // there leaves the process group on purpose.
       if (process.platform !== 'win32') return;
 
-      const runId = `spawner-${crypto.randomUUID()}`;
-      const path = runLiveOwnerPath(runId);
-      const kidsDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-spawner-')));
-      // Every process in the tree carries this unique directory on its command line, which
-      // is how the check below finds a survivor. A recorded PID cannot: Windows hands a
-      // killed child's PID to unrelated processes within the stop's own runtime, and one
-      // such reuser (TrustedInstaller.exe) once failed this test as a "survivor".
-      const marker = basename(kidsDir);
-      // The spawner records each child's PID as a file name, so the test can wait until
-      // the target is spawning before the stop begins.
-      const spawner = spawn(
-        process.execPath,
-        [
-          '-e',
-          [
-            "const { spawn } = require('node:child_process');",
-            "const fs = require('node:fs');",
-            "const path = require('node:path');",
-            'const dir = process.argv[1];',
-            "const kid = 'setInterval(() => undefined, 1000);';",
-            'const loop = () => {',
-            "  const child = spawn(process.execPath, ['-e', kid, dir], { detached: true, stdio: 'ignore' });",
-            "  fs.writeFileSync(path.join(dir, String(child.pid)), '');",
-            '  setTimeout(loop, 10);',
-            '};',
-            'loop();',
-          ].join('\n'),
-          kidsDir,
-        ],
-        { detached: true, stdio: 'ignore' }
-      );
-      if (spawner.pid === undefined) throw new Error('Failed to spawn the spawning target');
-
-      const server = stubOwner(spawner.pid);
-      await listen(server, path);
+      const { runId, dir, marker } = await startWindowsRunOwner('spawner');
+      // Every process in the tree carries `marker` on its command line, which is how the
+      // check below finds a survivor. A recorded PID cannot: Windows hands a killed child's
+      // PID to unrelated processes within the stop's own runtime, and one such reuser
+      // (TrustedInstaller.exe) once failed this test as a "survivor".
       let survivors: number[] | undefined;
       try {
-        // The target is spawning before the stop begins, so the race is live.
-        await waitForFixtureProcess(() => readdirSync(kidsDir).length >= 3);
+        // The owner is spawning before the stop begins, so the race is live.
+        await waitForFixtureProcess(() => readdirSync(join(dir, 'kids')).length >= 3);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
-        // every process that belongs to the tree, the spawner included.
+        // every process that belongs to the tree, the owner included.
         survivors = await windowsProcessesNaming(marker);
         expect(survivors).toEqual([]);
       } finally {
-        spawner.kill();
-        // Listed again only when the stop threw before the check did.
-        for (const pid of survivors ?? (await windowsProcessesNaming(marker))) {
-          try {
-            process.kill(pid);
-          } catch {
-            // Already gone: the assertion above reports a survivor.
-          }
-        }
-        await close(server);
+        await killWindowsProcessesNaming(marker, survivors);
       }
     },
     RACING_STOP_TEST_TIMEOUT_MS
   );
 
   it(
-    'reports an unconfirmed Windows stop, killing nothing, when an exited root left a child',
+    'refuses a Windows owner that reported no job object, killing nothing',
     async () => {
-      // The root is gone before the stop, so nothing pins which process held its PID. A
-      // process naming that PID as its parent may be an unrelated earlier holder's child,
-      // so the stop must refuse to call the tree gone, and must not kill on the guess.
+      // An owner from an Archon version without job objects. Nothing can show its whole
+      // tree gone, so the stop must refuse before it kills anything.
       if (process.platform !== 'win32') return;
 
-      const runId = `orphaned-${crypto.randomUUID()}`;
-      const path = runLiveOwnerPath(runId);
-      const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-orphaned-')));
-      const childPidPath = join(fixtureDir, 'child');
-      const root = spawn(
-        process.execPath,
-        [
-          '-e',
-          [
-            "const { spawn } = require('node:child_process');",
-            "const child = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { detached: true, stdio: 'ignore' });",
-            "require('node:fs').writeFileSync(process.argv[1], String(child.pid));",
-            'process.exit(0);',
-          ].join('\n'),
-          childPidPath,
-        ],
-        { stdio: 'ignore' }
-      );
-      if (root.pid === undefined) throw new Error('Failed to spawn the exiting root');
-      await waitForExit(root);
-      const childPid = Number(readFileSync(childPidPath, 'utf8'));
-      expect(processExists(childPid)).toBe(true);
-
-      const server = stubOwner(root.pid);
-      await listen(server, path);
-      try {
-        const target = await requestDetachedRunStop(runId);
-        const error = await rejectedError(async (): Promise<void> => target.stop());
-        expect(error.message).toContain('Could not confirm');
-        expect(processExists(childPid)).toBe(true);
-      } finally {
-        try {
-          process.kill(childPid);
-        } catch {
-          // Already gone: the assertion above reports it.
-        }
-        await close(server);
-      }
-    },
-    STOP_TEST_TIMEOUT_MS
-  );
-
-  it(
-    'kills nothing on Windows when the lease closes before the kill',
-    async () => {
-      // The first process listing takes hundreds of milliseconds at least. A lease that
-      // closes during it no longer proves the listed root is the owner, so the stop must
-      // refuse rather than kill whatever now holds that PID.
-      if (process.platform !== 'win32') return;
-
-      const runId = `lapsed-${crypto.randomUUID()}`;
+      const runId = `jobless-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const target = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
         stdio: 'ignore',
@@ -487,12 +454,44 @@ describe('detached run control integration', () => {
       if (target.pid === undefined) throw new Error('Failed to spawn the target');
       const targetPid = target.pid;
 
-      const server = stubOwner(targetPid, 50);
+      const server = stubOwner(targetPid);
       await listen(server, path);
       try {
         const stop = await requestDetachedRunStop(runId);
         const error = await rejectedError(async (): Promise<void> => stop.stop());
-        expect(error.message).toContain('released its termination lease before it was stopped');
+        expect(error.message).toContain('Could not confirm');
+        expect(error.message).toContain('reported no job object');
+        expect(processExists(targetPid)).toBe(true);
+      } finally {
+        target.kill();
+        await close(server);
+      }
+    },
+    STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'refuses a Windows owner whose job object cannot be opened, killing nothing',
+    async () => {
+      // The owner names a job that does not exist. A job the stop cannot open proves
+      // nothing about the tree, so the stop must refuse before it kills anything.
+      if (process.platform !== 'win32') return;
+
+      const runId = `unopenable-job-${crypto.randomUUID()}`;
+      const path = runLiveOwnerPath(runId);
+      const target = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
+        stdio: 'ignore',
+      });
+      if (target.pid === undefined) throw new Error('Failed to spawn the target');
+      const targetPid = target.pid;
+
+      const server = stubOwner(targetPid, `Global\\archon-run-${crypto.randomUUID()}`);
+      await listen(server, path);
+      try {
+        const stop = await requestDetachedRunStop(runId);
+        const error = await rejectedError(async (): Promise<void> => stop.stop());
+        expect(error.message).toContain('Could not confirm');
+        expect(error.message).toContain('its job object could not be opened');
         expect(processExists(targetPid)).toBe(true);
       } finally {
         target.kill();

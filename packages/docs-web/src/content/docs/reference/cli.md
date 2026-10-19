@@ -1128,6 +1128,18 @@ After termination is confirmed, `cancel` records cancellation through the same r
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
 descendant and can report the same cascade failures or blocked parent described below.
 
+On Windows a detached owner runs in a Job Object that every process it starts inherits, so
+cancel and abandon stop and confirm the whole tree even when an intermediate process has
+already exited. An owner started by an Archon version without this reports no job, and its
+tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
+process and its descendants yourself, then use `workflow abandon`.
+
+The job also holds detached runs that a node of the run launched, for example with
+`workflow run --detach`, because the job grants no breakaway. Cancelling the
+launching run therefore stops their owners too, and those runs stay `running` with no
+owner until you abandon them. On POSIX a detached run starts its own process group and
+keeps running.
+
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and
 leaves the run's state unchanged, even though the owner process has stopped. With

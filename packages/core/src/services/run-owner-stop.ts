@@ -1,10 +1,11 @@
 import {
   requestRunLiveOwnerStop,
   RunLiveOwnerStopUnavailableError,
+  type RunLiveOwnerStopLease,
   type RunLiveOwnerStopRefusal,
 } from './run-live-owner';
 import { TERMINATION_CONFIRM_MS, TERMINATION_GRACE_MS } from './run-stop-bounds';
-import { terminateWindowsProcessTree } from './windows-process-tree';
+import { openWindowsRunJob, type WindowsRunJob } from './windows-run-job';
 
 /*
  * The one path that stops a detached run owner: prove the exact-run owner through its
@@ -39,7 +40,7 @@ export class DetachedRunOwnerUnavailableError extends Error {
 
 /** Ask the live exact-run owner for an opaque termination lease. */
 export async function requestDetachedRunStop(runId: string): Promise<DetachedRunStopTarget> {
-  let lease: Awaited<ReturnType<typeof requestRunLiveOwnerStop>>;
+  let lease: RunLiveOwnerStopLease;
   try {
     lease = await requestRunLiveOwnerStop(runId);
   } catch (error) {
@@ -56,10 +57,15 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
   return {
     pid: lease.pid,
     stop: async (): Promise<void> => {
+      let windowsJob: WindowsRunJob | undefined;
       try {
+        // Opened before committing, so a refused stop announces no handoff. The open
+        // handle keeps the job reachable even if the owner exits before the kill.
+        if (process.platform === 'win32') windowsJob = openOwnerWindowsJob(lease);
         await lease.commit();
-        await terminateDetachedProcessTree(lease.pid, () => lease.isLive());
+        await terminateDetachedProcessTree(lease.pid, () => lease.isLive(), windowsJob);
       } finally {
+        windowsJob?.close();
         lease.release();
       }
     },
@@ -67,6 +73,16 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
       lease.release();
     },
   };
+}
+
+function openOwnerWindowsJob(lease: RunLiveOwnerStopLease): WindowsRunJob {
+  // An owner from an Archon version without job objects: nothing can confirm its tree gone.
+  if (lease.windowsJob === undefined) {
+    throw new Error(
+      `Could not confirm detached workflow process tree ${String(lease.pid)} exited: its owner reported no job object`
+    );
+  }
+  return openWindowsRunJob(lease.windowsJob, lease.pid);
 }
 
 function processExists(pid: number): boolean {
@@ -99,7 +115,8 @@ async function waitUntilGone(exists: () => boolean, timeoutMs: number): Promise<
 /** Terminate the process tree while its exact-run owner holds the IPC lease open. */
 async function terminateDetachedProcessTree(
   pid: number,
-  ownsLiveLease: () => boolean
+  ownsLiveLease: () => boolean,
+  windowsJob: WindowsRunJob | undefined
 ): Promise<void> {
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
     throw new Error(`Refusing to terminate invalid detached owner PID ${String(pid)}`);
@@ -108,8 +125,8 @@ async function terminateDetachedProcessTree(
     throw new Error(`Detached workflow owner ${String(pid)} released its termination lease`);
   }
 
-  if (process.platform === 'win32') {
-    await terminateWindowsProcessTree(pid, ownsLiveLease);
+  if (windowsJob) {
+    await windowsJob.terminate();
     return;
   }
 
