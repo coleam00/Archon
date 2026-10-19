@@ -298,10 +298,8 @@ nodes:
               e.event_type === 'node_failed' &&
               e.step_name === 'work'
           );
-          expect(failed?.data?.error).toBe(
-            'No base branch could be resolved for this run, but $BASE_BRANCH is referenced. ' +
-              'A reused isolated branch without its original child run record has no known base, even when defaults are configured.'
-          );
+          expect(failed?.data?.error).toContain('No base branch could be resolved for this run');
+          expect(failed?.data?.error).toContain('start a new parent run');
         }
         if (!referencesBase) expect(child?.metadata.summary).toBe('done');
       });

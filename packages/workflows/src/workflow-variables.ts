@@ -167,7 +167,9 @@ export function substituteWorkflowVariables(
       if (!baseBranch) {
         throw new Error(
           'No base branch could be resolved for this run, but $BASE_BRANCH is referenced. ' +
-            'A reused isolated branch without its original child run record has no known base, even when defaults are configured.'
+            'For a new run, pass --base <branch>, set `worktree.baseBranch` in .archon/config.yaml, or set the codebase default branch. ' +
+            'An isolated child that reused a branch without its original child run record has no known base; start a new parent run. ' +
+            'See https://archon.diy/reference/variables/#base_branch-fail-fast'
         );
       }
       return baseBranch;
