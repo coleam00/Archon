@@ -3,7 +3,7 @@ import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { buildTruncationMarker } from '../utils/output-truncation';
 import type { WorkflowRun } from '../schemas';
 import { validateArtifactPointers } from '../artifact-pointer';
-import { writeSpillFile } from './references';
+import { writeSpillFile } from './shell-quote';
 
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */

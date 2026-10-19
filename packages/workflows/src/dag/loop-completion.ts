@@ -1,6 +1,6 @@
 import type { TokenUsage } from '@archon/provider-contract';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
-import { safeSendMessage } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import { persistNodeEvent, recordDerivedNodeState, recordNodeState } from '../node-event-write';
 import { finishNodeExecution } from '../node-execution';
 import { persistedOutputContract, type NodeExecutionResult } from '../node-record-serialization';

@@ -16,7 +16,7 @@ import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
-import { safeSendMessage, type SendMessageContext } from './executor-shared';
+import { safeSendMessage, type SendMessageContext } from './platform-messages';
 import { logProviderEvent } from './logger';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import type { IWorkflowStore } from './store';
