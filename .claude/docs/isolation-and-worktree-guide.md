@@ -68,9 +68,9 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 
 ---
 
-## Worktree Creation Flow (`packages/isolation/src/providers/worktree.ts`)
+## Worktree Creation Flow (`packages/isolation/src/providers/worktree/create.ts`)
 
-`WorktreeProvider.create(request)` at line 56:
+`WorktreeProvider.create(request)` delegates to `createWorktreeEnvironment()`:
 
 **1. Generate names + check adoption**
 - `generateBranchName(request)` → branch name based on request type
@@ -120,7 +120,7 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 4. If exists and `force` is false → check `hasUncommittedChanges()` (fail-safe: returns `true` on unexpected errors). If changes exist → skip removal
 5. Call `provider.destroy(path, options)`
 
-### `WorktreeProvider.destroy()` (`providers/worktree.ts:105`)
+### `WorktreeProvider.destroy()` (`providers/worktree/destroy.ts`)
 
 Returns `DestroyResult` tracking partial failures:
 
