@@ -5,6 +5,8 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'util';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { cliArgOptions } from '../args';
+import { cliProgramArguments } from './cli-program-arguments';
+import { withDrainedExit } from './exit-with-drain';
 import { writeStderr, writeStdout } from './stdout';
 
 /*
@@ -194,13 +196,8 @@ export async function startRunJobEscapeBroker(): Promise<string> {
   return pipe;
 }
 
-/**
- * The broker's process body, when this CLI process is a broker: serve until the owner that
- * started it exits, then finish the invocations already accepted.
- */
-export async function runRunJobEscapeBrokerIfRequested(): Promise<boolean> {
-  const pipe = process.env[BROKER_ENV];
-  if (pipe === undefined) return false;
+/** The broker's process body: serve until the owner that started it exits. */
+async function serveUntilOwnerExits(pipe: string): Promise<number> {
   const server = await serveRunJobEscape(pipe);
   await writeStdout(BROKER_READY);
   await new Promise<void>(resolveEnd => {
@@ -208,8 +205,31 @@ export async function runRunJobEscapeBrokerIfRequested(): Promise<boolean> {
     process.stdin.once('close', resolveEnd);
     process.stdin.resume();
   });
+  // Finishes the invocations already accepted.
   await server.close();
-  return true;
+  return 0;
+}
+
+/**
+ * The CLI's entry into this escape, before `main`, so telemetry counts a relayed invocation
+ * once, in the relayed process. A broker serves and a `--detach` launch inside a Windows run
+ * relays; either exits the process here. Anything else returns and runs as usual.
+ */
+export async function escapeRunJobIfRequested(
+  args: readonly string[],
+  inheritedEnv: Readonly<Record<string, string | undefined>>
+): Promise<void> {
+  const brokerPipe = process.env[BROKER_ENV];
+  if (brokerPipe !== undefined) await withDrainedExit(() => serveUntilOwnerExits(brokerPipe));
+  const pipe = process.env[RUN_JOB_ESCAPE_ENV];
+  if (pipe === undefined || !isDetachedLaunch(args)) return;
+  await withDrainedExit(() =>
+    relayOutsideRunJob(pipe, {
+      argv: [...cliProgramArguments(), ...args],
+      cwd: process.cwd(),
+      env: inheritedEnv,
+    })
+  );
 }
 
 /** Whether `args` launch a detached run owner (`--detach`). */
