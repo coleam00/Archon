@@ -53,7 +53,7 @@ nodes:
     depends_on: [plan]
     loop:
       prompt: "Implement the next step of the plan."
-      until_bash: "bun run test"          # code decides when it is done
+      until_bash: "bun run test"          # your test command; code decides when it is done
       max_iterations: 10
       fresh_context: true
 
@@ -82,7 +82,7 @@ flowchart LR
   approve -- approve --> pr["pr<br/>(agent)"]
 ```
 
-Run it from any repository:
+Save it in your repository's `.archon/workflows/`, swap `bun run test` for your own test command, and run it:
 
 ```bash
 archon workflow run build-feature "Add dark mode to the settings page"
