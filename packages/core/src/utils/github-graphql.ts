@@ -4,8 +4,8 @@
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { GITHUB_COM_HOST } from '@archon/git';
 import { createLogger } from '@archon/paths';
+import { GH_DOTCOM_TOKEN_KEYS, ghTokenKeysForHost } from '@archon/paths/github-token-env';
 import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -18,13 +18,16 @@ function getLog(): ReturnType<typeof createLogger> {
 const execFileAsync = promisify(execFile);
 
 /**
- * gh reads GH_TOKEN/GITHUB_TOKEN only for github.com; an Enterprise host takes
- * GH_ENTERPRISE_TOKEN. Hand it the same PAT, unless the operator set one.
+ * gh reads an Enterprise Server host's token from its Enterprise keys, not from
+ * GH_TOKEN/GITHUB_TOKEN. Hand it the same PAT, unless the operator set one.
  */
 function ghEnv(hostname: string): NodeJS.ProcessEnv | undefined {
+  const keys = ghTokenKeysForHost(hostname);
   const token = resolveGitHubTokenFromEnv();
-  if (hostname === GITHUB_COM_HOST.host || !token) return undefined;
-  return { GH_ENTERPRISE_TOKEN: token, ...process.env };
+  if (keys === GH_DOTCOM_TOKEN_KEYS || !token || keys.some(key => process.env[key])) {
+    return undefined;
+  }
+  return { ...process.env, GH_ENTERPRISE_TOKEN: token };
 }
 
 /**

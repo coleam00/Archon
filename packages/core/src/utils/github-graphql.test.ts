@@ -25,9 +25,11 @@ describe('getLinkedIssueNumbers', () => {
     const saved = {
       GH_TOKEN: process.env.GH_TOKEN,
       GH_ENTERPRISE_TOKEN: process.env.GH_ENTERPRISE_TOKEN,
+      GITHUB_ENTERPRISE_TOKEN: process.env.GITHUB_ENTERPRISE_TOKEN,
     };
     process.env.GH_TOKEN = 'ghp_pat';
     delete process.env.GH_ENTERPRISE_TOKEN;
+    delete process.env.GITHUB_ENTERPRISE_TOKEN;
     try {
       execFile.mockClear();
       await getLinkedIssueNumbers('owner', 'repo', 7, 'ghe.example');
@@ -35,6 +37,12 @@ describe('getLinkedIssueNumbers', () => {
 
       execFile.mockClear();
       await getLinkedIssueNumbers('owner', 'repo', 7, 'github.com');
+      expect(execFile.mock.calls[0][2]).toEqual({ timeout: 10000, env: undefined });
+
+      // The operator's own Enterprise token, under either key gh reads, is left to gh.
+      process.env.GITHUB_ENTERPRISE_TOKEN = 'ghe_operator';
+      execFile.mockClear();
+      await getLinkedIssueNumbers('owner', 'repo', 7, 'ghe.example');
       expect(execFile.mock.calls[0][2]).toEqual({ timeout: 10000, env: undefined });
     } finally {
       for (const [key, value] of Object.entries(saved)) {
