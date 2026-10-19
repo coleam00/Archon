@@ -14,13 +14,11 @@ decide:
       recommendation: "stub: drop it as out of scope"
   summary: "stub: 1 record, asked."
 outcome:
-  mode: live
   summary: "stub: 1 record, asked."
   written: []
   dropped: []
   asked: [stub-open-question]
   question: "1. stub-open-question: stub: is this in scope?\n   Recommended: stub: drop it as out of scope"
-  evaluation: null
 ask: { text: "stub: drop it" }
 answer:
   answered: [stub-open-question]

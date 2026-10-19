@@ -23,12 +23,9 @@ import {
   isNodeContextResume,
 } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
-import {
-  substituteWorkflowVariables,
-  detectCompletionSignal,
-  stripCompletionTags,
-  safeSendMessage,
-} from '../../../executor-shared';
+import { substituteWorkflowVariables } from '../../../workflow-variables';
+import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
 import { nodeTemplateReferences } from '../../references';
 import {

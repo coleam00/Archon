@@ -2,13 +2,10 @@
  * Apply the facts node's decision: write the work item first, then the labels that
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
- * BLOCKED for a maintainer instead. A closed issue gets the document write only. In eval mode nothing is read or
- * written: the decision is applied to a fresh item in memory and reported, with the
- * label delta live would write, as `evaluation`.
+ * BLOCKED for a maintainer instead. A closed issue gets the document write only.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEM, INPUTS_DECISION and INPUTS_SEEN from facts;
- * triage's verdict fields, each "null" when triage did not run; the workflow's
- * INPUTS_MODE and INPUTS_TRUST.
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; triage's
+ * verdict fields, each "null" when triage did not run.
  */
 
 import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
@@ -30,9 +27,6 @@ import {
   bodyDigest,
   type IntakeDecision,
   mirrorLabels,
-  newWorkItem,
-  parseMode,
-  parseTrustInput,
   type TriageResult,
   updateClaimed,
   type WorkItem,
@@ -117,27 +111,12 @@ function labelDelta(
   };
 }
 
-/** Everything triage decided, for the eval output; null when triage did not run. */
-function evaluatedTriage(triage: TriageResult | null): Record<string, unknown> | null {
-  if (triage === null) return null;
-  const { verdict, ...fields } = triage;
-  return {
-    contract: verdict.contract,
-    route: verdictText(process.env.INPUTS_ROUTE),
-    ...fields,
-    proposed_edits: nullableJson(process.env.INPUTS_PROPOSED_EDITS),
-    blocked_reason: verdictText(process.env.INPUTS_BLOCKED_REASON),
-    blocked_by: nullableJson(process.env.INPUTS_BLOCKED_BY),
-  };
-}
-
 function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   const latest = next.history.at(-1);
   return `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
 }
 
 function main(): void {
-  const mode = parseMode(text(process.env.INPUTS_MODE));
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
     emit({
@@ -148,7 +127,6 @@ function main(): void {
       promoted: false,
       labels: [],
       summary: 'No item waits for intake.',
-      evaluation: null,
     });
     return;
   }
@@ -159,28 +137,6 @@ function main(): void {
   const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision;
   const triage = triageResult();
   const at = new Date().toISOString();
-
-  if (mode === 'eval') {
-    const next = applyDecision(newWorkItem(item, at), decision, triage, false, at, runId);
-    const delta = labelDelta(next, decision, triage, false) ?? { add: [], remove: [] };
-    emit({
-      path: decision.path,
-      item: item.number,
-      stage: next.stage,
-      trust: next.trust,
-      promoted: next.promoted !== null,
-      labels: [...new Set(delta.add)].sort(),
-      summary: summary(item, next, runId),
-      evaluation: {
-        trust_input: parseTrustInput(text(process.env.INPUTS_TRUST)),
-        seen: nullableJson(process.env.INPUTS_SEEN),
-        labels: delta,
-        reasons: next.history.filter(entry => entry.run_id === runId),
-        triage: evaluatedTriage(triage),
-      },
-    });
-    return;
-  }
 
   // A promotion pins the body; an edit while triage ran leaves the verdict judging
   // text no maintainer promoted.
@@ -214,7 +170,6 @@ function main(): void {
     promoted: next.promoted !== null,
     labels,
     summary: summary(item, next, runId),
-    evaluation: null,
   });
 }
 

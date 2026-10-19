@@ -13,7 +13,7 @@ import {
 import { spellWorkflowCommand } from '../../../deps';
 import { readNodeArtifacts, writeNodeArtifactsListing } from '../../../artifacts-index';
 import { readComposedMeta } from '../../../compiled-command';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { aiConfigTextResolver } from '../../references';
 import { resolveNodeProviderAndModel } from '../../provider-resolution';

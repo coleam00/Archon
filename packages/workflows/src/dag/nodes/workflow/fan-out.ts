@@ -19,7 +19,8 @@ import {
 } from '../../../terminal-status-write';
 import { type JsonValue } from '../../../output-ref';
 import { mapWithHeldSlots } from '../../../utils/map-with-limit';
-import { substituteWorkflowVariables, safeSendMessage } from '../../../executor-shared';
+import { substituteWorkflowVariables } from '../../../workflow-variables';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumFanOutCost, sumFanOutTokens } from '../../usage';
 import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';

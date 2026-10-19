@@ -6,7 +6,8 @@ import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { sourceReleaseNotice } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import { safeSendMessage, sendCriticalMessage, type RunPhase } from './executor-shared';
+import { safeSendMessage, sendCriticalMessage } from './platform-messages';
+import { type RunPhase } from './executor-shared';
 import { resolveProjectPaths } from './run-paths';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,

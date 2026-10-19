@@ -77,6 +77,7 @@ const forgeOperationDescriptions = {
   'workitem.list': 'List open issues and pull requests that carry one label',
   'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
   'workitem.close': 'Close an issue with a reason and verify the result',
+  'workitem.edit-body': 'Replace an issue body and verify the result',
   'repo.labels.list': 'List repository label names',
   'repo.label.ensure': 'Explicitly ensure one repository label exists',
   'pr.view': 'Read a pull request by number or by qualified head',
@@ -87,6 +88,9 @@ const forgeOperationDescriptions = {
   'pr.merge': 'Merge a pull request pinned to its approved head',
   'checks.rerun': 'Rerun selected failed checks at a revision',
   'pr.reviews': 'Read submitted reviews and root review comments',
+  'pr.threads': 'Read every review thread with its comments and resolution',
+  'pr.thread.reply': 'Reply on one review thread and verify the reply',
+  'pr.thread.resolve': 'Resolve one review thread and verify the result',
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 

@@ -5,7 +5,7 @@ import { recordNodeState } from '../../../node-event-write';
 import { isSourceReadFailure } from '../../../workflow-source';
 import type { AgentNode, EffortLevel } from '../../../schemas';
 import { readHomeMcpDirectory } from '../../../compiled-command';
-import { safeSendMessage, type SendMessageContext } from '../../../executor-shared';
+import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { assertNodeSourceReadable, RunSourceUnreadableError } from '../../node-source';
