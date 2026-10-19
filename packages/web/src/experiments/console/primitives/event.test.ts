@@ -625,6 +625,12 @@ describe('foldNodeRuns — cost scope', () => {
       events.map(e => ({ node_id: e.nodeId ?? '', state: 'completed' as const }))
     );
 
+  test('a persisted completion preserves reported zero cost and total scope', () => {
+    const runs = foldCompleted([completed('build', 0, 'total')]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ costUsd: 0, costScope: 'total' });
+  });
+
   test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
     // A two-item compose_fan_out at $0.02 per call (#3657): the server serves the leaves
     // as own spend, the instance terminals and the wrapper as totals restating them.
