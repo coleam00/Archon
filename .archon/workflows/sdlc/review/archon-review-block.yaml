@@ -28,7 +28,7 @@ description: |
   stage and owns what follows its ending. It never pauses for a person: run
   archon-review, which adds that pause, by hand.
 
-model: medium
+model: ['@reviewer', medium]
 
 inputs:
   scope:
@@ -206,6 +206,7 @@ nodes:
   # light round, which skips the route node, never reads it.
   - id: seams
     output_type: review-lens
+    model: ['@review-seams', '@reviewer', medium]
     command: review-seams
     context: fresh
     mutates_checkout: false
@@ -216,7 +217,7 @@ nodes:
 
   - id: code
     output_type: review-lens
-    model: large
+    model: ['@review-code', '@reviewer', large]
     command: review-code
     context: fresh
     mutates_checkout: false
@@ -226,6 +227,7 @@ nodes:
 
   - id: tests
     output_type: review-lens
+    model: ['@review-tests', '@reviewer', medium]
     command: review-tests
     context: fresh
     mutates_checkout: false
@@ -235,6 +237,7 @@ nodes:
 
   - id: errors
     output_type: review-lens
+    model: ['@review-errors', '@reviewer', medium]
     command: review-errors
     context: fresh
     mutates_checkout: false
@@ -244,6 +247,7 @@ nodes:
 
   - id: docs
     output_type: review-lens
+    model: ['@review-docs', '@reviewer', medium]
     command: review-docs
     context: fresh
     mutates_checkout: false

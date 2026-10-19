@@ -656,6 +656,18 @@ describe('typed chat tools', () => {
     );
   });
 
+  test('inputs supplied on the launch reach the dispatch gate and the run', async () => {
+    const results: string[] = [];
+    agentInvokes([{ ...launch, inputs: '{"base_branch":"dev"}' }], results);
+    await handleMessage(makePlatform(), 'conv-1', 'release from dev', { actor: operator });
+
+    expect(results[0]).toContain('with inputs: base_branch=dev');
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ inputs: { base_branch: 'dev' } }),
+      expect.anything()
+    );
+  });
+
   test('a foreground surface runs the launch in the foreground with the isolation hints', async () => {
     mockGetCodebase.mockResolvedValue(makeCodebase());
     const isolationHints = { workflowType: 'issue', workflowId: '42' } as const;

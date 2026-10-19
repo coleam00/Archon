@@ -94,7 +94,7 @@ No one is watching this run: nothing you print survives unless it lands in this 
 
 ## Declare where things stand (every turn)
 
-Judge completion and green only on implement’s work and its focused checks on a clean HEAD. Pushing, review and its verdict, CI, CodeRabbit, operator or live checks, and marking the PR ready belong to later workflow steps: they are never implement’s to meet and never a blocker here. A `scope_conflict` decline goes to review and does not itself make this session red; a blocker means the work itself cannot be built responsibly, as described above.
+Judge completion and green only on implement’s work and its focused checks on a clean HEAD. Pushing, review and its verdict, CI, external review services, operator or live checks, and marking the PR ready belong to later workflow steps: they are never implement’s to meet and never a blocker here. A `scope_conflict` decline goes to review and does not itself make this session red; a blocker means the work itself cannot be built responsibly, as described above.
 
 - `done` — true when another iteration would not help: the work is complete and green, or you are definitively blocked. Never with `red_cause: incomplete`: the next iteration is how the checks finish, and delivery refuses an unfinished validation
 - `green` — true only when the work is complete AND the focused checks on what you changed passed on the current `HEAD` and a clean tree

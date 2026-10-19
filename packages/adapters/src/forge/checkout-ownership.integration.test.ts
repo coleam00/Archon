@@ -14,42 +14,35 @@ const codebases = await import('@archon/core/db/codebases');
 const findCodebase = spyOn(codebases, 'findCodebaseByRepoUrl');
 const updateCodebase = spyOn(codebases, 'updateCodebase').mockResolvedValue(undefined);
 
-const { GitHubAdapter } = await import('./github/adapter');
-const { GitLabAdapter } = await import('../community/forge/gitlab/adapter');
-const { GiteaAdapter } = await import('../community/forge/gitea/adapter');
-const lock = {
-  acquireLock: async (_id: string, handler: () => Promise<void>) => {
-    await handler();
-    return { status: 'started' as const };
-  },
-};
+const { getOrCreateCodebaseForRepo: routeGitHub } = await import('./github/registration');
+const { ensureRepoReady: prepareGitHub } = await import('./github/repository-readiness');
+const { getOrCreateCodebaseForRepo: routeGitLab } = await import(
+  '../community/forge/gitlab/registration'
+);
+const { ensureRepoReady: prepareGitLab } = await import(
+  '../community/forge/gitlab/repository-readiness'
+);
+const { getOrCreateCodebaseForRepo: routeGitea } = await import(
+  '../community/forge/gitea/registration'
+);
+const { ensureRepoReady: prepareGitea } = await import(
+  '../community/forge/gitea/repository-readiness'
+);
 const forges = [
   {
     name: 'GitHub',
     host: 'github.com',
-    route: () => {
-      const adapter = new GitHubAdapter({ kind: 'pat', token: 'test' }, 'secret', lock);
-      // @ts-expect-error - exercise the private registration boundary
-      return adapter.getOrCreateCodebaseForRepo('acme', 'api');
-    },
+    route: () => routeGitHub('acme', 'api'),
   },
   {
     name: 'GitLab',
     host: 'gitlab.example.com',
-    route: () => {
-      const adapter = new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com');
-      // @ts-expect-error - exercise the private registration boundary
-      return adapter.getOrCreateCodebaseForRepo('acme/api');
-    },
+    route: () => routeGitLab('https://gitlab.example.com', 'acme/api'),
   },
   {
     name: 'Gitea',
     host: 'gitea.example.com',
-    route: () => {
-      const adapter = new GiteaAdapter('https://gitea.example.com', 'test', 'secret', lock);
-      // @ts-expect-error - exercise the private registration boundary
-      return adapter.getOrCreateCodebaseForRepo('acme', 'api');
-    },
+    route: () => routeGitea('https://gitea.example.com', 'acme', 'api'),
   },
 ];
 type ProjectCheckout = { name: string; default_cwd: string };
@@ -256,13 +249,11 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
       updated_at: new Date(),
     });
     findCodebase.mockResolvedValue(existing);
-    const adapter = new GitHubAdapter({ kind: 'app', provider }, 'secret', lock);
+    // Registration followed by readiness, as the webhook does
     for (let attempt = 0; attempt < 2; attempt++) {
-      // @ts-expect-error - exercise registration followed by readiness as the webhook does
-      const routed = await adapter.getOrCreateCodebaseForRepo('acme', 'api');
+      const routed = await routeGitHub('acme', 'api');
       await expect(
-        // @ts-expect-error - token acquisition fails before cloning
-        adapter.ensureRepoReady('acme', 'api', 'main', routed.codebase, false)
+        prepareGitHub({ kind: 'app', provider }, 'acme', 'api', 'main', routed.codebase, false)
       ).rejects.toThrow('token unavailable');
     }
     expect(token).toHaveBeenCalledTimes(2);
@@ -277,20 +268,13 @@ const readiness = [
   {
     name: 'GitHub',
     prepare: (codebase: ProjectCheckout, shouldSync = false) =>
-      // @ts-expect-error - exercise the private readiness boundary
-      new GitHubAdapter({ kind: 'pat', token: 'test' }, 'secret', lock).ensureRepoReady(
-        'acme',
-        'api',
-        'main',
-        codebase,
-        shouldSync
-      ),
+      prepareGitHub({ kind: 'pat' }, 'acme', 'api', 'main', codebase, shouldSync),
   },
   {
     name: 'GitLab',
     prepare: (codebase: ProjectCheckout, shouldSync = false) =>
-      // @ts-expect-error - exercise the private readiness boundary
-      new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com').ensureRepoReady(
+      prepareGitLab(
+        { gitlabUrl: 'https://gitlab.example.com', token: 'test' },
         'acme/api',
         'main',
         codebase,
@@ -300,14 +284,7 @@ const readiness = [
   {
     name: 'Gitea',
     prepare: (codebase: ProjectCheckout, shouldSync = false) =>
-      // @ts-expect-error - exercise the private readiness boundary
-      new GiteaAdapter('https://gitea.example.com', 'test', 'secret', lock).ensureRepoReady(
-        'acme',
-        'api',
-        'main',
-        codebase,
-        shouldSync
-      ),
+      prepareGitea('https://gitea.example.com', 'acme', 'api', 'main', codebase, shouldSync),
   },
 ];
 
@@ -413,7 +390,6 @@ test('refuses nested GitLab repairs that would move or merge existing storage', 
   const previousHome = process.env.ARCHON_HOME;
   process.env.ARCHON_HOME = root;
   try {
-    const adapter = new GitLabAdapter('test', 'secret', lock, 'https://gitlab.example.com');
     const storageRoots: (string | null)[] = [];
     for (const [repo, worktree] of [
       ['api', 'old-api'],
@@ -435,8 +411,7 @@ test('refuses nested GitLab repairs that would move or merge existing storage', 
       const before = resolveRunStorageRoot({}, existing);
       expect(before).toBe(join(root, 'workspaces', '_local', worktree));
       findCodebase.mockResolvedValue(existing);
-      // @ts-expect-error - exercise the private registration boundary
-      await expect(adapter.getOrCreateCodebaseForRepo(existing.name)).rejects.toThrow(
+      await expect(routeGitLab('https://gitlab.example.com', existing.name)).rejects.toThrow(
         '/update-project'
       );
       expect(existing.default_cwd).toBe(stale);

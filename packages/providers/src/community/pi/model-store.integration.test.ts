@@ -9,7 +9,7 @@
  *
  * The acceptance criterion (maintainer direction on #2682): a model present
  * in the user's `models-store.json` and absent from the baked catalog
- * resolves through the exact construction `provider.ts` performs —
+ * resolves through the exact construction a Pi turn performs (`turn.ts`) —
  * `new ModelRegistry(await ModelRuntime.create(...))` followed by
  * `registry.find(provider, modelId)`.
  *
@@ -147,7 +147,7 @@ describe('dynamic model catalog (models-store.json)', () => {
       );
 
       const { ModelRuntime, ModelRegistry } = await loadRealSdk();
-      // Same construction as provider.ts step 2 (authPath undefined here —
+      // Same construction as a Pi turn (authPath undefined here —
       // auth is irrelevant to catalog resolution).
       const runtime = await ModelRuntime.create({});
       const registry = new ModelRegistry(runtime);

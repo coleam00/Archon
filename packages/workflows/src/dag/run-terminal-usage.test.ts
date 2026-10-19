@@ -1438,6 +1438,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     store.getDagResumeSnapshot.mockImplementation(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       costUsd: 0.1,
       budget: { workUnits: 1, spendUsd: 0.1 },

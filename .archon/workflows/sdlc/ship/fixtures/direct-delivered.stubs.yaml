@@ -20,6 +20,7 @@ triage__triage:
   urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
+  related: []
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 implement__implement:
@@ -55,6 +56,7 @@ review__publish:
   contract_left: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:

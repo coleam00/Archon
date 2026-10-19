@@ -241,6 +241,7 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
     INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
     INPUTS_SUMMARY: 'Ready',
     INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
+    INPUTS_RELATED: '[]',
     INPUTS_REPORT: '{"path":"triage.md"}',
   };
   const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };

@@ -21,7 +21,6 @@ import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
-import { git, gitOrThrow } from './git.ts';
 import { note } from './io.ts';
 import {
   type LabelVerdict,
@@ -32,13 +31,12 @@ import {
   type WorkType,
   wantedLabels,
 } from './labels.ts';
-import { fetchDefaultBranch } from './remote.ts';
 import {
   claimDisposition,
   runStatus,
   stateAppend,
+  stateDocuments,
   stateGet,
-  stateList,
   statePut,
 } from './state.ts';
 
@@ -108,6 +106,8 @@ export interface TriageFacts {
   readonly complexity: Field<string>;
   readonly importance: Field<string>;
   readonly urgency: Field<string>;
+  /** Overlapping issues, earlier attempts and merged changes triage opened; absent on older items. */
+  readonly related?: readonly { readonly url: string; readonly relation: string }[];
   readonly at: string;
   readonly run_id: string;
 }
@@ -147,6 +147,8 @@ export interface WorkItem {
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
+    /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
+    readonly own_pr?: { readonly url: string; readonly at: string };
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -177,7 +179,6 @@ export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
   readonly report: { readonly run_id: string; readonly path: string };
 }
 
-export const MAINTAINERS_PATH = '.archon/sdlc/policy/maintainers.json';
 // History, run links and label requests are capped so a label-spamming account cannot
 // push the document past the state store's 64 KiB limit and wedge the item. `archon
 // state log` keeps every revision.
@@ -203,7 +204,7 @@ export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }
 
-function newest<T>(entries: readonly T[]): T[] {
+export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
@@ -564,22 +565,9 @@ export function applyDecision(
   };
   if (decision.path === 'triage') {
     if (triage === null) throw new Error('the triage path has no triage verdict');
-    const { verdict, pull_request, type, size, complexity, importance, urgency, summary, report } =
-      triage;
-    facts = {
-      ...facts,
-      triage: {
-        verdict,
-        pull_request,
-        type,
-        size,
-        complexity,
-        importance,
-        urgency,
-        at,
-        run_id: runId,
-      },
-    };
+    // The stored facts are the verdict minus what only this run's outcome reads.
+    const { closure: _closure, labels: _labels, summary, report, ...kept } = triage;
+    facts = { ...facts, triage: { ...kept, at, run_id: runId } };
     if (bodyMoved) {
       stage = 'needs_maintainer';
       promoted = null;
@@ -623,36 +611,6 @@ export function applyDecision(
   };
 }
 
-// --- the maintainer list ------------------------------------------------------------
-
-/** The maintainer list's text, lower-cased logins; anything but an array of logins refuses. */
-export function parseMaintainers(text: string): Set<string> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`${MAINTAINERS_PATH} is not valid JSON`);
-  }
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every(login => typeof login === 'string' && login.trim() !== '')
-  ) {
-    throw new Error(`${MAINTAINERS_PATH} must be a JSON array of forge logins`);
-  }
-  return new Set(parsed.map(login => (login as string).trim().toLowerCase()));
-}
-
-/**
- * The maintainer list at the head of the repository's default branch, read with git
- * so it works on either forge source and whatever branch the checkout sits on. No
- * file means nobody: every author is outside.
- */
-export function readMaintainers(repo: QualifiedPr['repo']): Set<string> {
-  const { ref } = fetchDefaultBranch(repo);
-  if (git('cat-file', '-e', `${ref}:${MAINTAINERS_PATH}`).code !== 0) return new Set();
-  return parseMaintainers(gitOrThrow('show', `${ref}:${MAINTAINERS_PATH}`));
-}
-
 // --- pickup ---------------------------------------------------------------------
 
 /**
@@ -682,8 +640,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-function read(name: string): Read | undefined {
-  const stored = stateGet(name);
+export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
@@ -718,7 +675,7 @@ export function readWorkItem(number: number): WorkItem | null {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
+export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
@@ -778,14 +735,15 @@ function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkIte
   };
 }
 
-function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+export function claimable(item: Read | undefined, pickup: Pickup): item is Read {
   return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 
 /**
- * Release terminal claims, then claim the first waiting item in `order` with a
- * conditional write. A conflict re-reads the item once and claims it only if it
- * still waits unclaimed; otherwise the next candidate is tried.
+ * Read every work item in one state call, release terminal claims, then claim the
+ * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * item once and claims it only if it still waits unclaimed; otherwise the next
+ * candidate is tried.
  */
 export function claimNext(
   order: readonly OrderKey[],
@@ -793,8 +751,8 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateList('work/')
-    .map(read)
+  const items = stateDocuments('work/')
+    .map(stored => read(stored.name, stored))
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));

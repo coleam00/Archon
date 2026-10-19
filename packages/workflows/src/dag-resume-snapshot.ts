@@ -9,7 +9,7 @@ import {
   readNodeRecordEvent,
 } from './node-record-reader';
 import { nodeCostScope, DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-serialization';
-import type { NodeExecutionMetadata } from './schemas/node-execution';
+import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/node-execution';
 import {
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
   addAttemptSpend,
@@ -21,6 +21,7 @@ import {
   foldActiveNodeIds,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
+  type PriorFailedNode,
 } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -32,6 +33,24 @@ export interface DagResumeEvent {
   step_name?: string | null;
   event_type: string;
   data?: string | Record<string, unknown>;
+}
+
+/**
+ * Keep the failure a `node_failed` row records, as a later pass replays it. Every other
+ * node state row already cleared the entry, so a node that ran again is not kept.
+ */
+function recordPriorFailure(
+  failedNodes: Map<string, PriorFailedNode>,
+  eventType: string,
+  stepName: string,
+  data: Record<string, unknown>
+): void {
+  if (eventType !== 'node_failed') return;
+  const kind = nodeFailureKindSchema.safeParse(data.failure_kind);
+  failedNodes.set(stepName, {
+    error: typeof data.error === 'string' ? data.error : 'the node failed in an earlier pass',
+    ...(kind.success ? { failureKind: kind.data } : {}),
+  });
 }
 
 function isFanOutItem(value: unknown): value is FanOutInstanceSnapshot['item'] {
@@ -142,6 +161,7 @@ export async function foldDagResumeSnapshot(
   workflowRunId: string
 ): Promise<DagResumeSnapshot> {
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
+  const failedNodes = new Map<string, PriorFailedNode>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
   const unresolvedNodeStarts = new Set<string>();
   const unfinishedInvocations = new Map<string, NodeExecutionMetadata>();
@@ -275,6 +295,7 @@ export async function foldDagResumeSnapshot(
       // Every later node state supersedes reusable success, even when that row
       // carries no output (or its data cannot be recovered). Only success restores it.
       completedNodeOutputs.delete(row.step_name);
+      failedNodes.delete(row.step_name);
     }
     let rawData: Record<string, unknown>;
     let record: ReturnType<typeof readNodeRecordEvent>;
@@ -343,6 +364,7 @@ export async function foldDagResumeSnapshot(
       for (const [key, metadata] of unfinishedInvocations)
         if (metadata.path === record.path) unfinishedInvocations.delete(key);
     }
+    recordPriorFailure(failedNodes, row.event_type, row.step_name, data);
     if (
       row.event_type !== 'node_completed' &&
       row.event_type !== 'node_skipped_prior_success' &&
@@ -455,6 +477,7 @@ export async function foldDagResumeSnapshot(
   return {
     unfinishedInvocations,
     completedNodeOutputs,
+    failedNodes,
     fanOutSnapshots,
     unresolvedNodeStarts,
     tokensUnknown: countedUsage.some(contribution => contribution.tokensUnknown),

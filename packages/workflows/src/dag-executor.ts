@@ -15,7 +15,7 @@ import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
+import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -29,7 +29,7 @@ import {
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { logWorkflowError } from './logger';
 import { safeSendMessage } from './platform-messages';
-import { isTierName } from './model-validation';
+import { isTierName, selectModelRef } from './model-validation';
 import { getLog } from './dag/log';
 import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
@@ -52,6 +52,8 @@ export type PriorRunUsage = Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' |
 export interface ExecuteDagWorkflowOptions extends RunInputs {
   workflow: ResolvedWorkflow;
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /** Failures from before a pause, replayed instead of re-running their nodes. */
+  replayedFailures?: ReadonlyMap<string, PriorFailedNode>;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`),
    * resolved by executor.ts when the workflow uses session persistence (#1846).
@@ -107,6 +109,7 @@ export async function executeDagWorkflow(
     configuredCommandFolder,
     issueContext,
     priorCompletedNodes,
+    replayedFailures,
     aiProfile,
     workflowPreset,
     scopeArtifactsDir,
@@ -133,7 +136,8 @@ export async function executeDagWorkflow(
     );
   }
 
-  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
+  const workflowRef = selectModelRef(workflow.model, aiProfile);
+  const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
     fallbackModel: workflow.fallbackModel,
@@ -248,6 +252,7 @@ export async function executeDagWorkflow(
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
+    replayedFailures,
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,

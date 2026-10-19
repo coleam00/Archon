@@ -18,7 +18,7 @@ import {
   createInMemoryWorkflowStore,
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
-import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow';
+import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 
 const track = trackTempRoots();
 const priorEnv = { ...process.env };

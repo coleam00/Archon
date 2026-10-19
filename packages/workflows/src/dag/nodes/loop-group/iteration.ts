@@ -513,7 +513,7 @@ async function iterationUntilBash(
   // present in this group's per-iteration output map.
   const ownScope: LoopBodyScope = {
     loopPrevOutputs: iteration.body.prevSnapshot,
-    outputFileDir: ctx.logDir,
+    outputFileDir: artifactsDir,
     knownBodyIds: run.directBodyIds,
     directBodyIds: run.directBodyIds,
   };

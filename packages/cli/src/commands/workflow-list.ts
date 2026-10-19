@@ -29,7 +29,8 @@ export interface WorkflowJsonEntry {
   description: string;
   descriptionTruncated: boolean;
   provider?: string;
-  model?: string;
+  /** A model ref, or a preference list of `@alias` refs ending in a tier or model id. */
+  model?: string | readonly string[];
   /** Reasoning depth — the one spelling, on every provider that has one (#2556).
    *  A workflow written with the deprecated `modelReasoningEffort:` reports its
    *  value here, since the loader translates the two into one field. */
