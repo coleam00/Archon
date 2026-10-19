@@ -4205,8 +4205,11 @@ branch refs/heads/feature/auth
     ): Promise<void> => {
       const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'archon-trust-'))));
       const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
       const previousOwner = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
       process.env.GIT_CONFIG_GLOBAL = join(root, 'gitconfig');
+      // CI runner images trust every path in the system config (safe.directory = *).
+      process.env.GIT_CONFIG_NOSYSTEM = '1';
       try {
         await git.execFileAsync('git', ['init', '-q', join(root, 'repo')]);
         await realMkdir(join(root, 'plain'));
@@ -4215,6 +4218,8 @@ branch refs/heads/feature/auth
       } finally {
         if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
         else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+        else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
         if (previousOwner === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
         else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwner;
       }

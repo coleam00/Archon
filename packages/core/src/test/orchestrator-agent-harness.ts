@@ -700,8 +700,7 @@ mock.module('@archon/git', () => ({
   verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
-  // /register-project probes git-ness via findRepoRoot; a non-null root marks
-  // the registered path as a repo project (kind: 'repo').
+  // /register-project marks a path whose findRepoRoot root is non-null as kind: 'repo'.
   findRepoRoot: mock((p: string) => Promise.resolve(p)),
   trustRegisteredPath: mock(async () => {}),
   // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).

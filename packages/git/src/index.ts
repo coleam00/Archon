@@ -81,9 +81,9 @@ export {
   validateCloneUrl,
   syncRepository,
   addSafeDirectory,
-  trustRegisteredPath,
 } from './repo';
 export type { CloneCredentials, CloneRepositoryOptions } from './repo';
+export { trustRegisteredPath } from './registration-trust';
 
 export {
   inspectRemoteBranches,

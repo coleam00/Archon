@@ -322,6 +322,8 @@ test('a repo owned by another user registers as a repo; a plain directory gets n
     }
   };
   process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+  // CI runner images trust every path in the system config (safe.directory = *).
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
   try {
     // The Settings → Projects route classifies the path, then registers it.
     expect(await detectProjectKind(checkout)).toBe('repo');
@@ -331,5 +333,6 @@ test('a repo owned by another user registers as a repo; a plain directory gets n
     expect(grants().split('\n')).toEqual([checkout]);
   } finally {
     delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+    delete process.env.GIT_CONFIG_NOSYSTEM;
   }
 });

@@ -590,16 +590,13 @@ export async function cloneRepository(
   return result;
 }
 
-/**
- * Register an existing local repository in the supplied store (no git clone).
- */
+/** Register an existing local repository in the supplied store (no git clone). */
 export async function registerRepository(
   codebases: IWorkflowHostStore['codebases'],
   localPath: string,
   options: RegistrationOptions = {}
 ): Promise<RegisterResult> {
   localPath = await canonicalizeProjectPath(localPath);
-  // An operator-registered path gets the same safe.directory grant cloneCheckout gives its destination.
   await trustRegisteredPath(localPath);
   // Validate path exists and is a git repo
   try {
