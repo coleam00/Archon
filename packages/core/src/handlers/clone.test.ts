@@ -169,6 +169,7 @@ let spyFsStat: ReturnType<typeof spyOn>;
 let spyFsRealpath: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
 let spyAddSafeDirectory: ReturnType<typeof spyOn>;
+let spyTrustRegisteredPath: ReturnType<typeof spyOn>;
 let spyCloneGitRepository: ReturnType<typeof spyOn>;
 let spyGetCanonicalRepoPath: ReturnType<typeof spyOn>;
 
@@ -194,6 +195,7 @@ function setupSpies(): void {
     stderr: '',
   });
   spyAddSafeDirectory = spyOn(gitUtils, 'addSafeDirectory').mockResolvedValue(undefined);
+  spyTrustRegisteredPath = spyOn(gitUtils, 'trustRegisteredPath').mockResolvedValue(undefined);
   spyCloneGitRepository = spyOn(gitUtils, 'cloneRepository').mockResolvedValue({
     ok: true,
     value: undefined,
@@ -212,6 +214,7 @@ function restoreSpies(): void {
   spyFsStat?.mockRestore();
   spyExecFileAsync?.mockRestore();
   spyAddSafeDirectory?.mockRestore();
+  spyTrustRegisteredPath?.mockRestore();
   spyCloneGitRepository?.mockRestore();
   spyGetCanonicalRepoPath?.mockRestore();
 }
