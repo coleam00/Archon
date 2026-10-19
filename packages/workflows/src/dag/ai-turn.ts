@@ -42,18 +42,33 @@ export function structuredOutputPass(
 }
 
 /**
+ * What cut a stream off before its provider settled: the idle watchdog, or the operator
+ * ending a turn whose tools or background work stalled (see `end-turn-request.ts`). Both
+ * are a `timeout` failure, so the node's retry policy decides whether a fresh attempt runs.
+ */
+export type TurnCutOff = 'idle_timeout' | 'operator';
+
+/** How a cut-off stream ended, as the clause that follows the node or iteration name. */
+export function cutOffClause(cutOff: TurnCutOff, idleTimeoutMs: number): string {
+  return cutOff === 'idle_timeout'
+    ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event`
+    : 'was ended by the operator after its tools or background work stalled';
+}
+
+/**
  * Why a turn that produced output is not finished: its provider never sent `settled`.
- * An idle timeout says how long the stream was silent; otherwise the stream simply ended.
+ * A cut-off says what ended the stream; otherwise the stream simply ended.
  * The caller names the node or iteration in front of it.
  */
 export function unsettledTurnError(
-  idleTimeoutMs: number | undefined,
+  cutOff: TurnCutOff | undefined,
+  idleTimeoutMs: number,
   lastWatchdogReset: WatchdogReset | undefined,
   liveTaskIds: readonly string[]
 ): string {
   const cause =
-    idleTimeoutMs !== undefined
-      ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
+    cutOff !== undefined
+      ? `${cutOffClause(cutOff, idleTimeoutMs)}, before the provider signalled that its turn settled.${cutOff === 'idle_timeout' ? formatWatchdogResetDiagnostic(lastWatchdogReset) : ''}`
       : 'the provider stream ended without signalling that its turn settled.';
   const tasks =
     liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';

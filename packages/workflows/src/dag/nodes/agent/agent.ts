@@ -21,7 +21,12 @@ import {
 import { substituteLoopBodyText } from '../../references';
 import { rejectedArtifactPointer } from '../../node-output';
 import { lastNodeCancelCheck, lastNodeActivityUpdate } from '../../run-control';
-import { formatWatchdogResetDiagnostic, unsettledTurnError, NodeFailure } from '../../ai-turn';
+import {
+  cutOffClause,
+  formatWatchdogResetDiagnostic,
+  unsettledTurnError,
+  NodeFailure,
+} from '../../ai-turn';
 import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
@@ -163,7 +168,7 @@ export async function executeAgentNode(
   try {
     result = await runWorkload(pc, state, prompt.prompt, session);
   } catch (error) {
-    const cancelled = abortController.signal.aborted && !state.idleTimedOut;
+    const cancelled = abortController.signal.aborted && !state.cutOff;
     const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
     return failAgentNode(failure.message, failure.kind, {
       providerFailure: failure.providerFailure,
@@ -336,7 +341,7 @@ async function finishTurnOutput(
   state: AgentAttemptState
 ): Promise<WorkloadResult | undefined> {
   // If cancelled during streaming (not idle timeout), return as failed with cancel reason
-  if (pc.abortController.signal.aborted && !state.idleTimedOut) {
+  if (pc.abortController.signal.aborted && !state.cutOff) {
     const duration = Date.now() - pc.nodeStartTime;
     getLog().info(
       { nodeId: pc.node.id, durationMs: duration },
@@ -371,13 +376,14 @@ async function finishTurnOutput(
 // fails rather than completing on a turn that may not be done. Zero output falls
 // through to the empty-output guard; cancellation is handled by the caller.
 function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void {
-  const { idleTimedOut } = state;
+  const { cutOff } = state;
   if (state.settled) return;
   if (state.outputText.trim() === '' && state.structuredOutput === undefined) return;
   throw new NodeFailure(
-    idleTimedOut ? 'timeout' : 'unknown',
+    cutOff ? 'timeout' : 'unknown',
     `Node '${pc.node.id}' failed: ${unsettledTurnError(
-      idleTimedOut ? pc.idleTimeoutMs : undefined,
+      cutOff,
+      pc.idleTimeoutMs,
       state.lastWatchdogReset,
       state.backgroundTasksIncomplete
     )}`
@@ -387,15 +393,18 @@ function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void
 function emptyOutputFailure(pc: AgentPassContext, state: AgentAttemptState): WorkloadResult {
   const nodeId = pc.node.id;
   const duration = Date.now() - pc.nodeStartTime;
-  const emptyError = state.idleTimedOut
-    ? `Node '${nodeId}' timed out with no output (idle for ${String(pc.idleTimeoutMs / 60000)} min).${formatWatchdogResetDiagnostic(state.lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
-    : `Node '${nodeId}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+  const emptyError =
+    state.cutOff === 'idle_timeout'
+      ? `Node '${nodeId}' timed out with no output (idle for ${String(pc.idleTimeoutMs / 60000)} min).${formatWatchdogResetDiagnostic(state.lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
+      : state.cutOff === 'operator'
+        ? `Node '${nodeId}' ${cutOffClause(state.cutOff, pc.idleTimeoutMs)}, before producing output.`
+        : `Node '${nodeId}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
   getLog().error({ nodeId, durationMs: duration }, 'dag.node_empty_output');
   return {
     state: 'failed',
     output: '',
     error: emptyError,
-    failureKind: state.idleTimedOut ? 'timeout' : 'transient',
+    failureKind: state.cutOff ? 'timeout' : 'transient',
   };
 }
 
