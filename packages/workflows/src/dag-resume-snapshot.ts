@@ -464,7 +464,11 @@ export async function foldDagResumeSnapshot(
             contribution.tokens === undefined ? [] : [contribution.tokens]
           )
         ),
-    costUsd: countedUsage.reduce((total, contribution) => total + (contribution.costUsd ?? 0), 0),
+    costUsd: countedUsage.reduce<number | undefined>(
+      (total, contribution) =>
+        contribution.costUsd === undefined ? total : (total ?? 0) + contribution.costUsd,
+      undefined
+    ),
     budget,
   };
 }

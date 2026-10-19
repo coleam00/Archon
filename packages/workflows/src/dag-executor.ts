@@ -11,11 +11,11 @@
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { sourceReleaseNotice } from './deps';
-import type { TokenUsage, ExecutionContext } from '@archon/provider-contract';
+import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import type { PersistedNodeOutput } from './store';
+import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -46,11 +46,7 @@ import { announceContainerRun, suspendContainerForPause } from './dag/container-
  * only one of them is how cost came to under-report every resumed run while tokens did
  * not (#2469).
  */
-export interface PriorRunUsage {
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  costUsd: number;
-}
+export type PriorRunUsage = Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'>;
 
 /** Inputs accepted by {@link executeDagWorkflow}. */
 export interface ExecuteDagWorkflowOptions extends RunInputs {
@@ -427,10 +423,7 @@ export async function executeDagWorkflow(
       // the in-memory totals miss it. The durable rows hold all of it.
       try {
         const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        // The fold sums to 0 when nothing reported cost; keep a run with no AI usage absent.
-        if (runCtx.totalCostUsd !== undefined || durable.costUsd !== 0) {
-          runCtx.totalCostUsd = durable.costUsd;
-        }
+        runCtx.totalCostUsd = durable.costUsd;
         runCtx.totalTokens = durable.tokens;
         runCtx.totalTokensUnknown = durable.tokensUnknown;
       } catch (readError) {

@@ -1632,6 +1632,69 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(refusals(store)).toHaveLength(0);
   });
 
+  it.each([
+    ['bash', undefined, false],
+    ['unpriced AI', undefined, true],
+    ['free AI', 0, true],
+    ['paid AI', 0.25, true],
+  ] as const)(
+    'preserves cost presence from %s when resuming into bash-only work',
+    async (_label, cost, aiPrior) => {
+      providerCosts(cost);
+      const prior = aiPrior ? ai('prior') : sh('prior');
+      const store = await run({ name: 'cost-presence', nodes: [prior] });
+      const resume = await resumeOptions(store);
+      expect(resume.priorUsage?.costUsd).toBe(cost);
+      store.updateWorkflowRun.mockClear();
+      mockSendQueryDag.mockClear();
+
+      await run(
+        { name: 'cost-presence', nodes: [prior, sh('remaining', ['prior'])] },
+        store,
+        resume
+      );
+
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(2);
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      expect(started(store, 'remaining')).toHaveLength(1);
+      const writes = runUsageWrites(store);
+      if (cost === undefined) {
+        expect(writes.every(write => !('total_cost_usd' in write))).toBe(true);
+      } else {
+        expect(writes).toEqual([expect.objectContaining({ total_cost_usd: cost })]);
+      }
+    }
+  );
+
+  it.each([undefined, 0, 0.25])(
+    'preserves reported cost %s when a retry is budget-refused',
+    async cost => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          failure: { class: 'transient', evidence: 'crash' },
+          sessionId: 's',
+          ...(cost !== undefined ? { cost } : {}),
+        };
+      });
+      const store = await run({
+        name: 'retry-refusal-cost',
+        budget: { max_work_units: 1 },
+        nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+      });
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(exitReason(store)).toBe('budget_refused');
+      expect(refusals(store)).toHaveLength(1);
+      const writes = runUsageWrites(store);
+      if (cost === undefined) {
+        expect(writes.every(write => !('total_cost_usd' in write))).toBe(true);
+      } else {
+        expect(writes).toEqual([expect.objectContaining({ total_cost_usd: cost })]);
+      }
+    }
+  );
+
   it('records no run cost when a run without AI attempts is refused', async () => {
     const store = await run({
       name: 'bash-refused',
