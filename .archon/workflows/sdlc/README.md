@@ -253,9 +253,9 @@ transport without printing the URLs. Selected head remotes must use HTTPS or SSH
 for network transport, including Git's effective fetch and push URLs after
 `insteadOf`, `pushInsteadOf` and `pushurl` configuration. Local paths and `file://`
 URLs are also supported; explicit remote-helper syntax (`<transport>::<address>`)
-is refused because helpers control their own transport. Publication checks every
-push URL and the fetch URL used for readback. Failure messages are
-the same surface: interpolating a raw URL into one leaks it just as effectively.
+and configured `remote.<name>.vcs` helpers are refused because helpers control
+their own transport. Publication checks every push URL and the fetch URL used
+for readback. Failure messages are the same surface: interpolating a raw URL into one leaks it just as effectively.
 
 That retention is also why a node does not need its own log. The ready flip once
 wrote one by hand — every command it ran, echoed into an artifact — which is what
@@ -495,8 +495,9 @@ Both preserve the local branch and refuse local history that cannot fast-forward
 the PR head. Head remotes used for checkout or publication must use encrypted
 network transport (HTTPS or SSH); the selector checks their configured and effective
 URLs without printing them. Local paths and `file://` URLs remain supported;
-explicit remote-helper syntax is refused. Editable forks can use their HTTPS URL
-without a configured remote, subject to the same effective-transport check.
+explicit remote-helper syntax and configured `remote.<name>.vcs` helpers are refused.
+Editable forks can use their HTTPS URL without a configured remote, subject to
+the same effective-transport check.
 Publication still uses a normal push and refuses a subsequently advanced remote head.
 
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged

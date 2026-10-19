@@ -5,9 +5,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { delimiter, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
@@ -160,6 +160,48 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
 });
 
 describe('head operation transport', () => {
+  it('refuses configured helpers before continuation fetch, publication push or readback', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    const bare = git(cwd, 'remote', 'get-url', 'upstream');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const url = `https://user:secret@${PR.repo.host}/${PR.repo.path}.git`;
+    git(cwd, 'config', '--unset-all', `url.${bare}.insteadOf`);
+    git(cwd, 'remote', 'set-url', 'upstream', url);
+    git(cwd, 'config', 'remote.upstream.vcs', 'archon-probe');
+    const marker = join(cwd, 'helper-invoked');
+    writeFileSync(join(cwd, 'git-remote-archon-probe'), '#!/bin/sh\necho invoked >> helper-invoked\nexit 1\n', { mode: 0o755 });
+    const probePath = `${cwd}${delimiter}${process.env.PATH ?? ''}`;
+    for (const args of [
+      ['fetch', 'upstream', 'refs/heads/feature'],
+      ['push', 'upstream', 'HEAD:refs/heads/feature'],
+      ['ls-remote', 'upstream', 'refs/heads/feature'],
+    ]) {
+      const probe = spawnSync('git', args, { cwd, env: { ...process.env, PATH: probePath } });
+      expect(probe.status).not.toBe(0);
+      expect(existsSync(marker)).toBe(true);
+      unlinkSync(marker);
+    }
+    for (const script of ['build-queue/scripts/checkout', 'ship/scripts/checkout', '../../scripts/__tests__/push-pr-head']) {
+      const run = runPackScript(script, {
+        cwd,
+        inputs: {
+          PATH: probePath,
+          INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number),
+          INPUTS_REF: JSON.stringify(PR), INPUTS_PULL_REQUEST: String(PR.number),
+          INPUTS_PR: JSON.stringify(forgePrRecord()),
+        },
+        preload: 'Bun.sleepSync = () => {};',
+      });
+      expect(run.code).not.toBe(0);
+      expect(run.stderr).toContain('configured remote helpers are unsupported');
+      expect(run.stderr).not.toContain('secret');
+      expect(existsSync(marker)).toBe(false);
+      expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+      expect(git(cwd, '--git-dir', bare, 'rev-parse', 'refs/heads/feature')).toBe(before);
+    }
+  });
+
   it.each(['file URL', 'relative path'])('checks out and publishes through a local %s', mode => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'push', '-q', 'upstream', 'feature');

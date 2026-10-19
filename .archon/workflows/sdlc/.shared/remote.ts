@@ -100,6 +100,9 @@ export function headDestination(
   const destination = remote ?? `https://${headRepo.host}/${headRepo.path}.git`;
   const urls = [destination];
   if (remote !== undefined) {
+    const helper = git('config', '--get-all', `remote.${remote}.vcs`);
+    if (helper.code === 0) throw new Error('configured remote helpers are unsupported for head operations');
+    if (helper.code !== 1) throw new Error('cannot read head remote helper configuration');
     const configured = git('config', '--get-all', `remote.${remote}.url`);
     if (configured.code !== 0) throw new Error('cannot read head remote configuration');
     urls.push(...configured.stdout.split('\n'));
