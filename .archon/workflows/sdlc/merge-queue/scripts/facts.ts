@@ -8,8 +8,7 @@
  * reviewed beside it, so a delta review can continue from it. An item whose pull
  * request is already merged or closed, or that names none, is settled without the
  * sweep, and one whose pull request cannot be read waits for the next sweep with the
- * reason, so it never stops the rest of the batch; when it could not be read the sweep
- * before either, it is parked with the reason instead. Live writes only the claims.
+ * reason, so it never stops the rest of the batch. Live writes only the claims.
  *
  * Eval claims and reads nothing but each named pull request's URL: the sweep decides
  * from the facts the replay recorded, as of the time it recorded them.
@@ -30,7 +29,6 @@ import {
   type PrRead,
   readBase,
   readPr,
-  receiptsDir,
   requireGh,
   UNREADABLE,
 } from '../../.shared/merge.ts';
@@ -151,12 +149,7 @@ function main(): void {
       read = readPr(pr, maintainers);
     } catch (error) {
       const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
-      const again = doc.facts.merge?.decisions.at(-1)?.decision === UNREADABLE;
-      settled.push(
-        again
-          ? { item: doc.subject, pr, status: 'parked', decision: 'parked', reason: `${reason}; it could not be read the sweep before either` }
-          : { item: doc.subject, pr, status: 'waiting', decision: UNREADABLE, reason }
-      );
+      settled.push({ item: doc.subject, pr, status: 'waiting', decision: UNREADABLE, reason });
       continue;
     }
     const { facts, report } = read;
@@ -180,8 +173,6 @@ function main(): void {
     join(import.meta.dir, 'gate.ts'),
     '--method',
     method,
-    '--receipts',
-    receiptsDir(),
   ]
     .map(quoted)
     .join(' ');

@@ -16,7 +16,7 @@ facts:
       prior_report: "/stub/merge/42/review/report.md"
       recorded: null
   settled: []
-  gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--receipts' '/stub/receipts'"
+  gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
 sweep:
   decisions:

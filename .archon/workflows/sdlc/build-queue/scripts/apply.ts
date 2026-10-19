@@ -1,8 +1,8 @@
 /**
  * Check the run's decision, perform the writes it declared, and read each one back.
  *
- * The decision is the last agent's that ran: give-up's over answer's, answer's over
- * route's. A route that launched is answered after its round, so its own decision is
+ * The decision is the last agent's that ran: answer's over route's. At the round cap an
+ * answer that asks is the scope question. A route that launched is answered after its round, so its own decision is
  * recorded only when it asked. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. In live the push comes first, then the work item, in
@@ -11,8 +11,8 @@
  * nothing and returns the decision, with the writes live would make, as `evaluation`.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_RECORDED from facts; INPUTS_ROUTE,
- * INPUTS_ENDING (archon-ship's report), INPUTS_ANSWER and INPUTS_GIVE_UP, each the
- * whole output of its node, "null" when it was skipped.
+ * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
+ * node, "null" when it was skipped; INPUTS_AT_CAP from facts.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
@@ -36,12 +36,6 @@ interface AnswerOutput {
   readonly decision: 'done' | 'continue' | 'ask';
   readonly brief: string;
   readonly push: QualifiedPr | null;
-  readonly reason: string;
-  readonly attention: BuildAttention | null;
-}
-
-interface GiveUpOutput {
-  readonly decision: 'continue' | 'ask';
   readonly reason: string;
   readonly attention: BuildAttention | null;
 }
@@ -77,16 +71,13 @@ function decide(
   path: string,
   route: RouteOutput | null,
   answer: AnswerOutput | null,
-  giveUp: GiveUpOutput | null
+  atCap: boolean
 ): Decision {
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked('stop', answer.attention, answer.brief, answer.reason);
+    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
-    if (giveUp?.decision === 'ask') {
-      return asked('scope', giveUp.attention, answer.brief, giveUp.reason);
-    }
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
@@ -145,7 +136,7 @@ function main(): void {
     path,
     nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null,
     answer,
-    nullableJson(process.env.INPUTS_GIVE_UP) as GiveUpOutput | null
+    text(process.env.INPUTS_AT_CAP) === 'true'
   );
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;

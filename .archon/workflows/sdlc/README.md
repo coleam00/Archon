@@ -115,8 +115,7 @@ itself doesn't refuse over threads; the sweep holds a merge only for a thread th
 raises a defect in code the pull request changes or makes reachable.
 Delivery reads, answers and resolves review threads through `gh` alone for the same
 reason. On the `forge` source it never calls `gh` for them: its `threads` node does
-not run, and the report records `threads_checked: false` and says the threads were
-not checked.
+not run, and the report says the threads were not checked.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -574,10 +573,10 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   after publishing still records its pull request. Otherwise the round opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
   merged pull request, or one from a fork, is asked about.
-- **Give up.** When a round ends wanting another and `round_limit` rounds (default 3)
+- **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
-  answer, the `give-up` agent compares their reviews. Each round finding new defects
-  asks the scope question instead of running another round.
+  answer, the `answer` agent also compares their reviews. Each round finding new
+  defects asks the scope question instead of running another round.
 - **Writes.** The `apply` script refuses an attention item without the choice it
   recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
@@ -652,7 +651,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   queue's last round delivered. One already merged or closed is recorded without the
   agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
-  head, how many commits of the default branch it lacks, whether it merges cleanly, its size, CI and unresolved review threads at the
+  head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
   else can post a verdict. The trusted report is written under the run's
@@ -667,8 +666,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   published before verdicts were stamped: one such pull request gets a delta review in
   the same run, through an included `archon-review-block` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
-  gets one rerun of its failed jobs; the record stores the head it re-ran at and
-  refuses a second rerun there. What the build queue can fix (a verdict that is
+  gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
+  sweep reads it so it never reruns twice at one head. The sweep measures each diff with
+  git against the merge base, not the forge's counts. What the build queue can fix (a verdict that is
   not Ready, an unresolved thread, red the change caused) goes back to it with a
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
@@ -676,26 +676,22 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   refuses unless the verdict says Ready at the head and CI is green there (open review
   threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
-  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
-  writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
-  request that reads back unmerged, as when the forge queues merges, loses its receipt
-  and fails the gate.
+  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`
+  and reads the merge back. A pull request that reads back unmerged, as when the forge
+  queues merges, fails the gate.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
   batch it waits for CI on the default branch, rerunning a red in code the batch did
   not touch once; red after that is raised to a maintainer.
-- **Record.** The `record` script refuses, before it writes anything, a sweep that
-  left a claimed pull request undecided, decided one twice, offered an attention item
-  a person could not answer, merged a pull request it did not claim, merged without
-  checking the default branch afterwards, or raised the default branch without
-  merging. It reads every pull request back: the forge, not the sweep or the gate's
-  receipts, says what merged, at the head the forge merged, and a merge with no
-  receipt is recorded as made outside the run. A sweep that says it merged a pull
+- **Record.** The `record` script refuses a sweep that decided a pull request this
+  run did not claim, because that item belongs to another run. A claimed pull request
+  the sweep left undecided waits for the next sweep, and an ask with no attention item
+  waits the same way. It reads every pull request back: the forge, not the sweep, says
+  what merged, at the head the forge merged. A sweep that says it merged a pull
   request the forge does not show merged fails the record after every other decision
   is written: that pull request is recorded as waiting, or parked if it was closed,
   and the failure names a red default branch the run could not raise and any work
   item it could not write. A pull
-  request that cannot be read waits for the next sweep, and is parked when it could not
-  be read the sweep before either; a work item that cannot be written is reported, so one bad item never loses
+  request that cannot be read waits for the next sweep; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.
   It runs even when the delta review failed. It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
@@ -755,43 +751,39 @@ terminal report lists.
 
 - **Queue.** A pass lists this project's runs that ended (completed, failed or
   cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
-  them that still have undecided records. A record is decided once a decision record
-  that is not `asked` lists it. A run's work item is the state document
-  `discoveries/runs/<run-id>`, which holds the claim of the pass working it. A claim is
-  released only when the claiming run is completed, failed or cancelled, never on age.
-  A run whose records cannot be read is left queued and named on the pass's stderr.
+  them that still have undecided records. A run's state document
+  `discoveries/runs/<run-id>` is its memory and its work item: the refs a pass decided
+  for it, the questions a pass asked about it with their answers, and the claim of the
+  pass working it. A record is decided once its run's document lists it. Every run
+  document is read in one call. A claim is released only when the claiming run is
+  completed, failed or cancelled, never on age. A run whose records cannot be read is
+  left queued and named on the pass's stderr.
 - **Decisions.** One agent decides every queued record, under the project's direction
   document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
   verifies each claim against the default branch's head with `git show` and
-  `git grep`, merges duplicates across runs and with earlier decisions, and searches
-  the tracker before filing. Each discovery ends in one decision: `file` an issue with
-  a full brief, `track` it on the open issue that already covers it (with one marked
-  evidence comment per key, only when it adds something), `drop` it with a reason, or
-  `ask` a maintainer.
-- **Memory.** Every decision is the state document `discoveries/decisions/<key>`: the
-  outcome, the reason, the commit it was verified at, every run record that found it
-  (`<run-id>:<ref>`), and the last question with its answer. Each pass writes them all as one readable
-  `drain/discovery-decisions.md` in its artifacts, which is what the agent reads. List
-  them with `archon state list --prefix discoveries/decisions/`.
+  `git grep`, merges duplicates across runs, and searches the tracker before filing.
+  There is no store of decisions across runs: a defect a later run finds again is
+  judged again against the tracker. Each discovery ends in one decision: `file` an
+  issue with a full brief, `track` it on the open issue that already covers it (with
+  one marked evidence comment per key, only when it adds something), `drop` it with a
+  reason, or `ask` a maintainer.
 - **Writes.** The `outcome` script checks before any write that every queued record is
-  decided exactly once and that a key which already has an issue is not filed again,
-  and that a tracking issue is open. It writes every decision record before any public
-  write. A filed record keeps the issue's body until the issue reads back, and a
-  tracked record keeps its evidence comment until it is posted. A filed issue's body
-  begins with `<!-- archon-discovery <key> -->`, and the create looks for that marker
-  across every issue first; the evidence comment carries the same marker and is
-  replaced in place. So the next live pass, idle or not, finishes any write an earlier
-  pass stopped before, without a second issue or comment. Filed issues carry no
-  labels: intake triages them like any other issue, which it does only when the
-  install's forge identity is on `maintainers.json`.
+  decided exactly once and that a tracking issue is open. Then it makes the public
+  writes. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
+  create looks for that marker across every issue first; the evidence comment carries
+  the same marker and is replaced in place. So a pass run again after a stop, or a key
+  filed twice, never opens a second issue or comment. Last it records the decided refs
+  and the questions on each run's document. Filed issues carry no labels: intake
+  triages them like any other issue, which it does only when the install's forge
+  identity is on `maintainers.json`.
 - **Questions.** Every `ask` in a pass becomes one attention item labelled
-  `discoveries: question`. The answer is stored on each asked record. The runs those
-  records came from stay claimed by the asking run until it ends, so no other pass asks
-  again; the next pass then decides them with the answer in memory.
-- **Eval mode.** `mode: eval` reads the stored decisions and writes nothing: no state
-  document, issue or comment. It ignores which runs earlier passes drained, so it
-  decides the window's runs as unhandled, and returns every decision, and every check
-  that would have refused the pass, as the outcome's `evaluation`.
+  `discoveries: question`. The answer is stored on the asking run's document. The runs
+  those records came from stay claimed by the asking run until it ends, so no other
+  pass asks again; the next pass then decides them with the answer beside the records.
+- **Eval mode.** `mode: eval` writes nothing: no state document, issue or comment. It
+  ignores which runs earlier passes drained, so it decides the window's runs as
+  unhandled, and returns every decision, and every check that would have refused the
+  pass, as the outcome's `evaluation`.
 
 The pack installs no binding, so the workflow runs only when started by hand until an
 operator adds one. A native schedule starts a pass every few hours; `overlap: skip`
@@ -820,11 +812,6 @@ back:
   "schedule": { "intervalSeconds": 14400, "runAtLoad": false }
 }
 ```
-
-To seed decisions an operator already made, put one record per key with
-`archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
-JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
-parse refuses every pass, naming the document.
 
 ## Worktree cleanup
 

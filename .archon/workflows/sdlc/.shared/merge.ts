@@ -11,9 +11,7 @@
  * merge queue refuses the forge source instead of gating on less.
  */
 
-import { join } from 'node:path';
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
-import { artifactsDir } from './io.ts';
 import { ghGraphql, ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { readReviewStamp } from './review-comment.ts';
@@ -212,7 +210,6 @@ export interface PrFacts {
   readonly head_revision: string;
   readonly merge_commit: string | null;
   readonly mergeable: 'clean' | 'conflict' | 'unknown';
-  readonly size: { readonly additions: number; readonly deletions: number; readonly files: number };
   readonly checks: Checks;
   readonly threads: { readonly unresolved: number; readonly urls: readonly string[] };
   readonly verdict: Verdict;
@@ -320,7 +317,6 @@ const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { reposi
   defaultBranchRef { name }
   pullRequest(number: $number) {
     url title state isDraft baseRefName headRefName headRefOid mergeable
-    additions deletions changedFiles
     mergeCommit { oid }
     commits(last: 1) { nodes { commit { oid ${ROLLUP} } } }
     reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { url } } } }
@@ -382,7 +378,6 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
       head_revision: row.headRefOid,
       merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
       mergeable: row.mergeable === 'MERGEABLE' ? 'clean' : row.mergeable === 'CONFLICTING' ? 'conflict' : 'unknown',
-      size: { additions: Number(row.additions), deletions: Number(row.deletions), files: Number(row.changedFiles) },
       checks: checksOf(commit.statusCheckRollup),
       threads: {
         unresolved: unresolved.length,
@@ -422,23 +417,6 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
     refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
   }
   return refusals;
-}
-
-/**
- * What the gate writes for a merge the forge accepted, before it reads the merge back.
- * It stays when the merge reads back merged at its head or the read fails, and is
- * removed when the read shows the pull request unmerged, so a receipt is the record
- * node's evidence that this run merged.
- */
-export interface Receipt {
-  readonly pr: string;
-  readonly head: string;
-  readonly at: string;
-}
-
-/** Where the gate writes this run's receipts and the record node reads them. */
-export function receiptsDir(): string {
-  return join(artifactsDir(), 'merge', 'receipts');
 }
 
 /** Merge at exactly `head`; the forge refuses when the head has moved since it was read. */

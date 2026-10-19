@@ -6,10 +6,11 @@ description: |
   and with earlier decisions, and decides each one: file an issue with a full brief,
   track it on the open issue that already covers it (with a marked evidence comment
   only when it adds something), drop it with a reason, or ask a maintainer. The nodes
-  after the agent perform only the writes it declared and read them back. Every
-  decision is stored as a state document, so a discovery is decided once, a key with
-  an issue never gets a second one, and a maintainer's answer is remembered. With
-  mode eval the run writes nothing and returns every decision as its output.
+  after the agent perform only the writes it declared and read them back. Each
+  drained run's state document records the refs decided for it and any question
+  asked with its answer, so a record is decided once; a filed issue carries its
+  key's marker, so filing a key again recovers that issue. With mode eval the run
+  writes nothing and returns every decision as its output.
 
   Use when: an operator drains discoveries by hand, or a schedule binding the
   operator installed starts it (see the SDLC pack README, "Discoveries"). The pack
@@ -25,7 +26,7 @@ inputs:
   mode:
     default: "live"
     description: >-
-      live or eval. Eval reads the stored decisions but writes no state document,
+      live or eval. Eval writes no state document,
       issue or comment, ignores which runs earlier passes drained, and returns every
       decision and every check that would have refused it as the outcome's
       evaluation. Any other value refuses the run at facts, before anything is read.
@@ -42,7 +43,7 @@ inputs:
 returns: outcome
 
 nodes:
-  # Builds the queue and the decisions dump, and in live mode claims the queued runs.
+  # Builds the queue, and in live mode claims the queued runs.
   - id: facts
     script: facts
     runtime: bun
