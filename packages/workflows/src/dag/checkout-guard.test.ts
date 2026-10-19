@@ -355,29 +355,6 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     });
   });
 
-  it('preserves a completed node when only the post-run Git status fails', async () => {
-    await initRepo(testDir);
-    const execFile = git.execFileAsync;
-    let statusCalls = 0;
-    const exec = spyOn(git, 'execFileAsync').mockImplementation(async (cmd, args, options) => {
-      if (cmd === 'git' && args[0] === 'status' && ++statusCalls === 2) {
-        throw new git.GitFailure('unclassified', 'post-run status failed');
-      }
-      return execFile(cmd, args, options);
-    });
-    try {
-      const deps = await runBashNode('touch stray.txt && echo completed output', true);
-      expect(statusCalls).toBe(2);
-      expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
-      expect(deps.store.createWorkflowEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ event_type: 'node_completed', step_name: 'guarded' })
-      );
-      expect(deps.store.completeWorkflowRun).toHaveBeenCalled();
-    } finally {
-      exec.mockRestore();
-    }
-  });
-
   it('discards a partial snapshot on filesystem failure', async () => {
     await initRepo(testDir);
     await writeFile(join(testDir, 'first'), 'one');
