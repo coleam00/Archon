@@ -233,7 +233,8 @@ describe('WorktreeProvider against real git', () => {
     await git(templateRepo, 'config', 'commit.gpgsign', 'false');
     await writeFile(join(templateRepo, 'README.md'), '# fixture\n');
     await git(templateRepo, 'add', 'README.md');
-    await git(templateRepo, 'commit', '-qm', 'initial commit');
+    // Detached maintenance can delete its lock file while a test copies this template.
+    await git(templateRepo, '-c', 'maintenance.auto=false', 'commit', '-qm', 'initial commit');
     await git(templateRepo, 'branch', TASK_BRANCH);
   });
 
