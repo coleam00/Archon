@@ -100,7 +100,7 @@ The bundled `sdlc` pack is a working factory for a repository:
 4. **You answer what's unclear.** A scope question, a schema change or a stuck round becomes one attention item with a recommendation. Your answer is written into the issue as the new scope.
 5. **Nothing found along the way is lost.** `archon-discoveries` reads what runs noticed outside their task and files it, tracks it on an existing issue, or drops it.
 
-Archon is built this way. Between 17 and 19 October 2026, 63 pull requests that the build queue delivered merged into this repository.
+Archon builds Archon: of the 524 pull requests merged into this repository between 1 and 19 October 2026, Archon runs built 363.
 
 You start the queues by hand or bind them to a schedule or issue events with a [trigger](https://archon.diy/guides/workflow-triggers/). The pack binds nothing by default. The pack works through the GitHub CLI (`gh`) today; see [the forge path](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack) for the plugin route. [The essential workflows](https://archon.diy/book/essential-workflows/) describes every workflow in the pack.
 
