@@ -64,7 +64,7 @@ export interface TemplateReferences {
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
- * - $TYPED_ARTIFACTS_FILE - This invocation's typed-artifact listing (JSON). Throws
+ * - $TYPED_ARTIFACTS_FILE - The consumer's typed-artifact observation (JSON). Throws
  *   if referenced by a context that never materialized one (see below).
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
@@ -103,7 +103,7 @@ export function substituteWorkflowVariables(
     /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
     adoptedRunDir?: string;
     /**
-     * This invocation's typed-artifact listing path. Undefined means the caller never
+     * The consumer's typed-artifact observation path. Undefined means the caller never
      * supplied one (a coordination node, or a wiring bug) and a prompt that references
      * `$TYPED_ARTIFACTS_FILE` throws. An explicit `''` is a caller stating it has no
      * listing — the dry-run preview — and substitutes empty without throwing.
