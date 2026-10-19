@@ -344,6 +344,7 @@ export class CodexProvider implements IAgentProvider {
     const titleRequest = requestOptions?.purpose === 'title-generation';
     const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
     let catalogId: string | undefined;
+    let toolTurnResult: ResultChunk | undefined;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     try {
@@ -383,7 +384,6 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
       const stream = streamTurn({ ...request, connection: run.connection });
-      let toolTurnResult: ResultChunk | undefined;
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
           if (finalTurnParams && !chunk.failure) {
@@ -441,10 +441,12 @@ export class CodexProvider implements IAgentProvider {
       observationLost = error instanceof ConnectionClosedError || resultReported;
       getLog().error({ err: error, resultReported }, 'query_error');
       if (!resultReported) {
-        yield stopFailureResult(error, model, Boolean(nativeTools?.length), {
+        const result = stopFailureResult(error, model, Boolean(nativeTools?.length), {
           threadId: run.threadId,
           catalogId,
         });
+        if (toolTurnResult) withToolTurnOf(result, toolTurnResult);
+        yield result;
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);

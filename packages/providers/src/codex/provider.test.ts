@@ -1391,6 +1391,14 @@ describe('CodexProvider', () => {
         expect(server.processes).toHaveLength(1);
       });
 
+      test('a final turn that ends by a process exit still reports the tool turn usage', async () => {
+        const { provider, server } = providerWith(scripted(toolTurn, { exitCode: 1 }));
+        const result = resultOf(await run(provider, options('glm-5.3')));
+        expect(server.processes).toHaveLength(2);
+        expect(result.failure).toBeDefined();
+        expect(result.tokens).toMatchObject({ input: 100, output: 10 });
+      });
+
       test('another model keeps one turn with tools and the schema together', async () => {
         const { provider, server } = providerWith(scripted(finalTurn));
         const chunks = await run(provider, options('gpt-5.5'));
