@@ -10,6 +10,10 @@ Optional prior investigation report to build on (may be empty — empty means no
 
 $INPUTS.report
 
+Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface (may be `[]`). Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
+
+$INPUTS.related
+
 The operator's request — the message that started this run:
 
 $ARGUMENTS

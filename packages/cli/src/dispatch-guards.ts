@@ -47,33 +47,45 @@ export function rejectModelOnContinue(
 
 /**
  * Accepts run configuration and trigger deployment configuration on their owning commands.
+ * `--config-from-run` names another run's run config, which only `workflow run` takes.
  */
 export function rejectConfigOutsideRun(
   command: string | undefined,
   subcommand: string | undefined,
-  config: unknown
+  config: unknown,
+  configFromRun?: unknown
 ): string | undefined {
+  const workflowRun = command === 'workflow' && subcommand === 'run';
+  if (configFromRun !== undefined && !workflowRun) {
+    return 'Error: --config-from-run can only be used with workflow run.';
+  }
   const triggerConfig =
     command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
-  if (config !== undefined && !triggerConfig && (command !== 'workflow' || subcommand !== 'run')) {
+  if (config !== undefined && !triggerConfig && !workflowRun) {
     return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
   }
   return undefined;
 }
 
 /**
- * Rejects a fresh --config on `workflow run --resume`: the resumed run keeps
- * the config it started with.
+ * Rejects a fresh --config or --config-from-run on `workflow run --resume`: the resumed
+ * run keeps the config it started with.
  */
 export function rejectConfigOnContinue(
   resume: boolean | undefined,
-  config: unknown
+  config: unknown,
+  configFromRun?: unknown
 ): string | undefined {
-  if (resume && config !== undefined) {
-    return (
-      'Error: --config cannot be used when continuing an existing workflow run. ' +
-      'The run keeps the config it started with.'
-    );
-  }
-  return undefined;
+  if (!resume) return undefined;
+  const flag =
+    config !== undefined
+      ? '--config'
+      : configFromRun !== undefined
+        ? '--config-from-run'
+        : undefined;
+  if (flag === undefined) return undefined;
+  return (
+    `Error: ${flag} cannot be used when continuing an existing workflow run. ` +
+    'The run keeps the config it started with.'
+  );
 }

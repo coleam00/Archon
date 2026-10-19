@@ -196,11 +196,11 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 /** A checkout whose remote's default branch lists `Maintainer`, and an empty Archon home. */
-function install(): Install {
+function install(maintainers = '["Maintainer"]'): Install {
   const checkout = gitCheckout({}, track);
   git(checkout, 'checkout', '-q', 'dev');
   mkdirSync(join(checkout, '.archon/sdlc/policy'), { recursive: true });
-  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
+  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), `${maintainers}\n`);
   git(checkout, 'add', '.archon/sdlc/policy/maintainers.json');
   git(checkout, 'commit', '-q', '-m', 'maintainers');
   git(checkout, 'push', '-q', 'upstream', 'HEAD:dev');
@@ -255,6 +255,8 @@ interface FakePr {
   readonly behind?: number;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
+  /** What `gh pr list --author` reports open. */
+  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
 }
 
 /**
@@ -271,6 +273,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   const query = argv.find(part => String(part).startsWith('query=')) ?? '';
   const answered = () => appendFileSync('{ARTIFACTS}/forge-gh.log', argv.slice(1, 3).join(' ') + ' ' + argv.slice(3).filter(part => !String(part).startsWith('query=')).join(' ') + '\\n');
   const rollup = { contexts: { totalCount: 1, nodes: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: forgePr.checks === 'green' ? 'SUCCESS' : 'FAILURE' }] } };
+  if (argv[1] === 'pr' && argv[2] === 'list') {
+    answered();
+    return out(0, JSON.stringify(forgePr.ownPrs ?? []));
+  }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
     answered();
     if (argv[argv.indexOf('--match-head-commit') + 1] !== forgePr.headRefOid) return out(1, '', 'Head branch was modified');
@@ -411,6 +417,29 @@ describe('the merge queue scripts', () => {
     expect(output.gate).toContain('gate.ts');
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
+  }, 60_000);
+
+  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts and delivered ones left alone", () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item());
+    const ownPrs = [
+      { number: 42, url: PR_URL, isDraft: false },
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
+      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
+    ];
+    const picked = run(at, 'facts', {}, { pr: { ownPrs } });
+    const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
+    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
+    expect(stored(at, 51).value).toBeNull();
+    expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
+  }, 60_000);
+
+  test('without the opt-in, nobody\'s pull requests are enrolled', () => {
+    const at = install();
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }] } });
+    expect(ok(picked)).toMatchObject({ path: 'idle' });
+    expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
@@ -603,10 +632,14 @@ describe('the merge queue scripts', () => {
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '' }))).toMatchObject({ decision: 'merge', section: '' });
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
+    // The approval is acted on at once: a sweep starts on the answered run's config.
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-merge-queue', '--config-from-run', 'run-1', '--detach']));
   }, 60_000);
 
   test('a return writes its ruling into the issue body and the build round starts from it', () => {
