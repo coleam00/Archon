@@ -999,93 +999,97 @@ describe('executeWorkflow', () => {
       expect(result.success).toBe(true);
     });
 
-    describe.each([undefined, null, '/old-machine/.archon/workspaces/old/name'])(
-      'unreadable container source with adopted output root %s',
-      outputRoot => {
-        it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-          'refuses invalid adoption before releasing the run for unreadable source',
-          async () => {
-            const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
-            const release = mock(async () => ({ released: true }));
-            const store = makeStore({
-              releaseRunForUnreadableSource: release,
-              getWorkflowRun: mock(async () => makeRun({ output_root: outputRoot ?? null })),
-            });
-            const platform = makePlatform();
-            const preCreatedRun = makeRun({
-              id: 'crun3',
-              adopted_from_run_id: outputRoot === undefined ? null : 'prior-run',
-              metadata: {
-                isolation: 'container',
-                isolation_env_id: 'env-x',
-                workflow_source: {
-                  version: 1,
-                  root: captureRoot,
-                  origin: captureRoot,
-                  captured_at: new Date().toISOString(),
-                  digest: 'unread',
-                  file_count: 0,
-                  byte_count: 0,
-                },
+    describe.each([
+      ['no adoption', undefined],
+      ['an adopted run with no output root', null],
+      [
+        'an adopted run with an out-of-tree output root',
+        '/old-machine/.archon/workspaces/old/name',
+      ],
+    ] as const)('unreadable container source with %s', (_label, outputRoot) => {
+      it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'refuses invalid adoption before releasing the run for unreadable source',
+        async () => {
+          const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
+          const release = mock(async () => ({ released: true }));
+          const store = makeStore({
+            releaseRunForUnreadableSource: release,
+            getWorkflowRun: mock(async () => makeRun({ output_root: outputRoot ?? null })),
+          });
+          const platform = makePlatform();
+          const preCreatedRun = makeRun({
+            id: 'crun3',
+            adopted_from_run_id: outputRoot === undefined ? null : 'prior-run',
+            metadata: {
+              isolation: 'container',
+              isolation_env_id: 'env-x',
+              workflow_source: {
+                version: 1,
+                root: captureRoot,
+                origin: captureRoot,
+                captured_at: new Date().toISOString(),
+                digest: 'unread',
+                file_count: 0,
+                byte_count: 0,
               },
-            });
-            await chmod(captureRoot, 0o000);
-            try {
-              const result = await executeWorkflow(
-                makeDeps(store),
-                platform,
-                'conv-1',
-                '/tmp/ops',
-                makeWorkflow(),
-                'msg',
-                { conversationId: 'db-conv-1' },
-                {
-                  preCreatedRun,
-                  priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-                  execContext: { kind: 'container', containerId: 'cid' },
-                  container: {
-                    envId: 'env-x',
-                    writeBack: 'approve',
-                    backend: {
-                      suspend: mock(async () => {}),
-                      finalize: mock(async () => ({ requiresApproval: false })),
-                      applyChanges: mock(async () => ({
-                        filesApplied: 0,
-                        filesDeleted: 0,
-                        warnings: [],
-                      })),
-                      discardChanges: mock(async () => {}),
-                    },
+            },
+          });
+          await chmod(captureRoot, 0o000);
+          try {
+            const result = await executeWorkflow(
+              makeDeps(store),
+              platform,
+              'conv-1',
+              '/tmp/ops',
+              makeWorkflow(),
+              'msg',
+              { conversationId: 'db-conv-1' },
+              {
+                preCreatedRun,
+                priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+                execContext: { kind: 'container', containerId: 'cid' },
+                container: {
+                  envId: 'env-x',
+                  writeBack: 'approve',
+                  backend: {
+                    suspend: mock(async () => {}),
+                    finalize: mock(async () => ({ requiresApproval: false })),
+                    applyChanges: mock(async () => ({
+                      filesApplied: 0,
+                      filesDeleted: 0,
+                      warnings: [],
+                    })),
+                    discardChanges: mock(async () => {}),
                   },
-                }
-              );
-              if (outputRoot === undefined) {
-                expect(result).toMatchObject({ success: true, paused: true });
-              } else {
-                expect(result).toMatchObject({
-                  success: false,
-                  error: expect.stringContaining("Cannot adopt run 'prior-run'"),
-                });
-                expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-                expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-                expect(keepAwake.activeCount()).toBe(0);
+                },
               }
-            } finally {
-              await chmod(captureRoot, 0o755);
-              await removeTempTree(captureRoot);
+            );
+            if (outputRoot === undefined) {
+              expect(result).toMatchObject({ success: true, paused: true });
+            } else {
+              expect(result).toMatchObject({
+                success: false,
+                error: expect.stringContaining("Cannot adopt run 'prior-run'"),
+              });
+              expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+              expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+              expect(keepAwake.activeCount()).toBe(0);
             }
-            expect(release).toHaveBeenCalledTimes(outputRoot === undefined ? 1 : 0);
-            const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
-              String(c[1])
-            );
-            expect(sent.some(text => text.includes('resume it by hand'))).toBe(
-              outputRoot === undefined
-            );
-            expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
+          } finally {
+            await chmod(captureRoot, 0o755);
+            await removeTempTree(captureRoot);
           }
-        );
-      }
-    );
+          expect(release).toHaveBeenCalledTimes(outputRoot === undefined ? 1 : 0);
+          const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+            String(c[1])
+          );
+          expect(sent.some(text => text.includes('resume it by hand'))).toBe(
+            outputRoot === undefined
+          );
+          expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
+        }
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
