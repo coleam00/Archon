@@ -12,6 +12,7 @@ import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts'
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import {
   type Contract,
   type LabelVerdict,
@@ -62,6 +63,7 @@ function triageResult(): TriageResult | null {
     complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
     importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
     urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
+    related: (nullableJson(process.env.INPUTS_RELATED) as TriageResult['related']) ?? [],
     closure,
     labels: nullableJson(process.env.INPUTS_LABELS) as string[],
     summary: text(process.env.INPUTS_SUMMARY),
@@ -126,7 +128,7 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: 'No item waits for intake.',
+      summary: idleSummary('No item waits for intake.', stuckItems(text(process.env.WORKFLOW_ID))),
     });
     return;
   }

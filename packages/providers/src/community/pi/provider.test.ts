@@ -938,7 +938,7 @@ describe('PiProvider', () => {
 
   test('custom provider: filesystem error from buildCustomProviderModelsPath is classified as Pi auth storage init failed', async () => {
     // The throw site (buildCustomProviderModelsPath inside request-auth.ts)
-    // sits inside the try block in provider.ts that wraps ModelRuntime.create
+    // sits inside the try block in auth.ts (openTurnModelRuntime) that wraps ModelRuntime.create
     // errors as 'Pi auth storage init failed: …' — an FS error on the
     // per-call tmpdir must be framed the same way, not propagate raw. This
     // test exercises that classification path against a real FS failure.
@@ -3614,7 +3614,7 @@ describe('PiProvider', () => {
      * call: pi 0.84.0+ flushes the shared extension runtime's pending queue
      * into the SDK's INTERNAL registry, not ours — our provider re-applies
      * the snapshot separately (see `modelRegistry.registerProvider(name,
-     * config)` in provider.ts). In this test the `bindCore` drain is a
+     * config)` in session-setup.ts). In this test the `bindCore` drain is a
      * no-op against our registry: the registrations land via the re-apply.
      * We just drain the queue so the second call's session sees an empty
      * queue (matching the SDK's behavior) — the source of truth is the

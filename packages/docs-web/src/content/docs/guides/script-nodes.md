@@ -320,8 +320,11 @@ newline as before.
 ### Variable Substitution in Scripts
 
 Variables are substituted into the `script` text **as raw strings, without
-shell quoting** — unlike `bash:` nodes, where `$nodeId.output` values are
-auto-quoted. Treat substituted values as untrusted input and parse them with
+shell quoting**. In `bash:` nodes, small string `$nodeId.output` values are
+single-quoted inline, while spilled values use an unquoted command substitution
+that splits words and expands globs when used as a bare argument. For Bash,
+[assign the reference, then quote the shell variable](/reference/variables/#shell-quoting-in-bash-vs-script).
+In script bodies, treat substituted values as untrusted input and parse them with
 language features, not by interpolating into shell syntax.
 
 :::caution[Avoid String.raw with `$nodeId.output`]

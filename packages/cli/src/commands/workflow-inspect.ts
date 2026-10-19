@@ -225,11 +225,27 @@ interface ArtifactOmissions {
   unreadable: string[];
 }
 
-export async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Promise<LeaveBehind> {
+/**
+ * The run's `$ARTIFACTS_DIR`, or null when its output location cannot be resolved.
+ *
+ * #3097: route the persisted `output_root` through the shared resolver so the
+ * same `ARCHON_HOME` containment check every other persisted-root reader
+ * enforces applies here. An unresolvable root (out-of-tree persisted value with
+ * no codebase row to re-derive from) yields the same null-root refusal the
+ * transcript reader exposes.
+ */
+export async function resolveRunArtifactsDir(
+  host: WorkflowHost,
+  run: WorkflowRun
+): Promise<string | null> {
   const codebase = run.codebase_id
     ? await host.records.codebases.getCodebase(run.codebase_id)
     : null;
+  const root = archonPaths.resolveRunStorageRoot(run, codebase);
+  return root ? archonPaths.getRunArtifactsDirForRoot(root, run.id) : null;
+}
 
+export async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Promise<LeaveBehind> {
   const leaveBehind: LeaveBehind = {
     adopted_by: [],
     artifactFiles: [],
@@ -255,15 +271,9 @@ export async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Pr
   }
 
   // Artifact file list — operator-facing files, capped for display.
-  // #3097: route the persisted `output_root` through the shared resolver so
-  // the same `ARCHON_HOME` containment check every other persisted-root
-  // reader in this file already enforces applies here. An unresolvable root
-  // (out-of-tree persisted value with no codebase row to re-derive from)
-  // yields the same null-root refusal the transcript reader exposes.
-  const artifactsRoot = archonPaths.resolveRunStorageRoot(run, codebase);
-  if (artifactsRoot) {
+  const artifactsDir = await resolveRunArtifactsDir(host, run);
+  if (artifactsDir) {
     try {
-      const artifactsDir = archonPaths.getRunArtifactsDirForRoot(artifactsRoot, run.id);
       const listing = listArtifactFiles(artifactsDir);
       leaveBehind.artifactFiles = listing.files;
       leaveBehind.artifactFilesOmitted = listing.omitted;
@@ -289,7 +299,7 @@ export async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Pr
  * and the human preview fall on nested content rather than on whichever entries
  * `readdir` happened to return first — a run's reports sit at the top level.
  */
-function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
+export function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
   const files: string[] = [];
   const omitted: ArtifactOmissions = { internalFiles: 0, truncated: false, unreadable: [] };
   const walk = (current: string, prefix: string, internal: boolean): void => {

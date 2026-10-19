@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
-import { workflowStatusCommand, workflowGetCommand } from './workflow';
+import { workflowGetCommand, workflowStatusCommand } from './workflow-query';
 import { buildNodeSummaries } from './workflow-node-summaries';
 
 const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [

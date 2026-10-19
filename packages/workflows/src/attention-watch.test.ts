@@ -18,7 +18,12 @@ import {
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
 import type { ApprovalContext, WorkflowWaitContext } from './schemas/workflow-run';
-import { WorkflowEventCursorError, workflowEventCursor, type IWorkflowStore } from './store';
+import {
+  executionClaim,
+  WorkflowEventCursorError,
+  workflowEventCursor,
+  type IWorkflowStore,
+} from './store';
 
 const roots = trackTempRoots();
 const host: AttentionWatchHost = { branchOf: async () => null };
@@ -1158,6 +1163,139 @@ describe('watchAttentionQueue', () => {
     await portless.next(ofRun(healthy, 'terminal'));
     await portless.close();
     expect(portless.lines.filter(line => line.type === 'owner_lost')).toEqual([]);
+  });
+
+  test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
+    'replaying %s after owner loss does not watch the same claim again',
+    async eventType => {
+      const store = await makeStore();
+      const start = await store.getWorkflowEventHead();
+      const runId = await running(store);
+      if (eventType === 'workflow_started')
+        await store.createWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: eventType,
+          data: {},
+        });
+      else {
+        if (eventType === 'workflow_resumed') await store.failWorkflowRun(runId, 'failed');
+        else await store.updateWorkflowRun(runId, { status: 'paused' });
+        await store.resumeWorkflowRun(runId);
+      }
+      const head = await store.getWorkflowEventHead();
+      let held = true;
+      const holding: IWorkflowStore = Object.create(store);
+      holding.readWorkflowEventsAfter = (cursor, options) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, options);
+      let checks = 0;
+      const stream = await watch(
+        holding,
+        { after: start, bookmarkIntervalMs: 0 },
+        {
+          ...host,
+          ownerLoss: async () => {
+            checks++;
+            return { observedStatus: 'running' };
+          },
+        }
+      );
+      try {
+        await stream.next(ofRun(runId, 'owner_lost'));
+        held = false;
+        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+      } finally {
+        await stream.close();
+      }
+      expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
+      expect(checks).toBe(1);
+      expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+    }
+  );
+
+  test.each(['failed', 'paused'] as const)(
+    'a %s run resumed after owner loss reports the new claim loss once',
+    async status => {
+      const store = await makeStore();
+      const runId = await running(store);
+      await store.failWorkflowRun(runId, 'first failure');
+      const original = await store.resumeWorkflowRun(runId);
+      let held = false;
+      const holding: IWorkflowStore = Object.create(store);
+      holding.readWorkflowEventsAfter = (cursor, options) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, options);
+      let checks = 0;
+      const stream = await watch(
+        holding,
+        { bookmarkIntervalMs: 0 },
+        {
+          ...host,
+          ownerLoss: async () => {
+            checks++;
+            return { observedStatus: 'running' };
+          },
+        }
+      );
+      try {
+        await stream.next(ofRun(runId, 'owner_lost'));
+        held = true;
+        if (status === 'failed') await store.failWorkflowRun(runId, 'failed');
+        else await store.updateWorkflowRun(runId, { status: 'paused' });
+        const resumed = await store.resumeWorkflowRun(runId);
+        expect(executionClaim(resumed.metadata)).not.toBe(executionClaim(original.metadata));
+        const head = await store.getWorkflowEventHead();
+        held = false;
+        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        await stream.next(() => stream.lines.filter(ofRun(runId, 'owner_lost')).length >= 2);
+      } finally {
+        await stream.close();
+      }
+      expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(2);
+      expect(checks).toBe(2);
+    }
+  );
+
+  test('a new claim replaces a pending owner watch and ignores its late loss', async () => {
+    const store = await makeStore();
+    const runId = await running(store);
+    let held = true;
+    const holding: IWorkflowStore = Object.create(store);
+    holding.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : store.readWorkflowEventsAfter(cursor, options);
+    const oldOwner = Promise.withResolvers<{ observedStatus: 'running' } | null>();
+    const signals: AbortSignal[] = [];
+    const stream = await watch(
+      holding,
+      { bookmarkIntervalMs: 0 },
+      {
+        ...host,
+        ownerLoss: (_runId, signal) => {
+          signals.push(signal);
+          return signals.length === 1
+            ? oldOwner.promise
+            : Promise.resolve({ observedStatus: 'running' });
+        },
+      }
+    );
+    try {
+      await store.failWorkflowRun(runId, 'failed');
+      await store.resumeWorkflowRun(runId);
+      held = false;
+      await stream.next(ofRun(runId, 'owner_lost'));
+      expect(signals[0].aborted).toBe(true);
+      oldOwner.resolve({ observedStatus: 'running' });
+      await oldOwner.promise;
+    } finally {
+      oldOwner.resolve(null);
+      await stream.close();
+    }
+    expect(signals).toHaveLength(2);
+    expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
   });
 
   test('a failed liveness read is retried rather than dropped', async () => {

@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import * as runControl from './run-control';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { inspectResumableRun } from '../run-resume';
@@ -11,6 +12,7 @@ import {
   afterEach,
   mock,
   setSystemTime,
+  spyOn,
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
@@ -29,6 +31,7 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  failedLoopIterations,
   minimalConfig,
   type TestWorkflowDefinition,
   type DagOptionsOverrides,
@@ -243,126 +246,273 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ]);
   });
 
-  it.each(['post-body cancel', 'between-iteration cancel', 'completion error'] as const)(
-    'loop_group retains paid usage on %s',
-    async exit => {
-      const store = createMockStore();
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun();
-      let status: 'running' | 'cancelled' = 'running';
-      let calls = 0;
-      store.getWorkflowRunStatus.mockImplementation(async () => status);
-      mockSendQueryDag.mockImplementation(async function* () {
-        calls++;
-        yield { type: 'agent_message_chunk', text: 'Paid work.' };
-        yield {
-          type: 'result',
-          sessionId: `paid-${calls}`,
-          cost: 0.05,
-          tokens: { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 },
-        };
-        if (exit === 'post-body cancel' && calls === 2) status = 'cancelled';
-      });
-      store.createWorkflowEvent.mockImplementation(async event => {
-        if (
-          exit === 'between-iteration cancel' &&
-          event.event_type === 'loop_iteration_completed' &&
-          event.step_name === 'grp' &&
-          event.data?.iteration === 2
+  it.each([
+    { kind: 'loop', fault: 'shell', retry: false },
+    { kind: 'loop', fault: 'shell', retry: true },
+    { kind: 'loop', fault: 'listing', retry: false },
+    { kind: 'loop', fault: 'spawn', retry: false },
+    { kind: 'loop_group', fault: 'shell', retry: false },
+    { kind: 'loop_group', fault: 'listing', retry: false },
+    { kind: 'loop_group', fault: 'spawn', retry: false },
+  ] as const)('$kind retains paid usage after $fault throws (retry: $retry)', async test => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const tokens = { input: 100, output: 20, cacheRead: 40, cacheWrite: 5 };
+    const invalidShell = join(
+      testDir,
+      test.fault === 'spawn' ? 'nonexecutable-bash' : 'missing-bash'
+    );
+    if (test.fault === 'spawn') await writeFile(invalidShell, '', { mode: 0o600 });
+    const listingDir = join(testDir, 'artifacts', '.archon', 'typed-artifacts');
+    const savedBashPath = process.env.ARCHON_BASH_PATH;
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Paid work.' };
+      yield { type: 'result', sessionId: 'paid-session', cost: 0.25, tokens };
+      if (test.fault !== 'listing') process.env.ARCHON_BASH_PATH = invalidShell;
+      else {
+        await removeTempTree(listingDir);
+        await writeFile(listingDir, 'blocks directory creation');
+      }
+    });
+    const node: DagNode =
+      test.kind === 'loop'
+        ? {
+            id: 'work',
+            kind: 'loop',
+            loop: {
+              prompt: 'Work.',
+              until_bash: test.fault === 'listing' ? 'false' : 'true',
+              max_iterations: 3,
+              fresh_context: false,
+            },
+            ...(test.retry ? { retry: { max_attempts: 2, delay_ms: 1 } } : {}),
+          }
+        : {
+            id: 'work',
+            kind: 'loop_group',
+            loop_group: {
+              until_bash: 'true',
+              max_iterations: 3,
+              fresh_context: false,
+              nodes: [{ id: 'body', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+            },
+          };
+    try {
+      const iterations = await failedLoopIterations('work', () =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            logDir: join(testDir, 'logs'),
+            workflowRun,
+            workflow: { name: 'loop-thrown-usage', nodes: [node] },
+          })
         )
-          status = 'cancelled';
-      });
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform,
-          cwd: testDir,
-          logDir: join(testDir, 'logs'),
-          workflowRun,
-          workflow: {
-            name: 'loop-group-early-exit-usage',
-            nodes: [
-              {
-                id: 'grp',
-                kind: 'loop_group',
-                loop_group: {
-                  until: 'DONE',
-                  ...(exit === 'completion error'
-                    ? { until_bash: 'test -n "$skipped.output"' }
-                    : {}),
-                  max_iterations: 4,
-                  fresh_context: false,
-                  nodes: [
-                    { id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
-                    ...(exit === 'completion error'
-                      ? [
-                          {
-                            id: 'skipped',
-                            kind: 'agent' as const,
-                            source: { kind: 'inline' as const, prompt: 'Skip.' },
-                            depends_on: ['b'],
-                            when: "$b.output == 'never'",
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              },
-            ],
-          },
-        })
       );
-      expect(calls).toBe(exit === 'completion error' ? 1 : 2);
-      const groupFailure = persistedEvents(store).find(
-        event => event.event_type === 'node_failed' && event.step_name === 'grp'
-      );
-      expect(groupFailure?.data?.failure_kind).toBe(
-        exit === 'completion error' ? 'unknown' : 'cancelled'
-      );
-      if (exit === 'completion error')
-        expect(groupFailure?.data?.error).toContain("cannot resolve '$skipped.output'");
-      expect(groupFailure?.data?.cost_usd).toBe(0.05 * calls);
-      expect(groupFailure?.data?.spend).toMatchObject({
-        costUsd: { source: 'provider', value: 0.05 * calls },
-        tokens: {
-          source: 'provider',
-          value: {
-            input: 100 * calls,
-            output: 10 * calls,
-            cacheRead: 40 * calls,
-            cacheWrite: 5 * calls,
-          },
-        },
-      });
-      expect(runUsageWrites(store)).toEqual([
-        {
-          total_cost_usd: 0.05 * calls,
-          total_tokens_in: 100 * calls,
-          total_tokens_out: 10 * calls,
-          total_cache_read_tokens: 40 * calls,
-          total_cache_write_tokens: 5 * calls,
-        },
-      ]);
-      const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
-      expect(snapshot.costUsd).toBe(0.05 * calls);
-      expect(snapshot.tokens).toEqual({
-        input: 100 * calls,
-        output: 10 * calls,
-        cacheRead: 40 * calls,
-        cacheWrite: 5 * calls,
-      });
-      const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
-      const groupRow = rows.find(row => row.type === 'node_error' && row.step === 'grp');
-      expect(groupRow).toBeDefined();
-      expect(groupRow).not.toHaveProperty('cost_usd');
-      expect(groupRow).not.toHaveProperty('tokens');
-      expect(
-        rows
-          .filter(row => row.type === 'node_complete' || row.type === 'node_error')
-          .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
-      ).toBeCloseTo(0.05 * calls, 5);
+      expect(iterations).toBe(1);
+    } finally {
+      if (savedBashPath === undefined) delete process.env.ARCHON_BASH_PATH;
+      else process.env.ARCHON_BASH_PATH = savedBashPath;
     }
-  );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    const events = persistedEvents(store);
+    const failures = events.filter(event => event.event_type === 'node_failed');
+    expect(failures).toHaveLength(1);
+    const failed = failures[0];
+    expect(failed.step_name).toBe('work');
+    expect(failed.data?.failure_kind).toBe('unknown');
+    expect(failed.data?.error).toContain(test.fault === 'listing' ? listingDir : invalidShell);
+    if (test.fault === 'listing') expect(failed.data?.error).toContain('EEXIST');
+    if (test.fault === 'spawn') expect(failed.data?.error).toContain('cannot execute bash');
+    expect(failed.data?.cost_usd).toBe(0.25);
+    expect(failed.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.25 },
+      tokens: { source: 'provider', value: tokens },
+    });
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'work')
+    ).toHaveLength(0);
+    expect(runUsageWrites(store)).toEqual([
+      {
+        total_cost_usd: 0.25,
+        total_tokens_in: 100,
+        total_tokens_out: 20,
+        total_cache_read_tokens: 40,
+        total_cache_write_tokens: 5,
+      },
+    ]);
+    const snapshot = await foldDagResumeSnapshot(events, workflowRun.id);
+    expect(snapshot.costUsd).toBe(0.25);
+    expect(snapshot.tokens).toEqual(tokens);
+    expect(snapshot.completedNodeOutputs.has('work')).toBe(false);
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const failureRow = rows.find(row => row.type === 'node_error' && row.step === 'work');
+    expect(failureRow).toBeDefined();
+    if (test.kind === 'loop') {
+      expect(failureRow?.cost_usd).toBe(0.25);
+      expect(failureRow?.tokens).toEqual(tokens);
+    } else {
+      expect(failed.data?.accounting).toBe('aggregate');
+      expect(
+        events.filter(
+          event => event.event_type === 'node_completed' && event.step_name === 'work.body'
+        )
+      ).toHaveLength(1);
+      expect(failureRow).not.toHaveProperty('cost_usd');
+      expect(failureRow).not.toHaveProperty('tokens');
+    }
+    expect(
+      rows
+        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+    ).toBe(0.25);
+    const messages = platform.sendMessage.mock.calls.map(call => call[1]).join('\n');
+    expect(messages).toContain(String(failed.data?.error));
+    expect(messages).not.toContain('failed before execution');
+  });
+
+  it.each([
+    'post-body cancel',
+    'between-iteration cancel',
+    'until-bash cancel',
+    'completion error',
+  ] as const)('loop_group retains paid usage on %s', async exit => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    let status: 'running' | 'cancelled' = 'running';
+    let calls = 0;
+    store.getWorkflowRunStatus.mockImplementation(async () => status);
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'agent_message_chunk', text: 'Paid work.' };
+      yield {
+        type: 'result',
+        sessionId: `paid-${calls}`,
+        cost: 0.05,
+        tokens: { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 },
+      };
+      if (exit === 'post-body cancel' && calls === 2) status = 'cancelled';
+    });
+    store.createWorkflowEvent.mockImplementation(async event => {
+      if (
+        exit === 'between-iteration cancel' &&
+        event.event_type === 'loop_iteration_completed' &&
+        event.step_name === 'grp' &&
+        event.data?.iteration === 2
+      )
+        status = 'cancelled';
+    });
+    const shell =
+      exit === 'until-bash cancel'
+        ? spyOn(runControl, 'runSubprocessUntilRunStops').mockRejectedValue(
+            Object.assign(new Error('Workflow cancelled'), { cancelled: true })
+          )
+        : undefined;
+    let iterations: number | undefined;
+    try {
+      iterations = await failedLoopIterations('grp', () =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            logDir: join(testDir, 'logs'),
+            workflowRun,
+            workflow: {
+              name: 'loop-group-early-exit-usage',
+              nodes: [
+                {
+                  id: 'grp',
+                  kind: 'loop_group',
+                  loop_group: {
+                    until: 'DONE',
+                    ...(exit === 'completion error'
+                      ? { until_bash: 'test -n "$skipped.output"' }
+                      : exit === 'until-bash cancel'
+                        ? { until_bash: 'true' }
+                        : {}),
+                    max_iterations: 4,
+                    fresh_context: false,
+                    nodes: [
+                      { id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+                      ...(exit === 'completion error'
+                        ? [
+                            {
+                              id: 'skipped',
+                              kind: 'agent' as const,
+                              source: { kind: 'inline' as const, prompt: 'Skip.' },
+                              depends_on: ['b'],
+                              when: "$b.output == 'never'",
+                            },
+                          ]
+                        : []),
+                    ],
+                  },
+                },
+              ],
+            },
+          })
+        )
+      );
+    } finally {
+      shell?.mockRestore();
+    }
+    expect(calls).toBe(exit === 'completion error' || exit === 'until-bash cancel' ? 1 : 2);
+    expect(iterations).toBe(calls);
+    const groupFailure = persistedEvents(store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'grp'
+    );
+    expect(groupFailure?.data?.failure_kind).toBe(
+      exit === 'completion error' ? 'unknown' : 'cancelled'
+    );
+    if (exit === 'completion error')
+      expect(groupFailure?.data?.error).toContain("cannot resolve '$skipped.output'");
+    expect(groupFailure?.data?.cost_usd).toBe(0.05 * calls);
+    expect(groupFailure?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.05 * calls },
+      tokens: {
+        source: 'provider',
+        value: {
+          input: 100 * calls,
+          output: 10 * calls,
+          cacheRead: 40 * calls,
+          cacheWrite: 5 * calls,
+        },
+      },
+    });
+    expect(runUsageWrites(store)).toEqual([
+      {
+        total_cost_usd: 0.05 * calls,
+        total_tokens_in: 100 * calls,
+        total_tokens_out: 10 * calls,
+        total_cache_read_tokens: 40 * calls,
+        total_cache_write_tokens: 5 * calls,
+      },
+    ]);
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
+    expect(snapshot.costUsd).toBe(0.05 * calls);
+    expect(snapshot.tokens).toEqual({
+      input: 100 * calls,
+      output: 10 * calls,
+      cacheRead: 40 * calls,
+      cacheWrite: 5 * calls,
+    });
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const groupRow = rows.find(row => row.type === 'node_error' && row.step === 'grp');
+    expect(groupRow).toBeDefined();
+    expect(groupRow).not.toHaveProperty('cost_usd');
+    expect(groupRow).not.toHaveProperty('tokens');
+    expect(
+      rows
+        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+    ).toBeCloseTo(0.05 * calls, 5);
+  });
 
   it('a node cancelled by the user leaves its spend in the transcript', async () => {
     // The abort branch called no logNodeError at all, so a cancelled node produced no
@@ -1438,6 +1588,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     store.getDagResumeSnapshot.mockImplementation(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       costUsd: 0.1,
       budget: { workUnits: 1, spendUsd: 0.1 },

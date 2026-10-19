@@ -20,6 +20,7 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
+import { deprecatedForRemovalNotice } from './community/deprecation';
 import type { ProviderRegistration, IAgentProvider } from './types';
 import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
@@ -515,6 +516,21 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(deprecated).toEqual(['copilot', 'opencode']);
+    });
+
+    test('deprecated providers announce removal in the next minor release', () => {
+      registerCommunityProviders();
+      expect(deprecatedForRemovalNotice('Copilot')).toBe(
+        'Copilot is deprecated and will be removed in the next minor release: no Archon ' +
+          'maintainer owns it. It keeps working until then. If you need it, build your own ' +
+          'plugin: https://archon.diy/guides/publishing-plugins/'
+      );
+      expect(getRegistration('copilot').deprecationNotice).toBe(
+        deprecatedForRemovalNotice('Copilot')
+      );
+      expect(getRegistration('opencode').deprecationNotice).toBe(
+        deprecatedForRemovalNotice('OpenCode')
+      );
     });
 
     test('is idempotent', () => {

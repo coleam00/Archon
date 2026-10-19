@@ -3,9 +3,10 @@ import { createLogger } from '@archon/paths';
 import { requireProvider } from '@archon/provider-contract';
 import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import { safeSendMessage, type RunPhase } from './executor-shared';
+import { safeSendMessage } from './platform-messages';
+import { type RunPhase } from './executor-shared';
 import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader/contracts';
-import { hasRunModelOverrides, runOverrideAppliesToRef } from './model-validation';
+import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from './model-validation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
 import { prepareRunAiConfiguration, type PreparedRunAiConfiguration } from './run-preflight';
@@ -333,7 +334,7 @@ async function resolveWorkflowProvider(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflow: ResolvedWorkflow,
-  { resolvedModelOverrides, scope }: PreparedRunAiConfiguration
+  { resolvedModelOverrides, scope, aiProfile }: PreparedRunAiConfiguration
 ): Promise<void> {
   // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
   // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
@@ -346,10 +347,11 @@ async function resolveWorkflowProvider(
   // so this normally resolves to `config.assistant`. It still has to behave correctly for
   // a programmatic caller that hands over an unexpanded definition.
   const { provider: resolvedProvider, model: resolvedModel, preset: workflowPreset } = scope;
-  const providerSource = runOverrideAppliesToRef(resolvedModelOverrides, workflow.model)
+  const workflowRef = selectModelRef(workflow.model, aiProfile);
+  const providerSource = runOverrideAppliesToRef(resolvedModelOverrides, workflowRef)
     ? 'run-override'
     : scope.providerOrigin === 'model ref'
-      ? `model preset '${workflow.model ?? ''}'`
+      ? `model preset '${workflowRef ?? ''}'`
       : scope.providerOrigin === 'workflow'
         ? 'workflow definition'
         : 'config';
@@ -360,14 +362,14 @@ async function resolveWorkflowProvider(
         workflowName: workflow.name,
         configuredProvider: workflow.provider,
         resolvedProvider: workflowPreset.provider,
-        modelRef: workflow.model,
+        modelRef: workflowRef,
       },
       'workflow.model_provider_conflict'
     );
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflowRef ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
     );
     if (!delivered) {
       getLog().error(

@@ -2,13 +2,14 @@ name: archon-build-queue
 description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
   request and stops only for decisions that belong to a person. Each run claims the
-  best waiting item with intake's claim. One agent routes it (and proves a bug's
-  symptom first) and launches archon-ship from a brief; one agent answers how that
-  round ended; and after several rounds that each found new defects, one agent decides
-  whether to ask the scope question instead of running another. A clear case acts on
-  its own. Anything unclear pauses as one attention item whose answer is a declared
-  choice; the ruling is written into the issue body as a dated "Current scope"
-  section. Every decision is recorded on the item's work item.
+  best waiting item with intake's claim, or the one the number input names. One
+  agent routes it (and proves a bug's symptom first) and launches archon-ship from a
+  brief; one agent answers how that round ended; and after several rounds that each
+  found new defects, one agent decides whether to ask the scope question instead of
+  running another. A clear case acts on its own. Anything unclear pauses as one
+  attention item whose answer is a declared choice; the ruling is written into the
+  issue body as a dated "Current scope" section. Every decision is recorded on the
+  item's work item.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Build queue").
@@ -27,6 +28,19 @@ inputs:
     description: >-
       Pickup order, intake's format: a JSON array of "<key> <asc|desc>" with keys
       urgency, importance, size, complexity and created.
+  number:
+    default: ""
+    description: >-
+      The issue to build. Empty claims the waiting item that sorts first. A number
+      claims that item, and refuses the run with the reason when it cannot: it has no
+      work item, another run holds it, or it does not wait for the build queue.
+  retriage_as:
+    default: ""
+    description: >-
+      The maintainer login a blocked item's re-triage is requested as. Set, a run that
+      names no item also revisits the blocked items: one agent judges which no longer
+      look blocked, and those get archon-triage and an intake run with that label
+      event. Empty revisits nothing.
   round_limit:
     default: "3"
     description: >-
@@ -76,7 +90,11 @@ nodes:
         # The branch the round opens its pull request from when it continues none: a new
         # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
+        # The blocked items due a revisit; empty unless retriage_as is set and no item
+        # is named.
+        blocked: { type: array, items: { type: object } }
+        blocked_count: { type: integer }
+      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch, blocked, blocked_count]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -246,3 +264,41 @@ nodes:
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]
+
+  # Intake's blocked verdict can go stale while work lands in parallel. The revisit
+  # runs beside the item's path and changes nothing on it.
+  - id: revisit
+    command: revisit
+    depends_on: [facts]
+    when: "$facts.output.blocked_count > 0"
+    model: medium
+    mutates_checkout: false
+    with:
+      blocked: { from: "$facts.output.blocked" }
+    output_format:
+      type: object
+      properties:
+        retriage:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              reason: { type: string, pattern: '\S' }
+            required: [number, reason]
+      required: [retriage]
+
+  - id: retriage
+    script: retriage
+    runtime: bun
+    depends_on: [facts, revisit]
+    with:
+      blocked: { from: "$facts.output.blocked" }
+      retriage: { from: "$revisit.output.retriage" }
+    output_format:
+      type: object
+      properties:
+        retriaged: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [retriaged, summary]

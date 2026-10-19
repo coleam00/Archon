@@ -1,5 +1,5 @@
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
-import { currentAdoptedRunDir } from '../../../executor-shared';
+import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
 import { buildNodeShellEnvironment } from '../../references';
 import { runSubprocessUntilRunStops } from '../../run-control';
@@ -78,7 +78,8 @@ function untilBashRejected(
       output: '',
       error: bashErr.message,
       failureKind: 'cancelled',
-      ...run.usage,
+      ...run.progress.usage,
+      loopIterations: run.progress.lastStartedIteration,
     };
   }
   // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself

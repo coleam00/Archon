@@ -3,8 +3,8 @@ import {
   isFanOutParentReleased,
   maybeResumeParentRun,
   releaseContinuablePauseSlot,
-  runChildWorkflow,
-} from './child-runs';
+} from './parent-resume';
+import { runChildWorkflow } from './child-runs';
 import {
   clearManagedProviderCredentialFiles,
   resolveUserProviderEnvForWorkflow,
@@ -12,14 +12,14 @@ import {
 } from './run-credential-env';
 import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
 import { resolveRunDispatch } from './run-dispatch';
-import { prepareRunPaths, resolveAdoptedRunDir } from './run-paths';
+import { prepareRunPaths } from './run-paths';
 import {
   assertRunCredentials,
   effectiveDbCredentialValues,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
-  establishRunSource,
+  establishAdoptedRunSource,
   prepareWorkflowSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
@@ -34,24 +34,19 @@ export type { ContainerRunContext, ContainerWriteBackBackend } from './container
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import * as archonPaths from '@archon/paths';
-import { captureWorkflowInvoked, createLogger } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { ContainerRunContext } from './container-context';
 import { executeDagWorkflow, type PriorRunUsage } from './dag-executor';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
-import { formatDeprecationNotice } from './deprecation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
-import {
-  runWithAdoptedRunDir,
-  safeSendMessage,
-  sendCriticalMessage,
-  type SendMessageContext,
-} from './executor-shared';
-import { logWorkflowError, logWorkflowResume, logWorkflowStart } from './logger';
+import { runWithAdoptedRunDir } from './workflow-variables';
+import { announceRunStart } from './run-start';
+import { safeSendMessage, sendCriticalMessage } from './platform-messages';
+import { logWorkflowError } from './logger';
 import type {
   ResolvedWorkflow,
   WorkflowExecutionResult,
@@ -62,19 +57,14 @@ import type {
 import {
   SUBRUN_METADATA_KEYS,
   isApprovalContext,
-  isExecNode,
-  isGateNode,
-  isLoopGroupNode,
-  isLoopNode,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
-  runMayPersistSessions,
   type ContinuationMode,
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { deadlineWaitCursor, type PersistedNodeOutput } from './store';
-import { workflowTelemetryShape } from './telemetry-shape';
+import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
+import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
@@ -96,12 +86,17 @@ type ResumePayload =
   | {
       preCreatedRun: WorkflowRun;
       priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+      /** The prior pass's failures; replayed only when `resumeCause` is `continue_after_wait`. */
+      priorFailedNodes?: Map<string, PriorFailedNode>;
+      resumeCause?: ResumeCause;
       priorUsage?: PriorRunUsage;
       priorNodeSessions?: readonly WorkflowRunNodeSession[];
     }
   | {
       preCreatedRun?: undefined;
       priorCompletedNodes?: undefined;
+      priorFailedNodes?: undefined;
+      resumeCause?: undefined;
       priorUsage?: undefined;
       priorNodeSessions?: undefined;
     };
@@ -275,11 +270,11 @@ export async function executeWorkflow(
   const {
     codebaseId,
     issueContext,
-    isolationContext,
     priorCompletedNodes,
+    priorFailedNodes,
+    resumeCause,
     priorUsage,
     priorNodeSessions,
-    parseWarnings,
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
@@ -297,16 +292,9 @@ export async function executeWorkflow(
   );
   if (dispatched.stopped) return dispatched.result;
   const dispatch = dispatched.value;
-  const { executionUserId, isContinuation, prepared, baseBranch, runSource, docsDir } = dispatch;
-  const {
-    config,
-    dbEnvVars,
-    baseAiProfile,
-    aiProfile,
-    resolvedModelOverrides,
-    scope,
-    effectiveRunConfig,
-  } = prepared;
+  const { executionUserId, isContinuation, prepared, baseBranch, docsDir } = dispatch;
+  const { config, dbEnvVars, aiProfile, resolvedModelOverrides, scope, effectiveRunConfig } =
+    prepared;
   const configuredCommandFolder = config.commands.folder;
   const { provider: resolvedProvider, model: resolvedModel, preset: workflowPreset } = scope;
 
@@ -350,18 +338,17 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
-  const sourced = await establishRunSource(
+  const sourced = await establishAdoptedRunSource(
     deps,
     platform,
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts
+    opts,
+    isContinuation
   );
   if (sourced.stopped) return sourced.result;
-  const workflowSourceRoots = sourced.value;
+  const { workflowSourceRoots } = sourced.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
@@ -378,6 +365,8 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const adoptedRunDir = sourced.value.adoptedRunDir();
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
@@ -428,215 +417,18 @@ export async function executeWorkflow(
     });
     workflowRun.metadata = { ...workflowRun.metadata, [RUN_GRAPH_METADATA_KEY]: graph };
 
-    getLog().info(
-      {
-        workflowName: workflow.name,
-        workflowRunId: workflowRun.id,
-        hasIssueContext: !!issueContext,
-        issueContextLength: issueContext?.length ?? 0,
-      },
-      'workflow_starting'
-    );
-    // `isContinuation`, not `priorCompletedNodes`: a failed child re-entered without a
-    // resumable snapshot is still a resume of an existing run.
-    if (isContinuation) {
-      await logWorkflowResume(logDir, workflowRun.id, workflow.name);
-    } else {
-      await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
-    }
-
-    // Register run with emitter and emit workflow_started
-    const emitter = getWorkflowEventEmitter();
-    emitter.registerRun(workflowRun.id, conversationId);
-
-    const transcriptPath = archonPaths.getRunLogPathForRoot(outputRoot, workflowRun.id);
-    emitter.emit({
-      type: 'workflow_started',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      conversationId: workflowRun.conversation_id,
-      transcriptPath,
-    });
-
-    // Fire-and-forget anonymous usage telemetry. Categorical only: bundled
-    // workflows report their real name, custom ones report "custom". No PII —
-    // descriptions/prompts/paths are never sent. Machine context + version ride
-    // along as super-properties. Opt out: ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
-    const telemetryNodes = workflow.nodes;
-    captureWorkflowInvoked({
-      runId: workflowRun.id,
-      isChild: workflowRun.parent_run_id != null,
-      workflowName: workflow.name,
-      workflowSource: runSource,
-      platform: platform.getPlatformType(),
-      provider: resolvedProvider,
-      model: resolvedModel,
-      nodeCount: telemetryNodes.length,
-      usesLoop: telemetryNodes.some(isLoopNode),
-      usesLoopGroup: telemetryNodes.some(isLoopGroupNode),
-      usesApproval: telemetryNodes.some(isGateNode),
-      usesScript: telemetryNodes.some(n => isExecNode(n) && n.runtime !== 'sh'),
-      usesBash: telemetryNodes.some(n => isExecNode(n) && n.runtime === 'sh'),
-      usesOutputFormat: telemetryNodes.some(n => n.output_format !== undefined),
-      usesOutputType: telemetryNodes.some(n => n.output_type !== undefined),
-      usesPersistSession: runMayPersistSessions(workflow),
-      usesMcp: telemetryNodes.some(n => n.mcp !== undefined),
-      usesSkills: telemetryNodes.some(n => n.skills !== undefined),
-      usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),
-      usedIsolation: isolationContext !== undefined,
-      isResume: isContinuation,
-      ...workflowTelemetryShape(deps.providers, workflow, runSource),
-    });
-
-    let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';
-    if (execContext.kind === 'container') {
-      isolationMode = 'container';
-    } else if (isolationContext) {
-      isolationMode = 'worktree';
-    }
-
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'workflow_started',
-        data: {
-          workflowName: workflow.name,
-          defaultAssistant: baseAiProfile.defaultProvider,
-          provider: resolvedProvider,
-          model: resolvedModel ?? null,
-          isolationMode,
-          baseBranch,
-          userId: workflowRun.user_id ?? null,
-          userMessage: workflowRun.user_message,
-          origin: workflowRun.parent_run_id ? 'workflow' : platform.getPlatformType(),
-          transcriptPath,
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'workflow_started' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    // Keys the engine dropped from this run's YAML (#2213). Recorded here rather
-    // than at the chat/console dispatch site for two reasons: every run reaches
-    // this line whatever surface started it (CLI and REST included, which have no
-    // conversation to post into), and the record is therefore written by a path
-    // that a failed `platform.sendMessage` cannot touch. That notification stays
-    // best-effort; this is the durable trace behind it, readable via
-    // `archon workflow get <id> --verbose` and the events API.
-    if (parseWarnings && parseWarnings.length > 0) {
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'workflow_parse_warnings',
-          data: {
-            workflowName: workflow.name,
-            warnings: [...parseWarnings],
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'workflow_parse_warnings' },
-            'workflow_event_persist_failed'
-          );
-        });
-    }
-
-    // Deprecated bundled default (#2781). Recorded here like the parse warnings
-    // above so every run surface — REST/detached starts included, which have no
-    // conversation to post into — carries the removal notice on its durable trace.
-    // The chat/web message that mirrors this is best-effort; this record cannot fail.
-    const deprecationNotice = formatDeprecationNotice(workflow);
-    if (deprecationNotice) {
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'workflow_deprecation_notice',
-          data: {
-            workflowName: workflow.name,
-            notice: deprecationNotice,
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'workflow_deprecation_notice' },
-            'workflow_event_persist_failed'
-          );
-        });
-    }
-
-    // Context for error logging
-    const workflowContext: SendMessageContext = {
-      workflowId: workflowRun.id,
-    };
-
-    // Build startup message
-    let startupMessage = '';
-
-    // Add isolation context to startup message
-    if (isolationContext) {
-      const { isPrReview, prSha, prBranch, branchName } = isolationContext;
-
-      if (isPrReview && prSha && prBranch) {
-        startupMessage += `Reviewing PR at commit \`${prSha.substring(0, 7)}\` (branch: \`${prBranch}\`)\n\n`;
-      } else if (branchName) {
-        const repoName = cwd.split(/[/\\]/).pop() || 'repository';
-        await sendCriticalMessage(
-          platform,
-          conversationId,
-          `📍 ${repoName} @ \`${branchName}\``,
-          workflowContext,
-          2,
-          { category: 'isolation_context', segment: 'new' }
-        );
-      } else {
-        getLog().warn(
-          {
-            workflowId: workflowRun.id,
-            hasFields: {
-              isPrReview: !!isPrReview,
-              prSha: !!prSha,
-              prBranch: !!prBranch,
-              branchName: !!branchName,
-            },
-          },
-          'isolation_context_incomplete'
-        );
-      }
-    }
-
-    // Add workflow start message (step details omitted from text notification)
-    // Strip routing metadata from description (Use when:, Handles:, NOT for:, Capability:, Triggers:)
-    const cleanDescription = (workflow.description ?? '')
-      .split('\n')
-      .filter(
-        line =>
-          !/^\s*(Use when|Handles|NOT for|Capability|Triggers)[:\s]/i.test(line) && line.trim()
-      )
-      .join('\n')
-      .trim();
-    const descriptionText = cleanDescription || workflow.name;
-    startupMessage += `🚀 **Starting workflow**: \`${workflow.name}\`\n\n> ${descriptionText}`;
-
-    // Send consolidated message - use critical send with limited retries (1 retry max)
-    // to avoid blocking workflow execution while still catching transient failures
-    const startupSent = await sendCriticalMessage(
+    await announceRunStart(
+      deps,
       platform,
       conversationId,
-      startupMessage,
-      workflowContext,
-      2, // maxRetries=2 means 2 total attempts (1 initial + 1 retry), 1s max delay
-      { category: 'workflow_status', segment: 'new' }
+      cwd,
+      workflow,
+      workflowRun,
+      userMessage,
+      opts,
+      dispatch,
+      { logDir, outputRoot }
     );
-    if (!startupSent) {
-      getLog().error(
-        { workflowId: workflowRun.id, conversationId },
-        'startup_message_delivery_failed'
-      );
-      // Continue anyway - workflow is already recorded in database
-    }
 
     // Declared-input defaults for a run with no caller (#2470). Runtime `$INPUTS`
     // otherwise comes only from `metadata.inputs`, which a parent stamps at spawn — so a
@@ -687,6 +479,8 @@ export async function executeWorkflow(
         configuredCommandFolder,
         issueContext,
         priorCompletedNodes,
+        // Only a run continued after a pause has moved past its earlier failures.
+        replayedFailures: resumeCause === 'continue_after_wait' ? priorFailedNodes : undefined,
         aiProfile,
         workflowPreset,
         scopeArtifactsDir,

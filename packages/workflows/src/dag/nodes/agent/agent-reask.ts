@@ -1,7 +1,7 @@
 import type { TokenUsage } from '@archon/provider-contract';
 import { validateStructuredOutput } from '../../../structured-output';
 import { canonicalValueText } from '../../../output-ref';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import {

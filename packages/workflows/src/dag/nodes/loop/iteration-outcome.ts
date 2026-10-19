@@ -4,12 +4,8 @@ import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { validateStructuredOutput } from '../../../structured-output';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
-import {
-  retryClassOf,
-  getRetryDelayMs,
-  effectiveRetryMaxRetries,
-  safeSendMessage,
-} from '../../../executor-shared';
+import { retryClassOf, getRetryDelayMs, effectiveRetryMaxRetries } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { rejectedArtifactPointer } from '../../node-output';
 import { waitForNodeRetry } from '../../run-control';

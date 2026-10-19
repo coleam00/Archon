@@ -184,6 +184,7 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
   findRepoRoot: mockFindRepoRoot,
+  trustRegisteredPath: mock(async () => {}),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({

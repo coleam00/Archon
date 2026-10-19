@@ -17,7 +17,7 @@ import {
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout } from '../../../utils/idle-timeout';
 import { isEndTurnRequested } from '../../../end-turn-request';
-import { safeSendMessage, type SendMessageContext } from '../../../executor-shared';
+import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import type { RunLayersContext } from '../../run-context';

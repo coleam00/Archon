@@ -6,16 +6,20 @@ import {
 } from '../../pause';
 import { gateReworkNode } from '../../../gate-rework';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
-import { serializeNodeStateRecord, serializeNodeOutput } from '../../../node-record-serialization';
+import {
+  serializeNodeStateRecord,
+  serializeNodeOutput,
+  type NodeExecutionResult,
+} from '../../../node-record-serialization';
 import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
 import { spellWorkflowCommand } from '../../../deps';
 import { approvalContextSchema, gateOccurrence } from '../../../schemas/workflow-run';
-import type { GateNode, NodeOutput } from '../../../schemas';
+import type { GateNode } from '../../../schemas';
 import { isApprovalContext } from '../../../schemas';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { requireTerminalStatusWrite } from '../../../terminal-status-write';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import { substituteNodeOutputRefs } from '../../references';
@@ -30,7 +34,7 @@ import { resolveNodeProviderAndModel } from '../../provider-resolution';
 export async function executeApprovalNode(
   ctx: RunLayersContext,
   node: GateNode
-): Promise<NodeOutput> {
+): Promise<NodeExecutionResult> {
   const { stepNamePrefix } = ctx;
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   const { workflowRun, deps, platform, conversationId, artifactsDir, nodeOutputs } = ctx;
@@ -57,6 +61,7 @@ export async function executeApprovalNode(
       : '';
 
   // On rejection resume with a rework continuation configured: run its prompt via AI
+  let reworkUsage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> = {};
   const rejectDecision = node.decisions.find(d => d.id === 'reject');
   const rework = rejectDecision?.rework;
   if (rejectionReason !== '' && rework) {
@@ -145,7 +150,12 @@ export async function executeApprovalNode(
     if (output.state === 'failed') {
       return output;
     }
-    // Fall through to re-pause at the approval gate
+    // The synthetic event owns durable spend; this return carries it to current-pass totals.
+    reworkUsage = {
+      costUsd: output.costUsd,
+      tokens: output.tokens,
+      tokensUnknown: output.tokensUnknown,
+    };
   }
 
   // Resolve $nodeId.output[.field] references so the human sees concrete values
@@ -203,7 +213,7 @@ export async function executeApprovalNode(
     approvalContext,
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) return serializeNodeOutput(execution);
+  if (!paused) return { ...serializeNodeOutput(execution), ...reworkUsage };
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
@@ -234,5 +244,5 @@ export async function executeApprovalNode(
       );
     });
 
-  return serializeNodeOutput(suspended);
+  return { ...serializeNodeOutput(suspended), ...reworkUsage };
 }

@@ -18,7 +18,7 @@ import { type McpPathResolution, resolveMcpPath, missingMcpConfigMessage } from 
 import type { McpUnavailable } from '../schemas/node-execution';
 import { capturedSourceReadGuard } from '../workflow-source';
 import { resolveNodeModel, assistantModelDefaults } from '../node-model-resolution';
-import { safeSendMessage } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import type { ScopedCapabilityMismatch } from './capability-preflight';

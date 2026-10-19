@@ -1,4 +1,5 @@
-import { safeSendMessage, describeUnmetCompletion } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
+import { describeUnmetCompletion } from '../../../executor-shared';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
@@ -10,7 +11,7 @@ import { type ModelAliasPreset, type TierName } from '../../../model-validation'
 import { getLog } from '../../log';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
-import type { LoopGroupBodyResult, LoopGroupRun, LoopGroupUsage } from './loop-group-state';
+import type { LoopGroupBodyResult, LoopGroupRun, LoopGroupProgress } from './loop-group-state';
 import {
   completeEscalatedResume,
   finalizeGroupOnBareApprove,
@@ -62,14 +63,14 @@ export async function executeLoopGroupNode(
       lifecycle: { status: 'started' },
     }
   );
-  const usage: LoopGroupUsage = {};
+  const progress: LoopGroupProgress = { usage: {}, lastStartedIteration: 0 };
   let result: LoopGroupBodyResult;
   try {
     result = await executeLoopGroupBody(
       ctx,
       node,
       execution,
-      usage,
+      progress,
       workflowProvider,
       workflowModel,
       workflowTier,
@@ -91,7 +92,8 @@ export async function executeLoopGroupNode(
       output: '',
       error: err.message,
       failureKind: 'unknown',
-      ...usage,
+      ...progress.usage,
+      loopIterations: progress.lastStartedIteration,
     };
     await safeSendMessage(
       ctx.platform,
@@ -143,7 +145,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
-  usage: LoopGroupUsage,
+  progress: LoopGroupProgress,
   workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
@@ -163,12 +165,12 @@ async function executeLoopGroupBody(
     directBodyIds: new Set(bodyNodes.map(n => n.id)),
     msgContext,
     execution,
-    usage,
+    progress,
     workflowProvider,
     workflowModel,
     workflowTier,
     workflowPreset,
-    resume: readLoopGroupResume(ctx, node, bodyNodes, stepName),
+    resume: readLoopGroupResume(ctx, node, bodyNodes, stepName, progress),
   };
   const { resume } = run;
 
@@ -201,7 +203,7 @@ async function executeLoopGroupBody(
     output: state.lastOutput,
     error: errorMsg,
     failureKind: 'max_iterations',
-    ...usage,
+    ...progress.usage,
     // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
     loopIterations: Math.max(iterationLimit, startIteration - 1),
   };

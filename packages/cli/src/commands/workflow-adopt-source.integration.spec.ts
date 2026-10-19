@@ -9,8 +9,8 @@ import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { capturedSourceRoots, loadWorkflowSource } from '@archon/workflows/workflow-source';
-import { loadCommandPrompt } from '@archon/workflows/executor-shared';
-import { workflowRunCommand } from './workflow';
+import { loadCommandPrompt } from '@archon/workflows/load-command-prompt';
+import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 

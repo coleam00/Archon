@@ -9,7 +9,7 @@ import { type JsonValue } from '../../../output-ref';
 import type { IncludeCommandContent } from '../../../compiled-command';
 import { instantiateResolvedInclude } from '../../../include-expander';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
-import { substituteWorkflowVariables } from '../../../executor-shared';
+import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { getLog } from '../../log';
 import { type RunLayersContext } from '../../run-context';
 import {

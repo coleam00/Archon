@@ -397,6 +397,7 @@ async function main(): Promise<number> {
     'auth',
     'user',
     'ai',
+    'project',
   ];
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
   // directory's project, which need not be registered or a git repository.
@@ -437,7 +438,7 @@ async function main(): Promise<number> {
         '@archon/core/config/run-config-handoff'
       );
       detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
-      // Fail-fast for the decode step, not a second copy of the invariant: `workflow.ts`
+      // Fail-fast for the decode step, not a second copy of the invariant: `workflow-run-admission.ts`
       // still owns this rejection for every caller. A legitimately spawned detached child
       // cannot reach it — the parent refuses to seal a config for a continuation before it
       // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
@@ -469,7 +470,12 @@ async function main(): Promise<number> {
       );
     }
 
-    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
+    const configOutsideRun = rejectConfigOutsideRun(
+      command,
+      subcommand,
+      values.config,
+      values['config-from-run']
+    );
     if (configOutsideRun) {
       console.error(configOutsideRun);
       return 1;
@@ -787,7 +793,11 @@ async function main(): Promise<number> {
               return await fail(jsonFlag, 'Usage: archon workflow run <name> [message]');
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            const configOnContinue = rejectConfigOnContinue(resumeFlag, values.config);
+            const configOnContinue = rejectConfigOnContinue(
+              resumeFlag,
+              values.config,
+              values['config-from-run']
+            );
             if (configOnContinue) {
               console.error(configOnContinue);
               return 1;
@@ -894,6 +904,7 @@ async function main(): Promise<number> {
               modelAssignments: values.model as string[] | undefined,
               configPath:
                 typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
+              configFromRun: values['config-from-run'] as string | undefined,
               detachedRunConfig,
               detachedRunId: values['internal-detached-run-id'] as string | undefined,
             };
@@ -941,6 +952,14 @@ async function main(): Promise<number> {
               effectiveCwd,
               values.events as boolean | undefined
             );
+          }
+
+          case 'artifacts': {
+            const { workflowArtifactsCommand } = await import('./commands/workflow-artifacts');
+            return await workflowArtifactsCommand(workflowHost, positionals.slice(2), {
+              json: jsonFlag,
+              cwd: effectiveCwd,
+            });
           }
 
           case 'logs': {
@@ -1292,11 +1311,20 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+              `${problem}
+Available: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
             );
           }
         }
         break;
+      }
+
+      case 'project': {
+        const { projectCommand } = await loadRoute(() => import('./commands/project'), {
+          providers: false,
+          database: await usesDatabaseStore(),
+        });
+        return await projectCommand(positionals.slice(1), jsonFlag);
       }
 
       case 'user': {

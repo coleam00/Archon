@@ -74,3 +74,37 @@ export function sumFanOutTokens(
     { scope: 'fan_out' }
   );
 }
+
+/** Run-level usage as either aggregation reports it: the live run total or the event-log fold. */
+export interface RunUsageFigures {
+  costUsd?: number;
+  tokens?: TokenUsage;
+  tokensUnknown?: boolean;
+}
+
+// Float sums taken in a different order differ in the last bits.
+const COST_TOLERANCE_USD = 1e-9;
+
+/**
+ * The axes on which two figures for the same run disagree; empty when they agree. The
+ * usage reconciliation tests and the debug-level check in `persistRunUsage` both judge
+ * with it, so a blind comparison would blind both.
+ *
+ * Absent cost equals `0`, because the fold reports `0` when no row carried cost. Tokens
+ * compare per axis; `cachePartial`, `total` and `cost` inside them are a floor marker and
+ * provider-defined fields, not reconciled figures.
+ */
+export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost' | 'tokens')[] {
+  const mismatched: ('cost' | 'tokens')[] = [];
+  if (Math.abs((a.costUsd ?? 0) - (b.costUsd ?? 0)) > COST_TOLERANCE_USD) mismatched.push('cost');
+  if (!tokensAgree(a, b)) mismatched.push('tokens');
+  return mismatched;
+}
+
+function tokensAgree(a: RunUsageFigures, b: RunUsageFigures): boolean {
+  const aUnknown = a.tokensUnknown === true;
+  if (aUnknown || b.tokensUnknown === true) return aUnknown === (b.tokensUnknown === true);
+  return (['input', 'output', 'cacheRead', 'cacheWrite'] as const).every(
+    axis => a.tokens?.[axis] === b.tokens?.[axis]
+  );
+}

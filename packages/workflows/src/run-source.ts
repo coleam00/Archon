@@ -6,8 +6,9 @@ import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { sourceReleaseNotice } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import { safeSendMessage, sendCriticalMessage, type RunPhase } from './executor-shared';
-import { resolveProjectPaths } from './run-paths';
+import { safeSendMessage, sendCriticalMessage } from './platform-messages';
+import { type RunPhase } from './executor-shared';
+import { resolveAdoptedRunDir, resolveProjectPaths } from './run-paths';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
@@ -400,6 +401,60 @@ export async function prepareWorkflowSource(
     manifest: capture.manifest,
     anchor: capture.anchor,
     roots: capturedSourceRoots(capture.anchor),
+  };
+}
+
+/**
+ * Validate adoption before source setup can stop the run, then establish the source.
+ * A refused adoption skips source setup and does not stop the run here: `adoptedRunDir`
+ * rethrows the refusal, so the caller fails the admitted run inside its own failure
+ * boundary. Source setup keeps its own exits.
+ */
+export async function establishAdoptedRunSource(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRun: WorkflowRun,
+  workflowSourceDir: string,
+  opts: Pick<
+    ExecuteWorkflowOptions,
+    | 'adoptedFromRunId'
+    | 'continuationMode'
+    | 'priorCompletedNodes'
+    | 'preparedSource'
+    | 'capturedSourceOwner'
+  >,
+  isContinuation: boolean
+): Promise<
+  RunPhase<{
+    adoptedRunDir: () => string | undefined;
+    workflowSourceRoots: WorkflowSourceRoots | undefined;
+  }>
+> {
+  let adoptedRunDir: string | undefined;
+  try {
+    adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
+  } catch (refusal) {
+    const rethrowRefusal = (): never => {
+      throw refusal;
+    };
+    return {
+      stopped: false,
+      value: { adoptedRunDir: rethrowRefusal, workflowSourceRoots: undefined },
+    };
+  }
+  const sourced = await establishRunSource(
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    workflowSourceDir,
+    opts
+  );
+  if (sourced.stopped) return sourced;
+  return {
+    stopped: false,
+    value: { adoptedRunDir: () => adoptedRunDir, workflowSourceRoots: sourced.value },
   };
 }
 

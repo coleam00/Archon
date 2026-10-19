@@ -5,6 +5,10 @@
  */
 import type { ApprovalContext, ExpectedApprovalGate } from '@archon/workflows/schemas/workflow-run';
 import {
+  PAUSE_CAUSE_METADATA_KEY,
+  pauseCauseOfApproval,
+} from '@archon/workflows/schemas/pause-cause';
+import {
   WorkflowRunPauseConflictError,
   type GatePauseEventInput,
   type GateResolutionEvent,
@@ -225,7 +229,10 @@ export async function pauseWorkflowRun(
           id,
           // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
           // atomic write so there is no window where the run is paused without it (M3).
-          JSON.stringify(extraMetadata ?? {}),
+          JSON.stringify({
+            ...extraMetadata,
+            [PAUSE_CAUSE_METADATA_KEY]: pauseCauseOfApproval(approvalContext),
+          }),
           // The complete gate context. JSON.stringify drops undefined, and the write
           // replaces rather than merges, so an optional field the caller left unset is
           // simply absent — no explicit-null reset list to keep in sync.

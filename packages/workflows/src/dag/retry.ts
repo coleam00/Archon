@@ -5,8 +5,8 @@ import {
   retryClassOf,
   effectiveRetryMaxRetries,
   getRetryDelayMs,
-  safeSendMessage,
 } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import type { NodeExecutionResult } from '../node-record-serialization';
 import {
   admitRunBudgetAttempt,

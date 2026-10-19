@@ -21,13 +21,9 @@ import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { declaredOutputPathsFromSchema, canonicalValueText } from '../../../output-ref';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { logNodeComplete } from '../../../logger';
-import {
-  currentAdoptedRunDir,
-  substituteWorkflowVariables,
-  detectCompletionSignal,
-  stripCompletionTags,
-  safeSendMessage,
-} from '../../../executor-shared';
+import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
+import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { nodeTemplateReferences, buildNodeShellEnvironment } from '../../references';
 import { shouldContinueStreamingForStatus, runSubprocessUntilRunStops } from '../../run-control';
@@ -58,12 +54,12 @@ export async function runLoopIteration(
   const loop = node.loop;
   const iterationStart = Date.now();
   // Fresh per iteration: this iteration's prompt and until_bash observe the
-  // artifacts published before it. Materialization failure is an explicit node
-  // provisioning error and propagates to the dispatch boundary.
+  // artifacts published before it.
   const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
 
   const stopped = await stopBeforeIteration(run, state, i);
   if (stopped !== undefined) return stopped;
+  state.lastStartedIteration = i;
   recordIterationStarted(run, i);
 
   const reply = await runIterationAttempts(run, state, i, iterationStart, typedArtifactsFile);

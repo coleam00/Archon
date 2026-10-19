@@ -105,7 +105,7 @@ describe('the merge record and the gate', () => {
     expect(mergeWaits(item({ ...BUILT, at: '2026-10-16T02:00:00.000Z' }, merge('parked')))).toBe(true);
   });
 
-  test('the gate passes only a Ready verdict, green CI and no open thread, all at a pinned head that contains the default branch', () => {
+  test('the gate passes only a Ready verdict, green CI and no open thread, at a pinned head that contains the default branch or merges into it cleanly', () => {
     expect(gateRefusals(FACTS, HEAD)).toEqual([]);
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head);
     // Which commit the Ready verdict is for is the sweep's judgment, not the gate's.
@@ -119,7 +119,11 @@ describe('the merge record and the gate', () => {
     // Whether an open thread holds the merge is the sweep's judgment, not the gate's.
     expect(refused({ threads: { unresolved: 2, urls: [] } })).toEqual([]);
     expect(refused({}, OLD)).toEqual([`its head is ${HEAD}, not ${OLD}`]);
-    expect(refused({ behind: 3 })).toEqual([`it lacks 3 commits of dev at ${OLD}`]);
+    // A head that is behind still merges when the forge reports the merge clean; the
+    // default branch's CI judges the combined result.
+    expect(refused({ behind: 3 })).toEqual([]);
+    expect(refused({ behind: 3, mergeable: 'conflict' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is conflict`]);
+    expect(refused({ behind: 3, mergeable: 'unknown' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is unknown`]);
     expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toEqual([
       'it is closed',
       'it is a draft',
@@ -196,11 +200,11 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 /** A checkout whose remote's default branch lists `Maintainer`, and an empty Archon home. */
-function install(): Install {
+function install(maintainers = '["Maintainer"]'): Install {
   const checkout = gitCheckout({}, track);
   git(checkout, 'checkout', '-q', 'dev');
   mkdirSync(join(checkout, '.archon/sdlc/policy'), { recursive: true });
-  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
+  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), `${maintainers}\n`);
   git(checkout, 'add', '.archon/sdlc/policy/maintainers.json');
   git(checkout, 'commit', '-q', '-m', 'maintainers');
   git(checkout, 'push', '-q', 'upstream', 'HEAD:dev');
@@ -253,8 +257,12 @@ interface FakePr {
   readonly queuesMerge?: boolean;
   /** Commits of the default branch the head lacks. */
   readonly behind?: number;
+  /** The head conflicts with the default branch. */
+  readonly conflicts?: boolean;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
+  /** What `gh pr list --author` reports open. */
+  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
 }
 
 /**
@@ -271,6 +279,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   const query = argv.find(part => String(part).startsWith('query=')) ?? '';
   const answered = () => appendFileSync('{ARTIFACTS}/forge-gh.log', argv.slice(1, 3).join(' ') + ' ' + argv.slice(3).filter(part => !String(part).startsWith('query=')).join(' ') + '\\n');
   const rollup = { contexts: { totalCount: 1, nodes: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: forgePr.checks === 'green' ? 'SUCCESS' : 'FAILURE' }] } };
+  if (argv[1] === 'pr' && argv[2] === 'list') {
+    answered();
+    return out(0, JSON.stringify(forgePr.ownPrs ?? []));
+  }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
     answered();
     if (argv[argv.indexOf('--match-head-commit') + 1] !== forgePr.headRefOid) return out(1, '', 'Head branch was modified');
@@ -287,7 +299,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev' }, pullRequest: {
       url: ${JSON.stringify(PR_URL.replace(/42$/, ''))} + number, title: 'Fix the thing',
       state: (forgePr.merged ?? []).includes(number) ? 'MERGED' : forgePr.state, isDraft: false,
-      baseRefName: 'dev', headRefName: 'feature', headRefOid: forgePr.headRefOid, mergeable: 'MERGEABLE',
+      baseRefName: 'dev', headRefName: 'feature', headRefOid: forgePr.headRefOid, mergeable: forgePr.conflicts ? 'CONFLICTING' : 'MERGEABLE',
       additions: 10, deletions: 2, changedFiles: 2,
       mergeCommit: forgePr.mergeCommit === null ? null : { oid: forgePr.mergeCommit },
       commits: { nodes: [{ commit: { oid: forgePr.headRefOid, statusCheckRollup: rollup } }] },
@@ -413,6 +425,29 @@ describe('the merge queue scripts', () => {
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
+  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts and delivered ones left alone", () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item());
+    const ownPrs = [
+      { number: 42, url: PR_URL, isDraft: false },
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
+      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
+    ];
+    const picked = run(at, 'facts', {}, { pr: { ownPrs } });
+    const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
+    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
+    expect(stored(at, 51).value).toBeNull();
+    expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
+  }, 60_000);
+
+  test('without the opt-in, nobody\'s pull requests are enrolled', () => {
+    const at = install();
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }] } });
+    expect(ok(picked)).toMatchObject({ path: 'idle' });
+    expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
+  }, 60_000);
+
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
     const at = install();
     seed(at, item());
@@ -458,12 +493,12 @@ describe('the merge queue scripts', () => {
     expect(merges(gated)).toHaveLength(1);
   }, 60_000);
 
-  test('the gate refuses a head behind the default branch or a red check, and merges nothing', () => {
+  test('the gate refuses a head behind the default branch that conflicts, or a red check, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
-    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
+    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2, conflicts: true } });
     expect(JSON.parse(red.stdout).refusals).toEqual([
-      `it lacks 2 commits of dev at ${OLD}`,
+      `it lacks 2 commits of dev at ${OLD} and its merge is conflict`,
       'CI at its head is red (test)',
     ]);
     expect(merges(red)).toEqual([]);
@@ -603,10 +638,14 @@ describe('the merge queue scripts', () => {
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '' }))).toMatchObject({ decision: 'merge', section: '' });
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
+    // The approval is acted on at once: a sweep starts on the answered run's config.
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-merge-queue', '--config-from-run', 'run-1', '--detach']));
   }, 60_000);
 
   test('a return writes its ruling into the issue body and the build round starts from it', () => {

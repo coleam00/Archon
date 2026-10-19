@@ -1450,7 +1450,7 @@ describe('dryRunWorkflow', () => {
   });
 
   test('tolerates a missing stub on an all_done node nested in a loop_group body (#2869)', async () => {
-    // simulateLoopGroup (dry-run.ts) dispatches every body node through this same
+    // simulateLoopGroup (dry-run/nodes/loop-group.ts) dispatches every body node through this same
     // single-node fallback, then fails the whole group if any body node ends up
     // 'failed' — a body join that tolerates its own missing stub must keep the group
     // (and the run) completing, not just the top-level dryRunWorkflow outcome field.
@@ -2196,6 +2196,69 @@ describe('dryRunWorkflow', () => {
     expect(result.trace.map(entry => entry.nodeId)).toEqual(['draft', 'finish', 'group']);
     expect(result.trace[1]?.resolvedText).toBe('finish fresh');
   });
+
+  for (const pause of [
+    { approval: { message: 'Review the work' } },
+    { wait: { attention: 'Review the work' } },
+  ]) {
+    for (const skipped of [true, false]) {
+      const kind = 'approval' in pause ? 'gate' : 'attention wait';
+      test.each([
+        ['bare', 'DONE', 'DONE'],
+        ['tagged', 'Result <promise>DONE</promise>', 'Result'],
+      ])(
+        `loop-group output reads past a ${skipped ? 'skipped' : 'completed'} ${kind} (%s)`,
+        async (_label, rawOutput, expectedOutput) => {
+          const workflow = makeTestWorkflow({
+            name: 'loop-group-human-sink',
+            nodes: [
+              {
+                id: 'group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 2,
+                  nodes: [
+                    { id: 'work', prompt: 'work' },
+                    {
+                      id: 'end',
+                      ...pause,
+                      depends_on: ['work'],
+                      ...(skipped ? { when: "$work.output == 'never'" } : {}),
+                    },
+                  ],
+                },
+              },
+              { id: 'after', prompt: 'Result: $group.output', depends_on: ['group'] },
+            ],
+          });
+          const result = await dryRunWorkflow({
+            workflow,
+            userMessage: '',
+            cwd: process.cwd(),
+            stubs: {
+              work: rawOutput,
+              after: 'received',
+              ...(!skipped && 'wait' in pause ? { end: { text: 'reviewed' } } : {}),
+            },
+          });
+
+          expect(result.outcome).toBe('completed');
+          expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(1);
+          expect(result.trace.find(entry => entry.nodeId === 'end')?.state).toBe(
+            skipped ? 'skipped' : 'wait' in pause ? 'stubbed' : 'completed'
+          );
+          expect(result.trace.find(entry => entry.nodeId === 'group')).toMatchObject({
+            state: 'completed',
+            output: expectedOutput,
+            reason: 'completion signal after 1 iteration(s)',
+          });
+          expect(result.trace.find(entry => entry.nodeId === 'after')?.resolvedText).toBe(
+            `Result: ${expectedOutput}`
+          );
+        }
+      );
+    }
+  }
 
   test('resolves $LOOP_PREV in body bindings and conditions as a real run does (#3996)', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-prev-'));

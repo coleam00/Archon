@@ -5,7 +5,7 @@ import {
   nodeExecutionMetadataSchema,
   type NodeExecutionRecord,
 } from '../../../schemas/node-execution';
-import { recordNodeState } from '../../../node-event-write';
+import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type { LoopNode, EffortLevel, LoopGateRunMetadata, WorkflowRun } from '../../../schemas';
 import { isApprovalContext } from '../../../schemas';
@@ -15,7 +15,8 @@ import {
   resolveIncludeOutputAliases,
   type LoopWithCompiledCommand,
 } from '../../../compiled-command';
-import { describeUnmetCompletion, safeSendMessage } from '../../../executor-shared';
+import { describeUnmetCompletion } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
@@ -154,6 +155,7 @@ export async function executeLoopNode(
   const resume = readLoopResume(workflowRun, node);
   const state: LoopState = {
     execution: resumedExecution,
+    lastStartedIteration: resume.startIteration - 1,
     sessionId: resume.gate?.sessionId ?? undefined,
     stopReason:
       resumedExecution.spend.stopReason.source === 'provider'
@@ -308,7 +310,7 @@ export async function executeLoopNode(
   };
   const { startIteration, iterationLimit } = resume;
   for (let i = startIteration; i <= iterationLimit; i++) {
-    const result = await runLoopIteration(run, state, i);
+    const result = await runSettledLoopIteration(run, state, i);
     if (result !== undefined) return result;
   }
 
@@ -327,6 +329,40 @@ export async function executeLoopNode(
     loopIterations: Math.max(iterationLimit, startIteration - 1),
     data: { maxIterations: iterationLimit },
   });
+}
+
+/**
+ * Run one iteration and settle a thrown iteration as a failed node carrying the spend
+ * of the iterations already paid for.
+ */
+async function runSettledLoopIteration(
+  run: LoopRun,
+  state: LoopState,
+  i: number
+): Promise<NodeExecutionResult | undefined> {
+  try {
+    return await runLoopIteration(run, state, i);
+  } catch (error) {
+    // An iteration reads no node source, reserves no run budget and writes no terminal
+    // status; a failed event write is the only engine error it can raise.
+    if (error instanceof NodeEventWriteError) throw error;
+    const { ctx, node } = run;
+    const message = error instanceof Error ? error.message : String(error);
+    getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
+    const failed = await failLoopNode(ctx, node.id, state, message, {
+      failureKind: 'unknown',
+      ...loopSpend(state),
+      loopIterations: state.lastStartedIteration,
+      data: { iteration: i },
+    });
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Loop node '${node.id}' failed: ${message}`,
+      run.msgContext
+    );
+    return failed;
+  }
 }
 
 /** Detect interactive loop resume — whether workflowRun.metadata holds this node's loop gate. */

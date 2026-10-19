@@ -61,6 +61,12 @@
       "src/commands/workflow.test.ts"
     ],
     [
+      "src/commands/workflow-run-owned.test.ts"
+    ],
+    [
+      "src/commands/workflow-control.test.ts"
+    ],
+    [
       "src/commands/workflow-shared.test.ts"
     ],
     [
@@ -218,6 +224,10 @@
     ],
     [
       "src/commands/user.test.ts"
+    ],
+    [
+      "src/commands/project.test.ts",
+      "src/commands/workflow-artifacts.test.ts"
     ],
     [
       "src/commands/auth.test.ts"

@@ -1036,6 +1036,111 @@ describe('OpencodeProvider', () => {
     ]);
   });
 
+  // OpenCode records each model step as its own assistant message, so a prompt that calls a
+  // tool produces two, each priced separately (recorded against opencode 1.1.49).
+  const assistantStep = (
+    id: string,
+    sessionID: string,
+    cost: number,
+    input: number,
+    output: number,
+    finish: string
+  ) => ({
+    type: 'message.updated',
+    properties: {
+      info: {
+        id,
+        role: 'assistant',
+        sessionID,
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet',
+        cost,
+        finish,
+        tokens: { input, output, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    },
+  });
+
+  test('a tool-using prompt reports the usage of every assistant message it produced', async () => {
+    scriptedEvents = [
+      // A message is updated as it streams; only its latest figures count.
+      assistantStep('message-1', 'session-1', 0.0001, 50, 5, 'tool-calls'),
+      assistantStep('message-1', 'session-1', 0.00012, 100, 10, 'tool-calls'),
+      assistantStep('message-2', 'session-1', 0.00024, 200, 20, 'stop'),
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        sessionId: 'session-1',
+        tokens: {
+          input: 300,
+          output: 30,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 330,
+          cost: expect.closeTo(0.00036, 12),
+        },
+        cost: expect.closeTo(0.00036, 12),
+        stopReason: 'end_turn',
+        resolvedModel: { id: 'claude-sonnet' },
+      },
+    ]);
+  });
+
+  test('multi-agent usage sums every assistant message of each sub-agent', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      assistantStep('scout-1', 'scout-session', 0.1, 100, 10, 'tool-calls'),
+      assistantStep('scout-2', 'scout-session', 0.2, 200, 20, 'stop'),
+      assistantStep('reviewer-1', 'reviewer-session', 0.4, 400, 40, 'stop'),
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          cost: expect.closeTo(0.7, 12),
+          tokens: {
+            input: 700,
+            output: 70,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 770,
+            cost: expect.closeTo(0.7, 12),
+          },
+        }),
+      ])
+    );
+  });
+
   test('session resume handoff falls back to a fresh session with warning', async () => {
     const runtime = makeRuntime({
       sessionGet: mock(async () => {

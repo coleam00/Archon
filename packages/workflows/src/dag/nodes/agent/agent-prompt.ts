@@ -1,6 +1,6 @@
 import type { AgentNode } from '../../../schemas';
 import { readComposedBindings, resolveIncludeOutputAliases } from '../../../compiled-command';
-import { buildPromptWithContext } from '../../../executor-shared';
+import { buildPromptWithContext } from '../../../workflow-variables';
 import { getLog } from '../../log';
 import type { loadNodeCommandPrompt } from '../../node-source';
 import type { RunLayersContext } from '../../run-context';
