@@ -420,7 +420,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/core/src/github-auth/auth.test.ts', 3],
   ['packages/core/src/utils/token-crypto.test.ts', 2],
   ['packages/git/src/git.test.ts', 2],
-  ['packages/paths/src/archon-paths.test.ts', 7],
   ['packages/paths/src/env-integration.test.ts', 2],
   ['packages/paths/src/env-loader.test.ts', 1],
   ['packages/paths/src/strip-cwd-env.test.ts', 3],

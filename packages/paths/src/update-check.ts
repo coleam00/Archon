@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { getArchonHome } from './archon-paths';
+import { getArchonHome } from './home-paths';
 import { createLogger } from './logger';
 
 const log = createLogger('update-check');
