@@ -2095,6 +2095,8 @@ describe('resumeWorkflow', () => {
 
 describe('abandonWorkflow', () => {
   beforeEach(() => {
+    mockListWorkflowRuns.mockReset();
+    mockLogger.warn.mockClear();
     mockGetWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
@@ -2116,6 +2118,7 @@ describe('abandonWorkflow', () => {
     expect(run.id).toBe('run-1');
     expect(cancelled).toBe(true);
     expect(cascadeFailures).toBe(0);
+    expect(mockListWorkflowRuns).not.toHaveBeenCalled();
     expect(blockedParentRunId).toBeNull();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
@@ -2173,25 +2176,148 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toContain('child-c'); // sibling AFTER the failure still cancelled
   });
 
-  // S1: an unbounded-deep tree hits the MAX_CASCADE_RUNS cap. Truncation must be
-  // REPORTED (non-zero cascadeFailures + a log), not silently returned as all-clear —
-  // otherwise the caller tells the user "abandoned, 0 failures" while descendants live.
-  test('reports truncation (does not silently stop) when the cascade hits its cap', async () => {
+  test('wide leaf fan-out cancels every child without false truncation failures', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
-    // Infinite chain: every run has exactly one new, unique, non-terminal child. Only
-    // the cap terminates the walk — the test completing at all proves the bound holds.
-    mockFindChildRuns.mockImplementation(parentId =>
-      Promise.resolve([makePausedRun({ id: `${parentId}::c`, status: 'running' })])
+    const children = Array.from({ length: 1000 }, (_, i) =>
+      makePausedRun({ id: `child-${i}`, status: 'running' })
     );
+    mockFindChildRuns.mockImplementation(parentId =>
+      Promise.resolve(parentId === 'run-1' ? children : [])
+    );
+    mockListWorkflowRuns.mockResolvedValueOnce({ runs: [], total: 0, counts: EMPTY_COUNTS });
 
     const { cascadeFailures } = await abandonWorkflow('run-1', operator);
 
-    // Unreached descendants surface via the failures channel.
-    expect(cascadeFailures).toBeGreaterThan(0);
-    // The walk was bounded (never looped forever) — findChildRuns was called a
-    // finite number of times despite the infinite chain.
-    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(1001);
-    expect(mockFindChildRuns.mock.calls.length).toBeGreaterThan(1);
+    expect(cascadeFailures).toBe(0);
+    expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).toEqual([
+      'run-1',
+      ...children.map(child => child.id),
+    ]);
+    expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
+      parentRunIds: children.slice(499).map(child => child.id),
+      limit: 0,
+    });
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'operations.workflow_abandon_cascade_truncated'
+    );
+  });
+
+  test('reports truncation when a deep chain hits the expansion cap', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockFindChildRuns.mockImplementation(parentId =>
+      Promise.resolve([makePausedRun({ id: `${parentId}::c`, status: 'running' })])
+    );
+    mockListWorkflowRuns.mockResolvedValueOnce({ runs: [], total: 1, counts: EMPTY_COUNTS });
+
+    const { cascadeFailures } = await abandonWorkflow('run-1', operator);
+
+    expect(cascadeFailures).toBe(1);
+    expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
+      parentRunIds: [`run-1${'::c'.repeat(500)}`],
+      limit: 0,
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { rootId: 'run-1', cap: 500, unreached: 1, pendingParents: 1 },
+      'operations.workflow_abandon_cascade_truncated'
+    );
+  });
+
+  for (const status of ['running', 'completed', 'cancelled'] as const) {
+    test(`wide frontier probes descendants beneath a ${status} intermediate`, async () => {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+      const children = Array.from({ length: 1000 }, (_, i) =>
+        makePausedRun({
+          id: `child-${i}`,
+          status: i === 999 ? status : 'running',
+          parent_run_id: 'run-1',
+        })
+      );
+      const grandchild = makePausedRun({
+        id: 'grandchild',
+        status: 'running',
+        parent_run_id: 'child-999',
+      });
+      const tree = [...children, grandchild];
+      mockFindChildRuns.mockImplementation(parentId =>
+        Promise.resolve(tree.filter(run => run.parent_run_id === parentId))
+      );
+      mockListWorkflowRuns.mockImplementation(async options => {
+        expect(options?.limit).toBe(0);
+        expect(options?.status).toBeUndefined();
+        const total = tree.filter(run =>
+          options?.parentRunIds?.includes(run.parent_run_id ?? '')
+        ).length;
+        return { runs: [], total, counts: EMPTY_COUNTS };
+      });
+
+      const result = await abandonWorkflow('run-1', operator);
+
+      expect(result.cancelled).toBe(true);
+      expect(result.cascadeFailures).toBe(1);
+      expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
+      expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
+      expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).not.toContain(grandchild.id);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { rootId: 'run-1', cap: 500, unreached: 1, pendingParents: 501 },
+        'operations.workflow_abandon_cascade_truncated'
+      );
+    });
+  }
+
+  test('a failed frontier probe preserves parent success and logs the original error', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockFindChildRuns.mockImplementation(parentId =>
+      Promise.resolve([makePausedRun({ id: `${parentId}::c`, status: 'running' })])
+    );
+    const err = new Error('aggregate unavailable');
+    mockListWorkflowRuns.mockRejectedValueOnce(err);
+
+    const result = await abandonWorkflow('run-1', operator);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.cascadeFailures).toBe(1);
+    expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err, rootId: 'run-1', pendingParents: 1 },
+      'operations.workflow_abandon_cascade_lookup_failed'
+    );
+  });
+
+  test('a successful frontier probe preserves earlier lookup and cancellation failures', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    const children = Array.from({ length: 1000 }, (_, i) =>
+      makePausedRun({ id: `child-${i}`, status: 'running' })
+    );
+    const err = new Error('child lookup unavailable');
+    mockFindChildRuns.mockImplementation(parentId => {
+      if (parentId === 'child-0') return Promise.reject(err);
+      return Promise.resolve(parentId === 'run-1' ? children : []);
+    });
+    mockCancelWorkflowRun.mockImplementation(id =>
+      Promise.resolve({ cancelled: id !== 'child-1' })
+    );
+    mockListWorkflowRuns.mockResolvedValueOnce({ runs: [], total: 0, counts: EMPTY_COUNTS });
+
+    const result = await abandonWorkflow('run-1', operator);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.cascadeFailures).toBe(2);
+    expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).toContain('child-999');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err, parentId: 'child-0' },
+      'operations.workflow_abandon_cascade_lookup_failed'
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { childId: 'child-1' },
+      'operations.workflow_abandon_cascade_cancel_failed'
+    );
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
   });
 
   // Abandoning a CHILD directly strands a parent paused on it — the op surfaces

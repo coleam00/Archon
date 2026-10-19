@@ -572,9 +572,13 @@ export function createTransactionView(
         ).slice(0, options?.limit ?? 50)
       ),
     listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
+      const parents =
+        options?.parentRunIds === undefined ? undefined : new Set(options.parentRunIds);
       const scoped = [...runs.values()].filter(
         run =>
           (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
+          (parents === undefined ||
+            (run.parent_run_id !== null && parents.has(run.parent_run_id))) &&
           (!options?.search ||
             run.workflow_name.includes(options.search) ||
             run.user_message.includes(options.search)) &&

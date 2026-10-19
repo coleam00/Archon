@@ -211,6 +211,24 @@ describe('workflow run lists', () => {
       });
     });
 
+    test('binds the parent set once in both listing and counts, retaining other filters', async () => {
+      const parentRunIds = ['00000000-0000-4000-8000-000000000001'];
+      await listDashboardRuns({ parentRunIds, status: 'running', limit: 0 });
+      const [listSql, listParams] = mockQuery.mock.calls[0]!;
+      const [countSql, countParams] = mockQuery.mock.calls[1]!;
+      expect(listSql).toContain(
+        'r.parent_run_id IN (SELECT value::uuid FROM json_array_elements_text($2::json) AS parents(value))'
+      );
+      expect(countSql).toContain(
+        'r.parent_run_id IN (SELECT value::uuid FROM json_array_elements_text($1::json) AS parents(value))'
+      );
+      expect(listSql).toContain('r.status IN ($1)');
+      expect(countSql).not.toContain('r.status IN');
+      expect(listParams).toEqual(['running', JSON.stringify(parentRunIds), 0, 0]);
+      expect(countParams).toEqual([JSON.stringify(parentRunIds)]);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
     test('filters by multiple statuses and totals their counts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([])).mockResolvedValueOnce(
         createQueryResult([

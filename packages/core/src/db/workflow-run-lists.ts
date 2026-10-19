@@ -81,6 +81,15 @@ function buildDashboardWhereClauses(
     values.push(options.codebaseId);
     whereClauses.push(`r.codebase_id = $${String(values.length)}`);
   }
+  if (options?.parentRunIds !== undefined) {
+    values.push(JSON.stringify(options.parentRunIds));
+    const parameter = `$${String(values.length)}`;
+    const parents =
+      getDatabaseType() === 'postgresql'
+        ? `SELECT value::uuid FROM json_array_elements_text(${parameter}::json) AS parents(value)`
+        : `SELECT value FROM json_each(${parameter})`;
+    whereClauses.push(`r.parent_run_id IN (${parents})`);
+  }
   if (options?.search) {
     const pattern = `%${options.search}%`;
     values.push(pattern, pattern);

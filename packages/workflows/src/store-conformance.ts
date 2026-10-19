@@ -3107,6 +3107,42 @@ export function describeWorkflowStoreConformance(
       for (const prefix of ['', '%', '_', 'not-a-uuid'])
         expect(await store.findWorkflowRunsByIdPrefix(prefix, CONFORMANCE_CODEBASE_ID)).toEqual([]);
     });
+    test('parent sets scope listing rows, totals and status counts', async () => {
+      const first = await create(store);
+      const second = await create(store);
+      const terminal = await create(store, { parent_run_id: first.id });
+      await store.cancelWorkflowRun(terminal.id);
+      const leaf = await create(store, { parent_run_id: second.id });
+      const grandchild = await create(store, { parent_run_id: terminal.id });
+      await create(store);
+      const parentRunIds = [first.id, second.id, first.id];
+      const listed = await store.listWorkflowRuns({ parentRunIds });
+      expect(listed.runs.map(run => run.id).sort()).toEqual([terminal.id, leaf.id].sort());
+      expect(listed.total).toBe(2);
+      expect(listed.counts).toMatchObject({ all: 2, cancelled: 1, pending: 1 });
+      const filtered = await store.listWorkflowRuns({ parentRunIds, status: 'pending', limit: 0 });
+      expect(filtered.runs).toEqual([]);
+      expect(filtered.total).toBe(1);
+      expect(filtered.counts).toMatchObject({ all: 2, cancelled: 1, pending: 1 });
+      expect((await store.listWorkflowRuns({ parentRunIds, limit: 0 })).total).toBe(2);
+      expect(
+        (
+          await store.listWorkflowRuns({
+            parentRunIds: Array<string>(40_000).fill(first.id),
+            limit: 0,
+          })
+        ).total
+      ).toBe(1);
+      const empty = await store.listWorkflowRuns({ parentRunIds: [] });
+      expect(empty.runs).toEqual([]);
+      expect(empty.total).toBe(0);
+      expect(empty.counts.all).toBe(0);
+      expect((await store.listWorkflowRuns()).total).toBe(6);
+      expect(
+        (await store.listWorkflowRuns({ parentRunIds: [terminal.id] })).runs.map(run => run.id)
+      ).toEqual([grandchild.id]);
+    });
+
     test('open work excludes adopted failures, adopters are newest first, cleanup deletes only old terminals', async () => {
       const failed = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       await store.failWorkflowRun(failed.id, 'failed');

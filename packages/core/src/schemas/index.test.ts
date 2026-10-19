@@ -345,10 +345,12 @@ describe('core schemas', () => {
       status: 'running',
       codebaseId: 'cb-1',
       search: 'deploy',
+      parentRunIds: ['parent-1'],
       limit: 50,
       offset: 0,
     });
     expect(result.success).toBe(true);
+    if (result.success) expect(result.data.parentRunIds).toEqual(['parent-1']);
   });
 
   test('listDashboardRunsOptionsSchema accepts a non-empty status array', () => {

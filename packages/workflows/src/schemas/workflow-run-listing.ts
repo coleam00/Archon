@@ -30,6 +30,7 @@ export const listDashboardRunsOptionsSchema = z.object({
     .union([workflowRunStatusSchema, z.tuple([workflowRunStatusSchema], workflowRunStatusSchema)])
     .optional(),
   codebaseId: z.string().optional(),
+  parentRunIds: z.array(z.string()).optional(),
   search: z.string().optional(),
   after: z.string().optional(),
   before: z.string().optional(),

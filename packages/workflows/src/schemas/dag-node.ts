@@ -1046,8 +1046,11 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * time, so no two of them contend for the parent checkout's path lock. The window counts
  * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
- * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
- * leave some children uncancelled when the parent is abandoned. The workflow `budget:`
+ * large list increases cancellation work. Abandon considers every discovered child for
+ * cancellation but expands at most 500 parents (`MAX_CASCADE_RUNS`), then makes one
+ * aggregate lookup for unvisited descendants. Deeper subtrees may remain unvisited;
+ * a warning calls for individual inspection. The bound limits lookup rounds, not
+ * cancellation count or total work. The workflow `budget:`
  * does not cover fan-out yet (a budgeted workflow rejects it at load; #2815). `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
  *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and

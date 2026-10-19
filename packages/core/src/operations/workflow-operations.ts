@@ -169,7 +169,7 @@ export interface RejectionOperationResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Safety bound on the abandon cascade walk (guards against corrupted run trees). */
+/** Maximum parent expansions in the abandon tree walks. */
 const MAX_CASCADE_RUNS = 500;
 
 type CancelWorkflowRun = (runId: string) => Promise<{ cancelled: boolean }>;
@@ -1224,7 +1224,13 @@ export function createWorkflowOperations({
           const result = await cancelRun(child.id);
           if (result.cancelled) {
             runs.push(child);
-          } else failures++;
+          } else {
+            getLog().warn(
+              { childId: child.id },
+              'operations.workflow_abandon_cascade_cancel_failed'
+            );
+            failures++;
+          }
         } catch (err) {
           getLog().warn(
             { err, childId: child.id },
@@ -1234,16 +1240,25 @@ export function createWorkflowOperations({
         }
       }
     }
-    // Truncation is NOT silent success: if we hit the cap with the queue non-empty,
-    // an unbounded-deep/wide tree still has live descendants we never reached. Surface
-    // it via the same `failures` channel (caller reports "part of the tree may still be
-    // alive") AND a distinct log line, rather than returning a false all-clear.
+    // Queued runs were already considered for cancellation; only their children
+    // remain unvisited. Probe after cancellation so a wide leaf level is all-clear.
     if (queue.length > 0) {
-      getLog().warn(
-        { rootId, cap: MAX_CASCADE_RUNS, unreached: queue.length },
-        'operations.workflow_abandon_cascade_truncated'
-      );
-      failures += queue.length;
+      try {
+        const { total } = await store.listWorkflowRuns({ parentRunIds: queue, limit: 0 });
+        if (total > 0) {
+          getLog().warn(
+            { rootId, cap: MAX_CASCADE_RUNS, unreached: total, pendingParents: queue.length },
+            'operations.workflow_abandon_cascade_truncated'
+          );
+          failures += total;
+        }
+      } catch (err) {
+        getLog().warn(
+          { err, rootId, pendingParents: queue.length },
+          'operations.workflow_abandon_cascade_lookup_failed'
+        );
+        failures++;
+      }
     }
     return { failures, runs };
   }
