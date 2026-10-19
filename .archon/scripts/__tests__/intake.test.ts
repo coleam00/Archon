@@ -778,6 +778,23 @@ describe('the intake scripts', () => {
       summary: expect.stringContaining('run-1, which ended failed'),
     });
   }, 60_000);
+  test('pickup reads every stored work item in one state call, not one per item', () => {
+    const at = install();
+    inProcess(at, () => {
+      for (const number of [1, 2, 3]) {
+        statePut(`work/${String(number)}`, newWorkItem({ repo: PR.repo, number }, AT), 0);
+      }
+    });
+    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-intake-calls-'))), 'calls.jsonl');
+    const result = run(at, 'facts', { runId: 'run-1', kind: 'pr' }, { ARCHON_CALL_LOG: log });
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(JSON.parse(result.stdout)).toMatchObject({ path: 'idle', item: null });
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+    expect(calls.filter(argv => argv[0] === 'state')).toEqual([
+      ['state', 'list', '--prefix', 'work/', '--values'],
+    ]);
+  }, 60_000);
+
   test('edits while an item is claimed queue one request, and a release keeps only the newest', () => {
     const at = install();
     facts(at, { runId: 'run-1' });
