@@ -142,7 +142,9 @@ tiers:
   medium: { provider: codex, model: gpt-5.6-terra, effort: high }
   small: { provider: pi, model: minimax-m3 }
 
-# Model aliases — optional custom refs for project workflows.
+# Model aliases — custom refs. Project workflows can name one directly; a bundled
+# workflow names one in a preference list that ends in a tier, such as the SDLC pack's
+# '@implementer' or '@reviewer', so an unset alias falls back to that tier.
 aliases:
   '@reasoning': { provider: claude, model: opus, effort: max }
 

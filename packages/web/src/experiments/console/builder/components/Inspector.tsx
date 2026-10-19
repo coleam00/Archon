@@ -266,13 +266,10 @@ export function Inspector({
               patchBase({ provider: raw.length > 0 ? raw : undefined });
             }}
           />
-          <TextField
-            label="Model"
-            value={node.base.model ?? ''}
-            mono
-            placeholder="inherit (tier / @alias / literal)"
-            onChange={(raw): void => {
-              patchBase({ model: raw.length > 0 ? raw : undefined });
+          <ModelField
+            model={node.base.model}
+            onChange={(model): void => {
+              patchBase({ model });
             }}
           />
           <CheckboxField
@@ -297,5 +294,33 @@ export function Inspector({
         />
       ) : null}
     </div>
+  );
+}
+
+/** A preference list is edited in the YAML; the inspector shows its order. */
+function ModelField({
+  model,
+  onChange,
+}: {
+  model: BaseFields['model'];
+  onChange: (next: string | undefined) => void;
+}): ReactElement {
+  if (Array.isArray(model)) {
+    return (
+      <Field label="Model">
+        <span className="font-mono text-[12.5px] text-text-secondary">{model.join(' → ')}</span>
+      </Field>
+    );
+  }
+  return (
+    <TextField
+      label="Model"
+      value={model ?? ''}
+      mono
+      placeholder="inherit (tier / @alias / literal)"
+      onChange={(raw): void => {
+        onChange(raw.length > 0 ? raw : undefined);
+      }}
+    />
   );
 }

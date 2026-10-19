@@ -7,6 +7,7 @@ import {
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import {
   isTierName,
+  selectModelRef,
   buildAiProfile,
   TIER_NAMES,
   type TierName,
@@ -190,17 +191,18 @@ export async function maybePrintTierNotice(
 ): Promise<void> {
   if (quiet) return;
 
-  // Collect tier keywords used by the workflow — check the workflow-level default
-  // first (model: large at the top level applies to all nodes without overrides),
-  // then per-node overrides.
+  // Collect tier keywords used by the workflow-level default and per-node overrides.
+  // A preference list counts by its final entry: the tier it lands on when none of its
+  // aliases is configured, which is the case this notice is about.
   const usedTiers = new Set<TierName>();
-  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
-    usedTiers.add(workflow.model);
-  }
-  for (const node of workflow.nodes) {
-    if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
-      usedTiers.add(node.model);
-    }
+  const refs = [
+    workflow.model,
+    ...workflow.nodes.map(node => ('model' in node ? node.model : undefined)),
+  ];
+  for (const ref of refs) {
+    if (ref === undefined) continue;
+    const selected = selectModelRef(ref);
+    if (isTierName(selected)) usedTiers.add(selected);
   }
   if (usedTiers.size === 0) return;
 

@@ -2603,14 +2603,14 @@ describe('executeWorkflow', () => {
             preCreatedRun,
             modelOverrideLayer: {
               kind: 'raw',
-              overrides: { aliases: { '@missing': 'codex/gpt-5.6-sol' } },
+              overrides: { aliases: { '@missing': 'gpt-5.6-sol' } },
             },
           }
         )
-      ).rejects.toThrow(/unknown alias '@missing'/);
+      ).rejects.toThrow(/'@missing' is not configured/);
       expect(failRun).toHaveBeenCalledWith(
         'invalid-model-run',
-        expect.stringContaining("unknown alias '@missing'")
+        expect.stringContaining("'@missing' is not configured")
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
