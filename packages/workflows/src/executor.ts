@@ -330,18 +330,17 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
-  const sourced = await establishRunSource(
-    deps,
-    platform,
-    conversationId,
-    workflowRun,
-    workflowSourceDir,
-    opts
+  // Validate adoption before source setup can stop the run. Defer only the refusal's
+  // handling to the execution boundary; source setup retains its own failure semantics.
+  const adoption = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation).then(
+    value => ({ success: true as const, value }),
+    (error: unknown) => ({ success: false as const, error })
   );
-  if (sourced.stopped) return sourced.result;
-  const workflowSourceRoots = sourced.value;
+  const sourced = adoption.success
+    ? await establishRunSource(deps, platform, conversationId, workflowRun, workflowSourceDir, opts)
+    : undefined;
+  if (sourced?.stopped) return sourced.result;
+  const workflowSourceRoots = sourced?.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
@@ -358,6 +357,9 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    if (!adoption.success) throw adoption.error;
+    const adoptedRunDir = adoption.value;
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
