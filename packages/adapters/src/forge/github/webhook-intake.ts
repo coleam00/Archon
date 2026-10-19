@@ -239,7 +239,8 @@ export async function fetchCommentHistory(
 export async function buildIsolationHints(
   callApi: GitHubApiCall,
   target: WebhookTarget,
-  isPR: boolean
+  isPR: boolean,
+  host: string
 ): Promise<IsolationHints> {
   const isolationHints: IsolationHints = {
     workflowType: isPR ? 'pr' : 'issue',
@@ -248,7 +249,7 @@ export async function buildIsolationHints(
   if (!isPR) return isolationHints;
 
   // Linked issues let the PR share their worktree
-  const linkedIssues = await getLinkedIssueNumbers(target.owner, target.repo, target.number);
+  const linkedIssues = await getLinkedIssueNumbers(target.owner, target.repo, target.number, host);
   if (linkedIssues.length > 0) {
     isolationHints.linkedIssues = linkedIssues;
     getLog().info({ prNumber: target.number, linkedIssues }, 'github.pr_linked_issues');

@@ -24,7 +24,8 @@ const execFileAsync = promisify(execFile);
 export async function getLinkedIssueNumbers(
   owner: string,
   repo: string,
-  prNumber: number
+  prNumber: number,
+  hostname: string
 ): Promise<number[]> {
   const query = `
     query ($owner: String!, $repo: String!, $pr: Int!) {
@@ -44,6 +45,8 @@ export async function getLinkedIssueNumbers(
       [
         'api',
         'graphql',
+        '--hostname',
+        hostname,
         '-F',
         `owner=${owner}`,
         '-F',

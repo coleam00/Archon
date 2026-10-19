@@ -6,7 +6,8 @@ export { loadAppPrivateKey } from './private-key';
 export { AppNotInstalledError, AppPrivateKeyError } from './errors';
 export { installCredentialHelper } from './credential-helper-install';
 export type { GitHubAppConfig, IGitHubAppAuthProvider, CachedInstallationToken } from './types';
-export { loadGitHubAppConfig, resolveGitHubTokenFromEnv } from './config';
+export { loadGitHubAppConfig, resolveGitHubHost, resolveGitHubTokenFromEnv } from './config';
+export type { GitHubHost } from './config';
 
 // Per-user device flow (PR-C)
 export { isPerUserGitHubEnabled, loadDeviceFlowConfig, assertEncryptionKeyAtBoot } from './config';

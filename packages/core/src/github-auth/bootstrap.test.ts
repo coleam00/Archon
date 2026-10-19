@@ -73,6 +73,10 @@ test('valid inline or file configuration needs no webhook secret and preserves i
   expect(inline?.appId).toBe('123');
   expect(inline?.slug).toBe('archon');
   expect(inline?.defaultInstallationId).toBe(42);
+  expect(inline?.apiBaseUrl).toBe('https://api.github.com');
+  expect(
+    loadGitHubAppConfig({ ...config, GITHUB_URL: 'https://github.example.com' })?.apiBaseUrl
+  ).toBe('https://github.example.com/api/v3');
   expect(loadGitHubAppConfig({ ...config, GH_TOKEN: 'ambient-fixture' })?.appId).toBe('123');
   expect(() =>
     loadGitHubAppConfig({
