@@ -205,17 +205,24 @@ async function probeLegacyStatePath(
   );
 }
 
-/** Legacy cwd storage has ambiguous ownership; never migrate it or read it as a fallback. */
+/**
+ * Warn once per working directory when legacy `_cwd/<basename>` storage exists.
+ * Legacy cwd storage has ambiguous ownership; never migrate it or read it as a fallback.
+ */
 export async function maybeWarnLegacyCwdStoragePath(cwd: string, newRoot: string): Promise<void> {
+  const latchKey = `cwd-storage:${cwd}`;
+  if (warnedCwds.has(latchKey)) return;
   const legacyPath = getProjectRoot('_cwd', sanitizeScopeSegment(basename(cwd)));
   try {
     await access(legacyPath);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return;
+    warnedCwds.add(latchKey);
     getLog().warn({ err, legacyPath }, 'workflow.legacy_cwd_storage_probe_error');
     return;
   }
+  warnedCwds.add(latchKey);
   getLog().warn(
     {
       legacyPath,

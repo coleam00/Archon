@@ -240,6 +240,8 @@ describe('resolveProjectPaths', () => {
     expect(notices[1][0]).toMatchObject({ legacyPath: legacyRoot, newPath: second.outputRoot });
 
     warn.mockClear();
+    await resolveProjectPaths(makeDeps(), firstCwd, 'run-a-again');
+    expect(warn).not.toHaveBeenCalled();
     const resumed = await resolveProjectPaths(
       makeDeps(),
       join(testHome, 'a', 'notes'),
