@@ -39,6 +39,7 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
 
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
 export const mockLogger = {
+  level: 'info',
   info: mockLogFn,
   warn: mockLogFn,
   error: mockLogFn,
