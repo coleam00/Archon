@@ -27,6 +27,7 @@ import {
   parseWholeInputsRef,
 } from '../../../output-ref';
 import { getLog } from '../../log';
+import { getStaleCachedDependencies } from '../../stale-dependencies';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
   resolveRunInputs,
@@ -44,6 +45,74 @@ export interface WaitLoopOwner {
   bodySessionCursorAncestry?: BodySessionCursorAncestry;
 }
 
+/** An answer a resume discarded: the occurrence it answered and what changed since. */
+interface DiscardedAnswer {
+  readonly occurrence: string;
+  readonly changed: readonly string[];
+}
+
+/**
+ * The persisted wait context this invocation resumes: the run's stored wait when it
+ * belongs to this node (or this loop-group iteration's body wait), unless it holds an
+ * answer to a question this pass no longer asks. Then the wait starts fresh and
+ * `discarded` says why.
+ */
+function resumableWaitContext(
+  ctx: RunLayersContext,
+  node: WaitNode,
+  loopOwner: WaitLoopOwner | undefined,
+  render: (text: string) => string
+): { persisted: WorkflowWaitContext | undefined; discarded?: DiscardedAnswer } {
+  const raw = ctx.workflowRun.metadata?.wait;
+  if (!isWorkflowWaitContext(raw)) return { persisted: undefined };
+  const owned =
+    loopOwner === undefined
+      ? raw.owner === 'node' && raw.nodeId === node.id
+      : raw.owner === 'loop_group' &&
+        raw.nodeId === loopOwner.groupId &&
+        raw.bodyWaitId === node.id &&
+        raw.iteration === loopOwner.iteration;
+  if (!owned) return { persisted: undefined };
+  const discarded = staleAnswer(ctx, node, raw, render);
+  return discarded === undefined ? { persisted: raw } : { persisted: undefined, discarded };
+}
+
+/**
+ * An answer belongs to the question it answered: the message, form and options recorded
+ * when the wait paused. When a resume re-ran something upstream (a failed node retried,
+ * an `always_run` producer, a stale cache) and the question this pass renders differs,
+ * the answer is discarded so the run never acts on an answer to a different question.
+ *
+ * Only a node-owned wait on a resume pass is checked: a loop_group body re-runs whole
+ * each iteration and carries no prior snapshot, so its waits are out of scope for now.
+ * A wait that was already re-asked once keeps its answer, so a question rendered from a
+ * value that changes on every resume cannot be asked forever.
+ */
+function staleAnswer(
+  ctx: RunLayersContext,
+  node: WaitNode,
+  persisted: WorkflowWaitContext,
+  render: (text: string) => string
+): DiscardedAnswer | undefined {
+  if (persisted.kind !== 'attention' || persisted.answer === undefined) return undefined;
+  if (persisted.owner !== 'node' || persisted.reaskedFrom !== undefined) return undefined;
+  if (ctx.priorCompletedNodes === undefined) return undefined;
+  const condition = waitCondition(node.wait);
+  if (condition.kind !== 'attention') return undefined;
+  const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs) ?? [];
+  const same =
+    render(condition.message).trim() === persisted.message &&
+    condition.form === persisted.form &&
+    JSON.stringify(options) === JSON.stringify(persisted.options ?? []);
+  if (same) return undefined;
+  const changed = getStaleCachedDependencies(node, ctx.nodeOutputs, ctx.priorCompletedNodes);
+  getLog().warn(
+    { workflowRunId: ctx.workflowRun.id, nodeId: node.id, changedDependencies: changed },
+    'dag.wait_answer_discarded_stale_question'
+  );
+  return { occurrence: attentionOccurrence(persisted), changed };
+}
+
 /** Execute a durable wait without holding a subprocess or provider slot. */
 export async function executeWaitNode(
   ctx: RunLayersContext,
@@ -52,17 +121,9 @@ export async function executeWaitNode(
 ): Promise<NodeExecutionResult> {
   const { workflowRun, deps, platform, conversationId, nodeOutputs, stepNamePrefix, logDir } = ctx;
   const now = new Date();
-  const rawPersisted = workflowRun.metadata?.wait;
-  const persisted =
-    isWorkflowWaitContext(rawPersisted) &&
-    (loopOwner === undefined
-      ? rawPersisted.owner === 'node' && rawPersisted.nodeId === node.id
-      : rawPersisted.owner === 'loop_group' &&
-        rawPersisted.nodeId === loopOwner.groupId &&
-        rawPersisted.bodyWaitId === node.id &&
-        rawPersisted.iteration === loopOwner.iteration)
-      ? rawPersisted
-      : undefined;
+  const resolveEventText = (text: string): string =>
+    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
+  const { persisted, discarded } = resumableWaitContext(ctx, node, loopOwner, resolveEventText);
 
   const execution =
     ctx.unfinishedInvocations?.get(
@@ -90,8 +151,6 @@ export async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
-  const resolveEventText = (text: string): string =>
-    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;
@@ -162,6 +221,7 @@ export async function executeWaitNode(
       form: condition.form,
       ...(options !== undefined ? { options } : {}),
       ...(labels !== undefined ? { labels } : {}),
+      ...(discarded !== undefined ? { reaskedFrom: discarded.occurrence } : {}),
     };
   }
 
@@ -203,7 +263,7 @@ export async function executeWaitNode(
         node.id,
         attentionOccurrence(context),
         stepNamePrefix + node.id,
-        attentionNotification(platform, workflowRun.id, context)
+        attentionNotification(platform, workflowRun.id, context, discarded)
       );
     }
     return execution === undefined
@@ -280,7 +340,8 @@ export async function executeWaitNode(
 function attentionNotification(
   surface: IWorkflowPlatform,
   runId: string,
-  wait: WorkflowAttentionWaitContext
+  wait: WorkflowAttentionWaitContext,
+  discarded?: DiscardedAnswer
 ): string {
   const answer = attentionAnswerLines(surface, {
     runId,
@@ -288,8 +349,15 @@ function attentionNotification(
     options: [...attentionOptions(wait)],
     occurrence: attentionOccurrence(wait),
   });
+  const changed =
+    discarded === undefined
+      ? []
+      : [
+          `Your earlier answer was discarded because ${discarded.changed.length > 0 ? discarded.changed.join(', ') : 'what this question is built from'} changed, so the question below is not the one you answered.`,
+        ];
   return [
     `⏸️ **Workflow run \`${runId}\` needs attention**`,
+    ...changed,
     wait.message,
     [...answer, `Abandon: \`${spellWorkflowCommand(surface, `abandon ${runId}`)}\``].join('\n'),
   ].join('\n\n');
