@@ -209,6 +209,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -256,6 +258,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -295,6 +299,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -455,6 +461,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -501,6 +509,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...refreshed, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -672,6 +682,8 @@ describe('workflow continuation scanner', () => {
       return {
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait' as const,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       };
@@ -760,6 +772,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -843,6 +857,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });

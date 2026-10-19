@@ -118,6 +118,31 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
 }
 
 /**
+ * A run continued after a pause had already moved past the nodes that failed before
+ * the pause: their dependents ran on the failure. Re-running them would be a retry
+ * nobody asked for, and would change what those dependents and any answered wait
+ * were computed from, so the failure is replayed as it was. The prior pass's
+ * `node_failed` row stays the node's latest record. `always_run` keeps re-executing.
+ */
+function replayPriorFailure(ctx: RunLayersContext, node: DagNode): LayerNodeResult | undefined {
+  const failure = ctx.replayedFailures?.get(node.id);
+  if (failure === undefined || node.always_run) return undefined;
+  getLog().info(
+    { workflowRunId: ctx.workflowRun.id, nodeId: node.id },
+    'dag.node_prior_failure_replayed'
+  );
+  return {
+    nodeId: node.id,
+    output: {
+      state: 'failed',
+      output: '',
+      error: failure.error,
+      ...(failure.failureKind !== undefined ? { failureKind: failure.failureKind } : {}),
+    },
+  };
+}
+
+/**
  * Decide whether a node dispatches. Returns the node's settled result when it does not:
  * replayed from a prior pass, or skipped by an enclosing include boundary, its trigger
  * rule, or its `when:` condition.
@@ -132,6 +157,8 @@ async function admitNode(
   // A prior success is reusable only while every enclosing include is still active.
   // Unlike ordinary node-local rules, a composed boundary governs the whole block,
   // so resume must not let a stale completed descendant cross a newly-false gate.
+  const replayedFailure = replayPriorFailure(ctx, node);
+  if (replayedFailure !== undefined) return replayedFailure;
   const priorCompletedNodes = ctx.priorCompletedNodes;
   const isCachedPriorSuccess = priorCompletedNodes?.has(node.id) === true && !node.always_run;
   const composedBoundaryDecision = checkComposedBlockBoundaries(
@@ -283,7 +310,12 @@ async function replayPriorSuccess(
     // output), the cached value reflects the OLD dep output and would
     // otherwise report success over stale synthesis. Invalidate and
     // fall through to a fresh execution instead.
-    const staleDeps = getStaleCachedDependencies(node, ctx.nodeOutputs, priorCompletedNodes);
+    const staleDeps = getStaleCachedDependencies(
+      node,
+      ctx.nodeOutputs,
+      priorCompletedNodes,
+      ctx.replayedFailures
+    );
     if (staleDeps.length > 0) {
       const invalidatedStepName = ctx.stepNamePrefix + node.id;
       // Same rationale as the always_run reset above: prior.output can now be

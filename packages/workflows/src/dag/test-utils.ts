@@ -353,6 +353,7 @@ export function createMockStore(): MockWorkflowStore {
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
