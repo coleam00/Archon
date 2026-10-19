@@ -35,6 +35,7 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { parseDocument, Scalar } from 'yaml';
 import { copyArchonSkill } from './skill';
 import {
   SetupExit,
@@ -550,8 +551,12 @@ export async function configureDocsPath(repoPath: string): Promise<void> {
         const hasDocs =
           typeof parsed === 'object' && parsed !== null && Object.hasOwn(parsed, 'docs');
         if (!hasDocs) {
-          const escaped = docsPath.trim().replace(/"/g, '\\"');
-          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
+          const document = parseDocument(existing);
+          if (document.errors.length > 0) throw document.errors[0];
+          const path = new Scalar(docsPath.trim());
+          path.type = Scalar.QUOTE_DOUBLE;
+          document.setIn(['docs', 'path'], path);
+          writeFileSync(configPath, document.toString());
         } else {
           note(
             `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,

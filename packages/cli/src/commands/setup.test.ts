@@ -12,6 +12,7 @@ import * as providerAuth from './setup-provider-auth';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { loadRepoConfig } from '@archon/core/config/config-loader';
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
@@ -50,22 +51,24 @@ describe('setup command', () => {
       expect(prompts.note).not.toHaveBeenCalled();
     });
 
-    it.each(['docs:\n  path: existing/\n', '"docs": null\n'])(
-      'preserves an active docs key and asks for a manual edit: %s',
-      async docs => {
-        const { path } = bootstrapProjectConfig(TEST_DIR);
-        const existing = readFileSync(path, 'utf-8') + docs;
-        writeFileSync(path, existing);
+    it.each([
+      'docs:\n  path: existing/\n',
+      '"docs": null\n',
+      '{docs: {path: existing/}}\n',
+      'docs:\n  path: existing/\n...\n',
+    ])('preserves an active docs key and asks for a manual edit: %s', async docs => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = readFileSync(path, 'utf-8') + docs;
+      writeFileSync(path, existing);
 
-        await configureDocsPath(TEST_DIR);
+      await configureDocsPath(TEST_DIR);
 
-        expect(readFileSync(path, 'utf-8')).toBe(existing);
-        expect(prompts.note).toHaveBeenCalledWith(
-          `A "docs:" key already exists in ${path}.\nEdit it manually to set path: docs/`,
-          'Docs path not written'
-        );
-      }
-    );
+      expect(readFileSync(path, 'utf-8')).toBe(existing);
+      expect(prompts.note).toHaveBeenCalledWith(
+        `A "docs:" key already exists in ${path}.\nEdit it manually to set path: docs/`,
+        'Docs path not written'
+      );
+    });
 
     it('preserves other settings and comments containing docs:', async () => {
       const { path } = bootstrapProjectConfig(TEST_DIR);
@@ -80,6 +83,39 @@ describe('setup command', () => {
         assistants: { claude: { model: 'opus' } },
         docs: { path: 'docs/' },
       });
+    });
+
+    it.each(['docs\\team', 'docs\\guide', 'docs/"quoted"', 'docs/line\nbreak'])(
+      'round-trips the selected path through the repository loader: %s',
+      async docsPath => {
+        bootstrapProjectConfig(TEST_DIR);
+        spyOn(prompts, 'text').mockResolvedValue(docsPath);
+
+        await configureDocsPath(TEST_DIR);
+
+        expect((await loadRepoConfig(TEST_DIR)).docs?.path).toBe(docsPath);
+      }
+    );
+
+    it.each([
+      '# docs: example\n{assistants: {claude: {model: opus}}}\n',
+      '# docs: example\n{assistants: {claude: {model: opus}},} # trailing comment\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n...\n# after document\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n',
+      '# docs: example\n',
+      '',
+    ])('adds docs within the existing YAML document: %j', async existing => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      writeFileSync(path, existing);
+      const before = await loadRepoConfig(TEST_DIR);
+
+      await configureDocsPath(TEST_DIR);
+
+      expect(await loadRepoConfig(TEST_DIR)).toEqual({ ...before, docs: { path: 'docs/' } });
+      const written = readFileSync(path, 'utf-8');
+      for (const comment of ['# docs: example', '# trailing comment', '# after document']) {
+        if (existing.includes(comment)) expect(written).toContain(comment);
+      }
     });
 
     it('reports malformed YAML without changing the file', async () => {
