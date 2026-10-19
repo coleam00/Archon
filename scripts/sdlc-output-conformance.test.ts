@@ -119,6 +119,7 @@ describe('triage', () => {
         INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
         INPUTS_SUMMARY: 'Ready',
         INPUTS_AREA_LABELS: '["area","nonexistent"]',
+        INPUTS_RELATED: '[]',
         INPUTS_REPORT: '{"type":"archon_artifact","run_id":"r","path":"triage.md"}',
       },
     });
@@ -148,6 +149,7 @@ describe('triage', () => {
     urgency: { value: 'now', reason: 'blocks a release' },
     item: { repo: { host: '', path: '' }, number: 0 },
     area_labels: [],
+    related: [],
     summary: 'Ready',
     report: { type: 'archon_artifact', run_id: 'r', path: 'triage.md' },
   };
