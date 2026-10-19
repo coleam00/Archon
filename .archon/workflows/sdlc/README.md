@@ -476,8 +476,8 @@ The predicate only saves runs; intake ignores any other label. A binding install
 ## Build queue
 
 Before launching ship, route can finish an open PR whose trusted canonical Archon
-review says Ready at its current full head SHA and whose CI is green at that head.
-Apply verifies the head, trusted review and CI before taking the PR out of draft,
+review says Ready at its current full head SHA and whose CI is green with clear workflow approval evidence at that head. Pending or unreadable approval evidence asks for attention.
+Apply verifies the head, trusted review, CI and approval evidence before taking the PR out of draft,
 then rechecks the head and records ready without a delivery round or push. A triage-linked PR needs no earlier build round.
 On the forge source, the plugin must support `pr.comments` to read conversation reviews;
 install a release/plugin carrying that operation before using this path. Route-agent

@@ -112,6 +112,7 @@ function decide(
 function pushTo(pr: QualifiedPr): string {
   const view = viewPr(pr, forgeSource());
   if (view.pr.state !== 'open') throw new Error(`${view.pr.url} is ${view.pr.state}; nothing is pushed to it`);
+  if (view.pr.head_repo === null) throw new Error(`${view.pr.url}'s head repository is gone; nothing is pushed`);
   if (view.pr.head_revision === gitOrThrow('rev-parse', 'HEAD')) return 'its head already holds the checkout';
   const pushed = pushHead({ repo: pr.repo, head_repo: view.pr.head_repo, head: view.pr.head });
   return `pushed ${pushed} to ${view.pr.head}`;

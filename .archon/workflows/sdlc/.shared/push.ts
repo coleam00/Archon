@@ -16,7 +16,7 @@ import { headDestination } from './remote.ts';
 
 export interface PushTarget {
   readonly repo: QualifiedPr['repo'];
-  readonly head_repo: QualifiedPr['repo'] | null;
+  readonly head_repo: QualifiedPr['repo'];
   readonly head: string;
 }
 

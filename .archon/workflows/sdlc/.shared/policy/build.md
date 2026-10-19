@@ -22,11 +22,13 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
     maintainer's merge (a false blocker).
 - **Push** commits a run left committed but unpushed on its pull request's branch.
 - **Done** when the trusted canonical review says Ready at the current full head SHA
-  and CI is green at that head. Route/apply can finish this without another ship
-  round, taking a draft PR out of draft if needed.
+  and CI is green at that head. Direct route/apply completion also requires clear
+  workflow approval evidence at that head; it skips another ship round and takes
+  a draft PR out of draft if needed.
 
 ## Unclear: the queue asks
 
+- Pending, unreadable or unknown workflow approval evidence for direct completion.
 - A body missing one of the six elements that the issue's own comments cannot supply.
 - A bug it cannot reproduce and has no other concrete evidence for.
 - A stop that asks to relax a constraint the maintainer stated, add scope the contract

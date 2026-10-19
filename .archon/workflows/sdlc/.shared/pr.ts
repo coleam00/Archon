@@ -82,10 +82,14 @@ export function ghGraphql(host: string, query: string, fields: Record<string, st
 export function ghWorkflowApprovalClear(repo: QualifiedPr['repo'], head: string): boolean {
   const result = gh('api', '--hostname', repo.host,
     `repos/${repo.path}/actions/runs?head_sha=${head}&per_page=100`, '--paginate', '--slurp');
-  const pages: unknown = JSON.parse(required(result, 'gh api workflow approval evidence'));
+  return workflowApprovalClear(JSON.parse(required(result, 'gh api workflow approval evidence')), head);
+}
+
+/** Only a complete, qualified Actions enumeration can certify clear approval. */
+export function workflowApprovalClear(pages: unknown, head: string): boolean {
   if (!Array.isArray(pages) || pages.length === 0) return false;
   const total = record(pages[0])?.total_count;
-  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return false;
+  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0 || total > 1000) return false;
   const runs: unknown[] = [];
   for (const page of pages) {
     const row = record(page);
@@ -94,7 +98,11 @@ export function ghWorkflowApprovalClear(repo: QualifiedPr['repo'], head: string)
   }
   return runs.length === total && runs.every(value => {
     const run = record(value);
-    return run?.head_sha === head && run.status === 'completed' &&
+    return run !== undefined &&
+      ((typeof run.id === 'number' && Number.isSafeInteger(run.id)) || (typeof run.id === 'string' && run.id !== '')) &&
+      (run.check_suite_id === null || (typeof run.check_suite_id === 'number' && Number.isSafeInteger(run.check_suite_id))) &&
+      typeof run.run_attempt === 'number' && Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 &&
+      run.head_sha === head && run.status === 'completed' &&
       typeof run.conclusion === 'string' && run.conclusion !== '' && run.conclusion !== 'action_required';
   });
 }

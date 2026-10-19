@@ -505,14 +505,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 
-  test('a route ask with no reviewed head keeps the claim and records its question', () => {
+  test.each(['pending', 'missing'])('a route ask for %s approval keeps the claim and records its question', approval => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const applied = run(at, 'apply', {
       INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
-      INPUTS_ROUTE: JSON.stringify({ decision: 'ask', ready_head: null, brief: 'Need a ruling', reason: 'Unclear scope', attention: ATTENTION }),
+      INPUTS_ROUTE: JSON.stringify({ decision: 'ask', ready_head: null, brief: 'Need clear workflow approval evidence', reason: `${approval} approval evidence with green checks`, attention: ATTENTION }),
       INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
-    });
+    }, { workflowRunPages: approval === 'missing' ? null : [{ total_count: 1, workflow_runs: [{ id: 1, head_sha: 'a'.repeat(40), check_suite_id: null, run_attempt: 1, status: 'waiting', conclusion: null }] }] });
     expect(ok(applied)).toMatchObject({ decision: 'asked', class: 'route' });
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { build: { status: 'asking', rounds: [] } } });
     expect(applied.gh).toEqual([]);
@@ -580,7 +580,7 @@ if (argv[0] === 'forge') {
       INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: 'a'.repeat(40) })),
       INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Already delivered', reason: 'Ready and green', attention: null }),
       INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
-    }, { pr: { isDraft, headRefOid: 'a'.repeat(40) }, workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }] });
+    }, { pr: { isDraft, headRefOid: 'a'.repeat(40) }, workflowRunPages: [{ total_count: 1, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }] });
     expect(applied.gh).toContain(`api --hostname ${PR.repo.host} repos/${PR.repo.path}/actions/runs?head_sha=${'a'.repeat(40)}&per_page=100 --paginate --slurp`);
     expect(ok(applied)).toMatchObject({ decision: 'ready', attention: '' });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
@@ -603,10 +603,10 @@ if (argv[0] === 'forge') {
       { workflowRunsFail: 'Actions permission denied' },
       { workflowRunPages: null },
       { workflowRunPages: [{ total_count: 1, workflow_runs: [] }] },
-      { workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'b'.repeat(40), status: 'completed', conclusion: 'success' }] }] },
-      ...['action_required', null, undefined].map(conclusion => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion }] }] })),
-      ...['waiting', 'requested', 'pending'].map(status => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status, conclusion: null }] }] })),
-      { workflowRunPages: [{ total_count: 2, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }, { total_count: 2, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'action_required' }] }] },
+      { workflowRunPages: [{ total_count: 1, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'b'.repeat(40), status: 'completed', conclusion: 'success' }] }] },
+      ...['action_required', null, undefined].map(conclusion => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'a'.repeat(40), status: 'completed', conclusion }] }] })),
+      ...['waiting', 'requested', 'pending'].map(status => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'a'.repeat(40), status, conclusion: null }] }] })),
+      { workflowRunPages: [{ total_count: 2, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }, { total_count: 2, workflow_runs: [{ id: 1, check_suite_id: null, run_attempt: 1, head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'action_required' }] }] },
     ].map(options => ({ ...options, error: 'approval' })),
     { writeLost: true, error: 'after conversion' },
   ])('direct completion refuses without recording ready: %j', options => {
@@ -712,6 +712,22 @@ if (argv[0] === 'forge') {
     expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', decisions: [{ decision: 'ready' }] } } });
     expect(doc?.facts.build?.rounds).toHaveLength(1);
     expect(buildWaits(doc as WorkItem)).toBe(false);
+  }, 60_000);
+
+  test.each(['continue', 'ask', 'done'] as const)('an answer push with no head repository refuses without creating a branch (%s)', decision => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const answer = decision === 'ask' ? ASK : { ...CONTINUE, decision };
+    const applied = run(at, 'apply', applyInputs({ ...answer, ...PUSH }), {
+      pr: { headRepository: null, headRefName: 'missing-head' },
+    });
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('head repository is gone');
+    expect(stored(at).revision).toBe(before);
+    const remote = spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/missing-head'], { cwd: at.checkout, encoding: 'utf8' });
+    expect(remote.status).toBe(0);
+    expect(remote.stdout.trim()).toBe('');
   }, 60_000);
 
   test('a closed pull request takes no push, and nothing is recorded', () => {

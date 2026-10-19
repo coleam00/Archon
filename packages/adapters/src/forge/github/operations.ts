@@ -20,7 +20,7 @@ import {
   parseRemote,
   type Fetch,
 } from './api';
-import { readWorkflowRuns } from './workflow-runs';
+import { readWorkflowRuns, workflowApprovalPending } from './workflow-runs';
 import { handleGithubMutation } from './lifecycle';
 import { handleGithubPrComments, handleGithubPrReviews, handleGithubPrView } from './pull-requests';
 import {
@@ -254,10 +254,9 @@ export async function handleGithubOperation(
         value: {
           ref: request.ref,
           revision,
-          approvalPending:
-            workflows.some(
-              run => run.head_sha === revision && run.conclusion === 'action_required'
-            ) || units.some(unit => unit.result === 'action_required'),
+          approvalPending: units.some(unit => unit.result === 'action_required')
+            ? true
+            : workflowApprovalPending(workflows, revision),
           units,
           summary: summarizeChecks(units),
           // The check-runs and statuses APIs enumerate observations but do not say which

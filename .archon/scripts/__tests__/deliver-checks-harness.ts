@@ -52,6 +52,7 @@ export interface GhPr {
   readonly headRefName?: string;
   readonly headRefOid?: string;
   readonly baseRefName?: string;
+  readonly headRepository?: { readonly name: string } | null;
   /** The head repository's owner; omitted, the head is in the `--repo` repository. */
   readonly headRepositoryOwner?: { readonly login: string };
 }
@@ -199,7 +200,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const row = {
       ...pr,
       url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
-      headRepository: { name },
+      headRepository: pr.headRepository === undefined ? { name } : pr.headRepository,
       headRepositoryOwner: pr.headRepositoryOwner ?? { login: owner },
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));

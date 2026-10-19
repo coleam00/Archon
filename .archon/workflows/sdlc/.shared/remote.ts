@@ -93,9 +93,9 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
 
 export function headDestination(target: {
   readonly repo: Repo;
-  readonly head_repo: Repo | null;
+  readonly head_repo: Repo;
 }): string {
-  const headRepo = target.head_repo ?? target.repo;
+  const headRepo = target.head_repo;
   if (sameRepo(headRepo, target.repo)) return remoteFor(headRepo);
   return findRemote(headRepo) ?? `https://${headRepo.host}/${headRepo.path}.git`;
 }
