@@ -29,6 +29,9 @@ import {
 } from '../services/codebase-checkout-resolver';
 import { createMockLogger } from '../test/mocks/logger';
 
+const realFsAccess = fsPromises.access;
+const realFsStat = fsPromises.stat;
+const realCheckoutRemote = registrationRemote.assertCheckoutRemote;
 const realExecFileAsync = gitUtils.execFileAsync;
 const realAddSafeDirectory = gitUtils.addSafeDirectory;
 
@@ -672,7 +675,7 @@ describe('cloneRepository', () => {
         ]);
         expect(result).toMatchObject({
           codebaseId: existing.id,
-          defaultCwd: savedPath,
+          defaultCwd: resolve(savedPath),
           alreadyExisted: true,
         });
         expect(mockCreateCodebase).not.toHaveBeenCalled();
@@ -704,7 +707,7 @@ describe('cloneRepository', () => {
       expect(spyCloneGitRepository).not.toHaveBeenCalled();
     });
 
-    test.each(['/../missing/../source', '/../alias/../source'])(
+    test.each(['', '/', '/./', '/../missing/../source', '/../alias/../source'])(
       'clones into the managed directory on disk for saved suffix %s',
       async suffix => {
         const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-retry-'));
@@ -722,9 +725,25 @@ describe('cloneRepository', () => {
           );
           execFileSync('git', ['init', '--bare', '-q', origin]);
           const saved = source + suffix;
-          mockListCodebaseClaims.mockResolvedValueOnce([makeCodebase({ default_cwd: saved })]);
+          const existing = makeCodebase({ default_cwd: saved });
+          mockListCodebaseClaims.mockResolvedValue([existing]);
+          mockUpdateCodebase.mockImplementation(async (_target, data) => {
+            if (data.default_cwd !== undefined) existing.default_cwd = data.default_cwd;
+          });
+          spyFsAccess.mockImplementation(realFsAccess);
+          spyFsStat.mockImplementation(realFsStat);
+          spyCheckoutRemote.mockImplementation(realCheckoutRemote);
+          spyExecFileAsync.mockImplementation(realExecFileAsync);
           spyCloneGitRepository.mockImplementation(async (_url: string, target: string) => {
             execFileSync('git', ['clone', '-q', origin, target], { stdio: 'pipe' });
+            execFileSync('git', [
+              '-C',
+              target,
+              'remote',
+              'set-url',
+              'origin',
+              'https://github.com/owner/repo',
+            ]);
             return { ok: true, value: undefined };
           });
 
@@ -732,7 +751,28 @@ describe('cloneRepository', () => {
 
           expect(await fsPromises.readdir(source)).toContain('.git');
           expect(await fsPromises.readdir(join(root, 'foreign', 'source'))).toEqual([]);
-          expect(result.defaultCwd).toBe(saved);
+          expect(result.defaultCwd).toBe(source);
+          expect(existing.default_cwd).toBe(source);
+          expect((await cloneRepository('https://github.com/owner/repo')).defaultCwd).toBe(source);
+          expect(spyCloneGitRepository).toHaveBeenCalledTimes(1);
+
+          if (suffix === '/../missing/../source') {
+            existing.default_cwd = saved;
+            expect((await cloneRepository('https://github.com/owner/repo')).defaultCwd).toBe(
+              source
+            );
+            expect(existing.default_cwd).toBe(source);
+            expect(spyCloneGitRepository).toHaveBeenCalledTimes(1);
+          }
+          if (suffix === '/../alias/../source') {
+            existing.default_cwd = saved;
+            mockUpdateCodebase.mockClear();
+            await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+              'Cannot verify checkout ownership'
+            );
+            expect(mockUpdateCodebase).not.toHaveBeenCalled();
+            expect(spyCloneGitRepository).toHaveBeenCalledTimes(1);
+          }
         } finally {
           managedSourceOverride = undefined;
           spyFsRm.mockRestore();
