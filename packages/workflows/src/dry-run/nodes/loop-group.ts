@@ -1,9 +1,9 @@
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
+import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-state';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import type { LoopGroupNode, NodeOutput } from '../../schemas';
-import { loopGroupOutputNodes } from '../../schemas';
 import { recordFailed, withResolution, type DryRunContext } from '../context';
 import { completionReason, loopIterationCompletes } from '../loop-completion';
 import { simulateNodes } from '../simulate';
@@ -61,10 +61,7 @@ export async function simulateLoopGroup(
       ctx.loopBodyScopes = outerLoopBodyScopes;
     }
     loopPrevOutputs = bodyOutputs;
-    const iterationOutput =
-      loopGroupOutputNodes(bodyNodes)
-        .map(body => bodyOutputs.get(body.id))
-        .find(output => output?.state === 'completed' && output.output.trim())?.output ?? '';
+    const iterationOutput = loopGroupIterationOutput(bodyNodes, bodyOutputs)?.output ?? '';
     const failed = bodyNodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
     if (failed) {
       recordFailed(
