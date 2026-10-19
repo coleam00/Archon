@@ -115,15 +115,19 @@ interface GitCommandAnchors {
   durable: RepoPath;
 }
 
+/**
+ * Only a branch cut here has a cut-from commit and a known base: current config cannot
+ * establish the original base of a reused branch. Neither says who owns the branch;
+ * `branchCreated` does.
+ */
+interface BranchCheckout {
+  branchCreated: boolean;
+  cutFromCommit?: string;
+  resolvedBaseBranch?: string;
+}
+
 type WorktreeCreationResult =
-  | {
-      kind: 'created';
-      resolvedBaseBranch?: string;
-      warnings: string[];
-      cutFromCommit?: string;
-      creationId: string;
-      branchCreated: boolean;
-    }
+  | ({ kind: 'created'; warnings: string[]; creationId: string } & BranchCheckout)
   | { kind: 'adopted'; environment: WorktreeCreationEnvironment };
 
 class WorktreeAddError extends Error {
@@ -1011,11 +1015,7 @@ export class WorktreeProvider implements IIsolationProvider {
     // recursively is enough.
     await mkdirAsync(worktreeBase, { recursive: true });
 
-    // Only a branch this call cuts from its start point has a cut-from commit,
-    // so it says nothing about who owns the branch; `branchCreated` does.
-    let cutFromCommit: string | undefined;
-    let resolvedBaseBranch: string | undefined;
-    let branchCreated = false;
+    let checkout: BranchCheckout = { branchCreated: false };
     if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
       // Adoption continues the local branch exactly as the prior run left it.
       // Do not fetch, sync, reset, or create a child branch here.
@@ -1034,7 +1034,7 @@ export class WorktreeProvider implements IIsolationProvider {
       // (request.baseBranch), then auto-detect via getDefaultBranch.
       const preferredBaseBranch =
         request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
-      resolvedBaseBranch = await this.syncWorkspaceBeforeCreate(
+      const baseBranch = await this.syncWorkspaceBeforeCreate(
         repoPath,
         preferredBaseBranch,
         remote
@@ -1046,20 +1046,18 @@ export class WorktreeProvider implements IIsolationProvider {
         if ('adopted' in pr) {
           return { kind: 'adopted', environment: pr.adopted };
         }
-        branchCreated = pr.branchCreated;
+        checkout = { branchCreated: pr.branchCreated };
       } else {
         // For issues, tasks, threads: create new branch
-        ({ cutFromCommit, branchCreated } = await this.createNewBranch(
+        checkout = await this.createNewBranch(
           request,
           repoPath,
           worktreePath,
           branchName,
-          resolvedBaseBranch,
+          baseBranch,
           setupLockReason,
           remote
-        ));
-        // Current config cannot establish the original base of a reused branch.
-        if (cutFromCommit === undefined) resolvedBaseBranch = undefined;
+        );
       }
     }
 
@@ -1119,14 +1117,7 @@ export class WorktreeProvider implements IIsolationProvider {
       };
     }
 
-    return {
-      kind: 'created',
-      ...(resolvedBaseBranch !== undefined ? { resolvedBaseBranch } : {}),
-      creationId,
-      branchCreated,
-      warnings,
-      ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
-    };
+    return { kind: 'created', creationId, warnings, ...checkout };
   }
 
   /**
@@ -1762,8 +1753,7 @@ export class WorktreeProvider implements IIsolationProvider {
    * Create a worktree for a named branch. A branch that exists nowhere yet is cut from
    * the start point. A branch that already exists, locally or on the remote, is checked
    * out at its current head and never moved backwards: its commits may exist nowhere
-   * else. Returns the cut-from commit (only for a branch cut here) and whether the local
-   * branch was created here.
+   * else.
    */
   private async createNewBranch(
     request: IsolationRequest,
@@ -1773,7 +1763,7 @@ export class WorktreeProvider implements IIsolationProvider {
     baseBranch: string,
     setupLockReason: string,
     remote = 'origin'
-  ): Promise<{ cutFromCommit?: string; branchCreated: boolean }> {
+  ): Promise<BranchCheckout> {
     const fromBranch =
       request.workflowType === 'task' && request.taskBranch?.kind === 'new'
         ? request.taskBranch.fromBranch
@@ -1803,7 +1793,7 @@ export class WorktreeProvider implements IIsolationProvider {
             timeout: GIT_OPERATION_TIMEOUT_MS,
           })
       );
-      return { cutFromCommit: cutFrom.trim(), branchCreated: true };
+      return { cutFromCommit: cutFrom.trim(), resolvedBaseBranch: baseBranch, branchCreated: true };
     }
 
     if (fromBranch) {

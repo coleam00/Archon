@@ -85,6 +85,19 @@ function parentSourceUnreadable(root: string, error: unknown): unknown {
 }
 
 /**
+ * A shared-checkout child inherits its parent's base; an isolated child reports the base
+ * its worktree was cut from. An unknown cut-from base stays unresolved (`''`) rather than
+ * falling through to config that may not describe the reused branch.
+ */
+function childBaseBranch(
+  isolation: ChildIsolationResult | undefined,
+  parentBaseBranch: string
+): string {
+  if (!isolation) return parentBaseBranch;
+  return isolation.baseBranch ?? '';
+}
+
+/**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
  * run-record creation, path-lock, artifacts, credential/model resolution, resume,
@@ -444,9 +457,7 @@ export async function runChildWorkflow(
           resolveChildIsolation,
           preparedSource: childSource,
           ...(runConfig ? { runConfig } : {}),
-          resolvedBaseBranch: childIsolationEnv
-            ? (childIsolationEnv.baseBranch ?? '')
-            : parentBaseBranch,
+          resolvedBaseBranch: childBaseBranch(childIsolationEnv, parentBaseBranch),
           ...(childIsolationEnv?.cutFromCommit !== undefined
             ? { cutFromCommit: childIsolationEnv.cutFromCommit }
             : {}),
