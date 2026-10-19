@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
-import { assertDetachedRunProcessOwner } from '../detached-run-control';
+import { claimDetachedRunProcessOwner } from '../detached-run-control';
 
 /*
  * A real detached run owner for the Windows stop tests. Every process it starts carries
@@ -18,7 +18,7 @@ if (!runId || !dir || (mode !== 'orphan' && mode !== 'spawner')) {
   throw new Error('Usage: windows-run-owner.ts <run-id> <dir> <orphan|spawner>');
 }
 
-assertDetachedRunProcessOwner();
+await claimDetachedRunProcessOwner();
 await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
 const idle = 'setInterval(() => undefined, 1000);';
