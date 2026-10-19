@@ -1,5 +1,7 @@
+import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import { providerInvocation } from './dag/capability-preflight';
 import {
+  type ExecutionContext,
   type ProviderRegistry,
   type NodeConfig,
   type StoredCredentialKind,
@@ -383,7 +385,10 @@ export async function assertRunCredentials(
     | 'getUserProviderCredential'
     | 'credentialStore'
   >,
-  prepared: PreparedRunAiConfiguration
+  prepared: PreparedRunAiConfiguration,
+  context: { cwd: string; execContext?: ExecutionContext } | 'pending-isolation' = {
+    cwd: prepared.cwd,
+  }
 ): Promise<void> {
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
@@ -449,17 +454,20 @@ export async function assertRunCredentials(
         }
       }
     }
+    if (context === 'pending-isolation') continue;
     let status: CredentialStatus;
     try {
       status = await deps.getAgentProvider(provider).checkCredential({
-        cwd: prepared.cwd,
+        ...context,
         settingSources: requirement.settingSources,
         model,
-        assistantConfig: prepared.config.assistants[provider],
+        assistantConfig: checkCredentialRequestSchema.shape.assistantConfig.parse(
+          prepared.config.assistants[provider]
+        ),
         env: {
           ...Object.fromEntries(
-            Object.entries(process.env).flatMap(([key, value]) =>
-              value === undefined ? [] : [[key, value]]
+            Object.entries(context.execContext?.kind === 'container' ? {} : process.env).flatMap(
+              ([key, value]) => (value === undefined ? [] : [[key, value]])
             )
           ),
           ...prepared.config.envVars,

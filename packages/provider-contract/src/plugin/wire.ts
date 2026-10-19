@@ -142,10 +142,14 @@ export type ProviderLog = z.infer<typeof logNotificationSchema>;
 export type ProviderLogSink = (record: ProviderLog) => Promise<void>;
 
 export const checkCredentialRequestSchema = z.object({
+  execContext: executionContextSchema.optional(),
   cwd: z.string().min(1).optional(),
   settingSources: settingSourcesSchema.optional(),
   model: z.string().optional(),
   assistantConfig: configSchema.optional(),
+});
+export const checkCredentialParamsSchema = checkCredentialRequestSchema.extend({
+  env: z.record(z.string(), z.string()).optional(),
 });
 export const resolveCredentialModelRequestSchema = checkCredentialRequestSchema
   .pick({ model: true, assistantConfig: true })
@@ -182,7 +186,7 @@ export const providerPluginWireSchemas = {
   ProviderToolCallRequest: toolCallRequestSchema,
   ProviderToolCallResponse: toolCallResponseSchema,
   ProviderLogNotification: logNotificationSchema,
-  ProviderCheckCredentialRequest: checkCredentialRequestSchema,
+  ProviderCheckCredentialRequest: checkCredentialParamsSchema,
   ProviderCheckCredentialResponse: credentialStatusSchema,
   ProviderResolveCredentialModelRequest: resolveCredentialModelRequestSchema,
   ProviderResolveCredentialModelResponse: resolveCredentialModelResponseSchema,

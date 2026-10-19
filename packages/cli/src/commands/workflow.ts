@@ -809,7 +809,13 @@ async function runWorkflowWithOwnedSource(
               : {}),
           }),
     });
-    await assertRunCredentials(host.deps, prepared);
+    await assertRunCredentials(
+      host.deps,
+      prepared,
+      !options.container && (options.noWorktree || !wantsIsolation)
+        ? { cwd: configCwd }
+        : 'pending-isolation'
+    );
     return prepared;
   };
 
@@ -1273,6 +1279,17 @@ async function runWorkflowWithOwnedSource(
       // Isolation was expected (default) but codebase is unavailable — fail fast. The
       // `--detach` pre-flight enforces the same refusal before the fork.
       assertCodebaseResolvedForIsolation({ codebase });
+    }
+
+    try {
+      await assertRunCredentials(host.deps, preparedAiConfiguration, {
+        cwd: workingCwd,
+        execContext,
+      });
+    } catch (error) {
+      if (containerBackend && containerEnvId && !resumable)
+        await destroyRunContainer(host.deps.store, containerBackend, containerEnvId, undefined);
+      throw error;
     }
 
     if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {

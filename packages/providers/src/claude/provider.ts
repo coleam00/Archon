@@ -28,7 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
-import { exec } from 'node:child_process';
+import { exec, execFile, spawn, type ExecFileException } from 'node:child_process';
 import { z } from 'zod';
 import {
   collectCredentialValues,
@@ -75,7 +75,7 @@ import {
 } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES, CLAUDE_SKILL_DISCOVERY } from './capabilities';
-import { buildContainerSpawn } from './container-spawn';
+import { buildContainerSpawn, buildDockerExecPrefix } from './container-spawn';
 import {
   resolveClaudeBinaryPath,
   resolveClaudeBinaryWithSource,
@@ -1628,7 +1628,8 @@ const nativeHelperSettingsSchema = z.object({
 
 async function checkNativeKeyHelper(
   session: ReturnType<typeof query>,
-  request: Parameters<IAgentProvider['checkCredential']>[0]
+  request: Parameters<IAgentProvider['checkCredential']>[0],
+  subprocessEnv: NodeJS.ProcessEnv
 ): Promise<CredentialStatus> {
   // accountInfo reports a configured helper even when it fails. Read the native
   // get_settings control response so policy and subprocess env use the same cascade;
@@ -1638,36 +1639,44 @@ async function checkNativeKeyHelper(
   const settings = nativeHelperSettingsSchema.parse(
     await session.request({ subtype: 'get_settings' })
   ).response.effective;
+  const env = { ...subprocessEnv, ...settings.env };
+  if (env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || env.ANTHROPIC_AUTH_TOKEN)
+    return { state: 'usable', source: 'native' };
   return await new Promise<CredentialStatus>((resolve, reject) => {
-    exec(
-      settings.apiKeyHelper,
-      {
-        cwd: request.cwd,
-        env: { ...buildRequestSubprocessEnv({ env: request.env }), ...settings.env },
-        signal: request.signal,
-      },
-      (error, stdout) => {
-        if (request.signal.aborted) {
-          reject(request.signal.reason);
-          return;
-        }
-        if (error) {
-          resolve({
-            state: 'unusable',
-            source: 'native',
-            evidence: `apiKeyHelper failed (${error.code ?? error.name})`,
-          });
-        } else if (!stdout.trim()) {
-          resolve({
-            state: 'unusable',
-            source: 'native',
-            evidence: 'apiKeyHelper returned no credential',
-          });
-        } else {
-          resolve({ state: 'usable', source: 'native' });
-        }
+    const onResult = (error: ExecFileException | null, stdout: string): void => {
+      if (request.signal.aborted) {
+        reject(request.signal.reason);
+      } else if (error) {
+        resolve({
+          state: 'unusable',
+          source: 'native',
+          evidence: `apiKeyHelper failed (${error.code ?? error.name})`,
+        });
+      } else if (!stdout.trim()) {
+        resolve({
+          state: 'unusable',
+          source: 'native',
+          evidence: 'apiKeyHelper returned no credential',
+        });
+      } else {
+        resolve({ state: 'usable', source: 'native' });
       }
-    );
+    };
+    if (request.execContext?.kind === 'container') {
+      execFile(
+        'docker',
+        [
+          ...buildDockerExecPrefix(request.execContext, request.cwd, env),
+          'sh',
+          '-c',
+          settings.apiKeyHelper,
+        ],
+        { signal: request.signal },
+        onResult
+      );
+    } else {
+      exec(settings.apiKeyHelper, { cwd: request.cwd, env, signal: request.signal }, onResult);
+    }
   });
 }
 
@@ -1705,6 +1714,7 @@ export class ClaudeProvider implements IAgentProvider {
     request.signal.addEventListener('abort', abort, { once: true });
     let session: ReturnType<typeof query> | undefined;
     let closeInput: (() => void) | undefined;
+    let subprocessEnv: NodeJS.ProcessEnv | undefined;
     try {
       request.signal.throwIfAborted();
       // Keep input open for control requests without sending a model prompt.
@@ -1715,8 +1725,26 @@ export class ClaudeProvider implements IAgentProvider {
           });
         })(),
         options: {
-          env: buildRequestSubprocessEnv({ env: request.env }),
-          pathToClaudeCodeExecutable: await resolveClaudeBinaryPath(config.claudeBinaryPath),
+          env: buildRequestSubprocessEnv(request),
+          pathToClaudeCodeExecutable:
+            request.execContext?.kind === 'container'
+              ? 'claude'
+              : await resolveClaudeBinaryPath(config.claudeBinaryPath),
+          spawnClaudeCodeProcess: options => {
+            // Capture the SDK's final environment rather than duplicating its transforms.
+            subprocessEnv = options.env;
+            if (request.execContext?.kind === 'container')
+              return buildContainerSpawn(request.execContext)(options);
+            const child = spawn(options.command, options.args, {
+              cwd: options.cwd,
+              env: options.env,
+              signal: options.signal,
+              windowsHide: true,
+              stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            child.stderr.resume();
+            return child;
+          },
           cwd: request.cwd,
           settingSources: request.settingSources ??
             config.settingSources ?? [...DEFAULT_SETTING_SOURCES],
@@ -1732,8 +1760,10 @@ export class ClaudeProvider implements IAgentProvider {
       // Cloud backends resolve credentials outside Claude's first-party account store.
       if (account.apiProvider && account.apiProvider !== 'firstParty')
         return { state: 'not_checked', source: 'native' };
-      if (account.apiKeySource === 'apiKeyHelper' || account.tokenSource === 'apiKeyHelper')
-        return await checkNativeKeyHelper(session, request);
+      if (account.apiKeySource === 'apiKeyHelper' || account.tokenSource === 'apiKeyHelper') {
+        if (!subprocessEnv) throw new Error('Claude SDK did not expose its subprocess environment');
+        return await checkNativeKeyHelper(session, request, subprocessEnv);
+      }
       const hasCredential = [account.tokenSource, account.apiKeySource].some(
         source => source && source !== 'none'
       );

@@ -196,13 +196,14 @@ mock.module('@archon/core/services/run-attention-watch', () => ({
 
 export const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 export const mockPersistWorkflowEvent = mock(() => Promise.resolve());
-export const mockFolderBackendPrepare = mock(() =>
-  Promise.resolve({
-    cwd: '/test/path',
-    execContext: { kind: 'host' as const },
-    envId: 'container-env-1',
-    overlayMode: 'volume-copy' as const,
-  })
+export const mockFolderBackendPrepare = mock(
+  (): Promise<import('@archon/isolation').PreparedEnv> =>
+    Promise.resolve({
+      cwd: '/test/path',
+      execContext: { kind: 'host' },
+      envId: 'container-env-1',
+      overlayMode: 'fuse' as const,
+    })
 );
 export const mockFolderBackendDestroy = mock(() => Promise.resolve());
 export const mockResolveFolderBackend = mock(() => ({

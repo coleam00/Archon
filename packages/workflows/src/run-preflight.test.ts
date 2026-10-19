@@ -753,3 +753,24 @@ test('a usable same-model node cannot hide another node with no native credentia
   ).rejects.toThrow('no usable login');
   expect(checkCredential).toHaveBeenCalledTimes(1);
 });
+
+for (const execContext of [
+  { kind: 'host' },
+  { kind: 'container', containerId: 'runner' },
+] as const) {
+  test(`native preflight uses resolved execution context: ${execContext.kind}`, async () => {
+    const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+    const workflow = makeTestResolvedWorkflow({
+      name: 'isolated',
+      nodes: [{ id: 'ai', prompt: 'hello' }],
+    });
+    const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch');
+    await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, {
+      cwd: '/execution',
+      execContext,
+    });
+    expect(checkCredential.mock.calls[0]?.[0]).toMatchObject({ cwd: '/execution', execContext });
+    if (execContext.kind === 'container')
+      expect(checkCredential.mock.calls[0]?.[0].env.PATH).toBeUndefined();
+  });
+}

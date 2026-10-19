@@ -1,3 +1,4 @@
+import type { checkCredentialRequestSchema } from './plugin/wire';
 import type { ProviderDiagnostics, ProviderModelList } from './information';
 import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
@@ -300,14 +301,12 @@ export interface IAgentProvider {
   }): Promise<string | undefined>;
 
   /** Check the credential this provider uses when Archon delivers none. */
-  checkCredential(request: {
-    cwd?: string;
-    settingSources?: NodeConfig['settingSources'];
-    assistantConfig?: SendQueryOptions['assistantConfig'];
-    model?: string;
-    env: Record<string, string>;
-    signal: AbortSignal;
-  }): Promise<CredentialStatus>;
+  checkCredential(
+    request: z.infer<typeof checkCredentialRequestSchema> & {
+      env: Record<string, string>;
+      signal: AbortSignal;
+    }
+  ): Promise<CredentialStatus>;
 
   /**
    * Send a message and get streaming response.

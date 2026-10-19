@@ -45,6 +45,14 @@ test('container queries reach the real SDK spawn hook without a host platform bi
           execContext: { kind: 'container', containerId: 'test-container' },
         })) {}
         assert.equal(hookCalled, true, 'provider must reach container spawn without resolving a host binary');
+        hookCalled = false;
+        const status = await new ClaudeProvider().checkCredential({
+          cwd: '/runner', env: {}, signal: AbortSignal.timeout(5000),
+          execContext: { kind: 'container', containerId: 'test-container' },
+        });
+        assert.equal(status.state, 'check_failed');
+        assert.equal(status.evidence, 'container-spawn-hook-reached');
+        assert.equal(hookCalled, true, 'credential check must use the same container spawn');
       `,
     ],
     {

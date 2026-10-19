@@ -227,42 +227,52 @@ for (const key of ['', 'preflight-test-key']) {
   );
 }
 
-for (const [helper, expected] of [
-  ['exit 1', 'unusable'],
-  ['printf ""', 'unusable'],
-  ['test "$PREFLIGHT_HELPER_KEY" = helper-key && printf helper-key', 'usable'],
-] as const) {
-  test(
-    `native preflight resolves apiKeyHelper: ${helper}`,
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'claude-helper-preflight-'));
-      try {
-        await writeFile(
-          join(dir, 'settings.json'),
-          JSON.stringify({ apiKeyHelper: helper, env: { PREFLIGHT_HELPER_KEY: 'helper-key' } })
-        );
-        const env: Record<string, string> = {
-          CLAUDE_CONFIG_DIR: dir,
-          ANTHROPIC_API_KEY: '',
-          CLAUDE_API_KEY: '',
-          CLAUDE_CODE_OAUTH_TOKEN: '',
-          ANTHROPIC_AUTH_TOKEN: '',
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        };
-        for (const selector of cloudSelectors) env[selector] = '0';
-        const status = await new ClaudeProvider().checkCredential({
-          env,
-          assistantConfig: { settingSources: ['user'] },
-          signal: AbortSignal.timeout(15000),
-        });
-        expect(status.state).toBe(expected);
-        if (status.state === 'unusable') expect(status.evidence).toContain('apiKeyHelper');
-      } finally {
-        await removeTempTree(dir);
-      }
-    },
-    testTimeout(30000)
-  );
+for (const credential of ['', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+  for (const [helper, expected] of [
+    ['exit 1', 'unusable'],
+    ['printf ""', 'unusable'],
+    ['test "$PREFLIGHT_HELPER_KEY" = helper-key && printf helper-key', 'usable'],
+    [
+      'test "$CLAUDE_CODE_ENTRYPOINT" = sdk-ts && test -z "$NODE_OPTIONS" && printf helper-key',
+      'usable',
+    ],
+    ['test "$CLAUDE_CODE_ENTRYPOINT" != sdk-ts && printf helper-key', 'unusable'],
+  ] as const) {
+    test(
+      `native preflight resolves apiKeyHelper: ${helper} with ${credential || 'no env key'}`,
+      async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'claude-helper-preflight-'));
+        try {
+          await writeFile(
+            join(dir, 'settings.json'),
+            JSON.stringify({ apiKeyHelper: helper, env: { PREFLIGHT_HELPER_KEY: 'helper-key' } })
+          );
+          const env: Record<string, string> = {
+            CLAUDE_CONFIG_DIR: dir,
+            ANTHROPIC_API_KEY: '',
+            CLAUDE_API_KEY: '',
+            CLAUDE_CODE_OAUTH_TOKEN: '',
+            ANTHROPIC_AUTH_TOKEN: '',
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          };
+          env.NODE_OPTIONS = '--no-warnings';
+          env.CLAUDE_CODE_ENTRYPOINT = '';
+          if (credential) env[credential] = 'environment-key';
+          for (const selector of cloudSelectors) env[selector] = '0';
+          const status = await new ClaudeProvider().checkCredential({
+            env,
+            assistantConfig: { settingSources: ['user'] },
+            signal: AbortSignal.timeout(15000),
+          });
+          expect(status.state).toBe(credential ? 'usable' : expected);
+          if (status.state === 'unusable') expect(status.evidence).toContain('apiKeyHelper');
+        } finally {
+          await removeTempTree(dir);
+        }
+      },
+      testTimeout(30000)
+    );
+  }
 }
 
 test(
