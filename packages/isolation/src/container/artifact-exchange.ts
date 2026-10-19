@@ -32,18 +32,35 @@ export class ContainerArtifactExchange implements ArtifactExchange {
 
   /** Lifecycle operations use this same queue so teardown cannot race a helper. */
   serialize<T>(operation: (collect: () => Promise<void>) => Promise<T>): Promise<T> {
-    const run = () => operation(() => this.transfer('collect'));
+    return this.enqueue(async () => {
+      const containers = await this.containers();
+      const producer = containers.find(
+        entry => entry.name === this.target.container || entry.id === this.target.container
+      );
+      if (
+        containers.some(entry => entry.name === this.target.helper) ||
+        (producer && !['running', 'exited', 'dead', 'created'].includes(producer.state))
+      ) {
+        throw new Error(
+          `Cannot change artifact environment '${this.target.container}': helper '${this.target.helper}' or producer ownership is ambiguous; inspect before explicit recovery`
+        );
+      }
+      return operation(() => this.transfer('collect'));
+    });
+  }
+
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const next = this.tail.then(run, run);
     this.tail = next;
     return next;
   }
 
   publish(): Promise<void> {
-    return this.serialize(() => this.transfer('publish'));
+    return this.enqueue(() => this.transfer('publish'));
   }
 
   collect(): Promise<void> {
-    return this.serialize(() => this.transfer('collect'));
+    return this.enqueue(() => this.transfer('collect'));
   }
 
   private async containers(): Promise<ContainerDescription[]> {

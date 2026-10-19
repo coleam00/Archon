@@ -143,6 +143,7 @@ describe('ContainerArtifactExchange', () => {
       'wait',
       'rm',
       'unpause',
+      'container',
       'lifecycle',
     ]);
   });
@@ -264,6 +265,7 @@ describe('ContainerArtifactExchange', () => {
       await collect();
     });
     expect(verbs(f.calls)).toEqual([
+      'container',
       'lifecycle',
       'container',
       'volume',
@@ -274,8 +276,34 @@ describe('ContainerArtifactExchange', () => {
     ]);
   });
 
+  test.each([
+    { state: 'paused' },
+    { state: 'restarting' },
+    { state: 'removing' },
+    { helperExists: true },
+  ])('refuses lifecycle mutation when ownership is ambiguous: %j', async options => {
+    const f = fixture(options);
+    let mutated = false;
+    await expect(
+      f.exchange.serialize(async () => {
+        mutated = true;
+      })
+    ).rejects.toThrow('ownership is ambiguous');
+    expect(mutated).toBe(false);
+    expect(verbs(f.calls)).toEqual(['container']);
+  });
+
   test('a refused operation does not poison the serialization queue', async () => {
-    const f = fixture({ state: 'paused' });
+    let failed = false;
+    const f = fixture({
+      fail: args => {
+        if (args[0] === 'pause' && !failed) {
+          failed = true;
+          return new Error('pause unavailable');
+        }
+        return undefined;
+      },
+    });
     await expect(f.exchange.collect()).rejects.toThrow();
     expect(await f.exchange.serialize(async () => 'operator action')).toBe('operator action');
   });
