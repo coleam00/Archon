@@ -1,6 +1,7 @@
 import { providerInvocation } from './dag/capability-preflight';
 import {
   type ProviderRegistry,
+  type NodeConfig,
   type StoredCredentialKind,
   consumesStoredCredential,
   requireProvider,
@@ -252,6 +253,7 @@ async function prepareAiConfiguration(
   );
   return {
     aiConfigurationSnapshot,
+    cwd,
     config,
     dbEnvVars,
     baseAiProfile,
@@ -272,6 +274,7 @@ async function prepareAiConfiguration(
 }
 
 export interface PreparedRunAiConfiguration {
+  cwd: string;
   aiConfigurationSnapshot: RunAiConfigurationSnapshot;
   requirements: readonly RunCredentialRequirement[];
   connectedVendors: Set<string>;
@@ -287,6 +290,7 @@ export interface PreparedRunAiConfiguration {
   executionUserId?: string;
 }
 export interface RunCredentialRequirement {
+  settingSources?: NodeConfig['settingSources'];
   provider: string;
   model?: string;
   vendor?: string;
@@ -318,9 +322,10 @@ export function collectRunCredentialRequirements(
       }
       const invoked = invocation.kind === 'gate_rework' ? invocation.rework : invocation.node;
       const { provider, model } = resolveNodeModel(invoked, scope, models, prepared.aiProfile);
-      requirements.set(JSON.stringify([provider, model]), {
+      requirements.set(JSON.stringify([provider, model, invoked.settingSources]), {
         provider,
         model,
+        ...(invoked.settingSources !== undefined ? { settingSources: invoked.settingSources } : {}),
         vendor: requireProvider(providers, provider).credentials.vendorFor(model),
       });
     }
@@ -447,6 +452,8 @@ export async function assertRunCredentials(
     let status: CredentialStatus;
     try {
       status = await deps.getAgentProvider(provider).checkCredential({
+        cwd: prepared.cwd,
+        settingSources: requirement.settingSources,
         model,
         assistantConfig: prepared.config.assistants[provider],
         env: {

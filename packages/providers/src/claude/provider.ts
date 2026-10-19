@@ -28,6 +28,8 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import { exec } from 'node:child_process';
+import { z } from 'zod';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -1615,6 +1617,60 @@ async function* streamClaudeMessages(
   }
   yield { type: 'settled' };
 }
+const nativeHelperSettingsSchema = z.object({
+  response: z.object({
+    effective: z.object({
+      apiKeyHelper: z.string().min(1),
+      env: z.record(z.string(), z.string()).optional(),
+    }),
+  }),
+});
+
+async function checkNativeKeyHelper(
+  session: ReturnType<typeof query>,
+  request: Parameters<IAgentProvider['checkCredential']>[0]
+): Promise<CredentialStatus> {
+  // accountInfo reports a configured helper even when it fails. Read the native
+  // get_settings control response so policy and subprocess env use the same cascade;
+  // the host-side resolveSettings API cannot accept the subprocess environment.
+  if (!('request' in session) || typeof session.request !== 'function')
+    throw new Error('Claude SDK cannot inspect the native apiKeyHelper settings');
+  const settings = nativeHelperSettingsSchema.parse(
+    await session.request({ subtype: 'get_settings' })
+  ).response.effective;
+  return await new Promise<CredentialStatus>((resolve, reject) => {
+    exec(
+      settings.apiKeyHelper,
+      {
+        cwd: request.cwd,
+        env: { ...buildRequestSubprocessEnv({ env: request.env }), ...settings.env },
+        signal: request.signal,
+      },
+      (error, stdout) => {
+        if (request.signal.aborted) {
+          reject(request.signal.reason);
+          return;
+        }
+        if (error) {
+          resolve({
+            state: 'unusable',
+            source: 'native',
+            evidence: `apiKeyHelper failed (${error.code ?? error.name})`,
+          });
+        } else if (!stdout.trim()) {
+          resolve({
+            state: 'unusable',
+            source: 'native',
+            evidence: 'apiKeyHelper returned no credential',
+          });
+        } else {
+          resolve({ state: 'usable', source: 'native' });
+        }
+      }
+    );
+  });
+}
+
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
 /**
@@ -1648,17 +1704,22 @@ export class ClaudeProvider implements IAgentProvider {
     const abort = () => controller.abort();
     request.signal.addEventListener('abort', abort, { once: true });
     let session: ReturnType<typeof query> | undefined;
+    let closeInput: (() => void) | undefined;
     try {
       request.signal.throwIfAborted();
-      // An empty input stream initializes the SDK without sending a model request.
+      // Keep input open for control requests without sending a model prompt.
       session = query({
         prompt: (async function* () {
-          return;
+          await new Promise<void>(resolve => {
+            closeInput = resolve;
+          });
         })(),
         options: {
           env: buildRequestSubprocessEnv({ env: request.env }),
           pathToClaudeCodeExecutable: await resolveClaudeBinaryPath(config.claudeBinaryPath),
-          settingSources: config.settingSources ?? [...DEFAULT_SETTING_SOURCES],
+          cwd: request.cwd,
+          settingSources: request.settingSources ??
+            config.settingSources ?? [...DEFAULT_SETTING_SOURCES],
           abortController: controller,
           tools: [],
           mcpServers: {},
@@ -1671,6 +1732,8 @@ export class ClaudeProvider implements IAgentProvider {
       // Cloud backends resolve credentials outside Claude's first-party account store.
       if (account.apiProvider && account.apiProvider !== 'firstParty')
         return { state: 'not_checked', source: 'native' };
+      if (account.apiKeySource === 'apiKeyHelper' || account.tokenSource === 'apiKeyHelper')
+        return await checkNativeKeyHelper(session, request);
       const hasCredential = [account.tokenSource, account.apiKeySource].some(
         source => source && source !== 'none'
       );
@@ -1687,6 +1750,7 @@ export class ClaudeProvider implements IAgentProvider {
           ) || 'Claude account check failed',
       };
     } finally {
+      closeInput?.();
       session?.close();
       controller.abort();
       request.signal.removeEventListener('abort', abort);

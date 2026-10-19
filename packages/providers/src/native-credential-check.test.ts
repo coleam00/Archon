@@ -1,3 +1,5 @@
+import { SETTING_SOURCES } from '@archon/paths/skills';
+import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import { expect, mock, test } from 'bun:test';
 import type { AccountInfo, Options } from '@anthropic-ai/claude-agent-sdk';
 import type { CopilotClientOptions } from '@github/copilot-sdk';
@@ -105,4 +107,18 @@ test('OpenCode native check does not start a runtime', async () => {
     source: 'native',
   });
   expect(startRuntime).not.toHaveBeenCalled();
+});
+
+test('credential wire setting sources agree with the execution setting sources', () => {
+  expect(checkCredentialRequestSchema.shape.settingSources.unwrap().element.options).toEqual([
+    ...SETTING_SOURCES,
+  ]);
+});
+test('Claude cannot admit a helper when the SDK cannot inspect native settings', async () => {
+  account = { apiKeySource: 'apiKeyHelper' };
+  expect(await new ClaudeProvider().checkCredential(request())).toEqual({
+    state: 'check_failed',
+    source: 'native',
+    evidence: 'Claude SDK cannot inspect the native apiKeyHelper settings',
+  });
 });

@@ -251,6 +251,8 @@ test('credential states and credential model resolution round-trip without env o
   const provider = fixtureProvider({
     checkCredential: async request => {
       expect(matchesProcessEnvironment(request.env)).toBe(true);
+      expect(request.cwd).toBe('/target-project');
+      expect(request.settingSources).toEqual(['project']);
       const status = credentialStatuses.find(status => status.state === request.model);
       if (!status) throw new Error('Unknown fixture state');
       return status;
@@ -266,6 +268,8 @@ test('credential states and credential model resolution round-trip without env o
           check: () =>
             client.checkCredential({
               model: status.state,
+              cwd: '/target-project',
+              settingSources: ['project'],
               env: { KEY: 'host-secret-value' },
               signal: new AbortController().signal,
             }),

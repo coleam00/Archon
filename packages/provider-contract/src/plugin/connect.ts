@@ -179,6 +179,8 @@ export async function connectProvider(
       const response = rpc.request(
         '_archon/check_credential',
         checkCredentialRequestSchema.parse({
+          cwd: request.cwd,
+          settingSources: request.settingSources,
           model: request.model,
           assistantConfig: request.assistantConfig,
         })

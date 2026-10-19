@@ -22,6 +22,8 @@ export const agentDefinitionSchema = z.object({
 
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 
+export const settingSourcesSchema = z.array(z.enum(['project', 'user']));
+
 export interface PiExtensionPosture {
   /** Load Pi's native user and project extensions. Enabled by default; extension
    * tools and MCP clients remain the user's responsibility. */
@@ -234,7 +236,7 @@ export interface NodeConfig {
    * when neither is set. Claude-only; other providers ignore it (the
    * dag-executor warns via the settingSources capability axis).
    */
-  settingSources?: ('project' | 'user')[];
+  settingSources?: z.infer<typeof settingSourcesSchema>;
   idle_timeout?: number;
   /**
    * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
@@ -299,6 +301,8 @@ export interface IAgentProvider {
 
   /** Check the credential this provider uses when Archon delivers none. */
   checkCredential(request: {
+    cwd?: string;
+    settingSources?: NodeConfig['settingSources'];
     assistantConfig?: SendQueryOptions['assistantConfig'];
     model?: string;
     env: Record<string, string>;

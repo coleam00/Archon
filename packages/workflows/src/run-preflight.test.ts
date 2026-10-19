@@ -708,3 +708,48 @@ test('an implicit built-in tier cannot choose a provider when the default is uns
     )
   ).rejects.toThrow('No providers installed');
 });
+
+test('credential preflight retains each node setting scope and target cwd', async () => {
+  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'scopes',
+    nodes: [
+      { id: 'default', prompt: 'a' },
+      { id: 'disabled', prompt: 'b', settingSources: [] },
+      { id: 'project', prompt: 'c', settingSources: ['project'] },
+      { id: 'same', prompt: 'd', settingSources: ['project'] },
+    ],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/target-project');
+  await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared);
+  expect(
+    checkCredential.mock.calls.map(([request]) => ({
+      cwd: request.cwd,
+      settingSources: request.settingSources,
+    }))
+  ).toEqual([
+    { cwd: '/target-project', settingSources: undefined },
+    { cwd: '/target-project', settingSources: [] },
+    { cwd: '/target-project', settingSources: ['project'] },
+  ]);
+});
+
+test('a usable same-model node cannot hide another node with no native credential in its scope', async () => {
+  const { deps, checkCredential } = fixture();
+  checkCredential.mockImplementation(async request => ({
+    state: request.settingSources?.includes('project') ? 'usable' : 'not_connected',
+    source: 'native',
+  }));
+  const workflow = makeTestResolvedWorkflow({
+    name: 'scopes',
+    nodes: [
+      { id: 'disabled', prompt: 'b', settingSources: [] },
+      { id: 'project', prompt: 'a', settingSources: ['project'] },
+    ],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/target-project');
+  await expect(
+    assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared)
+  ).rejects.toThrow('no usable login');
+  expect(checkCredential).toHaveBeenCalledTimes(1);
+});

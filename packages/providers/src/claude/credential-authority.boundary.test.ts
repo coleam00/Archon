@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
@@ -226,3 +226,86 @@ for (const key of ['', 'preflight-test-key']) {
     testTimeout(30000)
   );
 }
+
+for (const [helper, expected] of [
+  ['exit 1', 'unusable'],
+  ['printf ""', 'unusable'],
+  ['test "$PREFLIGHT_HELPER_KEY" = helper-key && printf helper-key', 'usable'],
+] as const) {
+  test(
+    `native preflight resolves apiKeyHelper: ${helper}`,
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'claude-helper-preflight-'));
+      try {
+        await writeFile(
+          join(dir, 'settings.json'),
+          JSON.stringify({ apiKeyHelper: helper, env: { PREFLIGHT_HELPER_KEY: 'helper-key' } })
+        );
+        const env: Record<string, string> = {
+          CLAUDE_CONFIG_DIR: dir,
+          ANTHROPIC_API_KEY: '',
+          CLAUDE_API_KEY: '',
+          CLAUDE_CODE_OAUTH_TOKEN: '',
+          ANTHROPIC_AUTH_TOKEN: '',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        };
+        for (const selector of cloudSelectors) env[selector] = '0';
+        const status = await new ClaudeProvider().checkCredential({
+          env,
+          assistantConfig: { settingSources: ['user'] },
+          signal: AbortSignal.timeout(15000),
+        });
+        expect(status.state).toBe(expected);
+        if (status.state === 'unusable') expect(status.evidence).toContain('apiKeyHelper');
+      } finally {
+        await removeTempTree(dir);
+      }
+    },
+    testTimeout(30000)
+  );
+}
+
+test(
+  'native preflight uses target cwd and node setting sources over assistant defaults',
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'claude-project-preflight-'));
+    try {
+      const project = join(dir, 'project');
+      await mkdir(join(project, '.claude'), { recursive: true });
+      await writeFile(
+        join(project, '.claude/settings.json'),
+        JSON.stringify({ apiKeyHelper: 'test -f .claude/settings.json && printf project-key' })
+      );
+      const env: Record<string, string> = {
+        CLAUDE_CONFIG_DIR: dir,
+        ANTHROPIC_API_KEY: '',
+        CLAUDE_API_KEY: '',
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+        ANTHROPIC_AUTH_TOKEN: '',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      };
+      for (const selector of cloudSelectors) env[selector] = '0';
+      const provider = new ClaudeProvider();
+      const request = {
+        env,
+        cwd: project,
+        assistantConfig: { settingSources: [] },
+        signal: AbortSignal.timeout(15000),
+      };
+      expect(await provider.checkCredential(request)).toEqual({
+        state: 'not_connected',
+        source: 'native',
+      });
+      expect(await provider.checkCredential({ ...request, settingSources: ['project'] })).toEqual({
+        state: 'usable',
+        source: 'native',
+      });
+      expect(
+        await provider.checkCredential({ ...request, cwd: dir, settingSources: ['project'] })
+      ).toEqual({ state: 'not_connected', source: 'native' });
+    } finally {
+      await removeTempTree(dir);
+    }
+  },
+  testTimeout(30000)
+);

@@ -30,7 +30,10 @@ interface Fixture {
   trap: string;
   env: NodeJS.ProcessEnv;
 }
-function fixture(config = 'store: files\n', nativeStatus?: 'usable' | 'not_connected'): Fixture {
+function fixture(
+  config = 'store: files\n',
+  nativeStatus?: 'usable' | 'not_connected' | 'real'
+): Fixture {
   const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
   const project = join(root, 'project'),
     home = join(root, 'home'),
@@ -71,7 +74,7 @@ mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,get
 ${
   nativeStatus
     ? `const {ClaudeProvider}=await import(${src('packages/providers/src/claude/provider.ts')});
-ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});
+${nativeStatus === 'real' ? '' : `ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});`}
 const {registerBuiltinProviders}=await import(${src('packages/providers/src/in-process.ts')});
 mock.module(${src('packages/core/src/providers/register-host-providers.ts')},()=>({registerHostProviders:async()=>registerBuiltinProviders()}));`
     : ''
@@ -99,10 +102,11 @@ async function cli(
   f: ReturnType<typeof fixture>,
   args: string[],
   env = f.env,
-  input = ''
+  input = '',
+  launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
   const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: f.project,
+    cwd: launchCwd,
     env,
     stdin: 'pipe',
     stdout: 'pipe',
@@ -148,6 +152,70 @@ nodes:
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 30000);
+for (const nodeOverride of [false, true]) {
+  test(`Claude native CLI preflight uses --cwd and node settings (override=${nodeOverride})`, async () => {
+    const f = fixture(
+      `store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: ${nodeOverride ? '[]' : '[project]'}\n`,
+      'real'
+    );
+    mkdirSync(join(f.project, '.claude'));
+    writeFileSync(
+      join(f.project, '.claude/settings.json'),
+      JSON.stringify({ apiKeyHelper: 'printf project-key' })
+    );
+    const claudeConfig = join(f.root, 'claude-config');
+    mkdirSync(claudeConfig);
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: scoped native credentials
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    ${nodeOverride ? 'settingSources: [project]' : ''}
+    prompt: Say hello
+`
+    );
+    const env = {
+      ...f.env,
+      CLAUDE_CONFIG_DIR: claudeConfig,
+      ANTHROPIC_API_KEY: '',
+      CLAUDE_API_KEY: '',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      ANTHROPIC_AUTH_TOKEN: '',
+      CLAUDE_CODE_USE_BEDROCK: '0',
+      CLAUDE_CODE_USE_VERTEX: '0',
+      CLAUDE_CODE_USE_FOUNDRY: '0',
+      CLAUDE_CODE_USE_MANTLE: '0',
+      CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+      CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    const started = await cli(
+      f,
+      ['workflow', 'run', 'native', '--cwd', f.project, '--folder', '--no-worktree'],
+      env,
+      '',
+      f.root
+    );
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toMatchObject([
+      { workflow_name: 'native', status: 'paused' },
+    ]);
+    expect(existsSync(f.trap)).toBe(false);
+  }, 30000);
+}
 for (const flags of [[], ['--detach']] as const) {
   test(`file-store CLI refuses missing native login before launch (${flags.join(' ') || 'foreground'})`, async () => {
     const f = fixture('store: files\ndefaultAssistant: claude\n', 'not_connected');

@@ -1669,6 +1669,20 @@
     "ProviderCheckCredentialRequest": {
       "type": "object",
       "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settingSources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "project",
+              "user"
+            ]
+          }
+        },
         "model": {
           "type": "string"
         },
