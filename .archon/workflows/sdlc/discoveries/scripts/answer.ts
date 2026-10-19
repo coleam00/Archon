@@ -27,9 +27,14 @@ try {
     const read = stateGet(name);
     const document = parseRunDocument(name, read.value);
     if (document === null) continue;
-    const questions = (document.questions ?? []).map(question =>
-      question.answer === null && question.keys.some(key => (keys as string[]).includes(key)) ? { ...question, answer } : question
-    );
+    let changed = false;
+    const questions = (document.questions ?? []).map(question => {
+      if (question.answer !== null || !question.keys.some(key => (keys as string[]).includes(key))) return question;
+      changed = true;
+      return { ...question, answer };
+    });
+    // A run with no question answered here is not this pass's to write: another pass may hold it.
+    if (!changed) continue;
     if (statePut(name, { ...document, questions }, read.revision) === 'conflict') {
       throw new Error(`${name} changed while this run held its claim`);
     }

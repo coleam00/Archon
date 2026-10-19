@@ -68,8 +68,12 @@ function settledOf(document: RunDocument | undefined): ((ref: string) => boolean
   return ref => decided.has(ref);
 }
 
-/** Claim the run for this pass: false when another pass holds it or won the write. */
-function claimRun(runId: string, self: string, at: string): boolean {
+/**
+ * Claim the run for this pass and return the document as claimed, or null when another pass
+ * holds it or won the write. Callers decide from this document, not an earlier snapshot, so a
+ * pass that settled the run in between is seen.
+ */
+function claimRun(runId: string, self: string, at: string): RunDocument | null {
   const name = runName(runId);
   const stored = stateGet(name);
   const current = parseRunDocument(name, stored.value);
@@ -78,10 +82,34 @@ function claimRun(runId: string, self: string, at: string): boolean {
     const status = runStatus(held.run_id);
     if (claimDisposition(status) === 'hold') {
       if (status === null) note(`${name} stays claimed: the engine reports no status for run ${held.run_id}`);
-      return false;
+      return null;
     }
   }
-  return statePut(name, { ...(current ?? { version: 1 }), claim: { run_id: self, at } }, stored.revision) === 'ok';
+  const claimed: RunDocument = { ...(current ?? { version: 1 }), claim: { run_id: self, at } };
+  return statePut(name, claimed, stored.revision) === 'ok' ? claimed : null;
+}
+
+/** The run's undecided records and its questions, from the document this pass decides against. */
+function undecided<R extends { ref: string }>(records: readonly R[], document: RunDocument | undefined): R[] {
+  const settled = settledOf(document);
+  return records.filter(record => !settled(record.ref));
+}
+
+/**
+ * The run's undecided records and questions once this pass holds it, or null when nothing is
+ * left to decide or another pass holds it. The snapshot only skips a claim that could not
+ * matter; what is queued comes from the document as claimed.
+ */
+function claimUndecided<R extends { ref: string }>(
+  id: string,
+  all: readonly R[],
+  pass: { mode: string; self: string; at: string; snapshot: RunDocument | undefined }
+): { records: R[]; questions: NonNullable<RunDocument['questions']> } | null {
+  if (undecided(all, pass.snapshot).length === 0) return null;
+  const document = pass.mode === 'live' ? claimRun(id, pass.self, pass.at) : (pass.snapshot ?? null);
+  if (pass.mode === 'live' && document === null) return null;
+  const records = undecided(all, document ?? undefined);
+  return records.length === 0 ? null : { records, questions: document?.questions ?? [] };
 }
 
 function main(): void {
@@ -139,19 +167,15 @@ function main(): void {
       note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
       continue;
     }
-    const settled = settledOf(documents.get(id));
-    const records = relayed.records
-      .map(record => ({ ...record, ref: `${id}:${record.ref}` }))
-      .filter(record => !settled(record.ref));
-    if (records.length === 0) continue;
-    if (mode === 'live' && !claimRun(id, self, at)) continue;
+    const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
+    const claimed = claimUndecided(id, all, { mode, self, at, snapshot: documents.get(id) });
+    if (claimed === null) continue;
     queue.push({
       id,
       workflow: typeof run.workflow_name === 'string' ? run.workflow_name : '',
       completed_at: run.completed_at as string,
       artifacts,
-      records,
-      questions: documents.get(id)?.questions ?? [],
+      ...claimed,
     });
   }
 
