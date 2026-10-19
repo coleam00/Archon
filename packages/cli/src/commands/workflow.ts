@@ -182,13 +182,16 @@ import {
   assertWorkflowNotWorktreePinnedForFolder,
   resolveRunCodebase,
   assertResumeWorkingPathExists,
-  folderRunsInContainer,
   prepareFolderExecution,
   warnOnReusedWorktree,
   readUnresolvedWriteback,
   warnPreservedContainer,
   destroyRunContainer,
 } from './workflow-isolation';
+import {
+  assertCredentialsWhereRunExecutes,
+  detachedRunExecutesInPlace,
+} from './workflow-native-auth';
 import {
   buildNoResumableRunError,
   buildResumeLookupFailureError,
@@ -779,7 +782,7 @@ async function runWorkflowWithOwnedSource(
     codebaseId: string | undefined,
     // Only a run already known to execute in configCwd on the host checks native
     // authentication here; every other run checks it once isolation has resolved.
-    nativeContext: 'launch-checkout' | 'pending-isolation' = 'pending-isolation'
+    runsInConfigCwd = false
   ): Promise<PreparedRunAiConfiguration> => {
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
     const prepared = await prepareRunAiConfiguration(host.deps, workflow, configCwd, {
@@ -799,7 +802,7 @@ async function runWorkflowWithOwnedSource(
     await assertRunCredentials(
       host.deps,
       prepared,
-      nativeContext === 'launch-checkout' ? { cwd: configCwd } : 'pending-isolation'
+      runsInConfigCwd ? { cwd: configCwd } : 'pending-isolation'
     );
     return prepared;
   };
@@ -877,21 +880,16 @@ async function runWorkflowWithOwnedSource(
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
-      // A detached run that will execute in place refuses a missing login before it
-      // forks. A worktree or container is created by the child, which checks there.
-      const runsInPlace = detachIsFolder
-        ? detachCodebase != null &&
-          !folderRunsInContainer(
-            options,
-            workflow,
-            await host.deps.loadConfig(detachCodebase.default_cwd),
-            continuationRun
-          )
-        : options.noWorktree || !wantsIsolation;
       detachedPrepared = await prepareCredentialPreflight(
         configCwd,
         detachCodebase?.id,
-        runsInPlace ? 'launch-checkout' : 'pending-isolation'
+        await detachedRunExecutesInPlace(
+          host,
+          options,
+          workflow,
+          { codebase: detachCodebase, isFolder: detachIsFolder, wantsIsolation },
+          continuationRun
+        )
       );
     }
 
@@ -1281,16 +1279,12 @@ async function runWorkflowWithOwnedSource(
       assertCodebaseResolvedForIsolation({ codebase });
     }
 
-    try {
-      await assertRunCredentials(host.deps, preparedAiConfiguration, {
-        cwd: workingCwd,
-        execContext,
-      });
-    } catch (error) {
-      if (containerBackend && containerEnvId && !resumable)
-        await destroyRunContainer(host.deps.store, containerBackend, containerEnvId, undefined);
-      throw error;
-    }
+    await assertCredentialsWhereRunExecutes(
+      host,
+      preparedAiConfiguration,
+      { cwd: workingCwd, execContext },
+      { backend: containerBackend, envId: containerEnvId, resumable }
+    );
 
     if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
       preparedSource = { ...preparedSource, origin: workingCwd };

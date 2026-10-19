@@ -1,4 +1,3 @@
-import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import { listPiModels } from './model-catalog';
 import type {
   CredentialStatus,
@@ -108,9 +107,6 @@ export class PiProvider implements IAgentProvider {
     }
     const credential = await this.checkCredential({
       ...request,
-      assistantConfig: checkCredentialRequestSchema.shape.assistantConfig.parse(
-        request.assistantConfig
-      ),
       env: Object.fromEntries(
         Object.entries(process.env).filter(
           (entry): entry is [string, string] => entry[1] !== undefined

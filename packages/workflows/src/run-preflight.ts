@@ -1,4 +1,3 @@
-import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import { providerInvocation } from './dag/capability-preflight';
 import {
   type ExecutionContext,
@@ -374,6 +373,42 @@ export function assertCredentialStatus(
   }
 }
 
+async function checkNativeCredential(
+  deps: Pick<WorkflowDeps, 'getAgentProvider'>,
+  prepared: PreparedRunAiConfiguration,
+  requirement: RunCredentialRequirement,
+  context: { cwd: string; execContext?: ExecutionContext }
+): Promise<CredentialStatus> {
+  // A container runs with only the environment Archon forwards, never the host's.
+  const baseEnv = context.execContext?.kind === 'container' ? {} : process.env;
+  try {
+    return await deps.getAgentProvider(requirement.provider).checkCredential({
+      ...context,
+      settingSources: requirement.settingSources,
+      model: requirement.model,
+      assistantConfig: prepared.config.assistants[requirement.provider],
+      env: {
+        ...Object.fromEntries(
+          Object.entries(baseEnv).flatMap(([key, value]) =>
+            value === undefined ? [] : [[key, value]]
+          )
+        ),
+        ...prepared.config.envVars,
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    log.warn(
+      { err: error as Error, provider: requirement.provider },
+      'workflow.native_credential_check_failed'
+    );
+    throw new WorkflowCredentialPreflightError(
+      requirement,
+      'could not verify native authentication'
+    );
+  }
+}
+
 export async function assertRunCredentials(
   deps: Pick<
     WorkflowDeps,
@@ -392,7 +427,7 @@ export async function assertRunCredentials(
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
   for (const requirement of prepared.requirements) {
-    const { provider, model, vendor } = requirement;
+    const { provider, vendor } = requirement;
     // A stored credential this provider cannot consume is never delivered to it, so the
     // provider must authenticate natively; the stored kind only explains a missing login.
     let unconsumedKind: StoredCredentialKind | undefined;
@@ -454,32 +489,7 @@ export async function assertRunCredentials(
       }
     }
     if (context === 'pending-isolation') continue;
-    let status: CredentialStatus;
-    try {
-      status = await deps.getAgentProvider(provider).checkCredential({
-        ...context,
-        settingSources: requirement.settingSources,
-        model,
-        assistantConfig: checkCredentialRequestSchema.shape.assistantConfig.parse(
-          prepared.config.assistants[provider]
-        ),
-        env: {
-          ...Object.fromEntries(
-            Object.entries(context.execContext?.kind === 'container' ? {} : process.env).flatMap(
-              ([key, value]) => (value === undefined ? [] : [[key, value]])
-            )
-          ),
-          ...prepared.config.envVars,
-        },
-        signal: AbortSignal.timeout(20_000),
-      });
-    } catch (error) {
-      log.warn({ err: error as Error, provider }, 'workflow.native_credential_check_failed');
-      throw new WorkflowCredentialPreflightError(
-        requirement,
-        'could not verify native authentication'
-      );
-    }
+    const status = await checkNativeCredential(deps, prepared, requirement, context);
     if (unconsumedKind && vendor && status.state === 'not_connected') {
       throw new WorkflowCredentialPreflightError(
         requirement,

@@ -1,4 +1,3 @@
-import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import {
   installedProviders,
   noDefaultProviderMessage,
@@ -372,9 +371,7 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
   }
   return {
     assistant: config.assistant,
-    assistantConfig: checkCredentialRequestSchema.shape.assistantConfig.parse(
-      config.assistants[config.assistant]
-    ),
+    assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
     model,
     vendor,
     connectedVendors,

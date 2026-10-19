@@ -3,7 +3,11 @@ import {
   type ResourceStartDisposition,
 } from '@archon/workflows/schemas/resource-start';
 import { z } from '@hono/zod-openapi';
-import { answeredPauseContinuation, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  answeredPauseContinuation,
+  runAttention,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { expect, test, setSystemTime } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -122,6 +126,50 @@ async function cli(
   ]);
   return { output, error, code };
 }
+/** A Claude environment with no login, so only project settings can supply one. */
+function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
+  return {
+    ...f.env,
+    CLAUDE_CONFIG_DIR: claudeConfig,
+    ANTHROPIC_API_KEY: '',
+    CLAUDE_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    ANTHROPIC_AUTH_TOKEN: '',
+    CLAUDE_CODE_USE_BEDROCK: '0',
+    CLAUDE_CODE_USE_VERTEX: '0',
+    CLAUDE_CODE_USE_FOUNDRY: '0',
+    CLAUDE_CODE_USE_MANTLE: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  };
+}
+/** The file store's runs; a detached launch is awaited until its run settles. */
+async function listRuns(f: Fixture, awaitSettled: boolean): Promise<WorkflowRun[]> {
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  let { runs } = await store.listWorkflowRuns();
+  const deadline = Date.now() + 15000;
+  while (
+    awaitSettled &&
+    Date.now() < deadline &&
+    !runs.some(run => ['failed', 'paused'].includes(run.status))
+  ) {
+    await Bun.sleep(25);
+    ({ runs } = await store.listWorkflowRuns());
+  }
+  return runs;
+}
+function isolatedCheckout(project: string): string {
+  const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], { cwd: project });
+  const worktree = paths.stdout
+    .toString()
+    .split('\0')
+    .filter(field => field.startsWith('worktree '))
+    .map(field => field.slice('worktree '.length))
+    .find(path => realpathSync(path) !== realpathSync(project));
+  if (!worktree) throw new Error('Missing isolated checkout');
+  return worktree;
+}
 test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
   const f = fixture('store: files\ndefaultAssistant: claude\n', 'usable');
   writeFileSync(
@@ -186,21 +234,7 @@ nodes:
     prompt: Say hello
 `
     );
-    const env = {
-      ...f.env,
-      CLAUDE_CONFIG_DIR: claudeConfig,
-      ANTHROPIC_API_KEY: '',
-      CLAUDE_API_KEY: '',
-      CLAUDE_CODE_OAUTH_TOKEN: '',
-      ANTHROPIC_AUTH_TOKEN: '',
-      CLAUDE_CODE_USE_BEDROCK: '0',
-      CLAUDE_CODE_USE_VERTEX: '0',
-      CLAUDE_CODE_USE_FOUNDRY: '0',
-      CLAUDE_CODE_USE_MANTLE: '0',
-      CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
-      CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-    };
+    const env = withoutClaudeLogin(f, claudeConfig);
     const started = await cli(
       f,
       ['workflow', 'run', 'native', '--cwd', f.project, '--folder', '--no-worktree'],
@@ -266,21 +300,7 @@ nodes:
       if (!launchOnly) unlinkSync(settings);
       const claudeConfig = join(f.root, 'claude-config');
       mkdirSync(claudeConfig);
-      const env = {
-        ...f.env,
-        CLAUDE_CONFIG_DIR: claudeConfig,
-        ANTHROPIC_API_KEY: '',
-        CLAUDE_API_KEY: '',
-        CLAUDE_CODE_OAUTH_TOKEN: '',
-        ANTHROPIC_AUTH_TOKEN: '',
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        CLAUDE_CODE_USE_BEDROCK: '0',
-        CLAUDE_CODE_USE_VERTEX: '0',
-        CLAUDE_CODE_USE_FOUNDRY: '0',
-        CLAUDE_CODE_USE_MANTLE: '0',
-        CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
-        CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
-      };
+      const env = withoutClaudeLogin(f, claudeConfig);
       const started = await cli(
         f,
         [
@@ -299,18 +319,7 @@ nodes:
         code: launchOnly && !detached ? 1 : 0,
       });
       if (launchOnly && !detached) expect(started.error).toContain('no usable login');
-      const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-      let { runs } = await store.listWorkflowRuns();
-      if (detached) {
-        const deadline = Date.now() + 15000;
-        while (
-          Date.now() < deadline &&
-          !runs.some(run => ['failed', 'paused'].includes(run.status))
-        ) {
-          await Bun.sleep(25);
-          ({ runs } = await store.listWorkflowRuns());
-        }
-      }
+      const runs = await listRuns(f, detached);
       expect(runs).toMatchObject([
         { workflow_name: 'native', status: launchOnly ? 'failed' : 'paused' },
       ]);
@@ -319,16 +328,7 @@ nodes:
       expect(existsSync(join(f.project, 'before-count'))).toBe(false);
       expect(existsSync(f.trap)).toBe(false);
       if (launchOnly) {
-        const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], {
-          cwd: f.project,
-        });
-        const worktrees = paths.stdout
-          .toString()
-          .split('\0')
-          .filter(field => field.startsWith('worktree '))
-          .map(field => field.slice('worktree '.length));
-        const worktree = worktrees.find(path => realpathSync(path) !== realpathSync(f.project));
-        if (!worktree) throw new Error('Missing isolated checkout');
+        const worktree = isolatedCheckout(f.project);
         expect(existsSync(join(worktree, 'before-count'))).toBe(false);
         if (detached) return;
         mkdirSync(join(worktree, '.claude'));

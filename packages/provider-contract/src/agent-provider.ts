@@ -302,7 +302,8 @@ export interface IAgentProvider {
 
   /** Check the credential this provider uses when Archon delivers none. */
   checkCredential(
-    request: z.infer<typeof checkCredentialRequestSchema> & {
+    request: Omit<z.infer<typeof checkCredentialRequestSchema>, 'assistantConfig'> & {
+      assistantConfig?: SendQueryOptions['assistantConfig'];
       env: Record<string, string>;
       signal: AbortSignal;
     }
