@@ -1,7 +1,7 @@
 import { sameRepo, type QualifiedPr, type ForgeSource } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 import { viewPr } from './pr.ts';
-import { findRemote, remoteFor } from './remote.ts';
+import { headDestination } from './remote.ts';
 
 export function checkoutPr(ref: QualifiedPr, source: ForgeSource, allowFork = false): string {
   const pr = viewPr(ref, source).pr;
@@ -9,10 +9,7 @@ export function checkoutPr(ref: QualifiedPr, source: ForgeSource, allowFork = fa
     throw new Error(`${pr.url} must be open with a head repository`);
   if (!sameRepo(pr.head_repo, ref.repo) && (!allowFork || pr.maintainer_can_modify !== true))
     throw new Error(`${pr.url} requires an allowed head repository and maintainer edits for a fork`);
-  const fork = !sameRepo(pr.head_repo, ref.repo);
-  const destination = fork
-    ? (findRemote(pr.head_repo) ?? `https://${pr.head_repo.host}/${pr.head_repo.path}.git`)
-    : remoteFor(pr.head_repo);
+  const destination = headDestination(pr);
   gitOrThrow('fetch', '--no-tags', destination, `refs/heads/${pr.head}`);
   const head = gitOrThrow('rev-parse', 'FETCH_HEAD');
   if (git('merge-base', '--is-ancestor', 'HEAD', head).code !== 0)

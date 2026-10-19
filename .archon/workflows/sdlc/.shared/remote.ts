@@ -91,6 +91,15 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
   return remote;
 }
 
+export function headDestination(target: {
+  readonly repo: Repo;
+  readonly head_repo: Repo | null;
+}): string {
+  const headRepo = target.head_repo ?? target.repo;
+  if (sameRepo(headRepo, target.repo)) return remoteFor(headRepo);
+  return findRemote(headRepo) ?? `https://${headRepo.host}/${headRepo.path}.git`;
+}
+
 /**
  * Fetch the head of the repository's default branch, as its remote reports it, into
  * the remote-tracking ref, whatever branch the checkout sits on.

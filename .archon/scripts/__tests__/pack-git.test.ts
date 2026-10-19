@@ -169,6 +169,28 @@ describe('standalone continuation identity', () => {
     expect(run.forge).toEqual([]);
   });
 
+  it('refuses ambiguous fork destinations for both preparation and publication', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'remote', 'add', 'mirror', `git@${PR.repo.host}:${PR.repo.path}.git`);
+    const baseRepo = { host: PR.repo.host, path: 'canonical/repo' };
+    const pr = forgePrRecord({ repo: baseRepo, maintainer_can_modify: true });
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const prepared = runPackScript('ship/scripts/checkout', {
+      cwd, source: 'forge',
+      inputs: { INPUTS_PULL_REQUEST: String(PR.number), INPUTS_REF: JSON.stringify({ repo: baseRepo, number: PR.number }) },
+      forge: { kind: 'fake', response: forgeOperation('pr.view', { pr, title: '', body: '' }) },
+    });
+    const published = runPackScript('../../scripts/__tests__/push-pr-head', {
+      cwd, inputs: { INPUTS_PR: JSON.stringify(pr) },
+    });
+    for (const result of [prepared, published]) {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('ambiguous');
+    }
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature')).toBe('');
+  });
+
   it.each([true, false])('prepares an editable fork (configured remote=%s)', configured => {
     const cwd = gitCheckout({}, track);
     const head = git(cwd, 'rev-parse', 'HEAD');
@@ -186,6 +208,12 @@ describe('standalone continuation identity', () => {
     expect(git(cwd, 'branch', '--show-current')).toBe('archon/standalone');
     expect(run.gh).toEqual([]);
     expect(JSON.parse(run.forgeRequests[0] ?? '')).toEqual({ selector: { kind: 'number', ref: { repo: baseRepo, number: PR.number } } });
+    git(cwd, 'commit', '-q', '--allow-empty', '-m', 'delivery');
+    const published = runPackScript('../../scripts/__tests__/push-pr-head', {
+      cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord({ repo: baseRepo })) },
+    });
+    expect({ code: published.code, stderr: published.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(git(cwd, 'ls-remote', `https://${PR.repo.host}/${PR.repo.path}.git`, 'refs/heads/feature').split(/\s+/)[0]).toBe(git(cwd, 'rev-parse', 'HEAD'));
   });
 });
 
