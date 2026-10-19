@@ -9,13 +9,13 @@ import {
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { workflowEventEmitCommand } from './workflow';
 import {
-  workflowResumeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
-  workflowEventEmitCommand,
-} from './workflow';
+  workflowResumeCommand,
+} from './workflow-control';
 import { workflowGetCommand } from './workflow-query';
 import { workflowRunCommand } from './workflow-run-owned';
 

@@ -64,6 +64,9 @@
       "src/commands/workflow-run-owned.test.ts"
     ],
     [
+      "src/commands/workflow-control.test.ts"
+    ],
+    [
       "src/commands/workflow-shared.test.ts"
     ],
     [

@@ -26,7 +26,11 @@ import { dirname, join, resolve } from 'node:path';
 import { getArchonHome, isDocker } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowResumeCommand, workflowApproveCommand, workflowRejectCommand } from './workflow';
+import {
+  workflowApproveCommand,
+  workflowRejectCommand,
+  workflowResumeCommand,
+} from './workflow-control';
 import { workflowRunCommand } from './workflow-run-owned';
 import { buildDetachedRunCmd, resolveDetachedRunEncryptionEnv } from './workflow-detach';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
