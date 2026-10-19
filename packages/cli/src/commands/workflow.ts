@@ -29,12 +29,12 @@ import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { resolveLaunchRunConfig } from './workflow-run-config';
 import type { OverlayMode } from '@archon/workflows/container-context';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import { loadWorkflowRunConfigFile, normalizeRunConfigSemantics } from '@archon/core/config';
 import {
   WORKFLOW_EVENT_TYPES,
   isDurableWorkflowEventType,
@@ -44,7 +44,6 @@ import { parseRunModelAssignments } from '@archon/workflows/model-validation';
 import { getIsolationProvider } from '@archon/isolation';
 import type { ExecutionContext, ContainerBackend } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
-import { isAbsolute, join } from 'node:path';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { rmSync } from 'node:fs';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -130,7 +129,6 @@ import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
-import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
 import {
   destinationCorrelationId,
   formatAge,
@@ -496,22 +494,7 @@ async function runWorkflowWithOwnedSource(
   // never agreed to and still not make it deterministic.
   const isContinuation = options.resume === true || continuationRun !== undefined;
 
-  const resolvedRunConfigPath = options.configPath
-    ? isAbsolute(options.configPath)
-      ? options.configPath
-      : join(cwd, options.configPath)
-    : undefined;
-  if (isContinuation && (resolvedRunConfigPath || options.detachedRunConfig)) {
-    throw new Error(RESUME_RUN_CONFIG_CONFLICT);
-  }
-  const runConfig = options.detachedRunConfig
-    ? {
-        ...options.detachedRunConfig,
-        layer: normalizeRunConfigSemantics(options.detachedRunConfig.layer),
-      }
-    : resolvedRunConfigPath
-      ? await loadWorkflowRunConfigFile(resolvedRunConfigPath)
-      : undefined;
+  const runConfig = await resolveLaunchRunConfig(host, options, cwd, isContinuation);
 
   // The row a detached parent created before forking (#2872). Loaded up front because
   // it decides the run's identity: the capture is filed under its id, the signal
