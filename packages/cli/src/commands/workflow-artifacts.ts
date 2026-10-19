@@ -25,16 +25,17 @@ export async function workflowArtifactsCommand(
     return 1;
   };
 
-  let run: WorkflowRun | null;
+  let run: WorkflowRun | null = null;
+  let artifactsDir: string | null;
   try {
     run = await host.deps.store.getWorkflowRun(await resolveRunIdArg(host, runId, opts.cwd));
+    if (!run) return failWith(`Workflow run not found: ${runId}`);
+    artifactsDir = await resolveRunArtifactsDir(host, run);
   } catch (error) {
-    getLog().error({ err: error as Error, runId }, 'cli.workflow_artifacts_failed');
-    return failWith((error as Error).message);
+    const id = run?.id ?? runId;
+    getLog().error({ err: error as Error, runId: id }, 'cli.workflow_artifacts_failed');
+    return failWith((error as Error).message, id);
   }
-  if (!run) return failWith(`Workflow run not found: ${runId}`);
-
-  const artifactsDir = await resolveRunArtifactsDir(host, run);
   // An empty list must mean the run wrote nothing, never that its location is unknown.
   if (!artifactsDir) {
     return failWith(

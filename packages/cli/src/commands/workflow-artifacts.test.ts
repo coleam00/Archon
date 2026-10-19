@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { getRunArtifactsDirForRoot, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import {
+  getRunArtifactsDirForRoot,
+  RUN_ARTIFACTS_ENGINE_SUBDIR,
+  setLogDestination,
+} from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { workflowArtifactsCommand } from './workflow-artifacts';
@@ -141,6 +145,33 @@ describe('workflowArtifactsCommand', () => {
       expect(out).toMatchObject({ ok: false, runId });
       expect(out.error).toContain(error);
     }
+  });
+
+  it('reports a failed codebase lookup as one --json failure carrying the run id', async () => {
+    const host = {
+      deps: {
+        store: {
+          getWorkflowRun: async () => ({ id: RUN_ID, output_root: null, codebase_id: 'cb' }),
+        },
+      },
+      records: {
+        codebases: {
+          getCodebase: async () => {
+            throw new Error('database is locked');
+          },
+        },
+      },
+    } as unknown as WorkflowHost;
+
+    // As in the CLI, so the failure log does not land in the JSON stream.
+    setLogDestination('stderr');
+    try {
+      expect(await workflowArtifactsCommand(host, RUN_ID, { json: true })).toBe(1);
+    } finally {
+      setLogDestination('stdout');
+    }
+    expect(stdoutJson()).toEqual({ ok: false, runId: RUN_ID, error: 'database is locked' });
+    expect(stderr.join('')).toContain('cli.workflow_artifacts_failed');
   });
 
   it('refuses a non-UTF-8 file under --json but prints its bytes without it', async () => {
