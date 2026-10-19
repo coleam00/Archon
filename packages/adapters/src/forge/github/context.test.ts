@@ -79,10 +79,10 @@ mock.module('@archon/core', () => ({
     getStats() {
       return {
         active: 0,
-        queuedTotal: 0,
-        queuedByConversation: [],
         maxConcurrent: 10,
-        activeConversationIds: [],
+        queuedTotal: 0,
+        activeConversations: [],
+        queuedConversations: [],
       };
     }
   },
