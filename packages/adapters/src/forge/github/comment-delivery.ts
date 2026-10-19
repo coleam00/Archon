@@ -80,6 +80,8 @@ export function isRetryableError(error: unknown): boolean {
 export interface CommentDeliveryOptions {
   /** Per-user attribution is an App-mode feature; PAT mode always posts as the token owner. */
   appMode: boolean;
+  /** REST API root the per-user client calls (`GitHubHost.apiBaseUrl`). */
+  apiBaseUrl: string;
   callApi: GitHubApiCall;
   retryDelayMs: (attempt: number) => number;
   /**
@@ -256,7 +258,7 @@ export class CommentDelivery {
       return null;
     }
     if (!token) return null;
-    const octokit = new Octokit({ auth: token });
+    const octokit = new Octokit({ auth: token, baseUrl: this.options.apiBaseUrl });
     this.userOctokitCache.set(userId, { octokit, expiresAt: Date.now() + 5 * 60 * 1000 });
     return octokit;
   }

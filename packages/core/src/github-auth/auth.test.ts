@@ -11,8 +11,8 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Capture the constructor arg + request fn so each test can inspect calls.
-const lastOctokitInit = { current: undefined as unknown };
+// Every constructor arg, in construction order, so tests can assert client config.
+const octokitInits: unknown[] = [];
 
 // One mockRequest used by every Octokit instance. Tests use mockResolvedValueOnce
 // to queue responses in call order. The 'GET /repos/.../installation' and
@@ -26,7 +26,7 @@ const mockRequest = mock(async (..._args: unknown[]) => ({
 class FakeOctokit {
   // The constructor records its init payload so tests can assert auth config.
   constructor(init: unknown) {
-    lastOctokitInit.current = init;
+    octokitInits.push(init);
   }
   request = mockRequest;
 }
@@ -49,12 +49,13 @@ import { AppNotInstalledError, AppPrivateKeyError } from './errors';
 const REAL_PEM =
   '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----';
 
-function makeProvider(opts: { defaultInstallationId?: number } = {}) {
+function makeProvider(opts: { defaultInstallationId?: number; apiBaseUrl?: string } = {}) {
   return createGitHubAppAuthProvider({
     appId: '12345',
     privateKey: REAL_PEM,
     slug: 'archon-test',
     defaultInstallationId: opts.defaultInstallationId,
+    apiBaseUrl: opts.apiBaseUrl ?? 'https://api.github.com',
   });
 }
 
@@ -70,6 +71,7 @@ function tokenResponse(token: string, expiresInSec: number) {
 
 beforeEach(() => {
   mockRequest.mockReset();
+  octokitInits.length = 0;
 });
 
 describe('loadAppPrivateKey', () => {
@@ -500,6 +502,18 @@ describe('cache TTL boundaries', () => {
 });
 
 describe('getOctokitForInstallation', () => {
+  test('app-level and installation clients both call the configured API root', async () => {
+    const provider = makeProvider({
+      defaultInstallationId: 9,
+      apiBaseUrl: 'https://ghe.example/api/v3',
+    });
+    await provider.getOctokitForInstallation('o', 'r');
+    expect(octokitInits).toHaveLength(2);
+    for (const init of octokitInits) {
+      expect(init).toMatchObject({ baseUrl: 'https://ghe.example/api/v3' });
+    }
+  });
+
   test('returns same instance for same installation (memoised)', async () => {
     const provider = makeProvider({ defaultInstallationId: 9 });
     const a = await provider.getOctokitForInstallation('o', 'r');

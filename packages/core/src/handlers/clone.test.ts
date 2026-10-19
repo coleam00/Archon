@@ -416,6 +416,7 @@ describe('cloneRepository', () => {
     delete process.env.GH_TOKEN;
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITEA_TOKEN;
+    delete process.env.GITHUB_URL;
   });
 
   describe('GitHub App registration', () => {
@@ -483,6 +484,24 @@ describe('cloneRepository', () => {
       expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toBeUndefined();
     });
 
+    test('uses installation credentials for the GITHUB_URL Enterprise host only over its scheme', async () => {
+      process.env.GITHUB_URL = 'https://github.example.com';
+      try {
+        await cloneRepository('https://github.example.com/owner/repo', options);
+        expect(getInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+        expect(spyCloneGitRepository.mock.calls.at(-1)?.[2]).toEqual({
+          credentials: { username: 'x-access-token', password: 'installation-secret' },
+        });
+        await expect(
+          cloneRepository('http://github.example.com/owner/repo', options)
+        ).rejects.toThrow('HTTPS');
+        await cloneRepository('https://github.com/owner/other', options);
+        expect(getInstallationToken).toHaveBeenCalledTimes(1);
+      } finally {
+        delete process.env.GITHUB_URL;
+      }
+    });
+
     test('fixed installation preserves missing-installation guidance for clone and inspection', async () => {
       appRequest.mockClear();
       const provider = createGitHubAppAuthProvider({
@@ -490,6 +509,7 @@ describe('cloneRepository', () => {
         privateKey: 'synthetic-key',
         slug: 'archon',
         defaultInstallationId: 555,
+        apiBaseUrl: 'https://api.github.com',
       });
       const fixedOptions = { githubAppAuth: provider };
       const url = 'https://github.com/missing/repo';
@@ -1127,6 +1147,22 @@ describe('cloneRepository', () => {
 
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
+    });
+
+    test('sends the GitHub token to the GITHUB_URL Enterprise host only over its scheme and authority', () => {
+      process.env.GH_TOKEN = 'ghp_enterprise';
+      expect(resolveForgeAuth('https://github.example.com/o/r')).toBeUndefined();
+
+      process.env.GITHUB_URL = 'https://github.example.com';
+      expect(resolveForgeAuth('https://github.example.com/o/r')).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_enterprise',
+      });
+      expect(resolveForgeAuth('http://github.example.com/o/r')).toBeUndefined();
+      expect(resolveForgeAuth('https://github.example.com.attacker.test/o/r')).toBeUndefined();
+
+      delete process.env.GITHUB_URL;
+      delete process.env.GH_TOKEN;
     });
 
     test('does not match forge name in URL path (security)', () => {

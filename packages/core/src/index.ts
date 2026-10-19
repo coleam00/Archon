@@ -210,6 +210,8 @@ export {
   createGitHubAppAuthProvider,
   loadAppPrivateKey,
   loadGitHubAppConfig,
+  resolveGitHubHost,
+  type GitHubHost,
   installCredentialHelper,
   AppNotInstalledError,
   AppPrivateKeyError,

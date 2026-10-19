@@ -58,7 +58,7 @@ import {
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
-import { resolveGitHubTokenFromEnv } from '../github-auth/config';
+import { resolveGitHubHost, resolveGitHubTokenFromEnv } from '../github-auth/config';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { installCredentialHelper } from '../github-auth/credential-helper-install';
 
@@ -156,22 +156,27 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   //    token, because anyone who can submit a clone URL controls that hostname.
   const URL_FORGE: {
     urlEnvVar: string;
-    tokenEnvVar: string;
+    resolveToken: () => string | undefined;
     buildCredentials: BuildForgeCredentials;
   }[] = [
     {
+      urlEnvVar: 'GITHUB_URL',
+      resolveToken: resolveGitHubTokenFromEnv,
+      buildCredentials: githubTokenCredentials,
+    },
+    {
       urlEnvVar: 'GITEA_URL',
-      tokenEnvVar: 'GITEA_TOKEN',
+      resolveToken: () => process.env.GITEA_TOKEN,
       buildCredentials: tokenAsUsername,
     },
     {
       urlEnvVar: 'GITLAB_URL',
-      tokenEnvVar: 'GITLAB_TOKEN',
+      resolveToken: () => process.env.GITLAB_TOKEN,
       buildCredentials: tokenAsOAuth2Password,
     },
     {
       urlEnvVar: 'FORGEJO_URL',
-      tokenEnvVar: 'GITEA_TOKEN',
+      resolveToken: () => process.env.GITEA_TOKEN,
       buildCredentials: tokenAsUsername,
     },
   ];
@@ -180,7 +185,7 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     if (forgeUrl) {
       const forgeParsed = safeParseUrl(forgeUrl);
       if (forgeParsed?.host.toLowerCase() === authority) {
-        const token = process.env[entry.tokenEnvVar];
+        const token = entry.resolveToken();
         if (forgeParsed.protocol !== parsed.protocol) {
           logWithheld(token, forgeParsed.protocol);
           continue;
@@ -215,10 +220,11 @@ export interface CloneOptions extends RegistrationOptions {
 function appRepository(url: string, options: CloneOptions): { owner: string; repo: string } | null {
   if (!options.githubAppAuth) return null;
   const parsed = safeParseUrl(url);
-  if (!parsed || parsed.hostname !== 'github.com') return null;
-  if (parsed.protocol === 'http:')
+  const github = new URL(resolveGitHubHost().webUrl);
+  if (!parsed || parsed.hostname !== github.hostname) return null;
+  if (parsed.protocol === 'http:' && github.protocol === 'https:')
     throw new ProjectRegistrationError('GitHub App URLs require HTTPS.');
-  if (parsed.protocol !== 'https:') return null;
+  if (parsed.protocol !== github.protocol) return null;
   const identity = parseOwnerRepo(
     parsed.pathname
       .replace(/\/+$/, '')
