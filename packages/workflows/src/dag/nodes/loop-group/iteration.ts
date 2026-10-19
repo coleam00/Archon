@@ -88,7 +88,8 @@ export async function runLoopGroupIteration(
       output: state.lastOutput,
       error: `Workflow ${effectiveStatus}`,
       failureKind: 'cancelled',
-      ...run.usage,
+      ...run.progress.usage,
+      loopIterations: run.progress.lastStartedIteration,
     };
   }
   // Carry the body's final sequential session into the next iteration (unless
@@ -166,11 +167,13 @@ async function stopBeforeIteration(
     output: '',
     error: `Workflow ${effectiveStatus}`,
     failureKind: 'cancelled',
-    ...run.usage,
+    ...run.progress.usage,
+    loopIterations: run.progress.lastStartedIteration,
   };
 }
 
 function recordIterationStarted(run: LoopGroupRun, i: number): void {
+  run.progress.lastStartedIteration = i;
   const { ctx, node } = run;
   const maxIterations = run.resume.iterationLimit;
   getWorkflowEventEmitter().emit({
@@ -306,7 +309,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
 
 /** Accumulate usage across iterations (charged on the failure paths too). */
 function addIterationUsage(run: LoopGroupRun, iterCtx: RunLayersContext, i: number): void {
-  const { usage } = run;
+  const { usage } = run.progress;
   if (iterCtx.totalCostUsd !== undefined) {
     usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
   }
@@ -356,7 +359,7 @@ async function failedBody(
     error: errorMsg,
     failureKind: 'child_failed',
     ...(providerFailure !== undefined ? { providerFailure } : {}),
-    ...run.usage,
+    ...run.progress.usage,
     loopIterations: i,
   };
 }
@@ -373,7 +376,7 @@ async function suspendedBody(
   const running: LoopGroupBodyResult = {
     state: 'running',
     output: state.lastOutput,
-    ...run.usage,
+    ...run.progress.usage,
     loopIterations: i,
   };
   const { terminalSuspendNode, scopedNodeOutputs } = body;
@@ -513,7 +516,7 @@ async function iterationUntilBash(
   // present in this group's per-iteration output map.
   const ownScope: LoopBodyScope = {
     loopPrevOutputs: iteration.body.prevSnapshot,
-    outputFileDir: ctx.logDir,
+    outputFileDir: artifactsDir,
     knownBodyIds: run.directBodyIds,
     directBodyIds: run.directBodyIds,
   };
@@ -597,7 +600,7 @@ async function completeLoopGroup(
   return {
     state: 'completed',
     output: state.lastOutput,
-    ...run.usage,
+    ...run.progress.usage,
     loopIterations: i,
     // The final iteration's sink payload, so downstream `$group.output.field`
     // resolves from the logical value (#2637). No declaredOutputPaths: a group's
@@ -622,7 +625,7 @@ async function pauseAtGroupGate(
     { status: 'suspended', point: 'interactive_loop' },
     {
       output: { text: state.lastOutput, structured: state.lastStructuredOutput },
-      ...run.usage,
+      ...run.progress.usage,
       diagnostics: { loopIterations: i },
     }
   );
@@ -662,7 +665,7 @@ async function pauseAtGroupGate(
     return {
       state: 'running',
       output: state.lastOutput,
-      ...run.usage,
+      ...run.progress.usage,
       loopIterations: i,
     };
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -692,5 +695,5 @@ async function pauseAtGroupGate(
       logGroupIterationEventError(node.id, err, i);
     });
 
-  return serializeNodeOutput(suspended);
+  return { ...serializeNodeOutput(suspended), loopIterations: i };
 }

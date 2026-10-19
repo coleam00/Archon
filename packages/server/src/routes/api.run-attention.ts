@@ -142,7 +142,11 @@ export function registerRunAttentionRoutes(
       const selected = selectAttentionQueue(items, { scope, labels, order });
       const ids = new Set(selected.map(item => item.runId));
       const runs = rows.filter(run => ids.has(run.id));
-      return c.json({ runs: runs.map(toApiDashboardWorkflowRun), items: selected });
+      // The queue lists only paused runs, and only a running run has an owner to observe.
+      return c.json({
+        runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
+        items: selected,
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_runs_needing_attention_failed');
       return apiError(c, 500, 'Failed to list runs needing attention');

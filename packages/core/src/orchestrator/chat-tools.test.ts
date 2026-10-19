@@ -73,6 +73,69 @@ describe('invoke_workflow', () => {
     expect(launches[0]?.entry.workflow.name).toBe('archon-ship');
     expect(launches[0]?.codebase.name).toBe('owner/my-app');
     expect(launches[0]?.prompt).toBe(prompt);
+    expect(launches[0]?.inputs).toEqual({});
+  });
+});
+
+describe('invoke_workflow declared inputs', () => {
+  const workflow = makeTestWorkflowWithSource({
+    name: 'release',
+    inputs: {
+      base_branch: { required: true, description: 'Branch to release from' },
+      style: { default: 'normal' },
+    },
+  });
+
+  function build(): { tool: ReturnType<typeof buildInvokeWorkflowTool>; launches: ChatLaunch[] } {
+    const launches: ChatLaunch[] = [];
+    const tool = buildInvokeWorkflowTool({
+      workflows: [workflow],
+      listCodebases: () => Promise.resolve([makeCodebase('owner/my-app')]),
+      onLaunch: launch => {
+        launches.push(launch);
+        return null;
+      },
+    });
+    return { tool, launches };
+  }
+  const call = { workflow: 'release', project: 'my-app', prompt: 'Cut the release' };
+
+  test('a missing required input is named with its description and nothing is queued', async () => {
+    const { tool, launches } = build();
+    const out = await tool.handler(call);
+    expect(out).toBe(
+      "release needs input 'base_branch' (Branch to release from). Ask the user for it, then call invoke_workflow again with inputs. Nothing was launched."
+    );
+    expect(launches).toEqual([]);
+  });
+
+  test('an undeclared input is named alongside the declared ones and nothing is queued', async () => {
+    const { tool, launches } = build();
+    const out = await tool.handler({ ...call, inputs: '{"base_branch":"dev","stlye":"x"}' });
+    expect(out).toContain("does not declare input 'stlye'");
+    expect(out).toContain('Declared inputs: base_branch, style.');
+    expect(launches).toEqual([]);
+  });
+
+  test.each([['not json'], ['["dev"]'], ['{"base_branch":1}'], [{ base_branch: 'dev' }]])(
+    'malformed inputs %p are refused and nothing is queued',
+    async inputs => {
+      const { tool, launches } = build();
+      const out = await tool.handler({ ...call, inputs });
+      expect(out).toBe(
+        'invoke_workflow: inputs must be a JSON object mapping input names to string values. Nothing was launched.'
+      );
+      expect(launches).toEqual([]);
+    }
+  );
+
+  test('valid inputs are queued with the launch and echoed to the agent', async () => {
+    const { tool, launches } = build();
+    const out = await tool.handler({ ...call, inputs: '{"style":"loud","base_branch":"dev"}' });
+    expect(out).toContain(
+      'Queued release on owner/my-app with inputs: base_branch=dev, style=loud.'
+    );
+    expect(launches[0]?.inputs).toEqual({ base_branch: 'dev', style: 'loud' });
   });
 });
 

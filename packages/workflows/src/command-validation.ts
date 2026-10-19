@@ -18,7 +18,7 @@ export function isValidCommandName(name: string): boolean {
  * The maximum subfolder depth workflow discovery descends to. A value of 1
  * means a workflow may be namespaced one folder deep (e.g. `triage/review`).
  *
- * Shared with workflow-discovery.ts so discovery depth and the name validator can't drift.
+ * Shared with workflow-discovery/load-dir.ts so discovery depth and the name validator can't drift.
  */
 export const MAX_DISCOVERY_DEPTH = 1;
 

@@ -34,7 +34,10 @@ import {
 import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
 import { nodeCostScopeSchema } from '@archon/workflows/schemas/node-execution';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
-import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
+import {
+  dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema,
+  runOwnerObservationSchema,
+} from '@archon/core/schemas/workflow-run';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
 export const workflowDefinitionSchema = engineWorkflowDefinitionSchema.meta({
@@ -177,6 +180,11 @@ const nullableRunAttentionSchema = z.union([runAttentionSchema, z.literal(null)]
   ],
 });
 
+const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
+  description:
+    "What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.",
+});
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
@@ -212,6 +220,7 @@ export const workflowRunDetailSchema = z
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
+      owner_observation: ownerObservationSchema,
       terminal_record: terminalRecordSchema.nullable(),
       nodes: z.array(runNodeStateSchema).openapi({
         description:
@@ -341,6 +350,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
+    owner_observation: ownerObservationSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),

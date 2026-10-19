@@ -185,7 +185,7 @@ import {
   workflowDefinitionSchema,
 } from './schemas';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
-import type { IWorkflowStore } from './store';
+import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -343,6 +343,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set<string>(),
       budget: { workUnits: 0, spendUsd: 0 },
       tokens: { input: 0, output: 0 },
@@ -999,72 +1000,97 @@ describe('executeWorkflow', () => {
       expect(result.success).toBe(true);
     });
 
-    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-      'a resumed container run whose source cannot be read is told to resume by hand',
-      async () => {
-        const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
-        const release = mock(async () => ({ released: true }));
-        const store = makeStore({ releaseRunForUnreadableSource: release });
-        const platform = makePlatform();
-        const preCreatedRun = makeRun({
-          id: 'crun3',
-          metadata: {
-            isolation: 'container',
-            isolation_env_id: 'env-x',
-            workflow_source: {
-              version: 1,
-              root: captureRoot,
-              origin: captureRoot,
-              captured_at: new Date().toISOString(),
-              digest: 'unread',
-              file_count: 0,
-              byte_count: 0,
-            },
-          },
-        });
-        await chmod(captureRoot, 0o000);
-        try {
-          const result = await executeWorkflow(
-            makeDeps(store),
-            platform,
-            'conv-1',
-            '/tmp/ops',
-            makeWorkflow(),
-            'msg',
-            { conversationId: 'db-conv-1' },
-            {
-              preCreatedRun,
-              priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-              execContext: { kind: 'container', containerId: 'cid' },
-              container: {
-                envId: 'env-x',
-                writeBack: 'approve',
-                backend: {
-                  suspend: mock(async () => {}),
-                  finalize: mock(async () => ({ requiresApproval: false })),
-                  applyChanges: mock(async () => ({
-                    filesApplied: 0,
-                    filesDeleted: 0,
-                    warnings: [],
-                  })),
-                  discardChanges: mock(async () => {}),
-                },
+    describe.each([
+      ['no adoption', undefined],
+      ['an adopted run with no output root', null],
+      [
+        'an adopted run with an out-of-tree output root',
+        '/old-machine/.archon/workspaces/old/name',
+      ],
+    ] as const)('unreadable container source with %s', (_label, outputRoot) => {
+      it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'refuses invalid adoption before releasing the run for unreadable source',
+        async () => {
+          const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-capture-'));
+          const release = mock(async () => ({ released: true }));
+          const store = makeStore({
+            releaseRunForUnreadableSource: release,
+            getWorkflowRun: mock(async () => makeRun({ output_root: outputRoot ?? null })),
+          });
+          const platform = makePlatform();
+          const preCreatedRun = makeRun({
+            id: 'crun3',
+            adopted_from_run_id: outputRoot === undefined ? null : 'prior-run',
+            metadata: {
+              isolation: 'container',
+              isolation_env_id: 'env-x',
+              workflow_source: {
+                version: 1,
+                root: captureRoot,
+                origin: captureRoot,
+                captured_at: new Date().toISOString(),
+                digest: 'unread',
+                file_count: 0,
+                byte_count: 0,
               },
+            },
+          });
+          await chmod(captureRoot, 0o000);
+          try {
+            const result = await executeWorkflow(
+              makeDeps(store),
+              platform,
+              'conv-1',
+              '/tmp/ops',
+              makeWorkflow(),
+              'msg',
+              { conversationId: 'db-conv-1' },
+              {
+                preCreatedRun,
+                priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+                execContext: { kind: 'container', containerId: 'cid' },
+                container: {
+                  envId: 'env-x',
+                  writeBack: 'approve',
+                  backend: {
+                    suspend: mock(async () => {}),
+                    finalize: mock(async () => ({ requiresApproval: false })),
+                    applyChanges: mock(async () => ({
+                      filesApplied: 0,
+                      filesDeleted: 0,
+                      warnings: [],
+                    })),
+                    discardChanges: mock(async () => {}),
+                  },
+                },
+              }
+            );
+            if (outputRoot === undefined) {
+              expect(result).toMatchObject({ success: true, paused: true });
+            } else {
+              expect(result).toMatchObject({
+                success: false,
+                error: expect.stringContaining("Cannot adopt run 'prior-run'"),
+              });
+              expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+              expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+              expect(keepAwake.activeCount()).toBe(0);
             }
+          } finally {
+            await chmod(captureRoot, 0o755);
+            await removeTempTree(captureRoot);
+          }
+          expect(release).toHaveBeenCalledTimes(outputRoot === undefined ? 1 : 0);
+          const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+            String(c[1])
           );
-          expect(result).toMatchObject({ success: true, paused: true });
-        } finally {
-          await chmod(captureRoot, 0o755);
-          await removeTempTree(captureRoot);
+          expect(sent.some(text => text.includes('resume it by hand'))).toBe(
+            outputRoot === undefined
+          );
+          expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
         }
-        expect(release).toHaveBeenCalledTimes(1);
-        const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
-          String(c[1])
-        );
-        expect(sent.some(text => text.includes('resume it by hand'))).toBe(true);
-        expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
-      }
-    );
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1267,24 +1293,81 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('adopted run dir containment (#3097)', () => {
-    it('refuses to adopt from a run whose persisted output_root is outside ARCHON_HOME with no codebase re-derivation', async () => {
-      const adoptedId = 'prior-run';
+    for (const resume of [false, true]) {
+      for (const outputRoot of [null, '/old-machine/.archon/workspaces/old/name']) {
+        it(`${resume ? 'resume' : 'fresh'}: fails the run when the adopted output root is ${outputRoot === null ? 'missing' : 'outside ARCHON_HOME'}`, async () => {
+          const run = makeRun({ status: 'running', adopted_from_run_id: 'prior-run' });
+          const failRun = mock<IWorkflowStore['failWorkflowRun']>(async (_id, error) => {
+            run.status = 'failed';
+            run.metadata.error = error;
+            return { failed: true };
+          });
+          const store = makeStore({
+            createWorkflowRun: mock(async () => run),
+            getWorkflowRun: mock(async (id: string) =>
+              id === 'prior-run'
+                ? makeRun({ id, status: 'completed', output_root: outputRoot, codebase_id: null })
+                : run
+            ),
+            getWorkflowRunStatus: mock(async () => run.status),
+            failWorkflowRun: failRun,
+          });
+          const acquireSpy = spyOn(keepAwake, 'acquire');
+          const releaseSpy = spyOn(keepAwake, 'release');
+          try {
+            const result = await executeWorkflow(
+              makeDeps(store),
+              makePlatform(),
+              'conv-1',
+              '/tmp/ops',
+              makeWorkflow(),
+              'msg',
+              { conversationId: 'db-conv-1' },
+              resume
+                ? { preCreatedRun: run, priorCompletedNodes: new Map() }
+                : { adoptedFromRunId: 'prior-run', continuationMode: 'adopt' }
+            );
+            const message =
+              outputRoot === null
+                ? "Cannot adopt run 'prior-run': it has no persisted output root, so its artifact directory cannot be addressed."
+                : "Cannot adopt run 'prior-run': its persisted output root is outside ARCHON_HOME and cannot be re-derived, so its artifact directory cannot be addressed.";
+            expect(result).toEqual({ success: false, workflowRunId: run.id, error: message });
+            expect(run.status).toBe('failed');
+            expect(run.metadata.error).toBe(message);
+            expect(failRun).toHaveBeenCalledTimes(1);
+            expect(failRun).toHaveBeenCalledWith(run.id, message, {
+              exitReason: 'unhandled_error',
+            });
+            expect(mockEmitter.emit).toHaveBeenCalledWith({
+              type: 'workflow_failed',
+              runId: run.id,
+              workflowName: 'test-workflow',
+              error: message,
+            });
+            expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
+              expect.objectContaining({ event_type: 'workflow.run_adopted' })
+            );
+            expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+            expect(acquireSpy).toHaveBeenCalledTimes(1);
+            expect(releaseSpy).toHaveBeenCalledTimes(1);
+            expect(keepAwake.activeCount()).toBe(0);
+          } finally {
+            acquireSpy.mockRestore();
+            releaseSpy.mockRestore();
+          }
+        });
+      }
+    }
+
+    it('surfaces a rejected adoption failure write without retrying or announcing failure', async () => {
+      const writeError = new Error('terminal store unavailable');
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {
+        throw writeError;
+      });
       const store = makeStore({
-        getWorkflowRun: mock(async (id: string) =>
-          id === adoptedId
-            ? makeRun({
-                id: adoptedId,
-                status: 'completed',
-                // Out-of-tree root — not under /tmp/ws (this suite's fake
-                // ARCHON_HOME), and no codebase row to re-derive from. The
-                // shared resolver returns null and the executor refuses,
-                // matching the CLI leave-behind and server readers.
-                output_root: '/old-machine/.archon/workspaces/old/name',
-                checkout_baseline: null,
-                codebase_id: null,
-              })
-            : { ...makeRun(), status: 'completed' as const }
-        ),
+        getWorkflowRun: mock(async () => makeRun({ output_root: null })),
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+        failWorkflowRun: failRun,
       });
       await expect(
         executeWorkflow(
@@ -1295,12 +1378,15 @@ describe('executeWorkflow', () => {
           makeWorkflow(),
           'msg',
           { conversationId: 'db-conv-1' },
-          {
-            adoptedFromRunId: adoptedId,
-            continuationMode: 'adopt',
-          }
+          { adoptedFromRunId: 'prior-run', continuationMode: 'adopt' }
         )
-      ).rejects.toThrow(/outside ARCHON_HOME/);
+      ).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause: writeError });
+      expect(failRun).toHaveBeenCalledTimes(1);
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+      expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'workflow_failed' })
+      );
+      expect(keepAwake.activeCount()).toBe(0);
     });
 
     it('re-derives a relocated adopted run dir through the adopted codebase', async () => {
@@ -1363,44 +1449,6 @@ describe('executeWorkflow', () => {
       expect(capturedVar!).toBe(
         `Read ${join(WS, 'acme', 'widget', 'artifacts', 'runs', adoptedId)}/report.md`
       );
-    });
-
-    // Same containment rules apply on the RESUME path — `adoptedFromRunId`
-    // is not in opts; the executor reads `adopted_from_run_id` from the
-    // pre-created persisted row. The resolver call site is identical
-    // (executor.ts:2578), but a future regression that adds a resume-specific
-    // bypass before the resolver would not fail the fresh-path tests above.
-
-    it('resume: refuses adoption when the persisted output_root is outside ARCHON_HOME with no codebase', async () => {
-      const adoptedId = 'prior-run';
-      const store = makeStore({
-        getWorkflowRun: mock(async (id: string) =>
-          id === adoptedId
-            ? makeRun({
-                id: adoptedId,
-                status: 'completed',
-                output_root: '/old-machine/.archon/workspaces/old/name',
-                checkout_baseline: null,
-                codebase_id: null,
-              })
-            : { ...makeRun(), status: 'completed' as const }
-        ),
-      });
-      await expect(
-        executeWorkflow(
-          makeDeps(store),
-          makePlatform(),
-          'conv-1',
-          '/tmp/ops',
-          makeWorkflow(),
-          'msg',
-          { conversationId: 'db-conv-1' },
-          {
-            preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: adoptedId }),
-            priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-          }
-        )
-      ).rejects.toThrow(/outside ARCHON_HOME/);
     });
 
     it('resume: re-derives a relocated adopted run dir through the adopted codebase', async () => {
@@ -3760,15 +3808,17 @@ describe('executeWorkflow', () => {
       const completedNodeOutputs = new Map([['node-a', { output: 'first output' }]]);
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
+      const snapshot: DagResumeSnapshot = {
+        completedNodeOutputs,
+        fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
+        tokens,
+        costUsd,
+      };
       const store = makeStore({
-        getDagResumeSnapshot: mock(async () => ({
-          completedNodeOutputs,
-          fanOutSnapshots: new Map(),
-          unresolvedNodeStarts: new Set<string>(),
-          budget: { workUnits: 0, spendUsd: 0 },
-          tokens,
-          costUsd,
-        })),
+        getDagResumeSnapshot: mock(async () => snapshot),
         listWorkflowRunNodeSessions: mock(async () => [
           {
             workflow_run_id: 'failed-run',
@@ -3800,9 +3850,7 @@ describe('executeWorkflow', () => {
 
       const dagCall = mockExecuteDagWorkflow.mock.calls[0];
       expect(dagCall?.[0].priorCompletedNodes).toBe(completedNodeOutputs);
-      // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
-      // across resume exactly like tokens, so a resumed run's total never regresses.
-      expect(dagCall?.[0].priorUsage).toEqual({ tokens, costUsd });
+      expect(dagCall?.[0].priorUsage).toBe(snapshot);
       expect(dagCall?.[0].priorNodeSessions).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });

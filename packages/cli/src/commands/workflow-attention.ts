@@ -5,17 +5,23 @@ import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   attentionProjectForCwd,
+  attentionQueueSource,
   resolveAttentionProject,
 } from '@archon/core/operations/attention-queue';
 import {
+  countAttentionQueue,
+  listAttentionQueue,
+  parseAttentionLabelPairs,
   parseAttentionQueueRequest,
+  readAttentionQueueItem,
+  selectAttentionQueue,
   type AttentionQueueItem,
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
-import { writeStderr, writeStdout } from '../utils/stdout';
-import { formatAge, getLog, resolveRunIdArg } from './workflow-shared';
+import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
+import { formatAge, getLog, printJsonWriteError, resolveRunIdArg } from './workflow-shared';
 
 export interface WorkflowAttentionOptions {
   json?: boolean;
@@ -209,5 +215,149 @@ export async function workflowAttentionWatch(
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
+  }
+}
+
+/**
+ * The attention queue as typed JSON for answerers outside Archon: the items in scope,
+ * how many fall under each project or label value, or the one item a run stands for.
+ * Read-only; answering goes through `answer`, `approve`, `reject` or `respond`.
+ */
+export async function workflowAttentionCommand(
+  host: WorkflowHost,
+  cwd: string,
+  runId: string | undefined,
+  opts: WorkflowAttentionOptions
+): Promise<number> {
+  try {
+    if (opts.after !== undefined && !opts.watch)
+      throw new Error('workflow attention --after needs --watch');
+    if (opts.watch) {
+      if (runId !== undefined || opts.sort !== undefined || opts.countBy !== undefined)
+        throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
+      return await workflowAttentionWatch(host, cwd, opts);
+    }
+    const source = attentionQueueSource(host.deps.store, host.records.isolation);
+    if (runId !== undefined) {
+      if (
+        opts.project !== undefined ||
+        opts.all ||
+        opts.labels.length > 0 ||
+        opts.sort !== undefined ||
+        opts.countBy !== undefined
+      )
+        throw new Error(
+          'workflow attention <run-id> takes no --project, --all, --label, --sort or --count-by'
+        );
+      const resolvedId = await resolveAttentionRunId(host, runId, cwd);
+      const item = await readAttentionQueueItem(source, resolvedId);
+      if (item === undefined) {
+        if (opts.json)
+          await writeJsonLine({ ok: false, runId, action: 'attention', error: 'not_found' });
+        else console.log(`Workflow run not found: ${runId}`);
+        return 1;
+      }
+      if (opts.json) {
+        await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
+      } else if (item === null) {
+        console.log(`Run ${resolvedId} needs no attention now.`);
+      } else {
+        printAttentionItem(item);
+      }
+      return 0;
+    }
+
+    const { labels, order, countBy } = parseAttentionQueueRequest(opts);
+    const scope = await attentionScope(host, cwd, opts);
+    const items = await listAttentionQueue(source);
+
+    if (countBy !== undefined) {
+      const counts = countAttentionQueue(items, { scope, labels, countBy });
+      if (opts.json) {
+        await writeJsonLine({ ok: true, action: 'attention', scope, counts });
+        return 0;
+      }
+      const rows =
+        counts.by === 'project'
+          ? counts.counts.map(
+              entry => [entry.count, entry.project?.name ?? '(no project)'] as const
+            )
+          : counts.counts.map(
+              entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
+            );
+      for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
+      if (rows.length === 0) console.log('No runs need attention.');
+      return 0;
+    }
+
+    const selected = selectAttentionQueue(items, { scope, labels, order });
+    if (opts.json) {
+      await writeJsonLine({ ok: true, action: 'attention', scope, items: selected });
+      return 0;
+    }
+    const where = scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`;
+    if (selected.length === 0) {
+      console.log(`No runs need attention in ${where}.`);
+      return 0;
+    }
+    console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
+    for (const item of selected) {
+      printAttentionItem(item);
+      console.log('');
+    }
+    return 0;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId }, 'cli.workflow_attention_failed');
+    if (opts.json) {
+      await writeJsonLine({
+        ok: false,
+        ...(runId ? { runId } : {}),
+        action: 'attention',
+        error: err.message,
+      });
+      return 1;
+    }
+    throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+  }
+}
+
+/**
+ * Merge a label write into the attention wait a run is paused at: `set` pairs replace
+ * the same keys, `unset` keys are removed, nothing else changes. Refused when the run is
+ * no longer at `occurrence`.
+ */
+export async function workflowAttentionLabelCommand(
+  host: WorkflowHost,
+  runId: string,
+  occurrence: string,
+  set: readonly string[],
+  unset: readonly string[],
+  json: boolean | undefined,
+  cwd: string
+): Promise<number> {
+  try {
+    const resolvedId = await resolveAttentionRunId(host, runId, cwd);
+    const result = await host.operations.labelAttentionWait(
+      resolvedId,
+      { occurrence, set: parseAttentionLabelPairs(set), unset },
+      { kind: 'operator' },
+      'cli'
+    );
+    if (json) {
+      await writeJsonLine({ ok: true, action: 'attention_label', ...result });
+    } else {
+      const labels = Object.entries(result.labels).map(([key, value]) => `${key}=${value}`);
+      console.log(
+        `Labeled run ${result.runId} at revision ${String(result.revision)}: ${
+          labels.length > 0 ? labels.join(', ') : 'no labels'
+        }`
+      );
+    }
+    return 0;
+  } catch (error) {
+    if (!json) throw error;
+    await printJsonWriteError(runId, 'attention_label', error);
+    return 1;
   }
 }

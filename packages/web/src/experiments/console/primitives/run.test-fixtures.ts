@@ -47,6 +47,7 @@ export const detailFixture: Detail = {
     output_root: null,
     checkout_baseline: null,
     conversation_platform_id: null,
+    owner_observation: null,
     terminal_record: terminalRecord({
       availability: 'available',
       node_id: 'outcome',

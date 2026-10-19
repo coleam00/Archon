@@ -478,6 +478,18 @@ mock.module('@archon/core/services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
+// Capture the real module before mock.module replaces it; the dashboard routes probe
+// owner endpoints, which tests answer here instead of through /tmp sockets.
+import * as runAttentionWatchModule from '@archon/core/services/run-attention-watch';
+const realRunAttentionWatch = { ...runAttentionWatchModule };
+export const mockObserveRunOwner = mock<typeof runAttentionWatchModule.observeRunOwner>(
+  async () => null
+);
+mock.module('@archon/core/services/run-attention-watch', () => ({
+  ...realRunAttentionWatch,
+  observeRunOwner: mockObserveRunOwner,
+}));
+
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
@@ -487,6 +499,8 @@ export const mockHydrateResumableRun = mock<
 >(async (_deps, run) => ({
   preCreatedRun: { ...run, status: 'running' },
   priorCompletedNodes: new Map(),
+  priorFailedNodes: new Map(),
+  resumeCause: run.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
   priorUsage: { costUsd: 0 },
   priorNodeSessions: [],
 }));

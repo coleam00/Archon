@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { findRepoRoot } from '@archon/git';
+import { findRepoRoot, trustRegisteredPath } from '@archon/git';
 import type { Codebase } from '../types';
 import { ProjectRegistrationError } from '../handlers/clone';
 
@@ -14,6 +14,7 @@ export class ProjectKindDetectionError extends Error {
 }
 
 export async function detectProjectKind(path: string): Promise<Codebase['kind']> {
+  await trustRegisteredPath(path);
   try {
     return (await findRepoRoot(path)) ? 'repo' : 'folder';
   } catch (error) {

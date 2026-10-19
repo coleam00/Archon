@@ -284,10 +284,10 @@ declared input from the environment as `$INPUTS_<UPPER_SNAKE>`, not as `$INPUTS.
 Inside an included block `$INPUTS.<name>` is shorthand for that variable; a directly run
 workflow leaves it literal (see
 [Passing values into an included block](/guides/authoring-workflows/#passing-values-into-an-included-block)).
-Note: `$nodeId.output` values are shell-escaped when substituted into `until_bash`. The same
-double-quoting footgun that applies to `bash:` nodes applies here — see
-[Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script)
-for the unquoted idiom to use.
+In `until_bash`, small output references are single-quoted inline; large outputs use
+an unquoted file-read substitution. Assign each reference to a variable, then quote
+that variable when using it. See the
+[assignment-then-quote examples](/reference/variables#shell-quoting-in-bash-vs-script).
 
 ### `until_field`
 
