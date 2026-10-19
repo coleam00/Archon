@@ -27,7 +27,7 @@ import type { RunChildWorkflowFn } from './child-run';
 import { runUsageMismatch, type RunUsageFigures } from './usage';
 
 type Shape = 'agent' | 'loop' | 'loop_group' | 'workflow';
-type Path = 'natural' | 'gate' | 'resume';
+type CompletionPath = 'natural' | 'gate' | 'resume';
 
 /** Σ of every spend the mocked provider and child run reported, paid failures included. */
 let truth = { input: 0, output: 0, costUsd: 0 };
@@ -76,7 +76,7 @@ const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
   };
 });
 
-function subjectNode(shape: Shape, path: Path): DagNode {
+function subjectNode(shape: Shape, path: CompletionPath): DagNode {
   const gate = path === 'gate' ? { interactive: true, gate_message: 'Review.' } : {};
   switch (shape) {
     case 'agent':
@@ -125,7 +125,7 @@ function subjectNode(shape: Shape, path: Path): DagNode {
 }
 
 /** A gate node follows shapes that cannot gate themselves. */
-function workflowNodes(shape: Shape, path: Path): DagNode[] {
+function workflowNodes(shape: Shape, path: CompletionPath): DagNode[] {
   const gateNode = path === 'gate' && (shape === 'agent' || shape === 'workflow');
   const nodes: DagNode[] = [subjectNode(shape, path)];
   if (gateNode) {
@@ -217,7 +217,7 @@ describe('usage reconciles across node shape × completion path', () => {
   });
 
   // agent × natural and agent × resume are reconciled in run-layers-usage.test.ts.
-  const cells: [Shape, Path][] = [
+  const cells: [Shape, CompletionPath][] = [
     ['agent', 'gate'],
     ['loop', 'natural'],
     ['loop', 'gate'],
