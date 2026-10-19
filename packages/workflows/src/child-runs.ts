@@ -6,7 +6,7 @@ import { childOutcomeFromRun } from './dag/child-run';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
-import { safeSendMessage } from './executor-shared';
+import { safeSendMessage } from './platform-messages';
 import type { ResolvedRunModelOverrides } from './model-validation';
 import { canonicalValueText, type JsonValue } from './output-ref';
 import { resolveWorkflowName } from './router';

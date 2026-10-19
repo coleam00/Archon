@@ -25,8 +25,8 @@ import {
   providerLimitResumeAt,
   isProviderLimit,
   type ProviderLimitFailure,
-  safeSendMessage,
 } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import type { ContainerRunContext } from '../container-context';
 import { randomUUID } from 'node:crypto';
 import { getLog } from './log';

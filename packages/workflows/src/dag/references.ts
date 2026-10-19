@@ -35,7 +35,7 @@ import {
 } from '../output-ref';
 import { readComposedMeta } from '../compiled-command';
 import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../exec-environment';
-import { substituteWorkflowVariables, type TemplateReferences } from '../executor-shared';
+import { substituteWorkflowVariables, type TemplateReferences } from '../workflow-variables';
 import { type AttentionOption, attentionOptionsSchema } from '../schemas/dag-node';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
@@ -206,7 +206,7 @@ export function resolveWorkflowValue(
   if (inputsName !== undefined) {
     const name = inputsName;
     if (runInputs && Object.hasOwn(runInputs, name)) return runInputs[name];
-    // Same loud posture (and hint shape) as the text splice in executor-shared.
+    // Same loud posture (and hint shape) as the text splice in workflow-variables.
     const known = runInputs ? Object.keys(runInputs) : [];
     const hint = similarNodeIds(name, known);
     const suffix =

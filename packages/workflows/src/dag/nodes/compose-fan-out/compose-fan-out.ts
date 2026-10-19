@@ -25,7 +25,7 @@ import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../
 import { mapWithLimit } from '../../../utils/map-with-limit';
 import { collectComposedSuspensionPaths } from '../../../include-expander';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumFanOutCost, sumFanOutTokens } from '../../usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';

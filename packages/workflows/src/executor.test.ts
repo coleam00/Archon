@@ -170,7 +170,7 @@ registerCommunityProviders();
 import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
-import { substituteWorkflowVariables } from './executor-shared';
+import { substituteWorkflowVariables } from './workflow-variables';
 import { resolveWorkflow } from './graph-plan';
 import type {
   ResolvedWorkflow,

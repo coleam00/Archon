@@ -8,7 +8,7 @@ import { isNodeContextResume } from '../../../schemas';
 import { createAttemptEventSequence } from '../../../provider-events';
 import { declaredOutputPathsFromSchema } from '../../../output-ref';
 import { STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
-import { safeSendMessage, type SendMessageContext } from '../../../executor-shared';
+import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { loadNodeCommandPrompt } from '../../node-source';

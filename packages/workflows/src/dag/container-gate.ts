@@ -13,7 +13,7 @@ import {
 import { gateOccurrence } from '../schemas/workflow-run';
 import { isApprovalContext } from '../schemas';
 import { getWorkflowEventEmitter } from '../event-emitter';
-import { safeSendMessage } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 
 /**

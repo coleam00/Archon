@@ -45,12 +45,8 @@ import { formatDeprecationNotice } from './deprecation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
-import {
-  runWithAdoptedRunDir,
-  safeSendMessage,
-  sendCriticalMessage,
-  type SendMessageContext,
-} from './executor-shared';
+import { runWithAdoptedRunDir } from './workflow-variables';
+import { safeSendMessage, sendCriticalMessage, type SendMessageContext } from './platform-messages';
 import { logWorkflowError, logWorkflowResume, logWorkflowStart } from './logger';
 import type {
   ResolvedWorkflow,

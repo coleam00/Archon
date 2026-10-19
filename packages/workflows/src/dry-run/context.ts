@@ -8,7 +8,8 @@ import {
 } from '../dag/references';
 import { resolveIncludeOutputAliases } from '../compiled-command';
 import type { JsonValue } from '../output-ref';
-import { loadCommandPrompt, substituteWorkflowVariables } from '../executor-shared';
+import { loadCommandPrompt } from '../load-command-prompt';
+import { substituteWorkflowVariables } from '../workflow-variables';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../node-model-resolution';
 import type { ResolvedAiProfile } from '../model-validation';
 import { assertWorkflowSourceIntegrity, type WorkflowSourceRoots } from '../workflow-source';

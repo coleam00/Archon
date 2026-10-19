@@ -967,7 +967,7 @@ export type WaitNode = z.infer<typeof waitNodeSchema>;
  * Identifier grammar for an include input name.
  *
  * Shared deliberately with every `$INPUTS.<name>` reference pattern (include-expander,
- * executor-shared, and the whole-ref parser in output-ref), which all build from this
+ * and the template token and whole-ref parser in output-ref), which all build from this
  * source. They encode the identical concept and the drift between them is
  * one-directional and silent: loosening this validator alone would
  * let `with: {my.key: v}` pass while `$INPUTS.my.key` matches only `$INPUTS.my`, leaving
