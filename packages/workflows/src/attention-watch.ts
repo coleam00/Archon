@@ -47,6 +47,7 @@ import {
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
 import {
+  executionClaim,
   WorkflowEventCursorError,
   type IWorkflowStore,
   type WorkflowEventCursor,
@@ -290,16 +291,23 @@ export async function watchAttentionQueue(
   const inQuery = (item: AttentionQueueItem): boolean =>
     isInAttentionScope(item.project, scope) && matchesAttentionLabels(item, labels);
 
-  // Liveness: one waiter per running run in scope, and one report per loss until the
-  // run commits another event.
-  const waiters = new Map<string, AbortController>();
-  const lost = new Set<string>();
-  const arm = (runId: string, project: ProjectRef | null): void => {
+  // A replayed event is not new life: only a new execution claim re-arms a lost run.
+  const waiters = new Map<string, { claim: string | null; controller: AbortController }>();
+  const lost = new Map<string, string | null>();
+  const disarm = (runId: string): void => {
+    waiters.get(runId)?.controller.abort();
+    waiters.delete(runId);
+  };
+  const arm = (run: WorkflowRun, project: ProjectRef | null): void => {
     const watchOwner = host.ownerLoss;
-    if (watchOwner === undefined || closed || waiters.has(runId) || lost.has(runId)) return;
+    if (watchOwner === undefined || closed) return;
+    const runId = run.id;
+    const claim = executionClaim(run.metadata);
+    if (waiters.get(runId)?.claim === claim || lost.get(runId) === claim) return;
+    disarm(runId);
     const controller = new AbortController();
     const { signal } = controller;
-    waiters.set(runId, controller);
+    waiters.set(runId, { claim, controller });
     void (async (): Promise<void> => {
       let result: Awaited<ReturnType<RunOwnerLossWatch>>;
       for (;;) {
@@ -318,10 +326,10 @@ export async function watchAttentionQueue(
           if (signal.aborted) return;
         }
       }
-      if (waiters.get(runId) !== controller || signal.aborted) return;
+      if (waiters.get(runId)?.controller !== controller || signal.aborted) return;
       waiters.delete(runId);
       if (result === null) return;
-      lost.add(runId);
+      lost.set(runId, claim);
       emit({
         type: 'owner_lost',
         cursor: position(),
@@ -331,12 +339,8 @@ export async function watchAttentionQueue(
       });
     })();
   };
-  const disarm = (runId: string): void => {
-    waiters.get(runId)?.abort();
-    waiters.delete(runId);
-  };
   const stopLiveness = (): void => {
-    for (const controller of waiters.values()) controller.abort();
+    for (const { controller } of waiters.values()) controller.abort();
     waiters.clear();
   };
 
@@ -375,7 +379,7 @@ export async function watchAttentionQueue(
       });
       for (const run of page.runs) {
         const project = await runProject(source, run);
-        if (isInAttentionScope(project, scope)) arm(run.id, project);
+        if (isInAttentionScope(project, scope)) arm(run, project);
       }
       if (page.runs.length < RUNNING_PAGE_LIMIT || offset + RUNNING_PAGE_LIMIT >= page.total) break;
     }
@@ -571,8 +575,7 @@ export async function watchAttentionQueue(
         runId,
         status: 'running',
       });
-    lost.delete(runId);
-    if (view?.run.status === 'running' && inScope) arm(runId, view.project);
+    if (view?.run.status === 'running' && inScope) arm(view.run, view.project);
   };
 
   try {
