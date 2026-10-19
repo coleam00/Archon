@@ -115,9 +115,7 @@ export const mockRequestDetachedRunStop = mock<typeof RunOwnerStop.requestDetach
   Promise.resolve({ pid: 4242, stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
 );
 export const mockRunLiveOwnerClose = mock((): Promise<void> => Promise.resolve());
-export const mockClaimDetachedRunProcessOwner = mock(
-  (): Promise<undefined> => Promise.resolve(undefined)
-);
+export const mockClaimDetachedRunProcessOwner = mock((): Promise<void> => Promise.resolve());
 let mockDetachedStopRequested = false;
 export function setMockDetachedStopRequested(value: boolean): void {
   mockDetachedStopRequested = value;

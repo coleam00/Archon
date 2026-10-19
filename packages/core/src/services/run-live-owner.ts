@@ -331,12 +331,12 @@ export async function startRunLiveOwner(
           phase = 'lease';
           stopSockets.add(socket);
           socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => socket.destroy());
-          const windowsJob = currentWindowsRunJob();
+          // `JSON.stringify` drops an unclaimed (undefined) job, so POSIX frames carry none.
           socket.write(
             stopResponseFrame({
               kind: 'detached',
               pid: options.detachedProcessPid,
-              ...(windowsJob ? { windowsJob } : {}),
+              windowsJob: currentWindowsRunJob(),
             })
           );
         } else if (phase === 'lease' && frame === TERMINATE_REQUEST) {
