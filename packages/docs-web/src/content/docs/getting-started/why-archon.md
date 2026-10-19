@@ -41,7 +41,7 @@ A `when:` condition skips a node based on earlier output, and `output_format` ma
 
 Nodes hand work to each other through **artifacts**, files in the run's `$ARTIFACTS_DIR`. A node can start a fresh agent session with `context: fresh` and read only the artifacts it needs, so each step stays focused.
 
-**Isolation.** A run against a repository gets its own git worktree and branch by default, so several runs can work on one repository at once and your checkout stays untouched. A worktree separates checkouts. It is not a security sandbox. See [Run work in parallel with worktrees](/guides/worktrees/). A directory registered as a [folder project](/guides/multi-repo-projects/) runs in place instead.
+**Isolation.** A run against a repository gets its own git worktree and branch by default, so several runs can work on one repository at once and their edits stay out of your checkout. A worktree separates checkouts. It is not a security sandbox. See [Run work in parallel with worktrees](/guides/worktrees/). A directory registered as a [folder project](/guides/multi-repo-projects/) runs in place instead.
 
 **Packs and plugins.** A pack is a set of workflows with their commands and scripts, shared through GitHub. Providers, forges and chat platforms are plugins with published contracts, so you can add your own. See [Publish a plugin](/guides/publishing-plugins/).
 

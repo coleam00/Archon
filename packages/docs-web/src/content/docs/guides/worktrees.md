@@ -9,9 +9,9 @@ sidebar:
   order: 2
 ---
 
-A run against a repository works in its own git worktree by default: a separate checkout of the same repository on its own branch. Two runs can edit `auth.ts` at the same time without seeing each other's changes, and your own checkout is never touched. If you don't like the result, close the pull request; nothing in your working directory changed.
+A run against a repository works in its own git worktree by default: a separate checkout of the same repository on its own branch. Two runs can edit `auth.ts` at the same time without seeing each other's changes, and a run's ordinary edits stay in its worktree instead of your checkout. If you don't like the result, close the pull request.
 
-A worktree separates checkouts. It is not an execution or security sandbox. For an isolated execution environment on a folder project, see [Container isolation](/guides/container-isolation/).
+A worktree separates checkouts. It is not an execution or security sandbox: commands a run executes can still affect files outside it. For an isolated execution environment on a folder project, see [Container isolation](/guides/container-isolation/).
 
 ## Choose how a run is isolated
 
@@ -23,7 +23,7 @@ A worktree separates checkouts. It is not an execution or security sandbox. For 
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
-Worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`.
+By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
 
 A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/guides/authoring-workflows/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.
 
@@ -39,7 +39,7 @@ worktree:
   postCreateTimeout: 300000     # per command, in milliseconds
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. A failed command stops worktree creation and reports its exit code and output. An existing worktree is reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
+Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. An existing worktree is reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
 
 ## Inspect and clean up
 

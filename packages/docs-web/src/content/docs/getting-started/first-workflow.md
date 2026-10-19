@@ -58,7 +58,7 @@ archon validate workflows my-workflow
 archon workflow run my-workflow --branch feat/refresh-tokens "Add JWT refresh token support"
 ```
 
-Archon runs `plan`, waits for it to finish, then runs `implement`. The run works in its own worktree on the branch `feat/refresh-tokens`, so your checkout is untouched.
+Archon runs `plan`, waits for it to finish, then runs `implement`. The run works in its own worktree on the branch `feat/refresh-tokens`, so its edits stay out of your checkout.
 
 ## Version 2: check with fresh eyes
 

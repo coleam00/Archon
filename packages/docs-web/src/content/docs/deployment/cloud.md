@@ -28,25 +28,25 @@ When you create the VPS, choose the Ubuntu 22.04 image and your SSH key, and all
 
 ## Secure the server
 
-Connect as root, create a deploy user with your key, and switch to it:
+Connect with the image's default account: `root` on most VPS providers, `ubuntu` on AWS EC2, which disables root login. Create a deploy user with your key, and switch to it:
 
 ```bash
-ssh root@your-server-ip
+ssh root@your-server-ip            # or: ssh ubuntu@your-server-ip on EC2
 
-adduser deploy
-usermod -aG sudo deploy
-mkdir -p /home/deploy/.ssh
-cp /root/.ssh/authorized_keys /home/deploy/.ssh/
-chown -R deploy:deploy /home/deploy/.ssh
-chmod 700 /home/deploy/.ssh
-chmod 600 /home/deploy/.ssh/authorized_keys
+sudo adduser deploy
+sudo usermod -aG sudo deploy
+sudo mkdir -p /home/deploy/.ssh
+sudo cp ~/.ssh/authorized_keys /home/deploy/.ssh/
+sudo chown -R deploy:deploy /home/deploy/.ssh
+sudo chmod 700 /home/deploy/.ssh
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
 ```
 
 Test `ssh deploy@your-server-ip` in a second terminal before you go on. Then turn off password logins by setting `PasswordAuthentication no` in `/etc/ssh/sshd_config`, and restart SSH:
 
 ```bash
-systemctl restart ssh
-su - deploy
+sudo systemctl restart ssh
+sudo su - deploy
 ```
 
 Open the firewall:
