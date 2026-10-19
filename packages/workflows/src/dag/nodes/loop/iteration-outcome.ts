@@ -151,12 +151,13 @@ export async function failedStream(
   if (attempt.abort.signal.aborted && !attempt.cutOff) {
     return failed(await stoppedDuringStream(run, state, i, attempt));
   }
-  // A timed-out `output_format` iteration is exempt from both checks below: the
-  // structured gate owns it, naming the contract that failed and failing on the first
-  // attempt. That mirrors executeAgentNode, where the generic guards are unreachable
-  // once `output_format` is set, and mirrors canReask's own idle-timeout exclusion — a
-  // retry would spend another full idle_timeout window per attempt for the same answer.
-  if (scope.wantsStructured && attempt.cutOff) return undefined;
+  // A cut-off `output_format` iteration with no payload is exempt from both checks
+  // below: the structured gate owns it, naming the contract that failed and failing on
+  // the first attempt, and canReask excludes it too — a retry would spend another full
+  // idle_timeout window per attempt for the same answer. One that already carries a
+  // payload was cut off before it settled, so it fails as unsettled rather than reaching
+  // a gate that would accept the payload (executeAgentNode's assertTurnSettled).
+  if (scope.wantsStructured && attempt.cutOff && attempt.structured === undefined) return undefined;
   const failure =
     emptyOutputFailure(run, i, attempt, scope.iterationStart) ??
     unsettledFailure(run, i, attempt, scope.iterationStart);

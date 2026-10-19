@@ -24,6 +24,27 @@ import { planEndTurn } from '../end-turn-request';
 // command. Its turn completed, but the reported work never ended, so the watchdog stayed
 // suspended and only `stalled_tool_calls` attention showed the hang. Ending the turn is
 // the operator's answer to that attention.
+const DONE_SCHEMA = {
+  type: 'object',
+  properties: { done: { type: 'boolean' } },
+  required: ['done'],
+};
+
+// A structured loop iteration carries its payload before it settles, so a cut-off
+// iteration must still fail rather than be accepted on that payload.
+const structuredLoop = (structured: boolean) =>
+  structured
+    ? {
+        output_format: DONE_SCHEMA,
+        loop: {
+          prompt: 'Check CI',
+          max_iterations: 1,
+          until_field: 'done',
+          fresh_context: false,
+        },
+      }
+    : { loop: { prompt: 'Check CI', max_iterations: 1, until: 'DONE', fresh_context: false } };
+
 describe('ending a stalled turn', () => {
   let testDir: string;
 
@@ -39,7 +60,7 @@ describe('ending a stalled turn', () => {
     await removeTempTree(testDir);
   });
 
-  it.each(['agent', 'loop'] as const)(
+  it.each(['agent', 'loop', 'structured loop'] as const)(
     'fails the %s attempt as a timeout once the operator ends it',
     async kind => {
       const store = createMockStore();
@@ -85,7 +106,7 @@ describe('ending a stalled turn', () => {
               kind: 'loop' as const,
               idle_timeout: 10,
               retry: { max_attempts: 0 },
-              loop: { prompt: 'Check CI', max_iterations: 1, until: 'DONE', fresh_context: false },
+              ...structuredLoop(kind === 'structured loop'),
             };
       const execution = executeDagWorkflow(
         dagOptions({
@@ -127,4 +148,39 @@ describe('ending a stalled turn', () => {
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  it('fails a structured loop iteration cut off by the idle timeout after its payload', async () => {
+    const store = createMockStore();
+    mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
+      yield { type: 'agent_message_chunk', text: '{"done":true}' };
+      yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+      // No live work is reported, so the idle watchdog runs and cuts the stream off.
+      await new Promise<void>(resolve => {
+        options?.abortSignal?.addEventListener('abort', () => resolve());
+      });
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'idle-structured-loop',
+          nodes: [
+            {
+              id: 'ci',
+              kind: 'loop',
+              idle_timeout: 50,
+              retry: { max_attempts: 0 },
+              ...structuredLoop(true),
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('idle-structured-loop'),
+      })
+    );
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.failure_kind).toBe('timeout');
+    expect(String(failed?.data?.error)).toContain('timed out after');
+    expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(false);
+  });
 });
