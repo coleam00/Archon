@@ -32,6 +32,7 @@ import {
   findLoopGroupTerminalSuspendNode,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
+  type LoopGroupProgress,
   type LoopGroupResume,
   type LoopGroupRun,
   type LoopGroupState,
@@ -50,25 +51,40 @@ interface ResumeShape {
   isEscalatedWaitResume: boolean;
 }
 
-/** Detect loop resume (mirrors executeLoopNode); see {@link LoopGroupResume} for the shapes. */
+/**
+ * Detect loop resume (mirrors executeLoopNode); see {@link LoopGroupResume} for the shapes.
+ * Records the iteration the pause already started in `progress` before any restoration
+ * that can reject the persisted pause, so that failure reports it.
+ */
 export function readLoopGroupResume(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   bodyNodes: readonly DagNode[],
-  stepName: string
+  stepName: string,
+  progress: LoopGroupProgress
 ): LoopGroupResume {
-  const shape = detectResumeShape(ctx, node, stepName);
-  const { loopGateMeta, loopOwnedWaitMeta, isLegacyInteractiveLoopResume, isEscalatedWaitResume } =
-    shape;
+  const rawApproval = ctx.workflowRun.metadata?.approval;
+  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
+  const enclosingPauseFrame = enclosingPauseFrameOf(
+    ctx,
+    node,
+    stepName,
+    loopGateMeta,
+    ownerInvocationKey
+  );
+  progress.lastStartedIteration = enclosingPauseFrame?.iteration ?? 0;
+  const shape = detectResumeShape(ctx, node, loopGateMeta, ownerInvocationKey);
+  const { loopOwnedWaitMeta, isLegacyInteractiveLoopResume, isEscalatedWaitResume } = shape;
   const isLoopResume =
     isLegacyInteractiveLoopResume || shape.isEscalatedGateResume || isEscalatedWaitResume;
-  const enclosingPauseFrame = enclosingPauseFrameOf(ctx, node, stepName, shape);
+  const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
+  if (isLoopResume) progress.lastStartedIteration = resumeIteration;
   const bodySessionCursors = restoreBodySessionCursors(node, bodyNodes, {
     ...shape,
     isLoopResume,
     enclosingPauseFrame,
   });
-  const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
   const startIteration = isLoopResume
     ? resumeIteration + 1
     : shape.restoredAncestry !== undefined
@@ -116,15 +132,12 @@ function withOwnCursors(
 function detectResumeShape(
   ctx: RunLayersContext,
   node: LoopGroupNode,
-  stepName: string
+  loopGateMeta: ApprovalContext | undefined,
+  ownerInvocationKey: string
 ): ResumeShape {
-  const { workflowRun } = ctx;
-  const rawApproval = workflowRun.metadata?.approval;
-  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const rawWait = workflowRun.metadata?.wait;
+  const rawWait = ctx.workflowRun.metadata?.wait;
   const loopWaitMeta = isWorkflowWaitContext(rawWait) ? rawWait : undefined;
   const loopOwnedWaitMeta = loopWaitMeta?.owner === 'loop_group' ? loopWaitMeta : undefined;
-  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
   const rawAncestry =
     loopGateMeta?.bodySessionCursorAncestry ?? loopOwnedWaitMeta?.bodySessionCursorAncestry;
   const restoredAncestry =
@@ -159,13 +172,14 @@ function enclosingPauseFrameOf(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   stepName: string,
-  shape: ResumeShape
+  loopGateMeta: ApprovalContext | undefined,
+  ownerInvocationKey: string
 ): { groupId: string; iteration: number } | undefined {
-  const pauseLoopPath = shape.loopGateMeta?.execution?.invocation.loopPath;
+  const pauseLoopPath = loopGateMeta?.execution?.invocation.loopPath;
   const pauseFrame = pauseLoopPath?.[ctx.loopGroupPath.length];
   return pauseFrame?.groupId === node.id &&
     nodeInvocationKey(stepName, pauseLoopPath?.slice(0, ctx.loopGroupPath.length) ?? []) ===
-      shape.ownerInvocationKey
+      ownerInvocationKey
     ? pauseFrame
     : undefined;
 }
