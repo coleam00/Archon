@@ -2236,8 +2236,9 @@ sub-pipeline.**
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
   run).
-- **Cancel cascade.** Abandoning the parent cancels its non-terminal descendants
-  cooperatively: their executors abort at the next status check, within ~10s. A running
+- **Cancel cascade.** Abandoning the parent attempts to cancel discovered resumable descendants
+  within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
+  Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
   detached run ends its owner's process group.
@@ -2528,7 +2529,8 @@ Consequences worth planning for:
   raising `max_parallel` costs nothing while they wait.
 - Abandoning the parent expands at most 500 parents (`MAX_CASCADE_RUNS`), considering
   every discovered child for cancellation even in a wide fan-out. One final aggregate
-  lookup checks for descendants beneath the remaining queue. Deeper subtrees may remain
+  lookup checks for resumable runs or uninspected subtrees beneath the remaining queue,
+  excluding completed and cancelled leaves. Deeper subtrees may remain
   unvisited; a warning means those descendants need individual inspection. This bounds
   lookup rounds, not cancellation count or total work. A run-tree-wide budget ceiling is tracked in
   [#1961](https://github.com/coleam00/Archon/issues/1961).

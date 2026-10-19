@@ -1188,7 +1188,7 @@ export function createWorkflowOperations({
   /**
    * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
    * A child sub-run shares the parent's conversation and runs in-process, so
-   * abandoning the parent walks every DESCENDANT, not just direct children (a child
+   * abandoning the parent walks descendants up to the expansion cap (a child
    * may itself spawn grandchildren). `cancelRun` supplies the mutation used for
    * each descendant. Best-effort — a per-run failure is logged, never thrown, so
    * the parent abandon always succeeds; the failure COUNT is returned so callers
@@ -1200,6 +1200,7 @@ export function createWorkflowOperations({
   ): Promise<{ failures: number; runs: WorkflowRun[] }> {
     const queue: string[] = [rootId];
     const seen = new Set<string>([rootId]);
+    const settledStatuses: WorkflowRun['status'][] = ['completed', 'cancelled'];
     let processed = 0;
     const runs: WorkflowRun[] = [];
     let failures = 0;
@@ -1219,12 +1220,14 @@ export function createWorkflowOperations({
         if (seen.has(child.id)) continue;
         seen.add(child.id);
         queue.push(child.id); // traverse deeper even under an already-terminal child
-        if (child.status === 'completed' || child.status === 'cancelled') continue;
+        if (settledStatuses.includes(child.status)) continue;
         try {
           const result = await cancelRun(child.id);
           if (result.cancelled) {
             runs.push(child);
           } else {
+            const current = await store.getWorkflowRun(child.id);
+            if (current && settledStatuses.includes(current.status)) continue;
             getLog().warn(
               { childId: child.id },
               'operations.workflow_abandon_cascade_cancel_failed'
@@ -1244,7 +1247,11 @@ export function createWorkflowOperations({
     // remain unvisited. Probe after cancellation so a wide leaf level is all-clear.
     if (queue.length > 0) {
       try {
-        const { total } = await store.listWorkflowRuns({ parentRunIds: queue, limit: 0 });
+        const { total } = await store.listWorkflowRuns({
+          parentRunIds: queue,
+          excludeLeafStatuses: settledStatuses,
+          limit: 0,
+        });
         if (total > 0) {
           getLog().warn(
             { rootId, cap: MAX_CASCADE_RUNS, unreached: total, pendingParents: queue.length },

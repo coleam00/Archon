@@ -90,6 +90,15 @@ function buildDashboardWhereClauses(
         : `SELECT value FROM json_each(${parameter})`;
     whereClauses.push(`r.parent_run_id IN (${parents})`);
   }
+  if (options?.excludeLeafStatuses?.length) {
+    const placeholders = options.excludeLeafStatuses.map(status => {
+      values.push(status);
+      return `$${String(values.length)}`;
+    });
+    whereClauses.push(
+      `(r.status NOT IN (${placeholders.join(', ')}) OR EXISTS (SELECT 1 FROM remote_agent_workflow_runs child WHERE child.parent_run_id = r.id))`
+    );
+  }
   if (options?.search) {
     const pattern = `%${options.search}%`;
     values.push(pattern, pattern);

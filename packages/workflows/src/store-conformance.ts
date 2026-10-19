@@ -3143,6 +3143,62 @@ export function describeWorkflowStoreConformance(
       ).toEqual([grandchild.id]);
     });
 
+    test('frontier counts exclude completed and cancelled leaves but retain unresolved subtrees', async () => {
+      const parent = await create(store);
+      const expected: string[] = [];
+      for (const status of [
+        'completed',
+        'cancelled',
+        'pending',
+        'running',
+        'failed',
+        'paused',
+      ] as const) {
+        for (const hasChild of [false, true]) {
+          const run = await create(store, { parent_run_id: parent.id });
+          if (status === 'completed') {
+            await store.updateWorkflowRun(run.id, { status: 'running' });
+            await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+          }
+          if (status === 'cancelled') await store.cancelWorkflowRun(run.id);
+          if (status === 'running') await store.updateWorkflowRun(run.id, { status });
+          if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
+          if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+          if (hasChild) await create(store, { parent_run_id: run.id });
+          if (hasChild || (status !== 'completed' && status !== 'cancelled')) expected.push(run.id);
+        }
+      }
+      const options = {
+        parentRunIds: [parent.id],
+        excludeLeafStatuses: ['completed', 'cancelled'] satisfies WorkflowRun['status'][],
+      };
+      const result = await store.listWorkflowRuns(options);
+      expect(result.runs.map(run => run.id).sort()).toEqual(expected.sort());
+      expect(result.total).toBe(10);
+      expect(result.counts).toMatchObject({
+        all: 10,
+        completed: 1,
+        cancelled: 1,
+        pending: 2,
+        running: 2,
+        failed: 2,
+        paused: 2,
+      });
+      const probe = await store.listWorkflowRuns({
+        ...options,
+        limit: 0,
+      });
+      expect(probe.runs).toEqual([]);
+      expect(probe.total).toBe(10);
+      const completed = await store.listWorkflowRuns({ ...options, status: 'completed', limit: 0 });
+      expect(completed.total).toBe(1);
+      expect(completed.counts.all).toBe(10);
+      expect(
+        (await store.listWorkflowRuns({ parentRunIds: [parent.id], excludeLeafStatuses: [] })).total
+      ).toBe(12);
+      expect((await store.listWorkflowRuns({ parentRunIds: [parent.id] })).total).toBe(12);
+    });
+
     test('open work excludes adopted failures, adopters are newest first, cleanup deletes only old terminals', async () => {
       const failed = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       await store.failWorkflowRun(failed.id, 'failed');

@@ -229,6 +229,18 @@ describe('workflow run lists', () => {
       expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
+    test('excludes selected leaf statuses in both rows and counts', async () => {
+      await listDashboardRuns({ excludeLeafStatuses: ['completed', 'cancelled'], limit: 0 });
+      for (const [sql, params] of mockQuery.mock.calls) {
+        expect(sql).toContain('r.status NOT IN ($1, $2)');
+        expect(sql).toContain(
+          'EXISTS (SELECT 1 FROM remote_agent_workflow_runs child WHERE child.parent_run_id = r.id)'
+        );
+        expect(params).toEqual(expect.arrayContaining(['completed', 'cancelled']));
+      }
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
     test('filters by multiple statuses and totals their counts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([])).mockResolvedValueOnce(
         createQueryResult([

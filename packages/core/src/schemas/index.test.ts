@@ -346,11 +346,15 @@ describe('core schemas', () => {
       codebaseId: 'cb-1',
       search: 'deploy',
       parentRunIds: ['parent-1'],
+      excludeLeafStatuses: ['completed', 'cancelled'],
       limit: 50,
       offset: 0,
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.parentRunIds).toEqual(['parent-1']);
+    if (result.success) {
+      expect(result.data.parentRunIds).toEqual(['parent-1']);
+      expect(result.data.excludeLeafStatuses).toEqual(['completed', 'cancelled']);
+    }
   });
 
   test('listDashboardRunsOptionsSchema accepts a non-empty status array', () => {

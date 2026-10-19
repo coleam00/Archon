@@ -574,11 +574,16 @@ export function createTransactionView(
     listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
       const parents =
         options?.parentRunIds === undefined ? undefined : new Set(options.parentRunIds);
+      const excludedLeafStatuses = new Set(options?.excludeLeafStatuses);
+      const nonLeaves = new Set(
+        excludedLeafStatuses.size > 0 ? [...runs.values()].map(run => run.parent_run_id) : []
+      );
       const scoped = [...runs.values()].filter(
         run =>
           (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
           (parents === undefined ||
             (run.parent_run_id !== null && parents.has(run.parent_run_id))) &&
+          (!excludedLeafStatuses.has(run.status) || nonLeaves.has(run.id)) &&
           (!options?.search ||
             run.workflow_name.includes(options.search) ||
             run.user_message.includes(options.search)) &&
