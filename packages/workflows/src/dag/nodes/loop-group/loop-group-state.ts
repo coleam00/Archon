@@ -15,11 +15,18 @@ import type { ModelAliasPreset, TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
 
-export type LoopGroupBodyResult = NodeExecutionResult & {
-  suspensionPoint?: 'approval' | 'wait';
-};
+export type LoopGroupBodyResult = NodeExecutionResult &
+  (
+    | { state: 'failed'; loopIterations: number }
+    | { state: Exclude<NodeExecutionResult['state'], 'failed'> }
+  ) & {
+    suspensionPoint?: 'approval' | 'wait';
+  };
 
-export type LoopGroupUsage = Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
+export interface LoopGroupProgress {
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
+  lastStartedIteration: number;
+}
 
 /**
  * Where a loop group starts. Three resume shapes are recognized:
@@ -44,6 +51,7 @@ export interface LoopGroupResume {
   /** The iteration the run paused in. */
   resumeIteration: number;
   startIteration: number;
+  lastStartedIteration: number;
   feedbackGiven: boolean;
   iterationLimit: number;
   loopUserInput: string;
@@ -71,8 +79,8 @@ export interface LoopGroupRun {
   directBodyIds: Set<string>;
   msgContext: { workflowId: string; nodeName: string };
   execution: NodeExecutionRecord;
-  /** Usage summed across iterations; the caller reads it when the body throws. */
-  usage: LoopGroupUsage;
+  /** Progress retained by the caller when the body throws. */
+  progress: LoopGroupProgress;
   workflowProvider: string | undefined;
   workflowModel: string | undefined;
   workflowTier: TierName | undefined;

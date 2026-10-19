@@ -94,6 +94,7 @@ export function readLoopGroupResume(
     bodySessionCursorAncestry: withOwnCursors(ctx, shape.ownerInvocationKey, bodySessionCursors),
     resumeIteration,
     startIteration,
+    lastStartedIteration: isLoopResume ? resumeIteration : (enclosingPauseFrame?.iteration ?? 0),
     feedbackGiven,
     iterationLimit: answered ? Math.max(maxIterations, startIteration) : maxIterations,
     loopUserInput: isLegacyInteractiveLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '',
