@@ -3,8 +3,10 @@ description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
-  agent routes it (and proves a bug's symptom first) and launches archon-ship from a
-  brief; one agent answers how that round ended; and after several rounds that each
+  agent routes it (and proves a bug's symptom first), finishing a reviewed, green
+  PR with clear workflow approval evidence directly or launching archon-ship
+  from a brief when work remains; one agent
+  answers how a launched round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
   attention item whose answer is a declared choice; the ruling is written into the
@@ -81,6 +83,8 @@ nodes:
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
         policy_defaults: { type: string }
+        source: { type: string, enum: [gh, forge] }
+        maintainers: { type: array, items: { type: string } }
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
@@ -94,7 +98,7 @@ nodes:
         # is named.
         blocked: { type: array, items: { type: object } }
         blocked_count: { type: integer }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch, blocked, blocked_count]
+      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, source, maintainers, pull_request, continues, branch, blocked, blocked_count]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -108,6 +112,8 @@ nodes:
     mutates_checkout: false
     with:
       policy_defaults: "$facts.output.policy_defaults"
+      source: "$facts.output.source"
+      maintainers: { from: "$facts.output.maintainers" }
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
@@ -115,7 +121,8 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [launch, ask] }
+        decision: { type: string, enum: [launch, ask, ready] }
+        ready_head: { type: [string, 'null'] }
         # The brief archon-ship starts from on launch; on ask, the brief a continue
         # choice launches.
         brief: { type: string, pattern: '\S' }
@@ -152,11 +159,25 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, brief, reason, attention]
+      required: [decision, ready_head, brief, reason, attention]
+
+  - id: checkout
+    script: checkout
+    runtime: bun
+    depends_on: [facts, route]
+    when: "$route.output.decision == 'launch'"
+    with:
+      item: { from: "$facts.output.item" }
+      continues: "$facts.output.continues"
+    output_format:
+      type: object
+      properties:
+        head: { type: [string, 'null'] }
+      required: [head]
 
   - id: ship
     include: archon-ship-block
-    depends_on: [facts, route]
+    depends_on: [facts, route, checkout]
     when: "$route.output.decision == 'launch'"
     with:
       target: "$route.output.brief"
@@ -209,6 +230,8 @@ nodes:
     depends_on: [facts, route, answer]
     trigger_rule: none_failed_min_one_success
     with:
+      maintainers: { from: "$facts.output.maintainers" }
+      pull_request: { from: "$facts.output.pull_request" }
       path: "$facts.output.path"
       item: { from: "$facts.output.item" }
       route: { from: "$route.output", if_skipped: null }

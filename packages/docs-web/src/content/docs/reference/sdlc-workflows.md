@@ -14,7 +14,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 The queues move work forward without you:
 
 1. `archon-intake` triages each new issue and labels its route.
-2. `archon-build-queue` claims a ready issue, writes the brief and runs `archon-ship` on it until its pull request is reviewed Ready.
+2. `archon-build-queue` claims a ready issue and directly marks its PR ready when a trusted review says Ready and CI is green with clear workflow approval evidence at the same head. Pending or unreadable approval evidence pauses for attention. Otherwise it writes the brief and runs `archon-ship` until its pull request is reviewed Ready.
 3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict, CI and open threads, syncing only those that conflict or reshape code first.
 4. `archon-discoveries` files, tracks or drops what runs noticed outside their own task.
 
@@ -109,7 +109,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake, started by a schedule binding. Each run claims one triaged item, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
+The stage after intake, started by a schedule binding. Each run claims one triaged item. If its pull request has a trusted Ready review and green CI with clear workflow approval evidence at its current head, the queue takes it out of draft and records it ready without a ship round. Pending or unreadable approval evidence pauses for attention. Otherwise it launches `archon-ship` from a brief and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack installs no binding; the SDLC pack README's "Build queue" section shows the one to add.
 

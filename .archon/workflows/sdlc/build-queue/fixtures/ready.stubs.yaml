@@ -1,0 +1,34 @@
+facts:
+  path: route
+  item: { repo: { host: github.com, path: example/repo }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  record: null
+  brief: ""
+  rounds: []
+  at_cap: false
+  policy_defaults: /stub/policy
+  source: forge
+  maintainers: [maintainer]
+  pull_request: { schemaVersion: 1, repo: { host: github.com, path: example/repo }, number: 42, url: "https://github.com/example/repo/pull/42", head: feature, base: dev, is_draft: true, state: open, head_repo: { host: github.com, path: example/repo }, head_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, base_revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, maintainer_can_modify: null }
+  continues: 42
+  branch: ""
+  blocked: []
+  blocked_count: 0
+route:
+  decision: ready
+  ready_head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  brief: "stub: already delivered"
+  reason: "stub: trusted Ready and green at the head"
+  attention: null
+apply:
+  decision: ready
+  summary: "stub: marked ready without delivery"
+  attention: ""
+  options: []
+  class: ""
+  asked: null
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  reached: [facts, route, apply]
+exec-code: false

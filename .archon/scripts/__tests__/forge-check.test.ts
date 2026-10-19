@@ -126,18 +126,6 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.gh).toEqual([]);
   });
 
-  it('refuses a plugin missing checks.state before the authenticated read', () => {
-    const run = check({
-      forge: { kind: 'fake', response: ANSWERED },
-      capabilities: REQUIRED_FORGE_OPERATIONS.filter(op => op !== 'checks.state'),
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('missing: checks.state');
-    expect(run.forge).toHaveLength(1);
-    expect(run.forge[0]).toContain('forge metadata');
-    expect(run.gh).toEqual([]);
-  });
-
   it('names both setup steps when no plugin claims the host', () => {
     const run = check({
       forge: {

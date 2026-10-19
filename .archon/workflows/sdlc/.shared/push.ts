@@ -10,24 +10,20 @@
  * After the push, the remote ref is read back and must equal HEAD.
  */
 
-import { sameRepo, type QualifiedPr } from './forge.ts';
+import type { QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
-import { findRemote, remoteFor } from './remote.ts';
+import { headDestination } from './remote.ts';
 
 export interface PushTarget {
   readonly repo: QualifiedPr['repo'];
-  readonly head_repo: QualifiedPr['repo'] | null;
+  readonly head_repo: QualifiedPr['repo'];
   readonly head: string;
 }
 
 /** Push HEAD to `head` on the head repository; returns the pushed commit. */
 export function pushHead(target: PushTarget): string {
   const head = gitOrThrow('rev-parse', 'HEAD');
-  const fork = target.head_repo !== null && !sameRepo(target.head_repo, target.repo);
-  const headRepo = target.head_repo ?? target.repo;
-  const destination = fork
-    ? (findRemote(headRepo) ?? `https://${headRepo.host}/${headRepo.path}.git`)
-    : remoteFor(headRepo);
+  const destination = headDestination(target, 'push');
   const ref = `refs/heads/${target.head}`;
   let pushed = git('push', destination, `HEAD:${ref}`);
   if (pushed.code !== 0) {
