@@ -79,6 +79,26 @@ export function ghGraphql(host: string, query: string, fields: Record<string, st
   return data;
 }
 
+export function ghWorkflowApprovalClear(repo: QualifiedPr['repo'], head: string): boolean {
+  const result = gh('api', '--hostname', repo.host,
+    `repos/${repo.path}/actions/runs?head_sha=${head}&per_page=100`, '--paginate', '--slurp');
+  const pages: unknown = JSON.parse(required(result, 'gh api workflow approval evidence'));
+  if (!Array.isArray(pages) || pages.length === 0) return false;
+  const total = record(pages[0])?.total_count;
+  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return false;
+  const runs: unknown[] = [];
+  for (const page of pages) {
+    const row = record(page);
+    if (row?.total_count !== total || !Array.isArray(row.workflow_runs)) return false;
+    runs.push(...row.workflow_runs);
+  }
+  return runs.length === total && runs.every(value => {
+    const run = record(value);
+    return run?.head_sha === head && run.status === 'completed' &&
+      typeof run.conclusion === 'string' && run.conclusion !== '' && run.conclusion !== 'action_required';
+  });
+}
+
 const PR_FIELDS = [
   'number',
   'url',

@@ -57,6 +57,8 @@ export interface GhPr {
 }
 
 export interface GhFake {
+  readonly workflowRunPages?: unknown;
+  readonly workflowRunsFail?: string;
   readonly commitChecks?: { readonly oid: string; readonly statusCheckRollup: unknown };
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
@@ -202,6 +204,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
+  if (text.includes('/actions/runs?')) {
+    if (fake.workflowRunsFail) return result(1, '', fake.workflowRunsFail);
+    return result(0, JSON.stringify(fake.workflowRunPages === undefined ? [{ total_count: 0, workflow_runs: [] }] : fake.workflowRunPages));
+  }
   if (text.startsWith('auth status --active --hostname ')) {
     const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
     return failure === undefined ? result(0) : result(1, '', failure);

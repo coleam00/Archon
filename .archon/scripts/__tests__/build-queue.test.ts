@@ -30,7 +30,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, type GhFake, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, forgeOperation, type ScriptRun } from './deliver-checks-harness';
+import { type GhFake, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, forgeOperation, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -248,7 +248,7 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string; preload?: string; comments?: GhFake['comments']; commitChecks?: GhFake['commitChecks'] } = {}
+  options: Pick<GhFake, 'issue' | 'pr' | 'writeLost' | 'afterReady' | 'readyFail' | 'comments' | 'commitChecks' | 'workflowRunPages' | 'workflowRunsFail'> & { preload?: string } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
@@ -258,6 +258,8 @@ function run(
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
       comments: options.comments ?? [READY_COMMENT],
       commitChecks: options.commitChecks ?? GREEN_CHECKS,
+      workflowRunPages: options.workflowRunPages,
+      workflowRunsFail: options.workflowRunsFail,
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
@@ -516,7 +518,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
     expect(applied.gh).toEqual([]);
   }, 60_000);
 
-  test.each(['green', 'pending', 'red', 'gated', 'unknown', 'none', 'moved', 'removed_review', 'approval_pending'] as const)('forge route-ready checks current eligibility before recording ready (%s)', eligibility => {
+  test.each(['green', 'pending', 'red', 'gated', 'unknown', 'none', 'moved', 'removed_review', 'approval_pending', 'approval_null', 'approval_absent'] as const)('forge route-ready checks current eligibility before recording ready (%s)', eligibility => {
     const at = install();
     seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
     const root = track(mkdtempSync(join(tmpdir(), 'archon-ready-forge-')));
@@ -530,7 +532,7 @@ import { spawnSync } from 'node:child_process';
 const argv = process.argv.slice(2);
 if (argv[0] === 'forge') {
   appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ op: argv[1], request: JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8')) }) + '\\n');
-  const replies = ${JSON.stringify({ 'pr.comments': forgeOperation('pr.comments', { ref: PR, comments: eligibility === 'removed_review' ? [] : [{ ...READY_COMMENT, author: { login: 'Maintainer' } }] }), 'checks.state': forgeOperation('checks.state', { ref: PR, revision: (eligibility === 'moved' ? 'b' : 'a').repeat(40), summary: { state: ['approval_pending', 'moved', 'removed_review'].includes(eligibility) ? 'green' : eligibility }, approvalPending: eligibility === 'approval_pending' }), 'pr.view': forgeOperation('pr.view', { pr: draft }), 'pr.ready': forgeOperation('pr.ready', { target: PR, outcome: 'applied', changed: true, pr: ready }) })};
+  const replies = ${JSON.stringify({ 'pr.comments': forgeOperation('pr.comments', { ref: PR, comments: eligibility === 'removed_review' ? [] : [{ ...READY_COMMENT, author: { login: 'Maintainer' } }] }), 'checks.state': forgeOperation('checks.state', { ref: PR, revision: (eligibility === 'moved' ? 'b' : 'a').repeat(40), summary: { state: ['approval_pending', 'approval_null', 'approval_absent', 'moved', 'removed_review'].includes(eligibility) ? 'green' : eligibility }, ...(eligibility === 'approval_absent' ? {} : { approvalPending: eligibility === 'approval_null' ? null : eligibility === 'approval_pending' }) }), 'pr.view': forgeOperation('pr.view', { pr: draft }), 'pr.ready': forgeOperation('pr.ready', { target: PR, outcome: 'applied', changed: true, pr: ready }) })};
   const reply = replies[argv[1]];
   if (reply === undefined) throw new Error('unexpected operation: ' + argv[1]);
   process.stdout.write(reply);
@@ -578,7 +580,8 @@ if (argv[0] === 'forge') {
       INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: 'a'.repeat(40) })),
       INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Already delivered', reason: 'Ready and green', attention: null }),
       INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
-    }, { pr: { isDraft, headRefOid: 'a'.repeat(40) } });
+    }, { pr: { isDraft, headRefOid: 'a'.repeat(40) }, workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }] });
+    expect(applied.gh).toContain(`api --hostname ${PR.repo.host} repos/${PR.repo.path}/actions/runs?head_sha=${'a'.repeat(40)}&per_page=100 --paginate --slurp`);
     expect(ok(applied)).toMatchObject({ decision: 'ready', attention: '' });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
     expect(stored(at).value?.facts.build?.decisions[0]?.reason).toContain('a'.repeat(40));
@@ -596,6 +599,15 @@ if (argv[0] === 'forge') {
     ...['FAILURE', null].map(conclusion => ({ commitChecks: { ...GREEN_CHECKS, statusCheckRollup: { contexts: { totalCount: 1, nodes: [{ __typename: 'CheckRun', name: 'test', status: conclusion === null ? 'IN_PROGRESS' : 'COMPLETED', conclusion }] } } }, error: 'green CI' })),
     { commitChecks: { ...GREEN_CHECKS, oid: 'b'.repeat(40) }, error: 'green CI' },
     { commitChecks: { ...GREEN_CHECKS, statusCheckRollup: null }, error: 'green CI' },
+    ...[
+      { workflowRunsFail: 'Actions permission denied' },
+      { workflowRunPages: null },
+      { workflowRunPages: [{ total_count: 1, workflow_runs: [] }] },
+      { workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'b'.repeat(40), status: 'completed', conclusion: 'success' }] }] },
+      ...['action_required', null, undefined].map(conclusion => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion }] }] })),
+      ...['waiting', 'requested', 'pending'].map(status => ({ workflowRunPages: [{ total_count: 1, workflow_runs: [{ head_sha: 'a'.repeat(40), status, conclusion: null }] }] })),
+      { workflowRunPages: [{ total_count: 2, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' }] }, { total_count: 2, workflow_runs: [{ head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'action_required' }] }] },
+    ].map(options => ({ ...options, error: 'approval' })),
     { writeLost: true, error: 'after conversion' },
   ])('direct completion refuses without recording ready: %j', options => {
     const at = install();
@@ -609,7 +621,7 @@ if (argv[0] === 'forge') {
     }, { ...options, pr: { headRefOid: 'a'.repeat(40), ...options.pr } });
     expect(applied.code).not.toBe(0);
     expect(applied.stderr).toContain(options.error);
-    if (options.error === 'green CI' || options.error === 'one trusted Ready review')
+    if (options.error === 'green CI' || options.error === 'one trusted Ready review' || options.error === 'approval')
       expect(applied.gh.some(call => call.startsWith('pr ready'))).toBe(false);
     expect(stored(at).revision).toBe(before);
   }, 60_000);

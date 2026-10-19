@@ -20,7 +20,7 @@ import { withBuild } from '../../.shared/build.ts';
 import { forgeSource, invokeForge, record, parseQualifiedPr, type QualifiedPr, type PrRecord } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { ghGraphql, ghIssueComments, setPrDraft, viewPr } from '../../.shared/pr.ts';
+import { ghGraphql, ghIssueComments, ghWorkflowApprovalClear, setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { checksOf, ROLLUP } from '../../.shared/merge.ts';
 import { readReviewStamp } from '../../.shared/review-comment.ts';
 import { pushHead } from '../../.shared/push.ts';
@@ -143,8 +143,8 @@ function verifyReady(ref: QualifiedPr, head: string): void {
     throw new Error(`route-ready requires one trusted Ready review at ${head}`);
   if (source === 'forge') {
     const checks = invokeForge('checks.state', { ref });
-    if (checks?.revision !== head || record(checks.summary)?.state !== 'green' || checks.approvalPending === true)
-      throw new Error(`route-ready requires green CI at ${head}`);
+    if (checks?.revision !== head || record(checks.summary)?.state !== 'green' || checks.approvalPending !== false)
+      throw new Error(`route-ready requires green CI and clear approval evidence at ${head}`);
   } else {
     const data = ghGraphql(ref.repo.host, `query($owner:String!,$name:String!,$head:GitObjectID!) {
       repository(owner:$owner,name:$name) { object(oid:$head) { ... on Commit { oid ${ROLLUP} } } }
@@ -152,6 +152,8 @@ function verifyReady(ref: QualifiedPr, head: string): void {
     const commit = record(record(data.repository)?.object);
     if (commit?.oid !== head || checksOf(commit.statusCheckRollup).state !== 'green')
       throw new Error(`route-ready requires green CI at ${head}`);
+    if (!ghWorkflowApprovalClear(ref.repo, head))
+      throw new Error(`route-ready requires clear workflow approval evidence at ${head}`);
   }
 }
 

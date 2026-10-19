@@ -544,7 +544,7 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   answer, the `answer` agent also compares their reviews. Each round finding new
   defects asks the scope question instead of running another round.
 - **Writes.** On direct completion, `apply` rechecks the trusted Ready review and green
-  CI at the reviewed head before draft conversion, verifies the head again, then
+  CI with clear approval evidence at the reviewed head before draft conversion, verifies the head again, then
   records ready and releases the claim. The `apply` script
   refuses an attention item without the choice it recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
