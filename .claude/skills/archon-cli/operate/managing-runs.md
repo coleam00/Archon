@@ -3,7 +3,7 @@ name: archon-cli-manage-run
 description: Inspect, control, and resolve Archon workflow runs: list/get/status, approve, reject, respond, cancel vs abandon, resume. Read when a run is paused, failed, or the user asks about one.
 ---
 
-# Managing Runs
+# Managing runs
 
 Every run-control verb, what it actually does, and the gate semantics that are
 easy to get wrong. Project listings scope by cwd; full run IDs remain globally
@@ -39,7 +39,7 @@ archon workflow run <workflow> "test" --dry-run --model large=...   # see 'runs 
 ```
 
 For reusable alternate setups, prefer a config layer instead of long flag lists
-(see `../setup-and-config/setup-and-config.md`, "Alternate config layers").
+(see `../setup/setup-and-config.md`, "Alternate config layers").
 
 ## Verbs
 
@@ -65,6 +65,34 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
+
+## Answering a decision well
+
+An attention item is a question a run cannot settle. Most are written to be answered
+by whoever is on top of the runs, which is often you, not the user. Answer the ones
+the user's standing direction already decides; bring the user only the ones that are
+unclear, risky, or outside what they have told you.
+
+1. Read the whole item: what is being decided, why it matters, the recommendation
+   with its evidence and what would change it, the choices and what each does, and
+   what happens if nobody answers. Open the evidence links before agreeing.
+2. Choose one of the declared choices. When none fits and the item offers `other`,
+   choose it and say what to do instead.
+3. Give a reason in the text. Workflows record the answer's text with the decision,
+   and some write it down as a ruling: the SDLC queues add it to the issue body as a
+   dated "Current scope" section that later rounds work from. A bare choice teaches
+   the next round nothing.
+4. Answer detached, so the continuation does not run in your shell:
+
+   ```bash
+   archon workflow respond <run-id> <choice> "<reason>" --detach
+   ```
+
+5. Pass `--occurrence <id>` when you answer from an item you read earlier: the
+   `occurrence` on its stream line, or `attention.occurrence` from `workflow wait
+   --json`. If the run has moved to a different pause, the answer is refused and the
+   error names the current occurrence, instead of landing on a question you never
+   read.
 
 ## The approve/resume two-step
 
@@ -111,11 +139,6 @@ the same item the list returns, so treat it as a wake and answer by its `runId` 
 lines before `ready` are the whole open set. Keep the `cursor` of the last line you
 handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
 store cannot read the stream's cursor: rerun without `--after`.
-
-When you answer from a run you saw paused earlier, pass the occurrence that
-`workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the
-run has since moved to a different pause, the answer is refused and the error names
-the current occurrence, instead of landing on a question you never read.
 
 Or deliberately in two steps:
 
@@ -189,36 +212,30 @@ the user.
 Report outcomes with their evidence: "completed, review verdict ready:false —
 2 findings remain, report at <path>" beats "done".
 
-## Discoveries: the sdlc pack's out-of-scope findings
+## Discoveries: the SDLC pack's out-of-scope findings
 
-A convention of the bundled sdlc workflows (`archon-ship`, `archon-deliver`,
-`archon-review`, `archon-upkeep`), not of workflows in
-general. Their review lenses record *proven* findings that fall outside the
-run's accepted scope as discovery sidecars instead of blocking findings: raw
-per-producer files at `<artifacts>/discoveries/*.json` (records of `title`,
-`claim`, `evidence`, `relation: unrelated | scope_conflict | note`, `source_node`),
-consolidated by the review into the verdict's `discoveries` records plus a
-human-readable `discoveries.md`. A delivery run files each one as an issue
-(reusing an open issue that already describes it) and its terminal report lists
-the issue links. A run that ended before filing, or a standalone review, lists the
-records with a relay addressed to you, the relaying agent. **If you drop an
-unfiled discovery at this hop, nobody ever sees it.**
+A convention of the bundled SDLC workflows (`archon-ship`, `archon-deliver`,
+`archon-review`, `archon-upkeep`), not of workflows in general. Their review lenses
+record proven findings that fall outside the run's accepted scope as discovery records
+instead of blocking findings: raw per-producer files at
+`<artifacts>/discoveries/*.json` (records of `title`, `claim`, `evidence`, `relation:
+unrelated | scope_conflict | note`, `source_node`), consolidated by the review into
+the verdict's `discoveries` records and a readable `discoveries.md`.
 
-When such a run reaches terminal:
+The run that found them files nothing. Its terminal report lists them, and
+`archon-discoveries` later decides every recorded discovery across finished runs:
+file an issue with a full brief, track it on the open issue that already covers it,
+drop it with a reason, or ask a maintainer. Run that drain rather than filing
+discoveries by hand (see `queues.md`, "Discoveries drain").
 
-1. Read the report's Discoveries section; when it names any, open
-   `discoveries.md` (locate it through `leave_behind.artifactFiles`).
-2. On a **failed** run, also check the raw `discoveries/*.json` sidecars —
-   consolidation runs late, so a run that died mid-flight can hold raw records
-   no report mentions.
-3. Surface each worthwhile discovery the run did not file to the user with its evidence, and ask
-   where it goes: an evidence comment on the existing issue it belongs to, a
-   new issue when it is a novel defect, or an explicit drop. File nothing
-   without the user's go unless they have given standing authorization.
+When the user asks about one run's discoveries before a drain has run:
 
-Discoveries arrive validated (`evidence` carries concrete `file:line` facts or
-command results), and `unrelated` and `note` ones never affected the run's readiness — do
-not re-litigate the verdict from them; route them.
+1. Read the report's Discoveries section and, when it names any, open
+   `discoveries.md` (find it through `leave_behind.artifactFiles`).
+2. On a failed run, also check the raw `discoveries/*.json` records: consolidation
+   runs late, so a run that died mid-flight can hold records no report mentions.
+3. Tell the user what the run found. Do not re-litigate the verdict from them:
+   `unrelated` and `note` records never affected the run's readiness.
 
 ## When a run looks wrong
 

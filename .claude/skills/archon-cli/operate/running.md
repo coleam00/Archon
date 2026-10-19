@@ -1,6 +1,7 @@
-# Running Workflows
+# Running workflows
 
-How to discover, select, and invoke Archon workflows against real work.
+How to discover, select and launch Archon workflows against real work, and how to watch
+what you launched.
 
 ## Discover what exists
 
@@ -94,59 +95,76 @@ Rules:
    from the domain of work — code: `fix/<topic-or-issue-N>`, `feat/<name>`,
    `review/pr-N`; ops/process runs: e.g. `ops/<queue>-<item>`,
    `upkeep/<dependency>`, `triage/<source>`. To run on
-   different models for one run, see the sibling
-   `../manage-run/manage-runs.md` ("Overriding models for one run").
+   different models for one run, see `managing-runs.md` ("Overriding models for one
+   run").
    Folder projects run in place and reject `--branch`, `--from`, and `--base`.
 3. **One workflow per shell.** Multiple pieces of work = separate invocations with
    separate branches; they cannot conflict because each gets its own worktree.
 4. **The message is the work order.** Write it as you would brief a competent
    engineer: what outcome is wanted, where the context lives (issue number, plan
    path), and any constraint the user actually stated. See
-   `../prompting-mistakes/prompting-mistakes.md` before writing it (this file stands alone without it).
+   `../authoring/prompting-mistakes.md` before writing it.
 5. **Interactive workflows need a human at their gates.** Launch them in the
    foreground. When they pause, read the rendered gate message and declared
    decisions from `archon workflow get <run-id> --json` under
    `metadata.approval`; assistant JSONL rows are AI transcripts, not the gate
-   contract. Resolve the gate per `../manage-run/manage-runs.md`. Continuation
+   contract. Resolve the gate per `managing-runs.md`. Continuation
    actions on the paused run may use `--detach`.
+
+## Inputs
+
+A workflow that declares `inputs:` takes them as `--input <name>=<value>`, one flag
+per input. `archon workflow list <name> --full` shows the description; the workflow's
+YAML lists each input with its default and meaning. An input without a default is
+required, and an undeclared name is refused.
+
+```bash
+archon workflow run archon-intake \
+  --input repo_host=github.com --input repo_path=<owner>/<repo> --input number=42 --detach
+```
+
+Inputs and a message can be combined. Queue workflows such as the SDLC pack's take
+inputs only; `queues.md` lists them.
 
 ## Monitoring
 
 ```bash
-archon workflow wait <run-id> --json        # block until the run ends or needs attention
+archon workflow attention --watch --json    # one stream: decisions and run ends, this project
+archon workflow attention --watch --json --all   # the same across the install
+archon workflow wait <run-id> --json        # block on one run until it ends or needs attention
 archon workflow runs --json                 # recent runs for this project
-archon workflow status --json               # active only for this project (running/paused)
-archon workflow status --all --json         # active across all projects
-archon workflow get <run-id> --json         # one run: status, error, metadata
-archon workflow get <run-id> --verbose --json  # + per-node detail
+archon workflow status --json               # active runs (running or paused) for this project
+archon workflow get <run-id> --json         # one run: status, outcome, artifacts
+archon workflow get <run-id> --verbose --json  # plus per-node detail
 ```
 
 Terminal statuses: `completed`, `failed`, `cancelled`.
 
-**Prefer `wait` over polling.** Immediately after a detached launch, arm
-`archon workflow wait <run-id> --json` as a *background task of your harness*:
-it blocks until the run reaches a terminal state or pauses needing a human
-decision, so you are woken exactly when there is something to act on instead of
-polling or forgetting the run. The wait is indefinite by default; `--timeout
-<seconds>` makes the *wait* give up — it never affects the run itself, and an
-indefinite wait is usually right because a killed wait silently orphans your
-attention, not the run. Fall back to polling `get` only when you cannot hold a
-background task open.
+**Watch with one stream.** Right after your first launch, run `archon workflow
+attention --watch --json` as a background task of your harness. It follows every run
+in scope, including runs started later by triggers, schedules or other sessions, and
+prints one JSON line per change:
 
-**Batches: one wait per run.** `wait` takes a single run id. When you launch
-several runs in parallel, arm one background wait per run id — each completes
-independently, so you are woken per run, in whatever order they need attention.
-Never chain waits in one shell (`wait A && wait B` sleeps on A while B pauses
-unattended), and never funnel a batch through a single polling loop.
+- `attention`: a run needs a decision. The line carries the whole item; answer it by
+  its `runId` and `occurrence` (see `managing-runs.md`).
+- `resolved`: the item no longer needs attention.
+- `terminal`: a run ended, with its `status` and `outcome`. Read its result.
+- `owner_lost`: a run says it is running but its process is gone.
 
-**Status is not verdict.** A `completed` run can carry a normalized negative
-`outcome`. Read it with `get --json`, locate the report under
-`leave_behind.artifactFiles`, and use a separate `get --verbose --json` call for
-node summaries. Read the report before telling the user what the run concluded.
-For the bundled sdlc workflows, the report may end with a discoveries section
-addressed to you — route it per `../manage-run/manage-runs.md` ("Discoveries"):
-surface each finding to the user and ask where to log it. The run deliberately
-files nothing itself, so a discovery dropped here is lost.
+The lines before `ready` are the current open set. Keep the `cursor` of the last line
+you handled; after a restart, `--after <cursor>` replays what you missed.
+
+`workflow wait <run-id>` blocks on one run and suits one or two runs. Do not arm one
+wait per run for a batch: dozens of waiting processes contend for the database, and a
+single stream already wakes you per run. Never chain waits in one shell (`wait A &&
+wait B` sleeps on A while B pauses unattended).
+
+**Status is not verdict.** A `completed` run can carry a negative `outcome`. Read it
+with `get --json`, find the report under `leave_behind.artifactFiles`, and use a
+separate `get --verbose --json` call for node summaries. Read the report before
+telling the user what the run concluded. For the bundled SDLC workflows the report
+may list discoveries: findings outside the run's scope. The run records them but
+files nothing; `archon-discoveries` decides and files them (see `queues.md`).
 
 ## Continuing finished work
 
@@ -167,8 +185,8 @@ archon workflow resume <run-id>
 archon workflow resume <run-id> --detach
 ```
 
-Detached resume returns after engine acceptance, before completion. Immediately use
-`workflow wait <run-id> --json` for the next attention or terminal outcome. If the
+Detached resume returns after engine acceptance, before completion. Your attention
+stream reports the run's next pause or end. If the
 60-second acceptance confirmation fails, inspect the run before retrying: the
 child may still continue.
 
