@@ -945,16 +945,8 @@ async function main(): Promise<number> {
           }
 
           case 'artifacts': {
-            const artifactsRunId = positionals[2];
-            if (!artifactsRunId || positionals[4] !== undefined) {
-              return await fail(
-                jsonFlag,
-                'Usage: archon workflow artifacts <run-id> [path] [--json]'
-              );
-            }
             const { workflowArtifactsCommand } = await import('./commands/workflow-artifacts');
-            return await workflowArtifactsCommand(workflowHost, artifactsRunId, {
-              path: positionals[3],
+            return await workflowArtifactsCommand(workflowHost, positionals.slice(2), {
               json: jsonFlag,
               cwd: effectiveCwd,
             });
@@ -1308,16 +1300,11 @@ async function main(): Promise<number> {
       }
 
       case 'project': {
-        const { projectListCommand } = await loadRoute(() => import('./commands/project'), {
+        const { projectCommand } = await loadRoute(() => import('./commands/project'), {
           providers: false,
           database: await usesDatabaseStore(),
         });
-        if (subcommand !== 'list' || positionals.length !== 2) {
-          return await fail(jsonFlag, 'Usage: archon project list [--json]');
-        }
-        const { createCliWorkflowHost } = await import('./utils/workflow-host');
-        const host = await createCliWorkflowHost();
-        return await projectListCommand(host.records.codebases, { json: jsonFlag });
+        return await projectCommand(positionals.slice(1), jsonFlag);
       }
 
       case 'user': {

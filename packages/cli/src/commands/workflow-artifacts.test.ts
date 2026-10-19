@@ -79,7 +79,7 @@ describe('workflowArtifactsCommand', () => {
     writeFileSync(join(artifactsDir, 'review', 'report.md'), 'x');
     writeFileSync(join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'listing.json'), '{}');
 
-    const code = await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { json: true });
+    const code = await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID], { json: true });
 
     expect(code).toBe(0);
     const out = stdoutJson();
@@ -95,13 +95,12 @@ describe('workflowArtifactsCommand', () => {
     writeFileSync(join(artifactsDir, 'review', 'report.md'), '# Report\nok\n');
 
     expect(
-      await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { path: 'review/report.md' })
+      await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID, 'review/report.md'], {})
     ).toBe(0);
     expect(stdoutText()).toBe('# Report\nok\n');
 
     stdout = [];
-    await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, {
-      path: 'review/report.md',
+    await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID, 'review/report.md'], {
       json: true,
     });
     expect(stdoutJson()).toEqual({
@@ -119,7 +118,7 @@ describe('workflowArtifactsCommand', () => {
 
     for (const path of [relative(artifactsDir, outside), 'link.txt']) {
       stderr = [];
-      expect(await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { path })).toBe(1);
+      expect(await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID, path], {})).toBe(1);
       expect(stderr.join('')).toContain('is outside run');
     }
     expect(stdout).toHaveLength(0);
@@ -129,20 +128,20 @@ describe('workflowArtifactsCommand', () => {
     mkdirSync(join(artifactsDir, 'review'), { recursive: true });
     writeFileSync(join(artifactsDir, 'plan.md'), 'x');
 
-    const cases: [string, { path?: string }, string][] = [
-      ['nope', {}, 'Workflow run not found: nope'],
-      [RUN_ID, { path: 'missing.md' }, 'Artifact not found: missing.md'],
-      [RUN_ID, { path: 'plan.md/x' }, 'Artifact not found: plan.md/x'],
-      [RUN_ID, { path: 'review' }, 'review is a directory'],
-      [RUN_ID, { path: '.' }, '. is a directory'],
+    const cases: [string[], string][] = [
+      [['nope'], 'Workflow run not found: nope'],
+      [[RUN_ID, 'missing.md'], 'Artifact not found: missing.md'],
+      [[RUN_ID, 'plan.md/x'], 'Artifact not found: plan.md/x'],
+      [[RUN_ID, 'review'], 'review is a directory'],
+      [[RUN_ID, '.'], '. is a directory'],
+      [[RUN_ID, 'plan.md', 'extra'], 'Usage: archon workflow artifacts'],
     ];
-    for (const [runId, opts, error] of cases) {
+    for (const [args, error] of cases) {
       stdout = [];
-      expect(
-        await workflowArtifactsCommand(hostFor(outputRoot), runId, { ...opts, json: true })
-      ).toBe(1);
+      expect(await workflowArtifactsCommand(hostFor(outputRoot), args, { json: true })).toBe(1);
       const out = stdoutJson();
-      expect(out).toMatchObject({ ok: false, runId });
+      expect(out).toMatchObject({ ok: false });
+      if (!error.startsWith('Usage')) expect(out.runId).toBe(args[0]);
       expect(out.error).toContain(error);
     }
   });
@@ -166,7 +165,7 @@ describe('workflowArtifactsCommand', () => {
     // As in the CLI, so the failure log does not land in the JSON stream.
     setLogDestination('stderr');
     try {
-      expect(await workflowArtifactsCommand(host, RUN_ID, { json: true })).toBe(1);
+      expect(await workflowArtifactsCommand(host, [RUN_ID], { json: true })).toBe(1);
     } finally {
       setLogDestination('stdout');
     }
@@ -180,24 +179,22 @@ describe('workflowArtifactsCommand', () => {
     writeFileSync(join(artifactsDir, 'clip.bin'), bytes);
 
     expect(
-      await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { path: 'clip.bin', json: true })
+      await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID, 'clip.bin'], { json: true })
     ).toBe(1);
     expect(stdoutJson()).toMatchObject({ ok: false, runId: RUN_ID });
     expect(stdoutJson().error).toContain('is not UTF-8 text');
 
     stdout = [];
-    expect(await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { path: 'clip.bin' })).toBe(
-      0
-    );
+    expect(await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID, 'clip.bin'], {})).toBe(0);
     expect(new Uint8Array(Buffer.concat(stdout))).toEqual(bytes);
   });
 
   it('fails when the output location is unresolvable, but lists nothing for a run that wrote nothing', async () => {
-    expect(await workflowArtifactsCommand(hostFor(null), RUN_ID, { json: true })).toBe(1);
+    expect(await workflowArtifactsCommand(hostFor(null), [RUN_ID], { json: true })).toBe(1);
     expect(stdoutJson()).toMatchObject({ ok: false, runId: RUN_ID });
 
     stdout = [];
-    expect(await workflowArtifactsCommand(hostFor(outputRoot), RUN_ID, { json: true })).toBe(0);
+    expect(await workflowArtifactsCommand(hostFor(outputRoot), [RUN_ID], { json: true })).toBe(0);
     expect(stdoutJson()).toMatchObject({ files: [], internalFiles: 0 });
   });
 });

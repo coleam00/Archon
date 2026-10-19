@@ -1,6 +1,19 @@
 import { projectKeyForCodebase } from '@archon/paths';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
-import { writeJsonLine } from '../utils/stdout';
+import { writeJsonLine, writeStderr } from '../utils/stdout';
+
+/** `archon project <args>`; `list` is the only subcommand. */
+export async function projectCommand(args: string[], json?: boolean): Promise<number> {
+  if (args.length !== 1 || args[0] !== 'list') {
+    const usage = 'Usage: archon project list [--json]';
+    if (json) await writeJsonLine({ ok: false, error: usage });
+    else await writeStderr(`${usage}\n`);
+    return 1;
+  }
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  const host = await createCliWorkflowHost();
+  return projectListCommand(host.records.codebases, { json });
+}
 
 /**
  * `archon project list`: every registered project, install-wide. `key` is the

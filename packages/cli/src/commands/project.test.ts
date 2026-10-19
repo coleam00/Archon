@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths';
 import type { Codebase } from '@archon/core/schemas/codebase';
-import { projectListCommand } from './project';
+import { projectCommand, projectListCommand } from './project';
 
 function codebase(overrides: Partial<Codebase> & Pick<Codebase, 'id' | 'name' | 'kind'>): Codebase {
   return {
@@ -67,5 +67,13 @@ describe('projectListCommand', () => {
     logs = [];
     await projectListCommand({ listCodebases: async () => [] }, {});
     expect(logs).toEqual(['No projects registered.']);
+  });
+
+  it('refuses any subcommand but list before opening the store', async () => {
+    expect(await projectCommand(['show'], true)).toBe(1);
+    expect(JSON.parse(stdout.join(''))).toEqual({
+      ok: false,
+      error: 'Usage: archon project list [--json]',
+    });
   });
 });
