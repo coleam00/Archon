@@ -3,15 +3,16 @@
  * facts its gate reads before every merge.
  *
  * The merge queue takes the items the build queue finished: a work item whose
- * `facts.build` is `ready` names its pull request in its last round. The queue claims
- * them with intake's claim, so an item has one owner at a time across the three queues.
+ * `facts.build` is `ready` names its pull request in a round or its triage decision.
+ * The queue claims them with intake's claim, so an item has one owner across queues.
  *
  * Every forge read here goes through the GitHub CLI. The forge contract has no read yet
- * for the trusted review comment, the default branch's head and CI, or how far a head
- * is behind it, and the gate cannot be answered without them, so the merge queue
+ * for the default branch's head and CI, or how far a head is behind it. The gate
+ * cannot be answered without them, so the merge queue
  * refuses the forge source instead of gating on less.
  */
 
+import { itemPullRequest } from './build.ts';
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
 import { ghGraphql, ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
@@ -119,11 +120,12 @@ export interface MergeSettled {
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
-/** The pull request the build queue's last round delivered on the item, or the enrolled own pull request, or null. */
+/** The delivered or enrolled PR, including a triage-linked PR finished without a round. */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
   const url =
     [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url ?? doc.facts.own_pr?.url;
-  return url === undefined ? null : prFromUrl(url);
+  if (url !== undefined) return prFromUrl(url);
+  return doc.facts.build?.status === 'ready' ? itemPullRequest([], doc.facts.triage, doc.subject.repo) : null;
 }
 
 /** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */

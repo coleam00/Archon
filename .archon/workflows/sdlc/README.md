@@ -469,6 +469,18 @@ The predicate only saves runs; intake ignores any other label. A binding install
 
 ## Build queue
 
+Before launching ship, route can finish an open PR whose trusted canonical Archon
+review says Ready at its current full head SHA and whose CI is green at that head.
+Apply verifies the head, takes the PR out of draft, verifies it again and records ready
+without a delivery round or push. A triage-linked PR needs no earlier build round.
+On the forge source, the plugin must support `pr.comments` to read conversation reviews;
+install a release/plugin carrying that operation before using this path. Read failures
+ask for a setup remedy and never fall back to another source.
+
+Actual continuations fetch and merge the qualified PR head before ship starts, preserving
+the local branch. Conflicts stop before delivery and leave git's conflict state visible.
+Publication still uses a normal push and refuses a subsequently advanced remote head.
+
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
@@ -506,8 +518,8 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
-  it ended and decides: `done` when the pull request's latest review says Ready at its
+- **Rounds.** Direct Ready completion records no round. One round is one included
+  `archon-ship-block` run. The `answer` agent reads how it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
@@ -521,8 +533,9 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
   defects asks the scope question instead of running another round.
-- **Writes.** The `apply` script refuses an attention item without the choice it
-  recommends, pushes the declared commits (never forcing, and reading the remote head
+- **Writes.** On direct completion, `apply` verifies the reviewed head before and after
+  draft conversion, then records ready and releases the claim. The `apply` script
+  refuses an attention item without the choice it recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
   conditional write. A run that asks keeps its claim while it is paused.
 - **Attention.** An unclear decision pauses the run as one `select` attention item

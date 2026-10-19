@@ -16,6 +16,7 @@ import {
   type MergeAttention,
   type MergeRecord,
   mergeWaits,
+  itemPr,
   POLICY_CLASSES,
   type PrFacts,
   prFromUrl,
@@ -424,6 +425,25 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
+
+  test('facts reads a ready triage-linked PR without a build round', () => {
+    const at = install();
+    const doc = item({ ...BUILT, rounds: [] });
+    seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, pull_request: 42 } } });
+    const output = ok(run(at, 'facts', {}));
+    expect(output).toMatchObject({ path: 'sweep', items: [{ facts: { pr: { number: 42 } } }] });
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
+  }, 60_000);
+
+  test('PR lookup preserves round and own-PR precedence before the ready triage fallback', () => {
+    const doc = item();
+    const triage = { ...TRIAGE, pull_request: 99 };
+    expect(itemPr({ ...doc, facts: { ...doc.facts, triage } })).toEqual(PR);
+    const noRounds = { ...BUILT, rounds: [] };
+    const own_pr = { url: PR_URL, at: AT };
+    expect(itemPr({ ...doc, facts: { build: noRounds, triage, own_pr } })).toEqual(PR);
+    expect(itemPr({ ...doc, facts: { build: { ...noRounds, status: 'next' }, triage } })).toBeNull();
+  });
 
   test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts and delivered ones left alone", () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');

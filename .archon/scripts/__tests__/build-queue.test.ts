@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -29,7 +29,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -245,7 +245,7 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
+  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
@@ -256,6 +256,8 @@ function run(
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
       writeLost: options.writeLost,
+      afterReady: options.afterReady,
+      readyFail: options.readyFail,
     },
     inputs: {
       ...at.env,
@@ -342,6 +344,23 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
     seed(at, triaged({ claim: null }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
+  }, 60_000);
+
+  test('facts supplies the selected source and trusted logins from the default branch', () => {
+    const at = install();
+    const git = (...args: string[]): void => {
+      const result = spawnSync('git', args, { cwd: at.checkout, encoding: 'utf8' });
+      expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+    };
+    git('checkout', '-q', 'dev');
+    mkdirSync(join(at.checkout, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(at.checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]');
+    git('add', '.archon/sdlc/policy/maintainers.json');
+    git('commit', '-q', '-m', 'maintainers');
+    git('push', '-q', 'upstream', 'dev');
+    git('checkout', '-q', 'feature');
+    seed(at, triaged({ facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ source: 'gh', maintainers: ['maintainer'] });
   }, 60_000);
 
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
@@ -438,6 +457,44 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
+  }, 60_000);
+
+  test.each([true, false])('route-ready completes a triage-only PR without a delivery round (draft=%s)', isDraft => {
+    const at = install();
+    seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
+    const applied = run(at, 'apply', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
+      INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: 'a'.repeat(40) })),
+      INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Already delivered', reason: 'Ready and green', attention: null }),
+      INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
+    }, { pr: { isDraft, headRefOid: 'a'.repeat(40) } });
+    expect(ok(applied)).toMatchObject({ decision: 'ready', attention: '' });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
+    expect(stored(at).value?.facts.build?.decisions[0]?.reason).toContain('a'.repeat(40));
+    expect(applied.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: at.checkout, encoding: 'utf8' }).stdout).toBe('');
+  }, 60_000);
+
+  test.each([
+    { pr: { headRefOid: 'b'.repeat(40) }, error: 'expected open at' },
+    { pr: { state: 'CLOSED' as const }, error: 'is closed' },
+    { afterReady: { headRefOid: 'b'.repeat(40) }, error: 'draft conversion may have landed' },
+    { afterReady: { state: 'CLOSED' as const }, error: 'after conversion' },
+    { readyFail: 'permission denied', error: 'permission denied' },
+    { writeLost: true, error: 'after conversion' },
+  ])('direct completion refuses without recording ready: %j', options => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const applied = run(at, 'apply', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
+      INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord()),
+      INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Delivered', reason: 'Ready and green', attention: null }),
+      INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
+    }, { ...options, pr: { headRefOid: 'a'.repeat(40), ...options.pr } });
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain(options.error);
+    expect(stored(at).revision).toBe(before);
   }, 60_000);
 
   test('an ask keeps the claim and raises one attention item carrying every field and the declared choices', () => {
