@@ -45,7 +45,7 @@ import type {
   ProviderCapabilities,
 } from '../types';
 import { sessionPreview, truncateToolOutput } from '@archon/provider-contract';
-import { parseClaudeConfig } from './config';
+import { parseClaudeConfig, resolveSettingSources } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import { checkClaudeNativeAuth } from './native-auth';
@@ -57,7 +57,7 @@ import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
 import { diagnoseBinary } from '../shared/binary-diagnostics';
 import { buildPluginListCommand, readClaudePluginIds, withPluginScopeCheck } from './plugins';
-import { DEFAULT_SETTING_SOURCES, type SETTING_SOURCES } from '@archon/paths/skills';
+import type { SETTING_SOURCES } from '@archon/paths/skills';
 import {
   ClaudeFirstEventTimeoutError,
   classifyClaudeThrownError,
@@ -332,8 +332,6 @@ function buildBaseClaudeOptions(
         ? { append: requestOptions.appendSystemPrompt }
         : {}),
     },
-    // Per-node override wins over the assistant-level default; the final
-    // fallback is DEFAULT_SETTING_SOURCES (the SDK-loading default Archon ships).
     settingSources,
     // Opt into the SDK's hook lifecycle frames so that tool-scoped hooks
     // (PreToolUse / PostToolUse / Stop / etc.) reach the workflow audit
@@ -454,10 +452,10 @@ async function* buildQueryOptions(
   // Ask the CLI for its session-state events: `idle` is what tells a finished turn
   // from a result that arrived while background agents still run.
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
-  const settingSources =
-    requestOptions?.nodeConfig?.settingSources ??
-    assistantDefaults.settingSources ??
-    DEFAULT_SETTING_SOURCES;
+  const settingSources = resolveSettingSources(
+    requestOptions?.nodeConfig?.settingSources,
+    assistantDefaults
+  );
 
   const options = buildBaseClaudeOptions(
     cwd,

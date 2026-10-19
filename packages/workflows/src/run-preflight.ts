@@ -419,10 +419,11 @@ export async function assertRunCredentials(
     | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration,
-  // Native authentication depends on where the provider runs. Before isolation picks the
-  // execution checkout or container, check stored credentials only; executeWorkflow checks
-  // native authentication in the resolved context before any node runs.
-  context: { cwd: string; execContext?: ExecutionContext } | 'pending-isolation'
+  // Where the provider runs, which decides the native login it sees. A host checkout and
+  // the worktree cut from it share the host login, so a host run is checked before
+  // isolation. A container sees only what Archon forwards, so before the container exists
+  // check stored credentials only; executeWorkflow checks it in the container context.
+  context: { cwd: string; execContext?: ExecutionContext } | 'pending-container'
 ): Promise<void> {
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
@@ -488,7 +489,7 @@ export async function assertRunCredentials(
         }
       }
     }
-    if (context === 'pending-isolation') continue;
+    if (context === 'pending-container') continue;
     const status = await checkNativeCredential(deps, prepared, requirement, context);
     if (unconsumedKind && vendor && status.state === 'not_connected') {
       throw new WorkflowCredentialPreflightError(

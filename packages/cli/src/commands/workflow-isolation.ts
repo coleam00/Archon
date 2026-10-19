@@ -378,8 +378,10 @@ interface FolderCodebase {
 export function folderRunsInContainer(
   options: Pick<WorkflowRunOptions, 'container' | 'resume'>,
   workflow: Pick<ResolvedWorkflow, 'container'>,
-  folderConfig: Awaited<ReturnType<WorkflowHost['deps']['loadConfig']>> | undefined,
-  resumable: WorkflowRun | null | undefined
+  folderConfig:
+    | Pick<Awaited<ReturnType<WorkflowHost['deps']['loadConfig']>>, 'container'>
+    | undefined,
+  resumable: Pick<WorkflowRun, 'metadata'> | null | undefined
 ): boolean {
   return options.resume
     ? resumable?.metadata?.isolation === 'container'

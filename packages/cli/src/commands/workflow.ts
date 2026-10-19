@@ -188,10 +188,7 @@ import {
   warnPreservedContainer,
   destroyRunContainer,
 } from './workflow-isolation';
-import {
-  assertCredentialsWhereRunExecutes,
-  detachedRunExecutesInPlace,
-} from './workflow-native-auth';
+import { assertContainerRunCredentials, runExecutesInContainer } from './workflow-native-auth';
 import {
   buildNoResumableRunError,
   buildResumeLookupFailureError,
@@ -780,9 +777,7 @@ async function runWorkflowWithOwnedSource(
   const prepareCredentialPreflight = async (
     configCwd: string,
     codebaseId: string | undefined,
-    // Only a run already known to execute in configCwd on the host checks native
-    // authentication here; every other run checks it once isolation has resolved.
-    runsInConfigCwd = false
+    executesInContainer = false
   ): Promise<PreparedRunAiConfiguration> => {
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
     const prepared = await prepareRunAiConfiguration(host.deps, workflow, configCwd, {
@@ -802,7 +797,7 @@ async function runWorkflowWithOwnedSource(
     await assertRunCredentials(
       host.deps,
       prepared,
-      runsInConfigCwd ? { cwd: configCwd } : 'pending-isolation'
+      executesInContainer ? 'pending-container' : { cwd: configCwd }
     );
     return prepared;
   };
@@ -883,13 +878,7 @@ async function runWorkflowWithOwnedSource(
       detachedPrepared = await prepareCredentialPreflight(
         configCwd,
         detachCodebase?.id,
-        await detachedRunExecutesInPlace(
-          host,
-          options,
-          workflow,
-          { codebase: detachCodebase, isFolder: detachIsFolder, wantsIsolation },
-          continuationRun
-        )
+        await runExecutesInContainer(host, options, workflow, detachCodebase, continuationRun)
       );
     }
 
@@ -1100,7 +1089,11 @@ async function runWorkflowWithOwnedSource(
           // Still the launch checkout (or an adopted run's worktree): repo config comes
           // from where the operator launched, including uncommitted and gitignored edits,
           // even when --branch reuses an existing worktree for the code.
-          return prepareCredentialPreflight(workingCwd, codebase?.id);
+          return prepareCredentialPreflight(
+            workingCwd,
+            codebase?.id,
+            await runExecutesInContainer(host, options, workflow, codebase, resumable)
+          );
         })();
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -1279,7 +1272,7 @@ async function runWorkflowWithOwnedSource(
       assertCodebaseResolvedForIsolation({ codebase });
     }
 
-    await assertCredentialsWhereRunExecutes(
+    await assertContainerRunCredentials(
       host,
       preparedAiConfiguration,
       { cwd: workingCwd, execContext },

@@ -5,11 +5,10 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import { DEFAULT_SETTING_SOURCES } from '@archon/paths/skills';
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider } from '../types';
 import { resolveClaudeBinaryPath } from './binary-resolver';
-import { parseClaudeConfig } from './config';
+import { parseClaudeConfig, resolveSettingSources } from './config';
 import { buildContainerSpawn, buildDockerExecPrefix } from './container-spawn';
 
 const nativeHelperSettingsSchema = z.object({
@@ -124,8 +123,7 @@ export async function checkClaudeNativeAuth(
           return child;
         },
         cwd: request.cwd,
-        settingSources: request.settingSources ??
-          config.settingSources ?? [...DEFAULT_SETTING_SOURCES],
+        settingSources: [...resolveSettingSources(request.settingSources, config)],
         abortController: controller,
         tools: [],
         mcpServers: {},

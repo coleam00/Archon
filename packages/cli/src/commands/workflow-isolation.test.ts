@@ -14,7 +14,11 @@ import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow';
-import { resolveContainerBackendConfig, hasUnresolvedWriteback } from './workflow-isolation';
+import {
+  folderRunsInContainer,
+  resolveContainerBackendConfig,
+  hasUnresolvedWriteback,
+} from './workflow-isolation';
 
 const git = await import('@archon/git');
 const codebases = await import('@archon/core/db/codebases');
@@ -35,6 +39,35 @@ describe('hasUnresolvedWriteback (H2 teardown-preserve decision)', () => {
   it('false for a run that never raised a write-back gate', () => {
     expect(hasUnresolvedWriteback({ isolation: 'container' })).toBe(false);
     expect(hasUnresolvedWriteback(undefined)).toBe(false);
+  });
+});
+
+describe('folderRunsInContainer', () => {
+  const containerRun = { metadata: { isolation: 'container' } };
+  const inPlaceRun = { metadata: {} };
+  const configOn = { container: { enabled: true } };
+
+  it('a resume follows the run it resumes, not the current flag or config', () => {
+    expect(folderRunsInContainer({ resume: true }, {}, {}, containerRun)).toBe(true);
+    expect(
+      folderRunsInContainer(
+        { resume: true, container: true },
+        { container: { enabled: true } },
+        configOn,
+        inPlaceRun
+      )
+    ).toBe(false);
+  });
+
+  it('a fresh run takes the flag, then the workflow, then the config', () => {
+    expect(
+      folderRunsInContainer({ container: false }, { container: { enabled: true } }, configOn, null)
+    ).toBe(false);
+    expect(folderRunsInContainer({}, { container: { enabled: false } }, configOn, null)).toBe(
+      false
+    );
+    expect(folderRunsInContainer({}, {}, configOn, containerRun)).toBe(true);
+    expect(folderRunsInContainer({}, {}, undefined, containerRun)).toBe(false);
   });
 });
 

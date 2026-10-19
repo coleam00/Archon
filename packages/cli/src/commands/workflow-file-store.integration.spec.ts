@@ -253,7 +253,7 @@ nodes:
 }
 for (const detached of [false, true]) {
   for (const launchOnly of [true, false]) {
-    test(`isolated Claude CLI checks the worktree account (launchOnly=${launchOnly}, detached=${detached})`, async () => {
+    test(`isolated Claude CLI checks the launch checkout, then the worktree (launchOnly=${launchOnly}, detached=${detached})`, async () => {
       const f = fixture(
         'store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: [project]\n',
         'real'
@@ -315,36 +315,26 @@ nodes:
         ],
         env
       );
-      expect(started, started.output + started.error).toMatchObject({
-        code: launchOnly && !detached ? 1 : 0,
-      });
-      if (launchOnly && !detached) expect(started.error).toContain('no usable login');
-      const runs = await listRuns(f, detached);
-      expect(runs).toMatchObject([
-        { workflow_name: 'native', status: launchOnly ? 'failed' : 'paused' },
-      ]);
-      if (!launchOnly)
-        expect(existsSync(join(runs[0]?.working_path ?? '', 'before-count'))).toBe(true);
-      expect(existsSync(join(f.project, 'before-count'))).toBe(false);
-      expect(existsSync(f.trap)).toBe(false);
-      if (launchOnly) {
-        const worktree = isolatedCheckout(f.project);
-        expect(existsSync(join(worktree, 'before-count'))).toBe(false);
-        if (detached) return;
-        mkdirSync(join(worktree, '.claude'));
-        writeFileSync(
-          join(worktree, '.claude/settings.json'),
-          JSON.stringify({ apiKeyHelper: 'printf reused-key' })
-        );
-        unlinkSync(settings);
-        const reused = await cli(
-          f,
-          ['workflow', 'run', 'native', '--branch', 'credential-test', '--base', 'main'],
-          env
-        );
-        expect(reused, reused.output + reused.error).toMatchObject({ code: 0 });
-        expect(existsSync(join(worktree, 'before-count'))).toBe(true);
+      if (!launchOnly) {
+        // The login is committed but missing from the launch checkout, so the host check
+        // before isolation refuses: no run row, no worktree.
+        expect(started, started.output + started.error).toMatchObject({ code: 1 });
+        expect(started.error).toContain('no usable login');
+        expect(await listRuns(f, false)).toEqual([]);
+        expect(() => isolatedCheckout(f.project)).toThrow('Missing isolated checkout');
+        expect(existsSync(f.trap)).toBe(false);
+        return;
       }
+      // The launch checkout's login is gitignored, so the worktree has none: the check in
+      // the worktree refuses before any node runs.
+      expect(started, started.output + started.error).toMatchObject({ code: detached ? 0 : 1 });
+      if (!detached) expect(started.error).toContain('no usable login');
+      expect(await listRuns(f, detached)).toMatchObject([
+        { workflow_name: 'native', status: 'failed' },
+      ]);
+      expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+      expect(existsSync(join(isolatedCheckout(f.project), 'before-count'))).toBe(false);
+      expect(existsSync(f.trap)).toBe(false);
     }, 30000);
   }
 }

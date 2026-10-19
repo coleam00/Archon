@@ -252,7 +252,9 @@ export async function runChildWorkflow(
           ...(runConfig ? { runConfig } : {}),
         }
       );
-      await assertRunCredentials(deps, childPrepared, 'pending-isolation');
+      await assertRunCredentials(deps, childPrepared, {
+        cwd: resumeChild?.run.working_path ?? cwd,
+      });
     } catch (error) {
       return failOutcome((error as Error).message, resumeChild?.run.id);
     }

@@ -11,29 +11,29 @@ import { destroyRunContainer, folderRunsInContainer } from './workflow-isolation
 import type { WorkflowRunOptions } from './workflow-shared';
 
 /**
- * Whether a detached run executes in its launch checkout on the host. Only then can the
- * parent check native authentication before it forks; the child creates a worktree or
- * container and checks there.
+ * Whether the run will execute in a container. Only then is native authentication
+ * checked after isolation: every other run executes on the host, where the launch
+ * checkout and any worktree cut from it see the same login.
  */
-export async function detachedRunExecutesInPlace(
+export async function runExecutesInContainer(
   host: WorkflowHost,
-  options: WorkflowRunOptions,
-  workflow: ResolvedWorkflow,
-  target: { codebase: Codebase | null | undefined; isFolder: boolean; wantsIsolation: boolean },
-  continuationRun: WorkflowRun | null | undefined
+  options: Pick<WorkflowRunOptions, 'container' | 'resume'>,
+  workflow: Pick<ResolvedWorkflow, 'container'>,
+  codebase: Pick<Codebase, 'kind' | 'default_cwd'> | null | undefined,
+  resumable: WorkflowRun | null | undefined
 ): Promise<boolean> {
-  if (!target.isFolder) return options.noWorktree === true || !target.wantsIsolation;
-  if (!target.codebase) return false;
-  const folderConfig = await host.deps.loadConfig(target.codebase.default_cwd);
-  return !folderRunsInContainer(options, workflow, folderConfig, continuationRun);
+  if (codebase?.kind !== 'folder') return false;
+  const folderConfig = await host.deps.loadConfig(codebase.default_cwd);
+  return folderRunsInContainer(options, workflow, folderConfig, resumable);
 }
 
 /**
- * Check native authentication where the run executes. A refused fresh container is
+ * Check native authentication inside the run's container. A refused fresh container is
  * destroyed here: no run owns it yet, so the teardown after execution never sees it.
- * A resumed run's container belongs to that run and stays.
+ * A resumed run's container belongs to that run and stays. Host runs were checked
+ * before isolation.
  */
-export async function assertCredentialsWhereRunExecutes(
+export async function assertContainerRunCredentials(
   host: WorkflowHost,
   prepared: PreparedRunAiConfiguration,
   context: { cwd: string; execContext: ExecutionContext },
@@ -43,6 +43,7 @@ export async function assertCredentialsWhereRunExecutes(
     resumable: WorkflowRun | null;
   }
 ): Promise<void> {
+  if (context.execContext.kind !== 'container') return;
   try {
     await assertRunCredentials(host.deps, prepared, context);
   } catch (error) {

@@ -14,6 +14,7 @@ import {
   mockIsRunOwnerAnswering,
   mockFolderBackendPrepare,
   mockFolderBackendDestroy,
+  mockCreateWorkflowRun,
   mockResolveFolderBackend,
   mockDiscoverWorkflowsWithConfig,
   capturedSourceOwnerCalls,
@@ -4547,6 +4548,47 @@ describe('workflow run credential launch refusal', () => {
       createDeps.mockRestore();
     }
   });
+
+  it.each([false, true])(
+    'a database-store worktree run with no native login is refused before its run row and worktree (detach: %p)',
+    async detach => {
+      const isolation = await import('@archon/isolation');
+      const codebases = await import('@archon/core/db/codebases');
+      mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+        workflows: [makeTestWorkflowWithSource({ name: 'native-run', provider: 'claude' })],
+        errors: [],
+      });
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue({
+        id: 'cb',
+        name: 'test/repo',
+        default_cwd: '/test/path',
+        kind: 'repo',
+      });
+      const host = createTestWorkflowHost();
+      const original = host.deps.getAgentProvider;
+      const check = mock(
+        async (_request: Parameters<ReturnType<typeof original>['checkCredential']>[0]) => ({
+          state: 'not_connected' as const,
+          source: 'native' as const,
+        })
+      );
+      host.deps.getAgentProvider = id => ({ ...original(id), checkCredential: check });
+      (isolation.getIsolationProvider as ReturnType<typeof mock>).mockClear();
+      mockCreateWorkflowRun.mockClear();
+      const spawn = spyOn(Bun, 'spawn');
+      try {
+        await expect(
+          workflowRunCommand(host, '/test/path', 'native-run', 'go', { detach })
+        ).rejects.toThrow('no usable login');
+        expect(check.mock.calls[0]?.[0]).toMatchObject({ cwd: '/test/path' });
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(isolation.getIsolationProvider).not.toHaveBeenCalled();
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        spawn.mockRestore();
+      }
+    }
+  );
 });
 
 for (const selection of ['flag', 'workflow', 'config'] as const) {

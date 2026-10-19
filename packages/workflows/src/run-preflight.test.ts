@@ -785,17 +785,17 @@ for (const execContext of [
   });
 }
 
-test('before isolation resolves, preflight refuses a stored credential but defers native authentication', async () => {
+test('before its container exists, preflight refuses a stored credential but defers native authentication', async () => {
   const { deps, checkCredential } = fixture({ state: 'not_connected', source: 'native' });
   const workflow = makeTestResolvedWorkflow({ name: 'pending', provider: 'claude' });
   const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch', { userId: 'origin' });
-  await assertRunCredentials(deps, prepared, 'pending-isolation');
-  await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, 'pending-isolation');
+  await assertRunCredentials(deps, prepared, 'pending-container');
+  await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, 'pending-container');
   deps.getUserProviderCredential.mockResolvedValue({
     kind: 'api_key',
     getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'revoked' }),
   });
-  await expect(assertRunCredentials(deps, prepared, 'pending-isolation')).rejects.toThrow(
+  await expect(assertRunCredentials(deps, prepared, 'pending-container')).rejects.toThrow(
     'credential cannot be used: revoked'
   );
   expect(checkCredential).not.toHaveBeenCalled();
