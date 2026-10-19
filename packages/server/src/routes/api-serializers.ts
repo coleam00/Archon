@@ -1,7 +1,7 @@
 import type { z } from '@hono/zod-openapi';
 import type { Codebase, Conversation } from '@archon/core';
 import type { MessageRow } from '@archon/core/schemas/message';
-import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import {
   isApprovalContext,
@@ -110,9 +110,13 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
   };
 }
 
-export function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+export function toApiDashboardWorkflowRun(
+  row: DashboardWorkflowRun,
+  ownerObservation: RunOwnerObservation | null
+): ApiDashboardWorkflowRun {
   return {
     ...row,
+    owner_observation: ownerObservation,
     metadata: toApiRunMetadata(row.metadata),
     attention: toApiRunAttention(row),
     started_at: toISOString(row.started_at),

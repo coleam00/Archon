@@ -491,6 +491,16 @@ nodes remain separate entries. The compatibility fields `current_step_name` and
 or multiple active nodes. `total_steps` is `null`; observed lifecycle events do not define the
 workflow's total node count. This state describes node lifecycle, not process-owner liveness.
 
+Process-owner liveness is `owner_observation`, which dashboard runs and the run in
+`GET /api/workflows/runs/{runId}` carry. The server observes it per request, by the rule
+`archon workflow wait` uses for `owner_lost`: `reachable` when an owner answers,
+`unreachable` when the recorded owner is on the server's host and user and nothing answers,
+and `unknown` when the server cannot observe the owner (another host or user, no recorded
+owner, or no answer in time). It is `null` for a run that is not running. It is never stored
+and never changes `status`; how long a run has been quiet is not an input. The console shows
+a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
+`unreachable`.
+
 ---
 
 ## Configuration

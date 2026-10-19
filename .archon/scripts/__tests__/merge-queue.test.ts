@@ -105,7 +105,7 @@ describe('the merge record and the gate', () => {
     expect(mergeWaits(item({ ...BUILT, at: '2026-10-16T02:00:00.000Z' }, merge('parked')))).toBe(true);
   });
 
-  test('the gate passes only a Ready verdict, green CI and no open thread, all at a pinned head that contains the default branch', () => {
+  test('the gate passes only a Ready verdict, green CI and no open thread, at a pinned head that contains the default branch or merges into it cleanly', () => {
     expect(gateRefusals(FACTS, HEAD)).toEqual([]);
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head);
     // Which commit the Ready verdict is for is the sweep's judgment, not the gate's.
@@ -119,7 +119,11 @@ describe('the merge record and the gate', () => {
     // Whether an open thread holds the merge is the sweep's judgment, not the gate's.
     expect(refused({ threads: { unresolved: 2, urls: [] } })).toEqual([]);
     expect(refused({}, OLD)).toEqual([`its head is ${HEAD}, not ${OLD}`]);
-    expect(refused({ behind: 3 })).toEqual([`it lacks 3 commits of dev at ${OLD}`]);
+    // A head that is behind still merges when the forge reports the merge clean; the
+    // default branch's CI judges the combined result.
+    expect(refused({ behind: 3 })).toEqual([]);
+    expect(refused({ behind: 3, mergeable: 'conflict' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is conflict`]);
+    expect(refused({ behind: 3, mergeable: 'unknown' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is unknown`]);
     expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toEqual([
       'it is closed',
       'it is a draft',
@@ -253,6 +257,8 @@ interface FakePr {
   readonly queuesMerge?: boolean;
   /** Commits of the default branch the head lacks. */
   readonly behind?: number;
+  /** The head conflicts with the default branch. */
+  readonly conflicts?: boolean;
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
   /** What `gh pr list --author` reports open. */
@@ -293,7 +299,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev' }, pullRequest: {
       url: ${JSON.stringify(PR_URL.replace(/42$/, ''))} + number, title: 'Fix the thing',
       state: (forgePr.merged ?? []).includes(number) ? 'MERGED' : forgePr.state, isDraft: false,
-      baseRefName: 'dev', headRefName: 'feature', headRefOid: forgePr.headRefOid, mergeable: 'MERGEABLE',
+      baseRefName: 'dev', headRefName: 'feature', headRefOid: forgePr.headRefOid, mergeable: forgePr.conflicts ? 'CONFLICTING' : 'MERGEABLE',
       additions: 10, deletions: 2, changedFiles: 2,
       mergeCommit: forgePr.mergeCommit === null ? null : { oid: forgePr.mergeCommit },
       commits: { nodes: [{ commit: { oid: forgePr.headRefOid, statusCheckRollup: rollup } }] },
@@ -487,12 +493,12 @@ describe('the merge queue scripts', () => {
     expect(merges(gated)).toHaveLength(1);
   }, 60_000);
 
-  test('the gate refuses a head behind the default branch or a red check, and merges nothing', () => {
+  test('the gate refuses a head behind the default branch that conflicts, or a red check, and merges nothing', () => {
     const at = install();
     const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
-    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2 } });
+    const red = run(at, 'gate', {}, { args, pr: { checks: 'red', threads: 1, behind: 2, conflicts: true } });
     expect(JSON.parse(red.stdout).refusals).toEqual([
-      `it lacks 2 commits of dev at ${OLD}`,
+      `it lacks 2 commits of dev at ${OLD} and its merge is conflict`,
       'CI at its head is red (test)',
     ]);
     expect(merges(red)).toEqual([]);

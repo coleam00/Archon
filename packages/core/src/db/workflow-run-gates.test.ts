@@ -71,9 +71,9 @@ describe('workflow run gates', () => {
         "metadata = jsonb_set((metadata - 'wait') || $2::jsonb, '{approval}', $3::jsonb, true)"
       );
 
-      // $2 is run-level metadata (empty here); $3 is the complete gate context,
-      // bound separately so the replace can target it.
-      expect(JSON.parse(params[1] as string)).toEqual({});
+      // $2 is run-level metadata (only the pause cause here); $3 is the complete gate
+      // context, bound separately so the replace can target it.
+      expect(JSON.parse(params[1] as string)).toEqual({ pause_cause: 'gate' });
       // Exactly what the caller passed — no explicit-null reset list. Every field
       // this gate leaves unset is absent, which is what makes a prior gate's value
       // unable to survive at any depth.
@@ -126,7 +126,10 @@ describe('workflow run gates', () => {
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       // Same atomic UPDATE, so there is no window where the run is paused
       // without the marker (M3) — it merges at the top level, beside `approval`.
-      expect(JSON.parse(params[1] as string)).toEqual({ pending_writeback: true });
+      expect(JSON.parse(params[1] as string)).toEqual({
+        pending_writeback: true,
+        pause_cause: 'gate',
+      });
       expect((JSON.parse(params[2] as string) as { nodeId: string }).nodeId).toBe('__writeback__');
     });
 

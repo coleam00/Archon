@@ -18,7 +18,7 @@ Archon supports multiple platform adapters. Each adapter connects Archon to a di
 | [**Web UI**](/adapters/web/) | SSE streaming | None | Built-in |
 | [**CLI**](/reference/cli/) | stdout | None | Built-in |
 | [**Slack**](/adapters/slack/) | Socket Mode, as a chat plugin | Plugin + Bot and App tokens | [Setup guide](/adapters/slack/) |
-| [**Telegram**](/adapters/telegram/) | Bot API polling | Bot token | [Setup guide](/adapters/telegram/) |
+| [**Telegram**](/adapters/telegram/) (deprecated) | Bot API polling | Bot token | [Setup guide](/adapters/telegram/) |
 | [**GitHub**](/adapters/github/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/github/) |
 
 ## Community Adapters
@@ -43,7 +43,7 @@ Slack runs as a chat plugin: a separate process the server starts from an instal
 ## Choosing an Adapter
 
 - **Web UI** is the fastest way to get started -- no tokens or external services needed.
-- **Slack** and **Telegram** are ideal for mobile access and team collaboration.
+- **Slack** is ideal for mobile access and team collaboration.
 - **GitHub** integrates directly into your issue and PR workflow.
 - **Discord** works well for community or team servers.
 

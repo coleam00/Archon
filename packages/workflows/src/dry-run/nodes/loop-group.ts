@@ -1,6 +1,7 @@
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
-import { describeUnmetCompletion } from '../../executor-shared';
+import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
+import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-state';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import type { LoopGroupNode, NodeOutput } from '../../schemas';
 import { recordFailed, withResolution, type DryRunContext } from '../context';
@@ -43,7 +44,6 @@ export async function simulateLoopGroup(
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
   const outerLoopBodyScopes = ctx.loopBodyScopes;
   let loopPrevOutputs: Map<string, NodeOutput> | undefined;
-  let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
     // in a real run outside an interactive resume.
@@ -61,10 +61,7 @@ export async function simulateLoopGroup(
       ctx.loopBodyScopes = outerLoopBodyScopes;
     }
     loopPrevOutputs = bodyOutputs;
-    lastOutput =
-      bodyPlan.sinks
-        .map(bodyId => bodyOutputs.get(bodyId))
-        .find(output => output?.state === 'completed' && output.output.trim())?.output ?? '';
+    const iterationOutput = loopGroupIterationOutput(bodyNodes, bodyOutputs)?.output ?? '';
     const failed = bodyNodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
     if (failed) {
       recordFailed(
@@ -78,15 +75,16 @@ export async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
-    const groupCompletion = loopIterationCompletes(node.loop_group, { output: lastOutput });
+    const groupCompletion = loopIterationCompletes(node.loop_group, { output: iterationOutput });
     if (groupCompletion.kind !== 'incomplete') {
-      outputs.set(node.id, { state: 'completed', output: lastOutput });
+      const output = stripCompletionTags(iterationOutput, node.loop_group.until);
+      outputs.set(node.id, { state: 'completed', output });
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop_group',
         state: 'completed',
         reason: completionReason(groupCompletion, node.loop_group, current),
-        output: lastOutput,
+        output,
         ...(iteration ? { iteration } : {}),
         ...withResolution(node, ctx),
       });
