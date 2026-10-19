@@ -8,7 +8,6 @@ facts:
   record: null
   brief: ""
   rounds: []
-  recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: null
@@ -21,7 +20,6 @@ apply:
   options: []
   class: ""
   asked: null
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

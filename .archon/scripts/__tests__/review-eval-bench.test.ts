@@ -17,7 +17,6 @@ import {
   type RunDetail,
   type RunNode,
   type FindingMark,
-  MARKS,
   appendLine,
   latestLines,
   readLines,
@@ -38,7 +37,6 @@ import {
   readSamples,
 } from '../../workflows/sdlc/review-eval/scripts/bench';
 import { FINDING_VALUES, type Finding, type ItemRecord, readFindings, writeItem } from '../../workflows/sdlc/.shared/review-item';
-import { MARKS as INTAKE_MARKS } from '../../workflows/sdlc/intake/scripts/bench/score';
 
 const track = trackTempRoots();
 
@@ -431,10 +429,6 @@ describe('collectItem', () => {
 });
 
 describe('saved review evidence', () => {
-  it('uses the same operator judgement vocabulary as intake', () => {
-    expect(INTAKE_MARKS).toBe(MARKS.defect);
-  });
-
   it('rejects duplicate finding IDs with different claims', () => {
     const dir = track(mkdtempSync(join(tmpdir(), 'archon-duplicate-finding-')));
     const finding: Finding = { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Wrong count.', status: 'open', round: 1 };
