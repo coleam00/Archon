@@ -126,7 +126,7 @@ export function headDestination(
   }
   if (
     urls.some(url => {
-      const transport = /^([a-z][a-z0-9+.-]*)(::|:\/\/)/i.exec(url.trim());
+      const transport = /^([a-z0-9][a-z0-9+.-]*)(::|:\/\/)/i.exec(url.trim());
       return (
         transport !== null &&
         (transport[2] === '::' ||

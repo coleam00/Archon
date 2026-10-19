@@ -244,7 +244,7 @@ describe('head operation transport', () => {
     { script: 'ship/scripts/checkout', mode: 'fork insteadOf' },
   ];
   const refusals = cases.flatMap(test =>
-    ['http://', 'http::http://', 'https::http://', 'ftp://', 'git://', 'ext::'].map(transport => ({ ...test, transport }))
+    ['http://', 'http::http://', 'https::http://', 'ftp://', 'git://', 'ext::', '1helper::', '1helper://'].map(transport => ({ ...test, transport }))
   );
   it.each(refusals)('refuses effective $transport for $script via $mode', ({ script, mode, transport }) => {
     const cwd = gitCheckout({}, track);
