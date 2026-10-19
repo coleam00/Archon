@@ -9,7 +9,18 @@
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
-import type { Pickup, Stage, TriageFacts, WorkItem } from './workitem.ts';
+import {
+  claimable,
+  claimItem,
+  type Pickup,
+  type Read,
+  read,
+  releaseIfTerminal,
+  type Stage,
+  type TriageFacts,
+  type WorkItem,
+  workItemName,
+} from './workitem.ts';
 
 /** What a build choice does when a person picks it; archon-build-queue.yaml declares the same enum. */
 export const BUILD_EFFECTS = ['continue', 'park'] as const;
@@ -102,6 +113,32 @@ export function notWaitingReason(doc: WorkItem): string {
 }
 
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
+
+/** What claiming one named item came to. */
+export type NamedClaim =
+  | { readonly kind: 'claimed'; readonly doc: WorkItem }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'held'; readonly runId: string }
+  | { readonly kind: 'not_waiting'; readonly doc: WorkItem };
+
+/**
+ * Claim the named item if it waits for the build queue, releasing a terminal claim on
+ * it first as `claimNext` does, or say why it cannot be claimed.
+ */
+export function claimNamed(number: number, at: string, runId: string): NamedClaim {
+  const found = read(workItemName(number));
+  if (found === undefined) return { kind: 'missing' };
+  const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
+  const outcome = (current: Read): NamedClaim =>
+    current.doc.claim === null
+      ? { kind: 'not_waiting', doc: current.doc }
+      : { kind: 'held', runId: current.doc.claim.run_id };
+  if (!claimable(item, BUILD_PICKUP)) return outcome(item);
+  const won = claimItem(item, at, runId, BUILD_PICKUP);
+  if (won !== null) return { kind: 'claimed', doc: won };
+  const fresh = read(item.name);
+  return fresh === undefined ? { kind: 'missing' } : outcome(fresh);
+}
 
 /**
  * The rounds that count toward the round cap: those since the item's scope last

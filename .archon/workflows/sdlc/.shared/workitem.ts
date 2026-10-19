@@ -682,7 +682,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-function read(name: string): Read | undefined {
+export function read(name: string): Read | undefined {
   const stored = stateGet(name);
   if (stored.value === null) return undefined;
   try {
@@ -718,7 +718,7 @@ export function readWorkItem(number: number): WorkItem | null {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
+export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
@@ -778,7 +778,7 @@ function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkIte
   };
 }
 
-function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+export function claimable(item: Read | undefined, pickup: Pickup): item is Read {
   return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 
@@ -803,32 +803,6 @@ export function claimNext(
     if (won !== null) return won;
   }
   return null;
-}
-
-/** What claiming one named item came to. */
-export type NamedClaim =
-  | { readonly kind: 'claimed'; readonly doc: WorkItem }
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'held'; readonly runId: string }
-  | { readonly kind: 'not_waiting'; readonly doc: WorkItem };
-
-/**
- * Claim the named item if it waits for this pickup, releasing a terminal claim on it
- * first as `claimNext` does, or say why it cannot be claimed.
- */
-export function claimNamed(number: number, at: string, runId: string, pickup: Pickup): NamedClaim {
-  const found = read(workItemName(number));
-  if (found === undefined) return { kind: 'missing' };
-  const item = releaseIfTerminal(found, at, runId, pickup);
-  const outcome = (current: Read): NamedClaim => {
-    if (current.doc.claim !== null) return { kind: 'held', runId: current.doc.claim.run_id };
-    return { kind: 'not_waiting', doc: current.doc };
-  };
-  if (!claimable(item, pickup)) return outcome(item);
-  const won = claimItem(item, at, runId, pickup);
-  if (won !== null) return { kind: 'claimed', doc: won };
-  const fresh = read(item.name);
-  return fresh === undefined ? { kind: 'missing' } : outcome(fresh);
 }
 
 export function claimItem(

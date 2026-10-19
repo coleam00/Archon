@@ -17,6 +17,7 @@ import {
   BUILD_PICKUP,
   type BuildRound,
   buildBranch,
+  claimNamed,
   countedRounds,
   itemPullRequest,
   notWaitingReason,
@@ -26,7 +27,7 @@ import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNamed, claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -89,7 +90,7 @@ function emitItem(
 
 /** The named item, claimed; anything else refuses with why it cannot be built now. */
 function claimTarget(number: number, runId: string): WorkItem {
-  const result = claimNamed(number, new Date().toISOString(), runId, BUILD_PICKUP);
+  const result = claimNamed(number, new Date().toISOString(), runId);
   switch (result.kind) {
     case 'claimed':
       return result.doc;
