@@ -366,6 +366,128 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(JSON.stringify(afterCompleted?.data)).toContain('use-dev');
   });
 
+  // An answer belongs to the question it answered. When a dependency re-executes on
+  // the resume that applies the answer, the question the wait would ask now is not the
+  // one that was answered, so the stored answer must not complete the wait.
+  it('asks again instead of applying an answer when a dependency re-ran on resume', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Which base? prior says old',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'use-main' }, { id: 'use-dev' }],
+      answer: { decision: 'use-dev', text: 'dev is ahead' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-stale',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-stale-test',
+          nodes: [
+            { id: 'prior', kind: 'exec', runtime: 'sh', script: 'printf new' },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['prior'],
+              wait: {
+                attention: 'Which base? prior says $prior.output',
+                form: 'select',
+                options: [{ id: 'use-main' }, { id: 'use-dev' }],
+              },
+            },
+            {
+              id: 'after',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'printf "%s" "$ask.output.decision"',
+              depends_on: ['ask'],
+            },
+          ],
+        },
+        // The prior pass completed nothing the wait depends on, so `prior` runs fresh.
+        priorCompletedNodes: new Map([['unrelated', { output: 'x' }]]),
+        workflowRun: makeWorkflowRun('attention-stale', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.clearWorkflowWaitContext).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-stale',
+      expect.objectContaining({
+        kind: 'attention',
+        message: 'Which base? prior says new',
+        form: 'select',
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
+    const pausedWith = store.pauseWorkflowRunForWait.mock.calls[0]?.[1] as WorkflowWaitContext;
+    expect(pausedWith.kind === 'attention' && pausedWith.answer).toBeFalsy();
+    expect(pausedWith.kind === 'attention' && pausedWith.pauseId).not.toBe('ask-1');
+    const afterRan = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .some(event => event.step_name === 'after' && event.event_type === 'node_completed');
+    expect(afterRan).toBe(false);
+  });
+
+  it('applies an answer on resume when every dependency replays its prior success', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Which base? prior says old',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'use-main' }, { id: 'use-dev' }],
+      answer: { decision: 'use-dev', text: 'dev is ahead' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-replayed',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-replayed-test',
+          nodes: [
+            { id: 'prior', kind: 'exec', runtime: 'sh', script: 'printf new' },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['prior'],
+              wait: {
+                attention: 'Which base? prior says $prior.output',
+                form: 'select',
+                options: [{ id: 'use-main' }, { id: 'use-dev' }],
+              },
+            },
+          ],
+        },
+        priorCompletedNodes: new Map([['prior', { output: 'old' }]]),
+        workflowRun: makeWorkflowRun('attention-replayed', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalledWith(
+      'attention-replayed',
+      persisted,
+      expect.objectContaining({ answer: { decision: 'use-dev', text: 'dev is ahead' } })
+    );
+  });
+
   it('pauses an unanswered select wait again on a bare resume', async () => {
     const store = createMockStore();
     const persisted: WorkflowWaitContext = {

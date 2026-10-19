@@ -27,6 +27,7 @@ import {
   parseWholeInputsRef,
 } from '../../../output-ref';
 import { getLog } from '../../log';
+import { getStaleCachedDependencies } from '../../stale-dependencies';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
   resolveRunInputs,
@@ -44,6 +45,51 @@ export interface WaitLoopOwner {
   bodySessionCursorAncestry?: BodySessionCursorAncestry;
 }
 
+/**
+ * The persisted wait context this invocation resumes: the run's stored wait when it
+ * belongs to this node (or this loop-group iteration's body wait), minus an answer
+ * given to a question the wait no longer asks. Undefined starts a fresh wait.
+ */
+function resumableWaitContext(
+  ctx: RunLayersContext,
+  node: WaitNode,
+  loopOwner: WaitLoopOwner | undefined
+): WorkflowWaitContext | undefined {
+  const raw = ctx.workflowRun.metadata?.wait;
+  if (!isWorkflowWaitContext(raw)) return undefined;
+  const owned =
+    loopOwner === undefined
+      ? raw.owner === 'node' && raw.nodeId === node.id
+      : raw.owner === 'loop_group' &&
+        raw.nodeId === loopOwner.groupId &&
+        raw.bodyWaitId === node.id &&
+        raw.iteration === loopOwner.iteration;
+  if (!owned || answersStaleQuestion(ctx, node, raw)) return undefined;
+  return raw;
+}
+
+/**
+ * True when a stored attention answer was given to a question this pass no longer asks:
+ * a dependency of the wait changed since the pass that paused it (a failed node retried
+ * on resume, an `always_run` producer, a stale cache). The answer is then discarded and
+ * the wait asks again, so the run never acts on an answer to a different question.
+ */
+function answersStaleQuestion(
+  ctx: RunLayersContext,
+  node: WaitNode,
+  persisted: WorkflowWaitContext
+): boolean {
+  if (persisted.kind !== 'attention' || persisted.answer === undefined) return false;
+  if (ctx.priorCompletedNodes === undefined) return false;
+  const stale = getStaleCachedDependencies(node, ctx.nodeOutputs, ctx.priorCompletedNodes);
+  if (stale.length === 0) return false;
+  getLog().warn(
+    { workflowRunId: ctx.workflowRun.id, nodeId: node.id, staleDependencies: stale },
+    'dag.wait_answer_discarded_stale_question'
+  );
+  return true;
+}
+
 /** Execute a durable wait without holding a subprocess or provider slot. */
 export async function executeWaitNode(
   ctx: RunLayersContext,
@@ -52,17 +98,7 @@ export async function executeWaitNode(
 ): Promise<NodeExecutionResult> {
   const { workflowRun, deps, platform, conversationId, nodeOutputs, stepNamePrefix, logDir } = ctx;
   const now = new Date();
-  const rawPersisted = workflowRun.metadata?.wait;
-  const persisted =
-    isWorkflowWaitContext(rawPersisted) &&
-    (loopOwner === undefined
-      ? rawPersisted.owner === 'node' && rawPersisted.nodeId === node.id
-      : rawPersisted.owner === 'loop_group' &&
-        rawPersisted.nodeId === loopOwner.groupId &&
-        rawPersisted.bodyWaitId === node.id &&
-        rawPersisted.iteration === loopOwner.iteration)
-      ? rawPersisted
-      : undefined;
+  const persisted = resumableWaitContext(ctx, node, loopOwner);
 
   const execution =
     ctx.unfinishedInvocations?.get(
