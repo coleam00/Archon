@@ -118,6 +118,7 @@ interface GitCommandAnchors {
 type WorktreeCreationResult =
   | {
       kind: 'created';
+      resolvedBaseBranch?: string;
       warnings: string[];
       cutFromCommit?: string;
       creationId: string;
@@ -299,6 +300,9 @@ export class WorktreeProvider implements IIsolationProvider {
         request,
         ...(creation.cutFromCommit !== undefined ? { cutFromCommit: creation.cutFromCommit } : {}),
       },
+      ...(creation.resolvedBaseBranch !== undefined
+        ? { resolvedBaseBranch: creation.resolvedBaseBranch }
+        : {}),
       ...(creation.warnings.length > 0 ? { warnings: creation.warnings } : {}),
     };
   }
@@ -1010,6 +1014,7 @@ export class WorktreeProvider implements IIsolationProvider {
     // Only a branch this call cuts from its start point has a cut-from commit,
     // so it says nothing about who owns the branch; `branchCreated` does.
     let cutFromCommit: string | undefined;
+    let resolvedBaseBranch: string | undefined;
     let branchCreated = false;
     if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
       // Adoption continues the local branch exactly as the prior run left it.
@@ -1029,7 +1034,7 @@ export class WorktreeProvider implements IIsolationProvider {
       // (request.baseBranch), then auto-detect via getDefaultBranch.
       const preferredBaseBranch =
         request.baseOverride ?? worktreeConfig?.baseBranch ?? request.baseBranch;
-      const baseBranch = await this.syncWorkspaceBeforeCreate(
+      resolvedBaseBranch = await this.syncWorkspaceBeforeCreate(
         repoPath,
         preferredBaseBranch,
         remote
@@ -1049,10 +1054,12 @@ export class WorktreeProvider implements IIsolationProvider {
           repoPath,
           worktreePath,
           branchName,
-          baseBranch,
+          resolvedBaseBranch,
           setupLockReason,
           remote
         ));
+        // Current config cannot establish the original base of a reused branch.
+        if (cutFromCommit === undefined) resolvedBaseBranch = undefined;
       }
     }
 
@@ -1114,6 +1121,7 @@ export class WorktreeProvider implements IIsolationProvider {
 
     return {
       kind: 'created',
+      ...(resolvedBaseBranch !== undefined ? { resolvedBaseBranch } : {}),
       creationId,
       branchCreated,
       warnings,
