@@ -103,8 +103,17 @@ await serveProvider(
           models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
         };
       },
-      async checkCredential({ env, signal }): Promise<CredentialStatus> {
+      async checkCredential({ env, signal, execContext, cwd }): Promise<CredentialStatus> {
         if (mode === 'live-eof') return await closeOutput();
+        if (
+          mode === 'container-check' &&
+          (env.PROCESS_HOST_CANARY ||
+            env.TEST_CREDENTIAL !== 'container-value' ||
+            execContext?.kind !== 'container' ||
+            execContext.containerId !== 'runner' ||
+            cwd !== '/runner')
+        )
+          throw new Error('Credential check escaped the execution context');
         if (mode === 'credential-crash') {
           process.stderr.write(process.env.CUSTOM_CREDENTIAL ?? '');
           process.exit(7);

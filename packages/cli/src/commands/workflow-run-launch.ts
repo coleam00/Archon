@@ -51,6 +51,7 @@ import {
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
+import { assertContainerRunCredentials, runExecutesInContainer } from './workflow-native-auth';
 import {
   buildNoResumableRunError,
   buildResumeLookupFailureError,
@@ -121,7 +122,14 @@ export async function launchDetachedOwnedRun(
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
-    detachedLaneConfig(request, admission, declaration, detachCodebase)
+    detachedLaneConfig(request, admission, declaration, detachCodebase),
+    await runExecutesInContainer(
+      host,
+      options,
+      admission.workflow,
+      detachCodebase,
+      admission.continuationRun
+    )
   );
 
   await launchDetachedRun({
@@ -281,7 +289,8 @@ export async function prepareForegroundLaunch(
   const preparedAiConfiguration = await prepareLaneAiConfiguration(
     request,
     admission,
-    foregroundLaneConfig(continuation, codebase, workspace)
+    foregroundLaneConfig(continuation, codebase, workspace),
+    await runExecutesInContainer(host, options, admission.workflow, codebase, resumable)
   );
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -562,6 +571,17 @@ export async function provisionWorkspace(
     // `--detach` pre-flight enforces the same refusal before the fork.
     assertCodebaseResolvedForIsolation({ codebase });
   }
+
+  await assertContainerRunCredentials(
+    request.host,
+    launch.preparedAiConfiguration,
+    { cwd: workspace.workingCwd, execContext: workspace.execContext },
+    {
+      backend: workspace.container?.backend,
+      envId: workspace.container?.envId,
+      resumable: launch.resumable,
+    }
+  );
 
   const { preparedSource } = admission;
   if (

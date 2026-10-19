@@ -249,7 +249,7 @@ async function startFreshInResumedWorktree(
   if (!captured) return; // capture failed, message already sent
   const workflow = captured.workflow;
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
+  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration, { cwd: scope.runCwd });
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
