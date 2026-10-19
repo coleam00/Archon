@@ -990,6 +990,7 @@ describe('manage_run — gate continuation', () => {
           getDagResumeSnapshot: async () => ({
             completedNodeOutputs: new Map(),
             fanOutSnapshots: new Map(),
+            failedNodes: new Map(),
             unresolvedNodeStarts: new Set<string>(),
             budget: { workUnits: 0, spendUsd: 0 },
             costUsd: 0,

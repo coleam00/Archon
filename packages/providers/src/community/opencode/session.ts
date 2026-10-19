@@ -18,7 +18,7 @@ import {
 } from './agent-config';
 import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
-import { normalizeTokens } from './tokens';
+import { sumAssistantUsage } from './tokens';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -238,6 +238,8 @@ export async function* streamOpencodeSession(
   const completedToolCalls = new Set<string>();
   const textBlocks = new TextPartBlocks();
   let latestAssistantInfo: Record<string, unknown> | undefined;
+  // Latest update of each assistant message, keyed by message id.
+  const assistantInfos = new Map<string, Record<string, unknown>>();
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
 
@@ -275,6 +277,7 @@ export async function* streamOpencodeSession(
           latestAssistantInfo = info;
           if (typeof info.id === 'string') {
             lastAssistantMessageId = info.id;
+            assistantInfos.set(info.id, info);
           }
         }
         continue;
@@ -340,14 +343,14 @@ export async function* streamOpencodeSession(
           sessionId,
           lastAssistantMessageId
         );
-        const tokens = normalizeTokens(latestAssistantInfo);
+        const { tokens, cost } = sumAssistantUsage([...assistantInfos.values()]);
 
         yield* textBlocks.drain();
         // Built by assignment on a typed value so a misspelled key fails to compile.
         const result: ResultChunk = { type: 'result', sessionId };
         if (tokens) result.tokens = tokens;
         if (structuredOutput !== undefined) result.structuredOutput = structuredOutput;
-        if (typeof latestAssistantInfo?.cost === 'number') result.cost = latestAssistantInfo.cost;
+        if (cost !== undefined) result.cost = cost;
         const stopReason = opencodeStopReason(latestAssistantInfo?.finish);
         if (stopReason !== undefined) result.stopReason = stopReason;
         if (typeof latestAssistantInfo?.modelID === 'string' && latestAssistantInfo.modelID) {

@@ -1,7 +1,8 @@
 /**
  * Claim the merge queue's items and read the facts the sweep decides from.
  *
- * Live claims, in intake's order, every item the build queue finished, up to `limit`,
+ * Enrolls listed maintainers' own open pull requests that opted in (`maintainers.ts`), then
+ * live claims, in intake's order, every item the build queue finished, up to `limit`,
  * and reads each one's pull request in one snapshot: its head, the trusted review
  * verdict, CI and review threads at that head, and whether it merges cleanly. The
  * trusted review report is written under `merge/<number>/review/` with the commit it
@@ -30,7 +31,9 @@ import {
   UNREADABLE,
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
-import { claimNext, parseOrder, readMaintainers, type WorkItem } from '../../.shared/workitem.ts';
+import { readMaintainerList } from '../../.shared/maintainers.ts';
+import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
+import { claimNext, parseOrder, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   /** The issue whose work item the queue claimed. */
@@ -41,6 +44,8 @@ interface Item {
   readonly record: MergeRecord | null;
   /** The trusted review report a delta review continues from; empty when there is none. */
   readonly prior_report: string;
+  /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
+  readonly own_pr: boolean;
 }
 
 function positive(name: string, value: string): number {
@@ -89,7 +94,9 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   requireGh();
-  const maintainers = readMaintainers(repo);
+  const list = readMaintainerList(repo);
+  const maintainers = list.logins;
+  enrollOwnPrs(repo, list.ownPrs, new Date().toISOString());
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
   for (const doc of claimAll(limit, order, runId)) {
@@ -120,6 +127,7 @@ function main(): void {
       facts,
       record: doc.facts.merge ?? null,
       prior_report: report === null || facts.verdict.reviewed === null ? '' : writePrior(pr, facts.verdict.reviewed, report),
+      own_pr: isOwnPr(doc),
     });
   }
   const gate = [

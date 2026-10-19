@@ -1,23 +1,23 @@
-/**
- * The response shapes every GitHub mutation answers with: applied, refused, applied
- * but unverified, or of unknown outcome, each carrying the evidence the contract asks
- * for. Shared by the mutation handlers in `lifecycle.ts` and `review-threads.ts`.
- */
-import type { z } from 'zod';
+/** The outcomes a lifecycle mutation reports; `lifecycle.ts` describes when each applies. */
+
+import { z } from 'zod';
 import {
   forgeResponseSchema,
-  mutationAttempt,
-  mutationTarget,
-  type ForgeCommentRecord,
-  type ForgeError,
+  type ForgeSubjectRecord,
   type ForgeLabelRecord,
+  mutationTarget,
+  mutationAttempt,
+  type ForgeCommentRecord,
+  type landedSchema,
+  type ForgeError,
   type ForgeMutationFailure,
   type ForgeMutationRequest,
   type ForgePrRecord,
   type ForgeResponse,
-  type ForgeSubjectRecord,
-  type landedSchema,
 } from '@archon/forge/operations';
+
+/** Records how far a mutation's single write got: submitted, then acknowledged by GitHub. */
+export type Submit = (phase: 'submitted' | 'acknowledged') => void;
 
 export function failure(
   operationId: string,

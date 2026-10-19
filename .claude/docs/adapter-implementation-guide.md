@@ -131,14 +131,14 @@ Only Discord creates real threads. Slack's `channel:ts` format already ensures t
 
 ### GitHub (`GitHubAdapter`)
 
-**File:** `packages/adapters/src/forge/github/adapter.ts`
+**File:** `packages/adapters/src/forge/github/adapter.ts`, which delegates to `webhook-intake.ts`, `check-run-signal.ts`, `registration.ts`, `repository-readiness.ts` and `comment-delivery.ts` in the same folder.
 
-**Receiving:** Webhooks. `start()` is a no-op. Server registers `POST /webhooks/github` which calls `handleWebhook(payload, signature)`. Fire-and-forget (returns 200 immediately).
+**Receiving:** Webhooks. `start()` is a no-op. Server registers `POST /webhooks/github` which calls `receiveWebhook()`; conversational events run `handleWebhook()` in the background.
 
-**Webhook processing flow (`handleWebhook()`, line 677):**
-1. HMAC-SHA256 signature verification via `timingSafeEqual`
+**Webhook processing flow (`handleWebhook()`):**
+1. HMAC-SHA256 signature verification
 2. Auth check against `GITHUB_ALLOWED_USERS` (username from `event.sender.login`)
-3. `parseEvent()` extracts fields — **only handles `issue_comment.created`, `issues.closed`, `pull_request.closed`** — NOT `issues.opened` or `pull_request.opened` (descriptions contain docs, not commands; see #96)
+3. `parseWebhookEvent()` extracts fields — **only handles `issue_comment.created`, `issues.closed`, `pull_request.closed`** — NOT `issues.opened` or `pull_request.opened` (descriptions contain docs, not commands; see #96)
 4. Self-loop prevention: ignores comments containing `<!-- archon-bot-response -->`
 5. Bot mention check via `hasMention()`
 6. `getOrCreateCodebaseForRepo()` upserts codebase record

@@ -10,6 +10,8 @@ import type { AttentionStreamLine } from './attention-watch';
 // These lists own both the public input exclusions and their runtime validation.
 export const FRESH_RUN_FORBIDDEN_OPTIONS = [
   'priorCompletedNodes',
+  'priorFailedNodes',
+  'resumeCause',
   'priorUsage',
   'priorNodeSessions',
 ] as const satisfies readonly (keyof ExecuteWorkflowOptions)[];

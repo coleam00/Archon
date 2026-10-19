@@ -17,7 +17,6 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseMaintainers,
   parseOrder,
   parseTrustInput,
   parseWorkItem,
@@ -29,6 +28,7 @@ import {
   updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
+import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
 import {
   gitCheckout,
   hostCli,
@@ -384,6 +384,10 @@ describe('pickup', () => {
     expect([...parseMaintainers('[" Wirasm ", "Other"]')]).toEqual(['wirasm', 'other']);
     expect(() => parseMaintainers('{"maintainers": []}')).toThrow('JSON array of forge logins');
     expect(() => parseMaintainers('[""]')).toThrow('JSON array of forge logins');
+    const list = parseMaintainerList('["Alice", { "login": " Wirasm ", "merge_queue": "own-prs" }]');
+    expect([...list.logins]).toEqual(['alice', 'wirasm']);
+    expect([...list.ownPrs]).toEqual(['wirasm']);
+    expect(() => parseMaintainerList('[{ "login": "x", "merge_queue": "all" }]')).toThrow('JSON array of forge logins');
   });
 });
 
@@ -503,6 +507,7 @@ const READY_VERDICT = {
   INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
   INPUTS_SUMMARY: 'Ready to deliver',
   INPUTS_CLOSURE: 'null',
+  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
@@ -611,6 +616,13 @@ describe('the intake scripts', () => {
       importance: { value: 'high' },
       urgency: { value: 'soon' },
     });
+    // Related work is stored for later rounds; the run-only fields are not.
+    expect(doc.facts.triage?.related).toEqual([
+      { url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' },
+    ]);
+    expect(Object.keys(doc.facts.triage ?? {}).sort()).toEqual(
+      ['at', 'complexity', 'importance', 'pull_request', 'related', 'run_id', 'size', 'type', 'urgency', 'verdict']
+    );
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'deliver',
       verdict: 'READY',
@@ -778,6 +790,59 @@ describe('the intake scripts', () => {
       summary: expect.stringContaining('run-1, which ended failed'),
     });
   }, 60_000);
+  function idleOutcome(at: Install, event: Event): string {
+    // A skipped document is noted on stderr as well, so only the exit codes are pinned.
+    const picked = run(at, 'facts', event);
+    expect(picked.code).toBe(0);
+    expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'idle', item: null });
+    const result = run(at, 'outcome', event, { INPUTS_PATH: 'idle', INPUTS_ITEM: 'null', INPUTS_DECISION: 'null' });
+    expect(result.code).toBe(0);
+    return (JSON.parse(result.stdout) as { summary: string }).summary;
+  }
+
+  test('an idle pass names a stored item that does not parse instead of reporting an empty queue', () => {
+    const at = install();
+    inProcess(at, () => statePut('work/3', { not: 'a work item' }, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(summary).not.toBe('No item waits for intake.');
+    expect(summary).toContain('work/3');
+  }, 60_000);
+
+  test('a claim held by a run with no status stays held, and the idle pass names it and the run', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(stored(at).value.claim?.run_id).toBe('ghost-run');
+    expect(summary).toContain('work/7');
+    expect(summary).toContain('ghost-run');
+  }, 60_000);
+
+  test('an idle pass with only live claims still reports an empty queue', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'live-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const event = { runId: 'run-1', kind: 'pr', statuses: { 'live-run': 'running' } };
+    expect(idleOutcome(at, event)).toBe('No item waits for intake.');
+  }, 60_000);
+
+  test('pickup reads every stored work item in one state call, not one per item', () => {
+    const at = install();
+    inProcess(at, () => {
+      for (const number of [1, 2, 3]) {
+        statePut(`work/${String(number)}`, newWorkItem({ repo: PR.repo, number }, AT), 0);
+      }
+    });
+    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-intake-calls-'))), 'calls.jsonl');
+    const result = run(at, 'facts', { runId: 'run-1', kind: 'pr' }, { ARCHON_CALL_LOG: log });
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(JSON.parse(result.stdout)).toMatchObject({ path: 'idle', item: null });
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+    expect(calls.filter(argv => argv[0] === 'state')).toEqual([
+      ['state', 'list', '--prefix', 'work/', '--values'],
+    ]);
+  }, 60_000);
+
   test('edits while an item is claimed queue one request, and a release keeps only the newest', () => {
     const at = install();
     facts(at, { runId: 'run-1' });

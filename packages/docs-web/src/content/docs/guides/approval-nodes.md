@@ -125,6 +125,12 @@ of the same run is refused. Answering through the CLI without `--json` continues
 the run in that process; otherwise `archon serve` or `archon workflow wake`
 continues it. Attention waits are not supported in container-isolated workflows.
 
+Continuing after an answer picks the run up where it paused. Nodes that completed
+replay their results, and a node that failed before the pause replays its failure
+instead of running again, because the run had already moved past it. If the
+question the wait would ask now differs from the one that was answered, the wait
+discards the answer and asks again, and its notice says which dependencies changed.
+
 ## Reading the answer
 
 Downstream nodes read the answer as `$<wait-id>.output.decision`,

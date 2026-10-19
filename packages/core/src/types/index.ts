@@ -65,9 +65,8 @@ export interface HandleMessageContext {
    *
    * Set ONLY by the `POST /api/workflows/:name/run` route, whose body carries an
    * `inputs` map. It rides the context rather than the message text so a supplied value
-   * is never confused with `$ARGUMENTS`, and so chat platforms — which have no channel
-   * for it and never populate this field — keep their existing behaviour unchanged
-   * (#2555 tracks giving them one).
+   * is never confused with `$ARGUMENTS`. Chat launches never populate this field; they
+   * carry inputs on the `invoke_workflow` launch instead.
    */
   readonly workflowInputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by the workflow run route (#2481). */

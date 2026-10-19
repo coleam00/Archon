@@ -22,6 +22,7 @@ import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.
 import { viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
+import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
@@ -111,7 +112,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       decision: 'idle',
-      summary: 'No item waits for the build queue.',
+      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
       class: '',

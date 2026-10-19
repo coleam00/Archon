@@ -27,11 +27,11 @@ import { getArchonHome, isDocker } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
-  workflowRunCommand,
-  workflowResumeCommand,
   workflowApproveCommand,
   workflowRejectCommand,
-} from './workflow';
+  workflowResumeCommand,
+} from './workflow-control';
+import { workflowRunCommand } from './workflow-run-owned';
 import { buildDetachedRunCmd, resolveDetachedRunEncryptionEnv } from './workflow-detach';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
 
@@ -326,6 +326,74 @@ describe('workflowRunCommand — detach', () => {
     } finally {
       if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
       else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+    }
+  });
+
+  it('hands the detached child the layer another run started with, for --config-from-run', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { sealWorkflowRunConfig, unsealWorkflowRunConfig } = await import('@archon/core/config');
+    const { workflowRunConfigMetadataSchema } = await import(
+      '@archon/workflows/schemas/run-config'
+    );
+    const workflowDb = await import('@archon/core/db/workflows');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    const savedKey = process.env.TOKEN_ENCRYPTION_KEY;
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'paused-run',
+      metadata: {
+        run_config: sealWorkflowRunConfig(
+          { docsPath: 'from-the-paused-run' },
+          { kind: 'cli', label: 'config.claude.yaml' }
+        ),
+      },
+    });
+    process.argv = [
+      'bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'assist',
+      '--config-from-run',
+      'paused-run',
+      '--detach',
+    ];
+
+    let payload: string | undefined;
+    try {
+      const commandPromise = workflowRunCommand(
+        createTestWorkflowHost(),
+        '/test/path',
+        'assist',
+        '',
+        {
+          detach: true,
+          configFromRun: 'paused-run',
+        }
+      );
+      await finishStartupWindow(commandPromise, spawnSpy);
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      const payloadIndex = spawnOptions.cmd.indexOf('--internal-detached-run-config');
+      payload = payloadIndex >= 0 ? spawnOptions.cmd[payloadIndex + 1] : undefined;
+      expect(payload).toBeDefined();
+      const metadata = workflowRunConfigMetadataSchema.parse(JSON.parse(payload ?? ''));
+      expect(metadata.source).toEqual({
+        kind: 'cli',
+        label: 'run paused-run (config.claude.yaml)',
+      });
+      expect(unsealWorkflowRunConfig(metadata)).toEqual({ docsPath: 'from-the-paused-run' });
+    } finally {
+      process.argv = savedArgv;
+      if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+      spawnSpy.mockRestore();
     }
   });
 

@@ -25,7 +25,7 @@ import { collectComposedSuspensionPaths } from '../../../include/suspension';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { sumFanOutCost, sumFanOutTokens } from '../../usage';
+import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
@@ -363,7 +363,7 @@ export async function executeComposeFanOutNode(
 
   const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
-  const totalCostUsd = sumFanOutCost(outcomes);
+  const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
