@@ -1,0 +1,122 @@
+name: god-mode-forge
+description: |
+  Use when: you want Archon to write a new workflow for you, or god mode's learner has
+  found a recurring problem that deserves its own handler.
+
+  Describe the workflow you need. An agent surveys the existing workflows, writes the
+  new one under `.archon/workflows/forged/<name>/`, and iterates until the engine's own
+  validator accepts it and a deterministic dry run reaches an end. A person then reads
+  the finished workflow and approves or rejects it. On approval it is committed to
+  this run's branch, ready for review and merge.
+
+  Forged workflows always go to a person, whatever the trust ladder says. A system
+  that installs its own governance without review is no longer governed, and a merge is
+  the point where a person takes responsibility for what will run unattended.
+
+  Usage: archon workflow run god-mode-forge --input need="<what the workflow should do>"
+
+inputs:
+  need:
+    required: true
+    description: What the new workflow must do, and why.
+
+returns: install
+outcome_field: installed
+
+nodes:
+  - id: survey
+    script: survey
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        catalog: { type: string }
+      required: [catalog]
+
+  - id: drafts
+    depends_on: [survey]
+    loop_group:
+      until_bash: |
+        done=$check.output.done
+        test "$done" = "true"
+      max_iterations: 4
+      nodes:
+        - id: author
+          command: author
+          with:
+            need: "$INPUTS.need"
+            catalog: "$survey.output.catalog"
+            feedback: "$LOOP_PREV.check.output.report"
+          output_format:
+            type: object
+            properties:
+              name: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+              summary: { type: string }
+            required: [name, summary]
+
+        - id: check
+          depends_on: [author]
+          script: check
+          runtime: bun
+          with:
+            name: "$author.output.name"
+            summary: "$author.output.summary"
+            previous: "$LOOP_PREV.check.output.attempt"
+          output_format:
+            type: object
+            properties:
+              attempt: { type: integer }
+              done: { type: boolean }
+              valid: { type: boolean }
+              report: { type: string }
+              name: { type: string }
+              summary: { type: string }
+            required: [attempt, done, valid, report, name, summary]
+
+  - id: unbuilt
+    depends_on: [drafts]
+    when: "$drafts.output.valid == false"
+    cancel: "The forge could not produce a valid workflow: $drafts.output.report"
+
+  - id: present
+    depends_on: [drafts]
+    when: "$drafts.output.valid == true"
+    script: present
+    runtime: bun
+    mutates_checkout: false
+    with:
+      name: "$drafts.output.name"
+      summary: "$drafts.output.summary"
+      report: "$drafts.output.report"
+    output_format:
+      type: object
+      properties:
+        message: { type: string }
+      required: [message]
+
+  - id: review
+    depends_on: [present]
+    wait:
+      attention: "$present.output.message"
+      form: approval
+      labels:
+        god-mode: forge
+
+  - id: install
+    depends_on: [review]
+    script: install
+    runtime: bun
+    with:
+      name: "$drafts.output.name"
+      decision: "$review.output.decision"
+      note: "$review.output.text"
+    output_format:
+      type: object
+      properties:
+        installed: { type: boolean }
+        name: { type: string }
+        branch: { type: string }
+        commit: { type: string }
+        reason: { type: string }
+      required: [installed, name, branch, commit, reason]

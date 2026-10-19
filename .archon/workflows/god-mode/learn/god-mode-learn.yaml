@@ -1,0 +1,89 @@
+name: god-mode-learn
+description: |
+  Use when: you want god mode to improve itself. Run it on a schedule (see
+  `god-mode/triggers/`), and it becomes the always-on half of god mode.
+
+  It reads the evidence: recent run outcomes in this project, which classes of
+  attention item keep recurring, the trust ladder, and god mode's memory. An agent then
+  picks the single highest-leverage improvement, backed by that evidence. It can
+  rewrite the memory into fewer and better lessons (committed with a revision guard),
+  launch the forge to build a handler workflow for a recurring problem (which a person
+  approves before it is committed), or do nothing when nothing is worth changing.
+
+  Every change it makes lands in an audited state document or on a branch a person
+  reviews. It never edits the engine, its own governance, or the trust ladder.
+
+  Usage: archon workflow run god-mode-learn
+
+returns: report
+
+nodes:
+  - id: observe
+    script: observe
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        evidence: { type: string }
+        lessons_revision: { type: integer }
+      required: [evidence, lessons_revision]
+
+  - id: reflect
+    depends_on: [observe]
+    command: reflect
+    context: fresh
+    mutates_checkout: false
+    with:
+      evidence: "$observe.output.evidence"
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        action: { type: string, enum: [forge, consolidate, none] }
+        rationale: { type: string, pattern: '\S' }
+        evidence: { type: string }
+        need: { type: string }
+        lessons: { type: array, items: { type: string }, maxItems: 25 }
+      required: [action, rationale, evidence, need, lessons]
+
+  - id: consolidate
+    depends_on: [observe, reflect]
+    when: "$reflect.output.action == 'consolidate'"
+    script: consolidate
+    runtime: bun
+    mutates_checkout: false
+    with:
+      lessons: { from: "$reflect.output.lessons" }
+      revision: "$observe.output.lessons_revision"
+    output_format:
+      type: object
+      properties:
+        kept: { type: integer }
+      required: [kept]
+
+  - id: forge
+    depends_on: [reflect]
+    when: "$reflect.output.action == 'forge'"
+    workflow: god-mode-forge
+    isolation: worktree
+    with:
+      need: "$reflect.output.need"
+
+  - id: report
+    depends_on: [reflect, consolidate, forge]
+    trigger_rule: all_done
+    script: report
+    runtime: bun
+    mutates_checkout: false
+    with:
+      action: "$reflect.output.action"
+      rationale: "$reflect.output.rationale"
+      consolidated: { from: "$consolidate.output.kept", if_skipped: null }
+      forged: { from: "$forge.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        action: { type: string }
+        summary: { type: string }
+      required: [action, summary]

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "sourceInstanceId": "god-mode-learn",
+  "binding": {
+    "bindingId": "god-mode-learn",
+    "bindingRevision": null,
+    "hostId": "REPLACE-with-your-host-id",
+    "runAsUserId": "REPLACE-with-the-id-from-archon-trigger-whoami",
+    "resource": "god-mode:learn:REPLACE-with-owner/repo",
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/REPLACE/with/absolute/path/to/your/checkout",
+      "workflowName": "god-mode-learn",
+      "inputs": {},
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": {
+    "intervalSeconds": 21600,
+    "runAtLoad": false
+  }
+}

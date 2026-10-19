@@ -1,0 +1,15 @@
+# A recurring class of attention item: the learner launches the forge. Dry-run never
+# launches a `workflow:` child, so the forge node fails here, and `report` fails with
+# it: a failed producer always fails the bindings that read it.
+observe: { evidence: "god-mode=charter 7", lessons_revision: 3 }
+reflect:
+  action: forge
+  rationale: the same clarifying question recurs
+  evidence: "label god-mode=charter: 7 open items"
+  need: "A workflow that answers recurring charter questions from project docs"
+  lessons: []
+fixture:
+  expect: failed
+  fail-node: [forge, report]
+  reached: [observe, reflect]
+exec-code: true
