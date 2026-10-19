@@ -42,6 +42,7 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -222,7 +223,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: 'No pull request waits for the merge queue.',
+      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
       class: '',
