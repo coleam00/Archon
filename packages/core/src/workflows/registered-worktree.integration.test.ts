@@ -201,8 +201,8 @@ test.each(['checkout', 'local branch', 'remote branch'])(
     expect(
       execFileSync('git', ['-C', reused.cwd, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
     ).toBe(git('rev-parse', 'dev'));
-    expect(first.baseBranch).toEqual({ kind: 'resolved', value: 'dev' });
-    expect(reused.baseBranch).toEqual({ kind: 'unavailable' });
+    expect(first.baseBranch).toBe('dev');
+    expect(reused.baseBranch).toBeUndefined();
     expect(reused.cwd).toBe(first.cwd);
     expect(reused.envId).toBe(first.envId);
     if (reuse === 'checkout') expect(reused.ownedWorktree).toBeUndefined();

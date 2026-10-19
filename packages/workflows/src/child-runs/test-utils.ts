@@ -722,7 +722,7 @@ export function makeFakeResolver(childCwd: string): {
       return {
         cwd: childCwd,
         envId: `env-${String(req.childIndex ?? 0)}`,
-        baseBranch: { kind: 'resolved', value: 'child-release' },
+        baseBranch: 'child-release',
         branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-${String(req.childIndex ?? 0)}`,
       };
     },
@@ -761,7 +761,7 @@ export function makeFanResolver(root: string): {
       return {
         cwd: dir,
         envId: `env-${req.parentRun.id.slice(0, 8)}-${String(idx)}`,
-        baseBranch: { kind: 'resolved', value: 'child-release' },
+        baseBranch: 'child-release',
         branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-${String(idx)}`,
       };
     },

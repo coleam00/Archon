@@ -275,7 +275,7 @@ nodes:
         const resolver: ChildIsolationResolver = {
           resolve: async req => ({
             ...(await fake.resolver.resolve(req)),
-            baseBranch: { kind: 'unavailable' },
+            baseBranch: undefined,
           }),
         };
         const result = await executeWorkflow(
@@ -441,7 +441,7 @@ nodes:
             envId: `env-${String(calls.length)}`,
             creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
           },
-          baseBranch: { kind: 'resolved', value: 'child-release' },
+          baseBranch: 'child-release',
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-0`,
         };
       },
@@ -758,7 +758,7 @@ nodes:
         return {
           cwd: dir,
           envId: `env-${req.nodeId}`,
-          baseBranch: { kind: 'resolved', value: 'child-release' },
+          baseBranch: 'child-release',
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-${req.nodeId}-child-0`,
         };
       },

@@ -192,10 +192,7 @@ export function createCodebaseChildResolver(
         );
 
         return {
-          baseBranch:
-            env.resolvedBaseBranch !== undefined
-              ? { kind: 'resolved', value: env.resolvedBaseBranch }
-              : { kind: 'unavailable' },
+          baseBranch: env.resolvedBaseBranch,
           cwd: env.workingPath,
           envId: created.envId,
           ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),

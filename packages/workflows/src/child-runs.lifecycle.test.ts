@@ -1671,7 +1671,7 @@ nodes:
         cwd: '/never',
         envId: 'never',
         branchName: 'never',
-        baseBranch: { kind: 'resolved' as const, value: 'never' },
+        baseBranch: 'never',
       }));
       const result = await executeWorkflow(
         deps,

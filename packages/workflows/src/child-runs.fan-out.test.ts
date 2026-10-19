@@ -1222,7 +1222,7 @@ nodes:
         cwd,
         envId: 'test-child',
         branchName: 'test-child',
-        baseBranch: { kind: 'resolved', value: 'child-release' },
+        baseBranch: 'child-release',
       };
     });
     const options = { resolveChildIsolation: { resolve } };
