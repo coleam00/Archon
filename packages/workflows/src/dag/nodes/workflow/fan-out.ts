@@ -22,7 +22,7 @@ import { mapWithHeldSlots } from '../../../utils/map-with-limit';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { sumFanOutCost, sumFanOutTokens } from '../../usage';
+import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { type RunLayersContext } from '../../run-context';
@@ -503,7 +503,7 @@ export async function executeFanOutWorkflowNode(
     return outcome;
   });
 
-  const totalCostUsd = sumFanOutCost(outcomes);
+  const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 

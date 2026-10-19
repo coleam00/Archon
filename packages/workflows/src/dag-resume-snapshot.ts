@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
+import { sumReportedCost } from './dag/usage';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 import {
   nodeInvocationKey,
@@ -464,11 +465,7 @@ export async function foldDagResumeSnapshot(
             contribution.tokens === undefined ? [] : [contribution.tokens]
           )
         ),
-    costUsd: countedUsage.reduce<number | undefined>(
-      (total, contribution) =>
-        contribution.costUsd === undefined ? total : (total ?? 0) + contribution.costUsd,
-      undefined
-    ),
+    costUsd: sumReportedCost(countedUsage),
     budget,
   };
 }
