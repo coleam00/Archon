@@ -151,6 +151,100 @@ nodes:
     }
   );
 
+  it.each(['join-failed', 'join-completed', 'paused', 'lookup-failed', 'pause-lost'] as const)(
+    'refuses legacy aggregate-only spend before resuming children (%s)',
+    async mode => {
+      const waits = !mode.startsWith('join-');
+      const marker = join(cwd, 'retry-succeeds');
+      await writeWorkflow(
+        'replacement-child',
+        `name: replacement-child
+description: paid child
+nodes:
+  - id: paid
+    prompt: work
+  - id: finish
+    bash: test -f '${marker}' && printf '%s' "$ARGUMENTS"
+    depends_on: [paid]
+  - id: ask
+    approval:
+      message: review
+    depends_on: [finish]
+    when: "$finish.output == 'second'"
+`
+      );
+      await writeWorkflow(
+        'replacement-parent',
+        fanAskParent(
+          'replacement-parent',
+          'replacement-child',
+          waits ? '["first","second"]' : '["first"]',
+          '      max_parallel: 1\n      join: all_success'
+        )
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      const workflow = await discover('replacement-parent');
+      await executeWorkflow(deps, platform, 'replacement', cwd, workflow, 'goal');
+      const parent = [...store.runs.values()].find(
+        row => row.workflow_name === 'replacement-parent'
+      )!;
+      const child = [...store.runs.values()].find(row => row.parent_run_id === parent.id)!;
+      expect(parent.status).toBe('failed');
+      expect(child.status).toBe('failed');
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(waits ? 0.02 : 0.01);
+      const childrenBefore = [...store.runs.values()]
+        .filter(row => row.parent_run_id === parent.id)
+        .map(row => structuredClone(row));
+      for (const event of store.events) {
+        if (event.workflow_run_id === parent.id && event.data) delete event.data.fan_out_usage;
+      }
+      if (mode !== 'join-failed') await writeFile(marker, '');
+      const find = store.findChildRuns;
+      store.findChildRuns = async id => {
+        const rows = await find(id);
+        if (mode === 'lookup-failed' && rows.some(row => row.status === 'paused')) {
+          throw new Error('replacement sibling lookup rejected');
+        }
+        return rows;
+      };
+      const pause = store.pauseWorkflowRun;
+      store.pauseWorkflowRun = async (id, gate, ...rest) => {
+        if (mode === 'pause-lost' && gate.type === 'fan_out') await store.cancelWorkflowRun(id);
+        return pause(id, gate, ...rest);
+      };
+      const resumed = await hydrateResumableRun(deps, parent);
+      if (!resumed) throw new Error('parent not resumable');
+      await executeWorkflow(
+        deps,
+        platform,
+        'replacement',
+        cwd,
+        workflow,
+        'goal',
+        undefined,
+        resumed
+      );
+      expect(parent.status).toBe('failed');
+      const expectedCost = waits ? 0.02 : 0.01;
+      const expectedInput = waits ? 14 : 7;
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(expectedCost);
+      expect(parent.metadata.total_tokens_in).toBe(expectedInput);
+      const snapshot = await store.getDagResumeSnapshot(parent.id);
+      expect(snapshot.costUsd).toBeCloseTo(expectedCost);
+      expect(snapshot.tokens?.input).toBe(expectedInput);
+      expect([...store.runs.values()].filter(row => row.parent_run_id === parent.id)).toEqual(
+        childrenBefore
+      );
+      const failure = [...store.events]
+        .reverse()
+        .find(event => event.workflow_run_id === parent.id && event.event_type === 'node_failed');
+      expect(failure?.data?.error).toContain('legacy fan-out usage');
+      expect(failure?.data?.error).toContain('fresh run');
+    }
+  );
+
   it.each([false, true, 'missing', 'absent', 'unsettled-missing'] as const)(
     'holds a source-stopped child slot until durable completion (child read fails=%s)',
     async childReadFails => {

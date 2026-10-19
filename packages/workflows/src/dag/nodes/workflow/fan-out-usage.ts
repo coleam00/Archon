@@ -19,8 +19,19 @@ export function childUsageTotals(outcomes: readonly ChildWorkflowOutcome[]): Fan
 export function recordedFanOutUsage(events: readonly NodeRecordEventEnvelope[]): FanOutUsage {
   const recorded: FanOutUsage = {};
   for (const event of events) {
-    const parsed = fanOutUsageSchema.safeParse(readNodeRecordData(event.data).fan_out_usage);
+    const data = readNodeRecordData(event.data);
+    const parsed = fanOutUsageSchema.safeParse(data.fan_out_usage);
     if (parsed.success) Object.assign(recorded, parsed.data);
+    else if (
+      event.event_type === 'node_failed' &&
+      (data.cost_usd || data.tokens !== undefined || data.tokens_unknown === true)
+    ) {
+      // Aggregate-only history cannot distinguish surviving children from replacements.
+      throw new Error(
+        `Cannot resume node '${event.step_name ?? 'unknown'}': legacy fan-out usage lacks child identities. ` +
+          'Start a fresh run to preserve the recorded spend without charging it again.'
+      );
+    }
   }
   return recorded;
 }

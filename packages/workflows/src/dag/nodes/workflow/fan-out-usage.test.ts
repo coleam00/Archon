@@ -41,6 +41,42 @@ describe('fan-out usage increments', () => {
     expect(unrecordedFanOutUsage([paid], recorded).costUsd).toBeCloseTo(0.02);
   });
 
+  it.each([
+    { cost_usd: 0.01 },
+    { tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 0 } },
+    { tokens_unknown: true },
+  ])('refuses aggregate-only failed history before reconciling children (%j)', usage => {
+    expect(() =>
+      recordedFanOutUsage([
+        {
+          workflow_run_id: 'parent',
+          step_name: 'fan',
+          event_type: 'node_failed',
+          data: JSON.stringify({ fan_out: true, error: 'join failed', ...usage }),
+        },
+        {
+          workflow_run_id: 'parent',
+          step_name: 'fan',
+          event_type: 'node_failed',
+          data: { fan_out_usage: { paid: { costUsd: 0.01 } } },
+        },
+      ])
+    ).toThrow("Cannot resume node 'fan': legacy fan-out usage lacks child identities");
+  });
+
+  it('accepts legacy pre-spend failures and uncharged suspension events', () => {
+    expect(
+      recordedFanOutUsage(
+        ['node_failed', 'node_suspended'].map(event_type => ({
+          workflow_run_id: 'parent',
+          step_name: 'fan',
+          event_type,
+          data: { fan_out: true, cost_usd: 0 },
+        }))
+      )
+    ).toEqual({});
+  });
+
   it('keeps unreported spend absent', () => {
     expect(unrecordedFanOutUsage([{ status: 'completed', childRunId: 'silent' }], {})).toEqual({
       costUsd: undefined,
