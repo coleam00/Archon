@@ -1,9 +1,10 @@
 /**
  * Claim the build queue's next item and write the issue the deciding agents read.
  *
- * Live claims the waiting item that sorts first with intake's claim and order, and
- * writes only that claim. A closed issue goes to `closed`, which apply parks without
- * an agent.
+ * It claims the waiting item that sorts first with intake's claim and order, or the
+ * item the `number` input names, and writes only that claim. A named item that cannot
+ * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
+ * apply parks without an agent.
  *
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the pull request the round continues;
@@ -12,13 +13,20 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BUILD_PICKUP, type BuildRound, buildBranch, countedRounds, itemPullRequest } from '../../.shared/build.ts';
+import {
+  BUILD_PICKUP,
+  type BuildRound,
+  buildBranch,
+  countedRounds,
+  itemPullRequest,
+  notWaitingReason,
+} from '../../.shared/build.ts';
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNamed, claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -79,6 +87,21 @@ function emitItem(
   });
 }
 
+/** The named item, claimed; anything else refuses with why it cannot be built now. */
+function claimTarget(number: number, runId: string): WorkItem {
+  const result = claimNamed(number, new Date().toISOString(), runId, BUILD_PICKUP);
+  switch (result.kind) {
+    case 'claimed':
+      return result.doc;
+    case 'missing':
+      throw new Error(`issue ${String(number)} has no work item: intake has not recorded it`);
+    case 'held':
+      throw new Error(`issue ${String(number)} is claimed by run ${result.runId}`);
+    case 'not_waiting':
+      throw new Error(`issue ${String(number)} is not ready for the build queue: ${notWaitingReason(result.doc)}`);
+  }
+}
+
 function main(): void {
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -90,7 +113,11 @@ function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
-  const doc = claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP);
+  const number = trimmed(process.env.INPUTS_NUMBER);
+  const doc =
+    number === ''
+      ? claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP)
+      : claimTarget(positive('number', number), runId);
   if (doc === null) {
     emit({
       path: 'idle',

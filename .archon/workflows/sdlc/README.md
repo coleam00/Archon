@@ -454,6 +454,12 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   the item's intake requests, so an edit or label request recorded while it holds the
   item waits for intake's next pickup. The queue writes no labels; intake's mirror
   stays as it is.
+- **A named item.** The `number` input makes the run claim that issue instead of the
+  first in order, so an operator chooses what a run builds and, with the launch's
+  config, which provider builds it: one launch per issue, such as
+  `--input number=123` with the config that selects Codex. The run refuses, before any
+  agent, when the issue has no work item, another run holds it, or it does not wait
+  for the build queue, and says which, including when intake recorded it blocked.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a

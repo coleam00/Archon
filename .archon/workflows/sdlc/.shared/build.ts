@@ -83,6 +83,24 @@ export function buildWaits(doc: WorkItem): boolean {
   return (doc.facts.triage?.at ?? '') > build.at;
 }
 
+/** Why an unclaimed item does not wait for the build queue, in words an operator acts on. */
+export function notWaitingReason(doc: WorkItem): string {
+  if (doc.stage === 'blocked') return 'intake recorded it blocked; re-triage it once what it waits on is resolved';
+  if (!(LAUNCH_STAGES as readonly string[]).includes(doc.stage)) {
+    return `its stage is ${doc.stage}, not a route intake sends to the build queue`;
+  }
+  switch (doc.facts.build?.status) {
+    case 'ready':
+      return 'the queue already marked its pull request ready';
+    case 'asking':
+      return "it waits for a maintainer's answer on its attention item";
+    case 'parked':
+      return 'the queue parked it; a re-triage starts it over';
+    default:
+      return 'it does not wait for the build queue';
+  }
+}
+
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
 /**
