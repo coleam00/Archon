@@ -527,3 +527,21 @@ describe('review threads and issue bodies', () => {
     }
   );
 });
+
+test('conversation comments retain bodies for callers, redact audit and enforce qualified identity', async () => {
+  const request = { operationId: 'comments', op: 'pr.comments', ref } satisfies ForgeRequest;
+  const result = await dispatch(request);
+  expect(result.response).toMatchObject({
+    ok: true,
+    result: {
+      op: 'pr.comments',
+      value: { ref, comments: [{ author: null, body: 'private conversation body' }] },
+    },
+  });
+  expect(JSON.stringify(result.audit)).not.toContain('private conversation body');
+  expect(JSON.stringify(result.audit)).toContain(contentDigest('private conversation body'));
+  expect((await dispatch(request, 'mismatch')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+  });
+});

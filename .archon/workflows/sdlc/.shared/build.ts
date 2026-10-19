@@ -32,7 +32,7 @@ export type BuildEffect = (typeof BUILD_EFFECTS)[number];
 export type BuildAttention = Attention<BuildEffect>;
 
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
-export const ROUTE_DECISIONS = ['launch', 'ask'] as const;
+export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
 export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];

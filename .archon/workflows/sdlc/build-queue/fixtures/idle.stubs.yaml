@@ -9,6 +9,8 @@ facts:
   brief: ""
   rounds: []
   at_cap: false
+  source: gh
+  maintainers: [maintainer]
   policy_defaults: "/stub/policy"
   pull_request: null
   continues: null

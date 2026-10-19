@@ -21,8 +21,9 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   - a stop that names as a blocker work a later step owns, such as a review, CI or a
     maintainer's merge (a false blocker).
 - **Push** commits a run left committed but unpushed on its pull request's branch.
-- **Done** when the pull request's latest review says Ready at its head commit and CI
-  marked it ready.
+- **Done** when the trusted canonical review says Ready at the current full head SHA
+  and CI is green at that head. Route/apply can finish this without another ship
+  round, taking a draft PR out of draft if needed.
 
 ## Unclear: the queue asks
 

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
-import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
+import { PR, forgeOperation, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -69,6 +69,87 @@ describe('pushHead', () => {
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ambiguous');
+  });
+});
+
+describe('build queue continuation checkout', () => {
+  const inputs = { INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number) };
+
+  it.each([false, true])('contains the PR history before publication, preserving the local branch (divergent=%s)', divergent => {
+    const cwd = gitCheckout({}, track);
+    const prHead = git(cwd, 'rev-parse', 'HEAD');
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'checkout', '-q', '-b', 'archon/build-test', 'dev');
+    if (divergent) {
+      writeFileSync(join(cwd, 'base-only.txt'), 'base advancement');
+      git(cwd, 'add', 'base-only.txt');
+      git(cwd, 'commit', '-q', '-m', 'advance base');
+    }
+    const initial = git(cwd, 'rev-parse', 'HEAD');
+    expect(spawnSync('git', ['merge-base', '--is-ancestor', prHead, 'HEAD'], { cwd }).status).toBe(1);
+    const prepared = runPackScript('build-queue/scripts/checkout', {
+      cwd, inputs, source: divergent ? 'forge' : 'gh',
+      forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: prHead }), title: '', body: '' }) },
+    });
+    if (divergent) expect(prepared.gh).toEqual([]);
+    expect({ code: prepared.code, stderr: prepared.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(JSON.parse(prepared.stdout)).toEqual({ head: prHead });
+    expect(git(cwd, 'branch', '--show-current')).toBe('archon/build-test');
+    git(cwd, 'merge-base', '--is-ancestor', prHead, 'HEAD');
+    git(cwd, 'merge-base', '--is-ancestor', initial, 'HEAD');
+    if (!divergent) expect(git(cwd, 'rev-parse', 'HEAD')).toBe(prHead);
+    const published = runPackScript('pr/scripts/publish-pr', {
+      cwd,
+      gh: { pr: { headRefOid: git(cwd, 'rev-parse', 'HEAD') } },
+      inputs: { INPUTS_PULL_REQUEST: String(PR.number), INPUTS_HEAD_REPO: JSON.stringify(PR.repo), INPUTS_EXISTING: String(PR.number), INPUTS_REPO: JSON.stringify(PR.repo) },
+    });
+    expect({ code: published.code, stderr: published.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(published.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(git(cwd, 'rev-parse', 'HEAD'));
+  });
+
+  it('does nothing on a first round without reading a forge or requiring a repository', () => {
+    const run = runPackScript('build-queue/scripts/checkout', { inputs: { INPUTS_CONTINUES: 'null' } });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual({ head: null });
+    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
+  });
+
+  it.each(['conflict', 'missing', 'closed', 'fork'] as const)('refuses %s before delivery without changing the remote', mode => {
+    const cwd = gitCheckout({ conflict: mode === 'conflict' }, track);
+    const prHead = git(cwd, 'rev-parse', 'HEAD');
+    if (mode !== 'missing') git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'checkout', '-q', '-b', 'archon/build-test', 'dev');
+    const run = runPackScript('build-queue/scripts/checkout', { cwd, inputs, gh: { pr: {
+      ...(mode === 'closed' ? { state: 'CLOSED' } : {}),
+      ...(mode === 'fork' ? { headRepositoryOwner: { login: 'fork' } } : {}),
+    } } });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain(mode === 'conflict' ? 'merge' : mode === 'missing' ? 'fetch' : 'must be open with a head');
+    expect(git(cwd, 'branch', '--show-current')).toBe('archon/build-test');
+    if (mode === 'conflict') {
+      expect(git(cwd, 'diff', '--name-only', '--diff-filter=U')).toBe('a.txt');
+      expect(run.stderr).toContain('CONFLICT');
+      expect(run.stderr).toContain('a.txt');
+    }
+    expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(mode === 'missing' ? '' : prHead);
+  });
+
+  it('preserves a remote advancement after preparation by refusing normal publication', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'checkout', '-q', '-b', 'archon/build-test', 'dev');
+    expect(runPackScript('build-queue/scripts/checkout', { cwd, inputs }).code).toBe(0);
+    git(cwd, 'checkout', '-q', 'feature');
+    git(cwd, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    const advanced = git(cwd, 'rev-parse', 'HEAD');
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'checkout', '-q', 'archon/build-test');
+    const published = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) }, preload: 'Bun.sleepSync = () => {};' });
+    expect(published.code).not.toBe(0);
+    expect(published.stderr).toContain('refused');
+    expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(advanced);
   });
 });
 

@@ -61,6 +61,7 @@ export interface GhFake {
   readonly repositoryLabels?: readonly string[];
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
+  readonly afterReady?: GhPr;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
   readonly pr?: GhPr;
   /** No pull request matches `gh pr list --head` until one is created. */
@@ -246,6 +247,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
     if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
+    Object.assign(pr, fake.afterReady ?? {});
     return result(0, 'ready');
   }
   if (text.startsWith('pr create')) {

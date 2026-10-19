@@ -109,7 +109,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake, started by a schedule binding. Each run claims one triaged item, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
+The stage after intake, started by a schedule binding. Each run claims one triaged item. If its pull request has a trusted Ready review and green CI at its current head, the queue takes it out of draft and records it ready without a ship round. Otherwise it launches `archon-ship` from a brief and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers continues it in the next run. An unclear one, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack installs no binding; the SDLC pack README's "Build queue" section shows the one to add.
 

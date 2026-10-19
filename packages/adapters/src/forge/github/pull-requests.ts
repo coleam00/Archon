@@ -395,3 +395,40 @@ export async function handleGithubPrReviews(
     },
   };
 }
+
+export async function handleGithubPrComments(
+  request: Extract<ForgeRequest, { op: 'pr.comments' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  await readPull(fetchImpl, token, request.ref);
+  const { root, path } = location(request.ref.repo);
+  const comment = z.object({
+    id: z.union([z.number().int(), z.string().min(1)]),
+    html_url: z.url(),
+    user: userSchema,
+    body: z.string().nullable(),
+  });
+  const comments = await githubPages(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(request.ref.number)}/comments`,
+    value => z.array(comment).parse(value)
+  );
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: request.op,
+      value: {
+        ref: request.ref,
+        comments: comments.map(item => ({
+          id: String(item.id),
+          url: item.html_url,
+          author: actor(request.ref.repo.host, item.user),
+          body: item.body ?? '',
+        })),
+      },
+    },
+  };
+}
