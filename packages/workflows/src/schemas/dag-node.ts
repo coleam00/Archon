@@ -18,6 +18,14 @@ import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
 import { modelRefSchema } from './model-binding';
+import {
+  betasSchema,
+  nodeMcpSchema,
+  piNodeConfigSchema,
+  sandboxSettingsSchema,
+  type NodeMcp,
+} from './provider-options';
+export * from './provider-options';
 export { MAX_DURABLE_WAIT_MS } from './durable-wait';
 export { effortLevelSchema, EFFORT_LEVELS } from './effort';
 export type { EffortLevel } from './effort';
@@ -64,96 +72,6 @@ export type TriggerRule = z.infer<typeof triggerRuleSchema>;
 /** Canonical list of trigger rules — derived from schema, do not duplicate. */
 export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
 
-// ---------------------------------------------------------------------------
-// Claude SDK option schemas
-// ---------------------------------------------------------------------------
-
-/**
- * Reasoning depth — the one spelling, on every provider that has the control
- * (#2556). The vocabulary is the union of the effort-capable SDKs' enums, and
- * a provider clamps a rung it doesn't offer to the nearest one it does
- * (`clampEffort` in @archon/core/effort): Codex takes every rung, while `ultra`
- * clamps to `max` on Claude/Pi and `xhigh` on Copilot, and `minimal` clamps to
- * `low` on Claude/Copilot. Derived from `EFFORT_LADDER` rather than restated, so
- * the YAML enum and the clamp cannot disagree.
- */
-/**
- * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
- * the SDK expects either a populated beta header or none at all. `.nonempty()`
- * enforces the min-length-1 rule at runtime; it does not narrow the inferred
- * TypeScript type to a non-empty tuple (the type stays `string[]`).
- */
-export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
-
-/**
- * Claude Agent SDK SandboxSettings — OS-level filesystem/network restrictions.
- * Uses passthrough() to match the SDK's loose schema (index signature allows extra fields).
- */
-export const sandboxSettingsSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    autoAllowBashIfSandboxed: z.boolean().optional(),
-    allowUnsandboxedCommands: z.boolean().optional(),
-    network: z
-      .object({
-        allowedDomains: z.array(z.string()).optional(),
-        allowManagedDomainsOnly: z.boolean().optional(),
-        allowUnixSockets: z.array(z.string()).optional(),
-        allowAllUnixSockets: z.boolean().optional(),
-        allowLocalBinding: z.boolean().optional(),
-        httpProxyPort: z.number().optional(),
-        socksProxyPort: z.number().optional(),
-      })
-      .optional(),
-    filesystem: z
-      .object({
-        allowWrite: z.array(z.string()).optional(),
-        denyWrite: z.array(z.string()).optional(),
-        denyRead: z.array(z.string()).optional(),
-      })
-      .optional(),
-    ignoreViolations: z.record(z.string(), z.array(z.string())).optional(),
-    enableWeakerNestedSandbox: z.boolean().optional(),
-    enableWeakerNetworkIsolation: z.boolean().optional(),
-    excludedCommands: z.array(z.string()).optional(),
-    ripgrep: z
-      .object({
-        command: z.string(),
-        args: z.array(z.string()).optional(),
-      })
-      .optional(),
-  })
-  .passthrough();
-
-export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
-
-/**
- * Per-node Pi extension posture — the PORTABLE authoring surface for issue #2133.
- * Mirrors the install-level `assistants.pi.nodes.<nodeId>` override map (#2124),
- * but lives on the node itself so it travels with the workflow instead of a
- * machine's `config.yaml`. Highest-precedence layer: node YAML `pi:` > config
- * `nodes.<id>` > assistant-level `assistants.pi.*`. Structurally identical to the
- * provider contract's `PiExtensionPosture`; pi-extension-posture.type-test.ts
- * checks the authoring schema against that SDK-free contract.
- *
- * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
- * it; non-AI node types warn it's ignored (see BASH_NODE_AI_FIELDS).
- */
-export const piNodeConfigSchema = z.object({
-  /** Override extension discovery for this node (`assistants.pi.enableExtensions`). */
-  enableExtensions: z.boolean().optional(),
-  /** Override the UIContext binding (`ctx.hasUI`) for this node. */
-  interactive: z.boolean().optional(),
-  /**
-   * Per-node extension flags, shallow-merged over the assistant-level and
-   * config `nodes.<id>` flags (node YAML wins). Set a flag to `false` to negate
-   * an inherited `true` (extensions check `getFlag(name) === true`).
-   */
-  extensionFlags: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
-});
-
-export type PiNodeConfig = z.infer<typeof piNodeConfigSchema>;
-
 export const nodeContextResumeSchema = z.object({
   resume: z.string().trim().min(1, "'context.resume' must name a node"),
 });
@@ -166,34 +84,6 @@ export function isNodeContextResume(
   context: NodeContext | undefined
 ): context is { resume: string } {
   return typeof context === 'object' && context !== null && 'resume' in context;
-}
-
-/**
- * A node's `mcp:` declaration: a config-file path the node requires, or
- * `{ path, optional: true }` for a server the node runs without when its provider
- * cannot load MCP servers or the file does not exist. Strict so a misspelled
- * `optional` fails the load instead of silently meaning required.
- */
-export const nodeMcpSchema = z.union([
-  z.string().min(1, "'mcp' must be a non-empty string path"),
-  z.strictObject({
-    path: z.string().min(1, "'mcp.path' must be a non-empty string path"),
-    optional: z.boolean().optional(),
-  }),
-]);
-
-export type NodeMcp = z.infer<typeof nodeMcpSchema>;
-
-export interface McpDeclaration {
-  path: string;
-  optional: boolean;
-}
-
-export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undefined {
-  if (mcp === undefined) return undefined;
-  return typeof mcp === 'string'
-    ? { path: mcp, optional: false }
-    : { path: mcp.path, optional: mcp.optional === true };
 }
 
 function trimNodeMcp(mcp: NodeMcp): NodeMcp {
@@ -1343,6 +1233,14 @@ type ModeOwnedKey = { [M in NodeMode]: keyof (typeof NODE_MODE_SHAPES)[M] }[Node
 
 const NODE_MODES = Object.keys(NODE_MODE_SHAPES) as NodeMode[];
 
+/** The modes a node selects. A string selector needs non-blank text; an object selector only presence. */
+function selectedModes(node: Readonly<Record<string, unknown>>): NodeMode[] {
+  return NODE_MODES.filter(mode => {
+    const value = node[mode];
+    return typeof value === 'string' ? value.trim().length > 0 : value !== undefined;
+  });
+}
+
 /** Each mode's owned keys, derived from `NODE_MODE_SHAPES`. */
 export const NODE_MODE_KEYS: ReadonlyMap<NodeMode, ReadonlySet<string>> = new Map(
   NODE_MODES.map(mode => [mode, new Set(Object.keys(NODE_MODE_SHAPES[mode]))])
@@ -1429,11 +1327,12 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
 
 /**
  * Validates a raw YAML object as a DAG node and transforms it to a typed DagNode.
+ * `dagNodeSchema` wraps it, rejecting misplaced keys on the raw object first.
  *
  * Enforces:
  * - Non-empty id
  * - Exactly one mode key from NODE_MODE_SHAPES (mutual exclusivity)
- * - No key owned by a different mode (NODE_MODE_SHAPES), and no loop setting at node top level
+ * - No key owned by a different mode, and no loop setting at node top level (rejectMisplacedKeys)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
  * - mode-specific retry validation; retry not allowed on loop_group nodes
@@ -1443,11 +1342,8 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  * loader/provider-checks.ts. Model strings are passed through to the SDK
  * unchanged — the SDK is the source of truth for what model names exist.
  */
-export const dagNodeSchema = z
-  .preprocess(
-    (value, ctx) => rejectMisplacedLoopSettings(rejectRetiredThinking(value, ctx), ctx),
-    dagNodeFlatSchema
-  )
+const dagNodeVariantSchema = z
+  .preprocess(rejectRetiredThinking, dagNodeFlatSchema)
   .superRefine((data, ctx) => {
     const id = data.id.trim();
     const addSchemaIssues = (
@@ -1479,13 +1375,9 @@ export const dagNodeSchema = z
       });
     }
 
-    // A string selector needs non-blank text; an object selector only presence.
-    const selectedModes = NODE_MODES.filter(mode => {
-      const value: unknown = data[mode];
-      return typeof value === 'string' ? value.trim().length > 0 : value !== undefined;
-    });
-    const modeCount = selectedModes.length;
-    const mode = selectedModes[0];
+    const modes = selectedModes(data);
+    const modeCount = modes.length;
+    const mode = modes[0];
     const hasCommand = mode === 'command';
     const hasPrompt = mode === 'prompt';
     const hasBash = mode === 'bash';
@@ -1503,25 +1395,6 @@ export const dagNodeSchema = z
         message: `${listModes('and')} are mutually exclusive`,
       });
       return z.NEVER;
-    }
-
-    // A key owned by another mode asserts something this node will not do — run a
-    // script under `runtime:`, bound its time, pass a child `input:` — so it fails
-    // the load rather than being dropped (#2478).
-    if (mode !== undefined) {
-      const ownKeys = NODE_MODE_KEYS.get(mode);
-      for (const [key, owners] of MODE_KEY_OWNERS) {
-        if (ownKeys?.has(key) || (data as Record<string, unknown>)[key] === undefined) continue;
-        const launchOnly = mode === 'include' ? LAUNCH_ONLY_ON_INCLUDE.get(key) : undefined;
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            launchOnly !== undefined
-              ? `'${key}' is not supported on an include node: ${launchOnly}. Use a 'workflow:' node instead when you want a separate governed run.`
-              : `'${key}' is only supported on ${joinOr(owners)} nodes, not on ${mode} node '${id}'.`,
-          path: [key],
-        });
-      }
     }
 
     const bashAuthoring = hasBash ? bashExecAuthoringSchema.partial().safeParse(data) : undefined;
@@ -2190,7 +2063,10 @@ export const dagNodeSchema = z
       loop: data.loop,
       ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
     } satisfies LoopNode;
-  })
+  });
+
+export const dagNodeSchema = z
+  .preprocess(rejectMisplacedKeys, dagNodeVariantSchema)
   .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
@@ -2541,15 +2417,52 @@ const LOOP_SETTING_OWNERS: ReadonlyMap<string, readonly NodeMode[]> = (() => {
 })();
 
 /**
- * A loop setting written at the top level of a node asserts iteration or a gate
- * the node never gets: the flat schema strips it and the node runs once (#2478).
- * Checked on the raw object because the flat schema does not carry these keys.
+ * A key owned by another mode asserts something this node will not do — run a
+ * script under `runtime:`, bound its time, pass a child `input:` — and a loop
+ * setting at the top level asserts iteration or a gate the node never gets. Both
+ * fail the load rather than being dropped (#2478). Checked on the raw node: the
+ * flat schema strips loop settings, and a misplaced key's value is beside the
+ * point, so its placement is reported instead of a type error on the value.
  */
-function rejectMisplacedLoopSettings(value: unknown, ctx: z.RefinementCtx): unknown {
+function rejectMisplacedKeys(value: unknown, ctx: z.RefinementCtx): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
-  const raw = value as Record<string, unknown>;
-  const where = typeof raw.id === 'string' && raw.id.trim() ? `of node '${raw.id.trim()}' ` : '';
-  for (const key of Object.keys(raw)) {
+  const node = value as Record<string, unknown>;
+  const id = typeof node.id === 'string' ? node.id.trim() : '';
+  const modes = selectedModes(node);
+  // Without an id or a single mode the variant schema's own error comes first.
+  if (id && modes.length === 1) rejectForeignModeKeys(node, modes[0], id, ctx);
+  rejectTopLevelLoopSettings(node, id, ctx);
+  return value;
+}
+
+function rejectForeignModeKeys(
+  node: Readonly<Record<string, unknown>>,
+  mode: NodeMode,
+  id: string,
+  ctx: z.RefinementCtx
+): void {
+  const ownKeys = NODE_MODE_KEYS.get(mode);
+  for (const [key, owners] of MODE_KEY_OWNERS) {
+    if (ownKeys?.has(key) || node[key] === undefined) continue;
+    const launchOnly = mode === 'include' ? LAUNCH_ONLY_ON_INCLUDE.get(key) : undefined;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        launchOnly !== undefined
+          ? `'${key}' is not supported on an include node: ${launchOnly}. Use a 'workflow:' node instead when you want a separate governed run.`
+          : `'${key}' is only supported on ${joinOr(owners)} nodes, not on ${mode} node '${id}'.`,
+      path: [key],
+    });
+  }
+}
+
+function rejectTopLevelLoopSettings(
+  node: Readonly<Record<string, unknown>>,
+  id: string,
+  ctx: z.RefinementCtx
+): void {
+  const where = id ? `of node '${id}' ` : '';
+  for (const key of Object.keys(node)) {
     const owners = LOOP_SETTING_OWNERS.get(key);
     if (owners === undefined) continue;
     const pauseHint =
@@ -2563,5 +2476,4 @@ function rejectMisplacedLoopSettings(value: unknown, ctx: z.RefinementCtx): unkn
       message: `'${key}' is only honoured inside ${joinOr(owners.map(o => `'${o}:'`))}; at the top level ${where}nothing reads it.${pauseHint}`,
     });
   }
-  return value;
 }

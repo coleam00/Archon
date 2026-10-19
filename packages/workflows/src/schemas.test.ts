@@ -1188,34 +1188,32 @@ describe('dagNodeSchema — ExecNode', () => {
     expect(Object.keys(SAMPLE_VALUE).sort()).toEqual([...nonSelectorKeys].sort());
   });
 
-  test('rejects a key owned by another mode, naming the key, node and owning modes', () => {
-    let checked = 0;
-    for (const mode of modes) {
-      const own = NODE_MODE_KEYS.get(mode);
-      for (const key of nonSelectorKeys) {
-        if (own?.has(key)) continue;
-        const result = dagNodeSchema.safeParse({
-          id: 'n1',
-          ...MINIMAL_NODE[mode],
-          [key]: SAMPLE_VALUE[key],
-        });
-        expect(result.success, `${key} on ${mode}`).toBe(false);
-        if (result.success) continue;
-        expect(result.error.issues, `${key} on ${mode}`).toHaveLength(1);
-        const [issue] = result.error.issues;
-        expect(issue?.path).toEqual([key]);
-        expect(issue?.message).toContain(`'${key}'`);
-        // The include launch-only reasons point at 'workflow:' instead of naming the node.
-        if (mode === 'include' && (key === 'isolation' || key === 'input')) continue;
-        expect(issue?.message).toContain(`not on ${mode} node 'n1'`);
-        for (const owner of modes.filter(m => NODE_MODE_KEYS.get(m)?.has(key))) {
-          expect(issue?.message).toContain(owner);
-        }
-        checked++;
+  const foreignKeyCases = modes.flatMap(mode =>
+    nonSelectorKeys
+      .filter(key => !NODE_MODE_KEYS.get(mode)?.has(key))
+      .map(key => [mode, key] as const)
+  );
+
+  test.each(foreignKeyCases)(
+    'rejects %s node carrying %s, naming the key, node and owning modes',
+    (mode, key) => {
+      const result = dagNodeSchema.safeParse({
+        id: 'n1',
+        ...MINIMAL_NODE[mode],
+        [key]: SAMPLE_VALUE[key],
+      });
+      const issues = result.error?.issues ?? [];
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.path).toEqual([key]);
+      expect(issues[0]?.message).toContain(`'${key}'`);
+      // The include launch-only reasons point at 'workflow:' instead of naming the node.
+      if (mode === 'include' && (key === 'isolation' || key === 'input')) return;
+      expect(issues[0]?.message).toContain(`not on ${mode} node 'n1'`);
+      for (const owner of modes.filter(m => NODE_MODE_KEYS.get(m)?.has(key))) {
+        expect(issues[0]?.message).toContain(owner);
       }
     }
-    expect(checked).toBeGreaterThan(0);
-  });
+  );
 
   test.each([
     [
@@ -1237,6 +1235,15 @@ describe('dagNodeSchema — ExecNode', () => {
     [
       { id: 'n1', command: 'c', timeout: 5 },
       "'timeout' is only supported on bash, loop, loop_group or script nodes",
+    ],
+    // A value the owning mode would also refuse still reports the placement.
+    [
+      { id: 'n1', prompt: 'p', on_timeout: 123 },
+      "'on_timeout' is only supported on bash or script nodes, not on prompt node 'n1'",
+    ],
+    [
+      { id: 'n1', prompt: 'p', runtime: 'perl' },
+      "'runtime' is only supported on script nodes, not on prompt node 'n1'",
     ],
   ])('names the owning modes for %o', (node, expected) => {
     const result = dagNodeSchema.safeParse(node);
