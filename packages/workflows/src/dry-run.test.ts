@@ -1450,7 +1450,7 @@ describe('dryRunWorkflow', () => {
   });
 
   test('tolerates a missing stub on an all_done node nested in a loop_group body (#2869)', async () => {
-    // simulateLoopGroup (dry-run.ts) dispatches every body node through this same
+    // simulateLoopGroup (dry-run/nodes/loop-group.ts) dispatches every body node through this same
     // single-node fallback, then fails the whole group if any body node ends up
     // 'failed' — a body join that tolerates its own missing stub must keep the group
     // (and the run) completing, not just the top-level dryRunWorkflow outcome field.
