@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectSourcePath } from '@archon/paths';
@@ -111,3 +111,37 @@ test.skipIf(process.platform === 'win32')(
     ).rejects.toThrow('Cannot verify checkout ownership');
   }
 );
+
+// Root ignores search permission, so these layouts would not fail inspection.
+const canRevokeSearch = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+test.skipIf(!canRevokeSearch).each([
+  {
+    name: 'saved managed spelling',
+    saved: 'alias/../source',
+    locked: 'foreign',
+    managed: 'source',
+  },
+  {
+    name: 'canonical managed source',
+    saved: 'managed/source/',
+    locked: 'managed',
+    managed: 'managed/source',
+  },
+  { name: 'non-managed checkout', saved: 'foreign/inner', locked: 'foreign', managed: null },
+])('refuses when the $name cannot be inspected', async ({ saved, locked, managed }) => {
+  const { root } = await fixture(false);
+  await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
+  await mkdir(join(root, 'foreign', 'source'));
+  await mkdir(join(root, 'managed', 'source'), { recursive: true });
+  await symlink(join(root, 'foreign', 'inner'), join(root, 'alias'));
+  await chmod(join(root, locked), 0o000);
+  try {
+    const managedSource = managed && join(root, managed);
+    const refusal = assertSavedCheckoutRemote(`${root}/${saved}`, remote, managedSource);
+    await expect(refusal).rejects.toThrow('Cannot verify checkout ownership');
+    await expect(refusal).rejects.toMatchObject({ cause: { code: 'EACCES' } });
+  } finally {
+    await chmod(join(root, locked), 0o755);
+  }
+});

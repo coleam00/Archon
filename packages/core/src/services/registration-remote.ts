@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, type Stats } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { execFileAsync, getDefaultRemote, isWorktreePath, toRepoPath } from '@archon/git';
@@ -87,36 +87,47 @@ export async function assertCheckoutRemote(
 }
 
 /**
- * Verify a project's saved checkout with {@link assertCheckoutRemote}. A missing
- * path has nothing to verify, nor has the empty managed source/ that project
- * setup creates before the first clone (or a failed clone leaves behind). A
- * non-empty managed source must be its own clone.
+ * Verify a project's saved checkout with {@link assertCheckoutRemote}. A path
+ * confirmed missing has nothing to verify, nor has the empty managed source/
+ * that project setup creates before the first clone (or a failed clone leaves
+ * behind). A non-empty managed source must be its own clone. A path that cannot
+ * be inspected has unknown ownership and is refused.
  */
 export async function assertSavedCheckoutRemote(
   path: string,
   remoteUrl: string,
   managedSource: string | null
 ): Promise<void> {
-  const normalized = resolve(path);
-  const isManagedSource = managedSource !== null && normalized === resolve(managedSource);
-  if (isManagedSource && existsSync(path)) {
-    try {
-      const [saved, managed] = await Promise.all([stat(path), stat(normalized)]);
-      // realpath normalizes away symlink/.. before consulting the filesystem.
-      if (saved.dev !== managed.dev || saved.ino !== managed.ino) {
-        throw new Error('The saved path reaches a different directory than its managed source.');
-      }
-    } catch (error) {
-      throw new ProjectRegistrationError(
-        `Cannot verify checkout ownership at ${path}. Restore its original checkout or use /update-project to set its path explicitly.`,
-        { cause: error }
-      );
+  const isManagedSource = managedSource !== null && resolve(path) === resolve(managedSource);
+  const checkout = isManagedSource ? resolve(path) : path;
+  let target: Stats | null;
+  try {
+    const [saved, found] = await Promise.all([inspectPath(path), inspectPath(checkout)]);
+    // The kernel resolves symlinks before `..`, so a lexically managed spelling
+    // can reach another directory than the managed source it normalizes to.
+    if (saved && (!found || saved.dev !== found.dev || saved.ino !== found.ino)) {
+      throw new Error('The saved path reaches a different directory than its managed source.');
     }
+    target = found;
+  } catch (error) {
+    throw new ProjectRegistrationError(
+      `Cannot verify checkout ownership at ${path}. Restore its original checkout or use /update-project to set its path explicitly.`,
+      { cause: error }
+    );
   }
-  const checkout = isManagedSource ? normalized : path;
-  if (!existsSync(checkout)) return;
+  if (!target) return;
   if (isManagedSource && (await readdir(checkout)).length === 0) return;
   await assertCheckoutRemote(checkout, remoteUrl, isManagedSource);
+}
+
+/** Null only when the path is confirmed absent; any other inspection failure throws. */
+async function inspectPath(path: string): Promise<Stats | null> {
+  try {
+    return await stat(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 /**
