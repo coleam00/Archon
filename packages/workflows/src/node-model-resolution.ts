@@ -7,7 +7,7 @@ import { NoDefaultProviderError } from '@archon/provider-contract';
  * (#1764). The executor's own function is `async` and takes a platform + conversation id
  * because it MESSAGES the user about capability mismatches; calling it from a dry run
  * would send chat messages for a run that never happens. Reimplementing the chain in
- * dry-run.ts instead would guarantee drift, which turns a legibility feature into an
+ * the dry run instead would guarantee drift, which turns a legibility feature into an
  * actively misleading one — so both callers go through here.
  *
  * Pure: no I/O, no messaging, no registry mutation.

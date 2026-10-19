@@ -1,5 +1,5 @@
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
-import { currentAdoptedRunDir } from '../../../executor-shared';
+import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
 import { buildNodeShellEnvironment } from '../../references';
 import { runSubprocessUntilRunStops } from '../../run-control';

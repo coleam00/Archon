@@ -3,7 +3,7 @@ import { serializeNodeOutput } from '../../../node-record-serialization';
 import { recordNodeState } from '../../../node-event-write';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { requireTerminalStatusWrite } from '../../../terminal-status-write';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import { substituteNodeOutputRefs } from '../../references';
 

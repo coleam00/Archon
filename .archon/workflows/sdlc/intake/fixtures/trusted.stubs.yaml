@@ -16,7 +16,6 @@ facts:
     labels: []
     waiting: []
     notes: []
-  seen: null
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }
@@ -36,7 +35,6 @@ outcome:
   promoted: false
   labels: [archon-ready, archon-size-s, archon-type-feature]
   summary: "stub: Issue 7: deliver"
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
   expect: completed

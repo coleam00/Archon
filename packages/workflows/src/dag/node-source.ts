@@ -5,7 +5,7 @@ import {
   WorkflowSourceUnavailableError,
   type WorkflowSourceRoots,
 } from '../workflow-source';
-import { loadCommandPrompt } from '../executor-shared';
+import { loadCommandPrompt } from '../load-command-prompt';
 import { NodeEventWriteError } from '../node-event-write';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
