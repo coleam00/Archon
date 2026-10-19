@@ -122,7 +122,7 @@ describe('workflow discovery', () => {
     await mkdir(testDir, { recursive: true });
     process.env.ARCHON_HOME = join(testDir, 'home');
     delete process.env.ARCHON_DOCKER;
-    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
     resetLegacyHomeWarningForTests();
   });
 
@@ -806,7 +806,7 @@ nodes:
       delete process.env.ARCHON_DOCKER;
       // The deprecation warning uses a module-scoped flag; reset between tests
       // so each case is independent.
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
       mockLogger.warn.mockClear();
     });
@@ -920,7 +920,7 @@ nodes:
       await mkdir(homeDir, { recursive: true });
       process.env.ARCHON_HOME = homeDir;
       delete process.env.ARCHON_DOCKER;
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
       mockLogger.warn.mockClear();
     });
@@ -1099,9 +1099,8 @@ nodes:
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
-      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } = await import(
-        './workflow-discovery'
-      );
+      const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
 
       const homeDir = join(

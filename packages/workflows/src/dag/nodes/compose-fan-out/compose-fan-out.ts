@@ -2,10 +2,8 @@ import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
-import {
-  discoverWorkflowsWithConfig,
-  resolveWorkflowCommandContents,
-} from '../../../workflow-discovery';
+import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
+import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
 import { findWorkflowLoadError } from '../../../schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
