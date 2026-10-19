@@ -555,9 +555,10 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   It merges the default branch into any whose head lacks commits of it, resolving each
   conflict and regenerating generated files with their owning script, and pushes
   without force. Each merge moves the default branch, so the pull requests after it
-  sync and wait for their delta review and CI: a sweep merges at most one pull request. A
-  push, by the sweep or anyone else, makes the verdict stale, and so does a comment
-  published before verdicts were stamped: one such pull request gets a delta review in
+  need a sync and CI at the synced head before they merge, usually in a later sweep. A
+  sync with no conflict keeps the Ready verdict; CI judges the composed result. A
+  conflict resolution, a push by anyone else, or a comment published before verdicts
+  were stamped makes the verdict stale: one such pull request gets a delta review in
   the same run, through an included `archon-review-block` continuing from its last report,
   and the rest wait for the next sweep. Red CI in code a pull request does not touch
   gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
@@ -567,10 +568,10 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   brief. A clear pull request whose gate passes is merged.
 - **Gate.** The sweep merges only through
   [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
-  refuses unless the verdict says Ready at the head and CI is green there (open review
-  threads are the sweep's judgment), and the pull request is open, not a draft, into the default
+  refuses unless the verdict says Ready and CI is green at the head (which commit the
+  verdict is for, across a clean sync, and open review threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
-  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`
+  head, so CI judged the composed result before the merge. It merges with `--match-head-commit`
   and reads the merge back. A pull request that reads back unmerged, as when the forge
   queues merges, fails the gate.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
