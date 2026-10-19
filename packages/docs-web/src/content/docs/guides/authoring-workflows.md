@@ -3097,11 +3097,22 @@ model: medium        # Tier, alias, or literal model override
 
 ### Portable Model References
 
-`model:` accepts three shapes:
+`model:` accepts four shapes:
 
 - `small`, `medium`, or `large` - portable tier refs resolved from `tiers:` in `~/.archon/config.yaml` and `.archon/config.yaml`, with built-in defaults for claude and codex only
-- `@name` - custom aliases from `aliases:`; use these for project workflows, not bundled or global workflows, because aliases are project-specific
+- `@name` - custom aliases from `aliases:`. A bare alias fails on an install that doesn't define it, so bundled and global workflows can't use one on its own
 - Any other string - a literal model id passed through to the resolved provider's SDK
+- A preference list of `@name` aliases ending in a tier or literal model id, such as `['@reviewer', medium]`. The first alias the run's config defines wins. When none is defined, the final entry is used, so the list is portable. Validation checks the final entry too, so the list works on an install that defines none of its aliases
+
+```yaml
+nodes:
+  - id: seams
+    command: review-seams
+    # The lens's own alias, then the reviewer concern, then the tier used today.
+    model: ['@review-seams', '@reviewer', medium]
+```
+
+A list is how a bundled workflow names the concern each node serves without requiring the user to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model, and optional `effort`. If a workflow or node sets both `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
@@ -3184,7 +3195,7 @@ To validate that all referenced command files, MCP config files, and skill direc
 archon validate workflows <name>
 ```
 
-This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject `@custom` model aliases because those refs are not portable across projects. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
+This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject a bare `@custom` model alias, because it isn't portable across projects; a preference list that ends in a tier or model id is. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
 
 ### Unknown Keys Are Reported, Not Rejected
 
