@@ -126,19 +126,6 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.gh).toEqual([]);
   });
 
-  it.each(['deliver', 'pr', 'ship', 'upkeep', 'forge-check'])('refuses missing pr.comments before the authenticated read in %s', entry => {
-    const run = check({
-      forge: { kind: 'fake', response: ANSWERED },
-      capabilities: REQUIRED_FORGE_OPERATIONS.filter(op => op !== 'pr.comments'),
-      entry,
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('missing: pr.comments');
-    expect(run.forge).toHaveLength(1);
-    expect(run.forge[0]).toContain('forge metadata');
-    expect(run.gh).toEqual([]);
-  });
-
   it('names both setup steps when no plugin claims the host', () => {
     const run = check({
       forge: {

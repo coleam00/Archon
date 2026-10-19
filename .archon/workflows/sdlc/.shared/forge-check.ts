@@ -25,7 +25,6 @@ export function forgeAccessRead(repo: QualifiedPr['repo']) {
 
 export const REQUIRED_FORGE_OPERATIONS = [
   'pr.view',
-  'pr.comments',
   'pr.create',
   'pr.edit-body',
   'pr.ready',
