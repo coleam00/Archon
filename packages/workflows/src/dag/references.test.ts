@@ -536,6 +536,8 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     { label: '40,000 bytes without newline', value: 'é'.repeat(20_000) },
     { label: '40,001 bytes with newline', value: 'é'.repeat(20_000) + '\n' },
     { label: '40,002 bytes with two newlines', value: 'é'.repeat(20_000) + '\n\n' },
+    { label: 'spilled output with newline', value: 'é'.repeat(33_000) + '\n' },
+    { label: 'spilled output with two newlines', value: 'é'.repeat(33_000) + '\n\n' },
   ])('delivers $label exactly through all four shell output references', async ({ value }) => {
     const outputs = new Map([['a', makeOutput('completed', value, { data: value })]]);
     const script = substituteNodeOutputRefsInScopes(

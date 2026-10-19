@@ -36,8 +36,8 @@ export function writeSpillFile(dir: string, filename: string, value: string): st
 
 /**
  * Shell-quote a value for bash, or write it under the run artifact directory's
- * engine-owned spill child and return a $(cat ...) reference when the value exceeds
- * the inline size threshold.
+ * engine-owned spill child when the value exceeds the inline size threshold.
+ * The shell expression restores trailing newlines stripped by command substitution.
  */
 export function shellQuoteOrFile(
   value: string,
@@ -56,7 +56,13 @@ export function shellQuoteOrFile(
     );
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
     const filePath = writeSpillFile(spillDir, filename, value);
-    if (filePath) return `$(cat ${shellQuote(filePath)})`;
+    if (filePath) {
+      // Command substitution strips every trailing LF; append that suffix outside it.
+      let suffixStart = value.length;
+      while (suffixStart > 0 && value[suffixStart - 1] === '\n') suffixStart--;
+      const trailingNewlines = value.slice(suffixStart);
+      return `$(cat ${shellQuote(filePath)})${trailingNewlines ? shellQuote(trailingNewlines) : ''}`;
+    }
     return shellQuote(value); // fallback: inline (pre-file-spill behavior)
   }
   return shellQuote(value);

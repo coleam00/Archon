@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
-import { mkdir, readFile } from 'fs/promises';
+import { mkdir, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -498,6 +498,18 @@ describe('executeDagWorkflow -- loop_group node', () => {
       current: 'C'.repeat(33_000),
     },
     {
+      label: 'whole spilled output with trailing newlines',
+      field: '',
+      previous: 'A'.repeat(33_000) + '\n',
+      current: 'A'.repeat(33_000) + '\n\n',
+    },
+    {
+      label: 'spilled field with trailing newlines',
+      field: '.data',
+      previous: 'A'.repeat(33_000) + '\n',
+      current: 'A'.repeat(33_000) + '\n\n',
+    },
+    {
       label: 'whole multibyte output',
       field: '',
       previous: 'é'.repeat(20_000) + '\n',
@@ -516,19 +528,27 @@ describe('executeDagWorkflow -- loop_group node', () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield {
           type: 'agent_message_chunk',
-          text: JSON.stringify({ data: iteration++ === 0 ? previous : current }),
+          text: field
+            ? JSON.stringify({ data: iteration++ === 0 ? previous : current })
+            : iteration++ === 0
+              ? previous
+              : current,
         };
         yield { type: 'result', sessionId: `spill-${iteration}` };
       });
       const currentFile = join(testDir, 'current.txt');
       const previousFile = join(testDir, 'previous.txt');
       const logDir = join(testDir, 'logs');
+      const artifactsDir = join(testDir, 'artifacts');
+      const stateDir = join(testDir, 'state');
       const result = await executeDagWorkflow(
         dagOptions({
           deps: createMockDeps(),
           cwd: testDir,
           workflowRun: makeWorkflowRun('lg-distinct-spills'),
           logDir,
+          artifactsDir,
+          stateDir,
           workflow: {
             name: 'lg-distinct-spills',
             nodes: [
@@ -568,12 +588,19 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(result).toBe('done');
       expect(iteration).toBe(2);
       expect(existsSync(join(logDir, '.archon', 'node-output-spills'))).toBe(false);
-      expect(await readFile(currentFile, 'utf8')).toBe(
-        field ? current : JSON.stringify({ data: current })
-      );
-      expect(await readFile(previousFile, 'utf8')).toBe(
-        field ? previous : JSON.stringify({ data: previous })
-      );
+      expect(existsSync(join(stateDir, '.archon', 'node-output-spills'))).toBe(false);
+      expect(await readFile(currentFile, 'utf8')).toBe(current);
+      expect(await readFile(previousFile, 'utf8')).toBe(previous);
+      if (previous.length > 32_768) {
+        const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
+        const files = await readdir(spillDir, { recursive: true });
+        const contents = await Promise.all(
+          files
+            .filter(file => file.endsWith('.nodeoutput'))
+            .map(file => readFile(join(spillDir, file), 'utf8'))
+        );
+        expect(contents).toContain(previous);
+      }
     }
   );
 
