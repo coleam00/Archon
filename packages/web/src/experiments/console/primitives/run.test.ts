@@ -223,26 +223,32 @@ describe('toRun — cost', () => {
     expect(r.costUsd).toBe(1.5);
   });
 
-  test('treats $0.00 (and non-positive) as null — the > 0 guard', () => {
+  test('preserves a reported zero cost', () => {
     const zero = toRun(
       raw({ id: 'r1', workflow_name: 'plan', status: 'completed', metadata: { total_cost_usd: 0 } })
     );
-    expect(zero.costUsd).toBeNull();
+    expect(zero.costUsd).toBe(0);
   });
 
-  test('cost is null when metadata is absent or non-numeric', () => {
+  test('cost is null when metadata is absent', () => {
     expect(toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' })).costUsd).toBeNull();
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'plan',
-          status: 'completed',
-          metadata: { total_cost_usd: 'free' },
-        })
-      ).costUsd
-    ).toBeNull();
   });
+
+  test.each([undefined, 'free', null, -1, Number.NaN, Infinity, -Infinity])(
+    'cost is null for missing or invalid total_cost_usd %s',
+    totalCost => {
+      expect(
+        toRun(
+          raw({
+            id: 'r1',
+            workflow_name: 'plan',
+            status: 'completed',
+            metadata: { total_cost_usd: totalCost },
+          })
+        ).costUsd
+      ).toBeNull();
+    }
+  );
 });
 
 describe('toRun — approval parsing', () => {
@@ -637,6 +643,11 @@ test('running advisories are normalized through API metadata and disappear for t
   const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
   expect(live.toolCallAttention).toEqual([call]);
   expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
+  // A stalled tool call keeps naming its cause when the owner is also gone or unobservable.
+  for (const observation of ['unreachable', 'unknown'] as const)
+    expect(runStatusLabel({ ...live, ownerObservation: observation })).toBe(
+      'Running · tool call needs attention'
+    );
   expect(
     toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
       .toolCallAttention

@@ -1,10 +1,11 @@
 // @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { SendQueryOptions } from '@archon/provider-contract';
+import { sessionPreview, type SendQueryOptions } from '@archon/provider-contract';
+import { nodeExecutionMetadataSchema } from '../../../schemas/node-execution';
 import {
   createMockStore,
   mockClaudeCapabilities,
@@ -19,6 +20,8 @@ import {
   makeWorkflowRun,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { writeNodeArtifact } from '../../../artifacts-index';
+import { nodeArtifactsListingSchema } from '../../../schemas/node-artifact';
 import type { DagNode } from '../../../schemas';
 import { dagNodeSchema, workflowDefinitionSchema } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -109,6 +112,62 @@ describe('loop node completion channels', () => {
     expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
   });
 
+  it('until_bash observes artifacts published during the iteration while the agent listing stays frozen', async () => {
+    const artifactsDir = join(testDir, 'typed-artifacts');
+    const workflowRun = makeWorkflowRun('loop-typed-until');
+    let agentListingPath = '';
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      agentListingPath = prompt;
+      const listing = nodeArtifactsListingSchema.parse(
+        JSON.parse(await readFile(agentListingPath, 'utf8'))
+      );
+      expect(listing.artifactsByType.verdict).toBeUndefined();
+      await writeNodeArtifact(
+        artifactsDir,
+        {
+          nodeId: 'judge',
+          outputType: 'verdict',
+          runId: workflowRun.id,
+          producedAt: new Date().toISOString(),
+        },
+        'approved'
+      );
+      yield { type: 'agent_message_chunk', text: 'Published verdict.' };
+      yield { type: 'result', sessionId: 'typed-until-session' };
+    });
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        artifactsDir,
+        workflowRun,
+        workflow: {
+          name: 'loop-typed-until',
+          nodes: [
+            {
+              id: 'judge',
+              kind: 'loop',
+              loop: {
+                prompt: '$TYPED_ARTIFACTS_FILE',
+                max_iterations: 1,
+                fresh_context: false,
+                until_bash: 'grep -q \'"verdict"\' "${TYPED_ARTIFACTS_FILE}"',
+              },
+            },
+          ],
+        },
+      })
+    );
+
+    expect(result).toBe('Published verdict.');
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const agentListing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(agentListingPath, 'utf8'))
+    );
+    expect(agentListing.artifactsByType.verdict).toBeUndefined();
+  });
+
   it('#2803: loop until_bash fails when an upstream whole-output producer was skipped', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'working' };
@@ -160,7 +219,10 @@ describe('loop node completion channels', () => {
       .find(event => event.event_type === 'node_started' && event.step_name === 'poll');
     expect(started?.data?.attempt).toBeDefined();
     expect(failed?.data?.attempt).toEqual(started?.data?.attempt);
-    expect(failed?.data?.binding).toEqual(started?.data?.binding);
+    expect(failed?.data?.binding).toEqual({
+      ...nodeExecutionMetadataSchema.shape.binding.parse(started?.data?.binding),
+      sessionPreview: sessionPreview('loop-required-ref'),
+    });
     expect(await Bun.file(markerPath).exists()).toBe(false);
   });
 
@@ -213,13 +275,49 @@ describe('loop node completion channels', () => {
     );
 
     expect(calls).toBe(1);
-    expect(
-      await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'producer.nodeoutput'),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
+    const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
+    const spills = (await readdir(spillDir)).filter(file => file.endsWith('.producer.nodeoutput'));
+    expect(spills).toHaveLength(1);
+    expect(await readFile(join(spillDir, spills[0]), 'utf-8')).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
+  });
+
+  it('delivers aggregate inline references to a plain-loop completion check', async () => {
+    const value = '€'.repeat(32_000);
+    const file = join(testDir, 'completion-values');
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'agent_message_chunk', text: 'working' };
+      yield { type: 'result', sessionId: 'completion' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('inline-until'),
+        priorCompletedNodes: new Map([['producer', { output: value }]]),
+        workflow: {
+          name: 'inline-until',
+          nodes: [
+            { id: 'producer', kind: 'agent', source: { kind: 'inline', prompt: 'produce' } },
+            {
+              id: 'poll',
+              kind: 'loop',
+              depends_on: ['producer'],
+              loop: {
+                prompt: 'work',
+                fresh_context: false,
+                max_iterations: 2,
+                until_bash: `a=$producer.output; b=$producer.output; printf '%s%s' "$a" "$b" > ${JSON.stringify(file)}`,
+              },
+            },
+          ],
+        },
+      })
+    );
+    expect(calls).toBe(1);
+    expect(await readFile(file, 'utf8')).toBe(value + value);
   });
 
   it('does not complete a loop with no until when the model emits a sentinel-shaped string', async () => {
@@ -527,6 +625,82 @@ describe('loop node completion channels', () => {
       'failed schema validation'
     );
   });
+
+  it.each(['reask', 'transient retry'] as const)(
+    'refreshes the artifact observation for a %s while keeping the first attempt frozen',
+    async mode => {
+      const artifactsDir = join(testDir, 'attempt-artifacts');
+      const workflowRun = makeWorkflowRun('loop-attempt-artifacts');
+      const listingPaths: string[] = [];
+      mockSendQueryDag.mockImplementation(async function* (prompt) {
+        listingPaths.push(prompt.split('\n')[0]);
+        if (listingPaths.length === 1) {
+          await writeNodeArtifact(
+            artifactsDir,
+            {
+              nodeId: 'judge',
+              outputType: 'verdict',
+              runId: workflowRun.id,
+              producedAt: new Date().toISOString(),
+            },
+            'approved'
+          );
+          if (mode === 'transient retry') {
+            yield {
+              type: 'result',
+              isError: true,
+              failure: { class: 'transient', evidence: 'temporary provider failure' },
+            };
+          } else {
+            yield { type: 'result', structuredOutput: { note: 'missing done' } };
+          }
+          return;
+        }
+        yield { type: 'result', structuredOutput: { done: true } };
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          artifactsDir,
+          workflowRun,
+          workflowProvider: 'pi',
+          config: { ...minimalConfig, assistant: 'pi' },
+          workflow: {
+            name: 'loop-attempt-artifacts',
+            nodes: [
+              {
+                id: 'judge',
+                kind: 'loop',
+                provider: 'pi',
+                output_format: untilFieldSchema,
+                retry: { max_attempts: 1, delay_ms: 0 },
+                loop: {
+                  prompt: '$TYPED_ARTIFACTS_FILE',
+                  max_iterations: 1,
+                  fresh_context: false,
+                  until_field: 'done',
+                },
+              },
+            ],
+          },
+        })
+      );
+
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(listingPaths).toHaveLength(2);
+      const listings = await Promise.all(
+        listingPaths.map(async path =>
+          nodeArtifactsListingSchema.parse(JSON.parse(await readFile(path, 'utf8')))
+        )
+      );
+      expect(listings[0].artifactsByType.verdict).toBeUndefined();
+      expect(listings[1].artifactsByType.verdict?.map(entry => entry.nodeId)).toEqual(['judge']);
+      expect(listingPaths[1]).not.toBe(listingPaths[0]);
+    }
+  );
 
   it('re-asks a best-effort provider within the iteration, then completes', async () => {
     // Attempt 1 violates the schema; attempt 2 satisfies it with done: true.

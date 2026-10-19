@@ -1,3 +1,4 @@
+import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
@@ -53,16 +54,13 @@ export async function runLoopIteration(
   const { ctx, node } = run;
   const loop = node.loop;
   const iterationStart = Date.now();
-  // Fresh per iteration: this iteration's prompt and until_bash observe the
-  // artifacts published before it. Materialization failure is an explicit node
-  // provisioning error and propagates to the dispatch boundary.
-  const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
 
   const stopped = await stopBeforeIteration(run, state, i);
   if (stopped !== undefined) return stopped;
+  state.lastStartedIteration = i;
   recordIterationStarted(run, i);
 
-  const reply = await runIterationAttempts(run, state, i, iterationStart, typedArtifactsFile);
+  const reply = await runIterationAttempts(run, state, i, iterationStart);
   if (reply.kind === 'failed') return reply.result;
   const accepted = await acceptIterationReply(run, state, i, reply);
   if (accepted.kind === 'failed') return accepted.result;
@@ -71,7 +69,6 @@ export async function runLoopIteration(
     reply,
     structuredText: accepted.structuredText,
     prevIterationOutput: accepted.prevIterationOutput,
-    typedArtifactsFile,
   });
   if (!Array.isArray(completionChecks)) return completionChecks.result;
 
@@ -234,7 +231,6 @@ async function checkCompletion(
     reply: IterationReply;
     structuredText: string | undefined;
     prevIterationOutput: string;
-    typedArtifactsFile: string;
   }
 ): Promise<LoopCompletionCheck[] | IterationFailed> {
   const loop = run.node.loop;
@@ -309,14 +305,14 @@ async function runUntilBash(
   state: LoopState,
   i: number,
   untilBash: string,
-  iteration: { prevIterationOutput: string; typedArtifactsFile: string }
+  iteration: { prevIterationOutput: string }
 ): Promise<boolean | IterationFailed> {
   const { ctx, node } = run;
   const { workflowRun, artifactsDir, stateDir, logDir, baseBranch, config, execContext } = ctx;
-  const { typedArtifactsFile } = iteration;
   // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
   // to the caller instead of being swallowed by the per-iteration catch.
   const loopBashPath = resolveBashPath();
+  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
   try {
     const { prompt: substitutedBash } = substituteWorkflowVariables(
       untilBash,
@@ -339,14 +335,16 @@ async function runUntilBash(
         }),
       }
     );
+    const invocation = bashInvocation(substitutedBash);
     await runSubprocessUntilRunStops(
       ctx.deps.store,
       workflowRun.id,
       node.id,
       execContext,
       loopBashPath,
-      ['-c', substitutedBash],
+      invocation.args,
       {
+        input: invocation.input,
         cwd: ctx.cwd,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,

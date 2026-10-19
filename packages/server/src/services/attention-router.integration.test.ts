@@ -158,7 +158,7 @@ test('activation is quiet; new occurrences and terminal follow-ups survive repea
   const snapshot = await getDagResumeSnapshot(current);
   expect(snapshot.completedNodeOutputs.size).toBe(0);
   expect(snapshot.unresolvedNodeStarts.size).toBe(0);
-  expect(snapshot.costUsd).toBe(0);
+  expect(snapshot.costUsd).toBeUndefined();
 });
 
 test('empty activation survives restart and failure retries all browsers without a premature ledger row', async () => {

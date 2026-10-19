@@ -600,6 +600,55 @@ describe('ClaudeProvider', () => {
         }
       );
 
+      test('per-query cost and tokens over one session sum to the SDK session total', async () => {
+        const sessionId = '10000000-0000-4000-8000-000000000094';
+        const cumulative = [
+          { total: 0.030896, input: 900, output: 60, cacheRead: 2700, cacheWrite: 1500 },
+          { total: 0.0356233, input: 1800, output: 120, cacheRead: 5400, cacheWrite: 2900 },
+          { total: 0.05, input: 2700, output: 180, cacheRead: 8200, cacheWrite: 4400 },
+        ];
+        for (const step of cumulative) {
+          mockQuery.mockImplementationOnce(async function* () {
+            yield persist({
+              type: 'result',
+              session_id: sessionId,
+              total_cost_usd: step.total,
+              modelUsage: {
+                'claude-haiku-4-5-20251001': {
+                  inputTokens: step.input,
+                  outputTokens: step.output,
+                  cacheReadInputTokens: step.cacheRead,
+                  cacheCreationInputTokens: step.cacheWrite,
+                },
+              },
+            });
+          });
+        }
+        const results: MessageChunk[] = [];
+        for (const resumeSessionId of [undefined, sessionId, sessionId]) {
+          for await (const chunk of client.sendQuery('test', '/workspace', resumeSessionId, {
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            if (chunk.type === 'result') results.push(chunk);
+        }
+
+        const final = cumulative[2];
+        let cost = 0;
+        let input = 0;
+        let output = 0;
+        for (const result of results) {
+          if (result.type !== 'result' || result.tokens === undefined)
+            throw new Error('every query must report cost and tokens');
+          cost += result.cost ?? Number.NaN;
+          input += result.tokens.input;
+          output += result.tokens.output;
+        }
+        expect(results).toHaveLength(3);
+        expect(cost).toBeCloseTo(final.total, 10);
+        expect(input).toBe(final.input + final.cacheRead + final.cacheWrite);
+        expect(output).toBe(final.output);
+      });
+
       test.each(['legacy', 'backwards', 'missing-model', 'empty'])(
         'incomplete or inconsistent token baseline omits tokens (%s)',
         async scenario => {

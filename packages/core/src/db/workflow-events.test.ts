@@ -1053,7 +1053,7 @@ describe('workflow-events', () => {
 
       const result = await getDagResumeSnapshot('run-cost-absent');
 
-      expect(result.costUsd).toBe(0);
+      expect(result.costUsd).toBeUndefined();
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -1560,7 +1560,7 @@ describe('workflow-events', () => {
       );
       const snapshot = await getDagResumeSnapshot('run-invalid-deferred');
       expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
-      expect(snapshot.costUsd).toBe(0);
+      expect(snapshot.costUsd).toBeUndefined();
       expect(snapshot.tokens).toBeUndefined();
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.anything(),
@@ -1579,7 +1579,7 @@ describe('workflow-events', () => {
 
       expect(result.completedNodeOutputs.size).toBe(0);
       expect(result.tokens).toBeUndefined();
-      expect(result.costUsd).toBe(0);
+      expect(result.costUsd).toBeUndefined();
       expect(result.fanOutSnapshots.size).toBe(0);
       expect(result.unresolvedNodeStarts.size).toBe(0);
     });

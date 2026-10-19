@@ -29,6 +29,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { TelegramAdapter } from './adapter';
+import { deprecatedForRemovalNotice } from '@archon/providers/community/deprecation';
 
 type SendMessage = Api['sendMessage'];
 
@@ -330,6 +331,22 @@ describe('TelegramAdapter', () => {
       expect(mockLogger.info).toHaveBeenCalledWith('telegram.bot_started');
     });
 
+    test('logs the shared deprecation notice on start', async () => {
+      const adapter = new TelegramAdapter('fake-token-for-testing');
+      const mockStart = mock<(opts?: { onStart?: () => void }) => Promise<void>>(opts => {
+        opts?.onStart?.();
+        return new Promise(() => {});
+      });
+      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
+
+      await adapter.start();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { notice: deprecatedForRemovalNotice('Telegram') },
+        'telegram.deprecated'
+      );
+    });
+
     test('should throw immediately on non-409 error', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const mockStart = mock<
@@ -358,7 +375,10 @@ describe('TelegramAdapter', () => {
       await adapter.start({ retryDelayMs: 0 });
 
       expect(mockStart).toHaveBeenCalledTimes(3);
-      expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+      const retryWarnings = (mockLogger.warn.mock.calls as unknown[][]).filter(
+        call => call[1] === 'telegram.start_conflict_retrying'
+      );
+      expect(retryWarnings).toHaveLength(2);
     });
 
     test('should throw after exhausting all 409 retry attempts', async () => {

@@ -2,10 +2,8 @@ import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
-import {
-  discoverWorkflowsWithConfig,
-  resolveWorkflowCommandContents,
-} from '../../../workflow-discovery';
+import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
+import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
 import { findWorkflowLoadError } from '../../../schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
@@ -23,11 +21,11 @@ import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
 import { mapWithLimit } from '../../../utils/map-with-limit';
-import { collectComposedSuspensionPaths } from '../../../include-expander';
+import { collectComposedSuspensionPaths } from '../../../include/suspension';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { sumFanOutCost, sumFanOutTokens } from '../../usage';
+import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
@@ -365,7 +363,7 @@ export async function executeComposeFanOutNode(
 
   const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
-  const totalCostUsd = sumFanOutCost(outcomes);
+  const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 

@@ -47,6 +47,11 @@ export async function resolveDispatchAdoption(
   workflow: ResolvedWorkflow
 ): Promise<DispatchAdoption | undefined> {
   const { codebase, options } = scope;
+  if (options?.adoptRunId !== undefined && options.supersedesRunId !== undefined) {
+    throw new WorkflowAdoptionError(
+      'adoptRunId and supersedesRunId are mutually exclusive. Choose adoption or supersede.'
+    );
+  }
   // Between-run continuation (#2747): adoption is validated by the ONE resolver,
   // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
   // cross-codebase id, or a missing estate refuses here, before any worktree is
@@ -147,6 +152,13 @@ export async function detectContinuation(
       `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
         `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
         'first, or declare the adoption from a conversation with no open run.'
+    );
+  }
+  if (options?.supersedesRunId !== undefined && willContinueExistingRun && resumableRun) {
+    throw new WorkflowAdoptionError(
+      `Cannot supersede run '${options.supersedesRunId}': this conversation already continues ` +
+        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
+        'first, or declare the supersede from a conversation with no open run.'
     );
   }
   return { resumableRun, explicitResumeRequested, willContinueExistingRun };

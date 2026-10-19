@@ -857,6 +857,20 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
+  test('fresh background supersede persists provenance on the pre-created row', async () => {
+    await dispatchBackgroundWorkflow(
+      makeRoutingCtx({ supersedesRunId: 'replaced-run' }),
+      makeWorkflow({ worktree: { enabled: false } })
+    );
+
+    expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
+      adopted_from_run_id: 'replaced-run',
+      metadata: { continuation: { mode: 'supersede' } },
+    });
+    await flushBackgroundExecution();
+  });
+
   test('writes no inputs key on the pre-created row when none are supplied', async () => {
     // Bare-run parity with the executor-level row: a run that supplied nothing must
     // look exactly as it did before #2554.

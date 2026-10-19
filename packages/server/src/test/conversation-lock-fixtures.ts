@@ -1,11 +1,11 @@
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockSnapshot } from '@archon/core';
 
-export function makeIdleLockStats(): ReturnType<ConversationLockManager['getStats']> {
+export function makeIdleLockStats(): ConversationLockSnapshot {
   return {
     active: 0,
-    queuedTotal: 0,
-    queuedByConversation: [],
     maxConcurrent: 10,
-    activeConversationIds: [],
+    queuedTotal: 0,
+    activeConversations: [],
+    queuedConversations: [],
   };
 }

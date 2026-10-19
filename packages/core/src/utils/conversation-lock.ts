@@ -32,21 +32,50 @@ export interface LockAcquisitionResult {
 }
 
 /**
+ * Read-only view of conversation processing in this process. Timestamps are the
+ * real acquisition and enqueue times; ages are measured from one clock read, so
+ * they agree within a snapshot. Nothing in Archon acts on an age.
+ */
+export interface ConversationLockSnapshot {
+  active: number;
+  maxConcurrent: number;
+  queuedTotal: number;
+  /** Conversations holding a processing slot. */
+  activeConversations: { conversationId: string; acquiredAt: string; ageMs: number }[];
+  /** Conversations with messages waiting; empty queues are omitted. */
+  queuedConversations: {
+    conversationId: string;
+    queuedMessages: number;
+    oldestEnqueuedAt: string;
+    oldestAgeMs: number;
+  }[];
+}
+
+/** The active owner and when it acquired its slot, kept on one entry. */
+interface ActiveConversation {
+  promise: Promise<void>;
+  acquiredAt: number;
+}
+
+/**
  * Manages conversation locks for concurrent message processing
  */
 export class ConversationLockManager {
-  private activeConversations: Map<string, Promise<void>>;
+  private activeConversations: Map<string, ActiveConversation>;
   private messageQueues: Map<string, QueuedMessage[]>;
   private maxConcurrent: number;
+  private readonly now: () => number;
 
   /**
    * Creates a new ConversationLockManager
    * @param maxConcurrent - Maximum number of concurrent conversations (default: 10)
+   * @param now - Clock in epoch milliseconds; tests inject a controlled one
    */
-  constructor(maxConcurrent = 10) {
-    this.activeConversations = new Map<string, Promise<void>>();
+  constructor(maxConcurrent = 10, now: () => number = Date.now) {
+    this.activeConversations = new Map<string, ActiveConversation>();
     this.messageQueues = new Map<string, QueuedMessage[]>();
     this.maxConcurrent = maxConcurrent;
+    this.now = now;
     getLog().info({ maxConcurrent }, 'initialized');
   }
 
@@ -80,6 +109,7 @@ export class ConversationLockManager {
     );
 
     // Store Promise in Map BEFORE awaiting (prevents race conditions)
+    const acquiredAt = this.now();
     const promise = handler()
       .catch(error => {
         getLog().error({ err: error, conversationId }, 'conversation_handler_error');
@@ -103,7 +133,7 @@ export class ConversationLockManager {
         });
       });
 
-    this.activeConversations.set(conversationId, promise);
+    this.activeConversations.set(conversationId, { promise, acquiredAt });
 
     // Fire-and-forget: don't await here, return immediately
     return { status: 'started' };
@@ -121,7 +151,7 @@ export class ConversationLockManager {
     }
     queue.push({
       handler,
-      timestamp: Date.now(),
+      timestamp: this.now(),
     });
     getLog().debug({ conversationId, queueLength: queue.length }, 'message_queued');
   }
@@ -139,7 +169,7 @@ export class ConversationLockManager {
 
     const next = queue.shift();
     if (!next) return;
-    const waitTime = Date.now() - next.timestamp;
+    const waitTime = this.now() - next.timestamp;
     getLog().debug({ conversationId, waitTimeMs: waitTime }, 'queued_message_processing');
 
     await this.acquireLock(conversationId, next.handler);
@@ -149,24 +179,38 @@ export class ConversationLockManager {
    * Get current concurrency statistics
    * @returns Current state for observability
    */
-  getStats(): {
-    active: number;
-    queuedTotal: number;
-    queuedByConversation: { conversationId: string; queuedMessages: number }[];
-    maxConcurrent: number;
-    activeConversationIds: string[];
-  } {
-    const queuedByConversation = Array.from(this.messageQueues.entries()).map(([id, queue]) => ({
-      conversationId: id,
-      queuedMessages: queue.length,
-    }));
+  getStats(): ConversationLockSnapshot {
+    const now = this.now();
+    const activeConversations = Array.from(this.activeConversations.entries()).map(
+      ([conversationId, { acquiredAt }]) => ({
+        conversationId,
+        acquiredAt: new Date(acquiredAt).toISOString(),
+        ageMs: now - acquiredAt,
+      })
+    );
+    // Queues are FIFO, so the first entry is the oldest. An emptied queue lingers
+    // until the next processQueue pass; it carries no waiting message.
+    const queuedConversations = Array.from(this.messageQueues.entries()).flatMap(
+      ([conversationId, queue]) => {
+        const oldest = queue[0];
+        if (!oldest) return [];
+        return [
+          {
+            conversationId,
+            queuedMessages: queue.length,
+            oldestEnqueuedAt: new Date(oldest.timestamp).toISOString(),
+            oldestAgeMs: now - oldest.timestamp,
+          },
+        ];
+      }
+    );
 
     return {
       active: this.activeConversations.size,
-      queuedTotal: Array.from(this.messageQueues.values()).reduce((sum, q) => sum + q.length, 0),
-      queuedByConversation,
       maxConcurrent: this.maxConcurrent,
-      activeConversationIds: Array.from(this.activeConversations.keys()),
+      queuedTotal: this.getQueuedCount(),
+      activeConversations,
+      queuedConversations,
     };
   }
 

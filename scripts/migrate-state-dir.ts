@@ -37,6 +37,7 @@ import { readdir, mkdir, stat, copyFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import {
+  canonicalizeProjectPath,
   resolveProjectStorageKey,
   getProjectStoragePaths,
   type ProjectStorageKey,
@@ -116,7 +117,7 @@ interface MigrationTarget {
  * so reading the codebase registry on a machine that has never run Archon
  * materialises `archon.db` plus a ~680 KB WAL — from a command whose own output
  * says `Dry run — nothing was moved`. No database means no registered projects,
- * which is already the `_cwd` fallback answer, so the read has nothing to tell
+ * which is already the `@cwd` fallback answer, so the read has nothing to tell
  * us that its side effect does not cost more than.
  *
  * Only sound for SQLite. A Postgres registry's contents cannot be inferred from
@@ -134,7 +135,7 @@ async function resolveTarget(cwd: string): Promise<MigrationTarget> {
   if (registryIsKnownEmpty()) {
     // Said out loud: a silent fallback to a different destination than the
     // operator expects is the failure family this script exists to prevent.
-    console.log(`No codebase registry yet — using the _cwd fallback for ${cwd}.`);
+    console.log(`No codebase registry yet — using the @cwd fallback for ${cwd}.`);
     return { key: { kind: 'cwd', cwd }, anchor: cwd, climbed: false };
   }
   try {
@@ -151,7 +152,7 @@ async function resolveTarget(cwd: string): Promise<MigrationTarget> {
         climbed: anchor !== cwd,
       };
     }
-    console.log(`No registered project matches ${cwd} — using the _cwd fallback.`);
+    console.log(`No registered project matches ${cwd} — using the @cwd fallback.`);
   } catch (error) {
     // A DB that is unreachable must not silently produce the wrong destination.
     throw new Error(`Could not read the codebase registry: ${(error as Error).message}`, {
@@ -190,20 +191,23 @@ async function exists(path: string): Promise<boolean> {
 async function migrate(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
   if (!args) return 1;
-  const { apply: APPLY, cwd: CWD } = args;
+  const APPLY = args.apply;
   // The cwd must exist before anything else: `--cwd /typo` otherwise resolves to
-  // the _cwd fallback, finds no legacy state, and reports a confident success
+  // the @cwd fallback, finds no legacy state, and reports a confident success
   // for a project directory nobody asked for.
   try {
-    if (!(await stat(CWD)).isDirectory()) {
-      console.error(`Not a directory: ${CWD}`);
+    if (!(await stat(args.cwd)).isDirectory()) {
+      console.error(`Not a directory: ${args.cwd}`);
       return 1;
     }
   } catch {
-    console.error(`Directory does not exist: ${CWD}`);
+    console.error(`Directory does not exist: ${args.cwd}`);
     console.error('Pass an existing project directory with --cwd, or omit it to use the cwd.');
     return 1;
   }
+  // The CLI and registration key on this canonical path; an unregistered
+  // directory's $STATE_DIR digest only matches theirs when this one does too.
+  const CWD = await canonicalizeProjectPath(args.cwd);
 
   const { key, anchor, climbed } = await resolveTarget(CWD);
   const legacyDir = join(anchor, '.archon', 'state');

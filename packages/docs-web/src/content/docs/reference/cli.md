@@ -35,6 +35,17 @@ Linking requires an existing full user id and a valid platform id. The first col
 
 Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Only a run's starter or an admin can act on it; the local operator can always act through the CLI. See [Who can act on a run](/reference/security/#who-can-act-on-a-run) for the action policy and [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
 
+## Projects
+
+`archon project list` lists every registered project in the install, from any directory, without a server.
+
+```bash
+archon project list          # ID, KIND, NAME, KEY and PATH per project
+archon project list --json   # { "projects": [ { ...project row, "key" } ] }
+```
+
+`key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register and remove projects through the Web UI or chat.
+
 ## Quick Start
 
 ```bash
@@ -601,7 +612,7 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
 The node events for every listed run are read in one query, so the cost does not grow with
 one query per run.
 
-The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any directory. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
+The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
 
 ### `workflow get`
 
@@ -763,6 +774,23 @@ worktree when the run used one.
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
 
+### `workflow artifacts`
+
+List the files a run left in `$ARTIFACTS_DIR`, or print one of them. Reads the store and filesystem directly; no server needs to be running.
+
+```bash
+archon workflow artifacts <run-id>                 # list every artifact file
+archon workflow artifacts <run-id> --json
+archon workflow artifacts <run-id> review/report.md # print one file's bytes
+archon workflow artifacts <run-id> review/report.md --json
+```
+
+`<run-id>` accepts the same short ids as `workflow get`: a unique prefix from the project directory, or the full id from any git repository or registered project folder.
+
+The list is uncapped. Files under the engine's own `.archon` child are counted, not listed. `--json` returns `{ "runId", "artifactsDir", "files", "internalFiles", "unreadable" }`, where `artifactsDir` is the absolute directory and `unreadable` names directories the walk could not read. A run that wrote nothing lists no files and exits `0`. A run whose output location cannot be resolved exits `1` instead, so an empty list always means the run wrote nothing.
+
+With a path, the command writes the file's exact bytes to stdout. `--json` returns `{ "runId", "path", "content" }` with the content as UTF-8 text, and fails for a file that is not valid UTF-8; read that one without `--json`. A path that does not exist, names a directory, or resolves outside the run's artifacts (`..`, or a symlink pointing elsewhere) exits `1`. Under `--json` every failure is one `{ "ok": false, "runId", "error" }` document.
+
 ### `workflow logs`
 
 Print the run's existing JSONL transcript, or follow it as rows are appended:
@@ -835,8 +863,10 @@ The answer a pause is waiting for does not have to come from a person. An
 orchestrating agent can supply it with `workflow respond` or `workflow answer` just as a
 reviewer can; the engine only reports that one is owed, and who answers is the waiting
 host's business. Pass the reported `attention.occurrence` back with `--occurrence` on
-`approve`, `reject`, `respond` or `answer`. The answer is then refused, naming the current
-occurrence, if the run has moved to a different pause in the meantime.
+`approve`, `reject`, `respond` or `answer`. The answer is then refused if the run has moved
+to a different pause in the meantime. If the diagnostic read succeeds and the run is
+awaiting another answer, the refusal names the current occurrence. Otherwise, fetch the
+current item again before retrying.
 For an attention wait, the output carries `attention.kind: "attention"`, the authored
 message, the paused node id, the `form` and the `options` an answer may choose from.
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
@@ -880,6 +910,10 @@ PostgreSQL database shared by several machines, or the run records no owner, the
 cannot tell whether the owner is alive. It says so on its `waiting` line and keeps
 watching the run's stored state until it changes or `--timeout` passes. `abandon` prints
 the host the run recorded and says when it is not this one.
+
+The console applies the same rule from the server's host and user: a running run whose
+owner is gone shows "Running · owner not answering", and one the server cannot observe
+shows "Running · owner unknown". Neither is shown as live progress.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -958,7 +992,8 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 - **Scope.** The default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
-  project key such as `_cwd/scratch`; `--all` covers the install. A run is in scope when
+  project key such as `@cwd/scratch-<digest>`; copy the exact key from
+  `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when
   its codebase id matches, when both sides have one, and otherwise when its project key
   matches, so a run paused before its codebase was renamed is still listed under the new
   name.
@@ -1010,9 +1045,11 @@ archon workflow attention label <run-id> --occurrence <id> --set class=ci-other 
 archon workflow attention label <run-id> --occurrence <id> --unset urgency --json
 ```
 
-A set key replaces the same key; every other label stays. The write is refused, naming
-the current occurrence, when the run has moved to another pause, and refused for a gate or
-an answered wait: only `wait: attention` pauses carry labels. Each write bumps the item's
+A set key replaces the same key; every other label stays. The write is refused when the
+run has moved to another pause. If the diagnostic read succeeds and the run is awaiting
+another answer, the refusal names the current occurrence. Otherwise, fetch the current
+item again before retrying. The write is also refused for a gate or an answered wait:
+only `wait: attention` pauses carry labels. Each write bumps the item's
 `revision` and commits an `attention_labeled` event, in the same transaction, carrying the
 occurrence, the keys set and unset, the surface as `via`, and the new revision. Who may
 write is the same as who may answer.
@@ -1655,7 +1692,7 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
-| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, `attention`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `artifacts`, `wait`, `attention`, `project list`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--after <cursor>` | For `workflow attention --watch`: replay readable feed events strictly after this cursor, excluding all lines at that cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/guides/attention-queue/#stream-the-queue). |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |

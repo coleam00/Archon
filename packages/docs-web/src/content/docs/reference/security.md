@@ -57,9 +57,11 @@ Because `bypassPermissions` grants full file and shell access, only run Archon i
 
 Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant for a path not created yet when the running user (other than root) owns its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
 
+Registering an existing local repository (Settings → Projects or `/register-project`) adds that exact path to the same list only when Git refuses it solely because another user owns it, as with a Docker bind mount. A path Git already accepts, or refuses for another reason (missing, unreadable, not a repository), gets no grant. Git matches the repository's top level, so register the repository root: a subdirectory of a repository owned by another user stays refused.
+
 If Git evaluates the same file more than once, for example through an include or symlinked XDG and home config files, its effective config can still list that single physical grant multiple times. Archon preserves those includes and symlinks.
 
-These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
+These grants persist if cloning, registration or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
 
 ## Tool Restrictions
 

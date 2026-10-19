@@ -1773,7 +1773,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -2094,6 +2094,45 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/dashboard/conversations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Active and queued conversation processing in this server process
+     * @description Background workflow runs bypass the conversation lock and are listed by /api/dashboard/runs.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Conversations holding a processing slot or waiting for one */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConversationProcessingResponse'];
           };
         };
       };
@@ -5249,6 +5288,7 @@ export interface components {
       persist_session?: boolean;
       output_type?: string;
       command?: string;
+      with?: unknown;
       prompt?: string;
       bash?: string;
       timeout?: number;
@@ -5316,11 +5356,11 @@ export interface components {
             };
           };
       cancel?: string;
-      include?: string;
-      workflow?: string;
-      input?: string;
+      script?: string;
       /** @enum {string} */
-      isolation?: 'inherit' | 'worktree';
+      runtime?: 'bun' | 'uv';
+      deps?: string[];
+      include?: string;
       fan_out?: {
         items: string;
         as?: string;
@@ -5332,11 +5372,10 @@ export interface components {
          */
         join: 'all_success' | 'all_done' | 'first_success';
       };
-      script?: string;
+      workflow?: string;
+      input?: string;
       /** @enum {string} */
-      runtime?: 'bun' | 'uv';
-      deps?: string[];
-      with?: unknown;
+      isolation?: 'inherit' | 'worktree';
     };
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
@@ -5438,6 +5477,11 @@ export interface components {
       agents_failed: number | null;
       agents_total: number | null;
       attention: components['schemas']['RunAttention'] | (never | null);
+      /**
+       * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+       * @enum {string|null}
+       */
+      owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
     };
     WorkflowRunMetadata: {
       tool_call_attention?: {
@@ -6473,6 +6517,22 @@ export interface components {
         paused: number;
       };
     };
+    ConversationProcessingResponse: {
+      active: number;
+      maxConcurrent: number;
+      queuedTotal: number;
+      activeConversations: {
+        conversationId: string;
+        acquiredAt: string;
+        ageMs: number;
+      }[];
+      queuedConversations: {
+        conversationId: string;
+        queuedMessages: number;
+        oldestEnqueuedAt: string;
+        oldestAgeMs: number;
+      }[];
+    };
     CancelWorkflowRunResponse: {
       success: boolean;
       message: string;
@@ -6609,6 +6669,11 @@ export interface components {
         worker_platform_id?: string;
         parent_platform_id?: string;
         conversation_platform_id: string | null;
+        /**
+         * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+         * @enum {string|null}
+         */
+        owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
         terminal_record: {
           run_id: string;
           /** @enum {string} */
@@ -7109,14 +7174,14 @@ export interface components {
       status: string;
       adapter: string;
       concurrency: {
+        /** @description Conversations holding a processing slot plus background workflow conversations */
         active: number;
         queuedTotal: number;
-        queuedByConversation: {
-          conversationId: string;
-          queuedMessages: number;
-        }[];
         maxConcurrent: number;
-        activeConversationIds: string[];
+        /** @description Age of the oldest conversation holding a processing slot in this process. Background workflow runs are counted in `active` but not aged here; see /api/dashboard/runs. */
+        oldestActiveAgeMs: number | null;
+        /** @description Age of the oldest waiting message */
+        oldestQueuedAgeMs: number | null;
       };
       runningWorkflows: number;
       version?: string;

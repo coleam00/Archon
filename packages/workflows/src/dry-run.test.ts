@@ -1610,6 +1610,46 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('executable bash dry runs reject NUL without executing a prefix', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'nul-bash',
+        nodes: [{ id: 'code', bash: "printf before # '\0'\nexit 7" }],
+      }),
+      cwd: process.cwd(),
+      userMessage: '',
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: 'Bash source cannot contain NUL bytes',
+    });
+  });
+
+  test('executable bash dry runs deliver large inline values and stdin EOF', async () => {
+    const value = '€'.repeat(32_000);
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'large-bash',
+        nodes: [
+          { id: 'producer', prompt: 'produce' },
+          {
+            id: 'consumer',
+            depends_on: ['producer'],
+            bash: 'a=$producer.output; b=$producer.output; if IFS= read -r line; then exit 8; fi; printf \'%s%s\' "$a" "$b"',
+          },
+        ],
+      }),
+      cwd: process.cwd(),
+      userMessage: '',
+      execCode: true,
+      stubs: { producer: value },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.summary).toBe(value + value);
+  });
+
   test('an executed code node is held to its output_format like a real run', async () => {
     const okSchema = {
       type: 'object',
@@ -2196,6 +2236,69 @@ describe('dryRunWorkflow', () => {
     expect(result.trace.map(entry => entry.nodeId)).toEqual(['draft', 'finish', 'group']);
     expect(result.trace[1]?.resolvedText).toBe('finish fresh');
   });
+
+  for (const pause of [
+    { approval: { message: 'Review the work' } },
+    { wait: { attention: 'Review the work' } },
+  ]) {
+    for (const skipped of [true, false]) {
+      const kind = 'approval' in pause ? 'gate' : 'attention wait';
+      test.each([
+        ['bare', 'DONE', 'DONE'],
+        ['tagged', 'Result <promise>DONE</promise>', 'Result'],
+      ])(
+        `loop-group output reads past a ${skipped ? 'skipped' : 'completed'} ${kind} (%s)`,
+        async (_label, rawOutput, expectedOutput) => {
+          const workflow = makeTestWorkflow({
+            name: 'loop-group-human-sink',
+            nodes: [
+              {
+                id: 'group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 2,
+                  nodes: [
+                    { id: 'work', prompt: 'work' },
+                    {
+                      id: 'end',
+                      ...pause,
+                      depends_on: ['work'],
+                      ...(skipped ? { when: "$work.output == 'never'" } : {}),
+                    },
+                  ],
+                },
+              },
+              { id: 'after', prompt: 'Result: $group.output', depends_on: ['group'] },
+            ],
+          });
+          const result = await dryRunWorkflow({
+            workflow,
+            userMessage: '',
+            cwd: process.cwd(),
+            stubs: {
+              work: rawOutput,
+              after: 'received',
+              ...(!skipped && 'wait' in pause ? { end: { text: 'reviewed' } } : {}),
+            },
+          });
+
+          expect(result.outcome).toBe('completed');
+          expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(1);
+          expect(result.trace.find(entry => entry.nodeId === 'end')?.state).toBe(
+            skipped ? 'skipped' : 'wait' in pause ? 'stubbed' : 'completed'
+          );
+          expect(result.trace.find(entry => entry.nodeId === 'group')).toMatchObject({
+            state: 'completed',
+            output: expectedOutput,
+            reason: 'completion signal after 1 iteration(s)',
+          });
+          expect(result.trace.find(entry => entry.nodeId === 'after')?.resolvedText).toBe(
+            `Result: ${expectedOutput}`
+          );
+        }
+      );
+    }
+  }
 
   test('resolves $LOOP_PREV in body bindings and conditions as a real run does (#3996)', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-prev-'));

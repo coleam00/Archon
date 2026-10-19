@@ -193,7 +193,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
       'Engine-owned JSON value domain for workflow bindings and validation; generic JSON vocabulary, not a provider boundary copy.',
   },
   {
-    file: 'packages/workflows/src/schemas/dag-node.ts',
+    file: 'packages/workflows/src/schemas/provider-options.ts',
     name: 'SandboxSettings',
     kind: 'boundary',
     reason:

@@ -63,6 +63,8 @@ curl http://localhost:3090/api/health
 # {"status":"ok","adapter":"...","concurrency":{...},"runningWorkflows":0}
 ```
 
+`/api/health` is public, so its `concurrency` object carries counts and the oldest active and queued ages, never conversation ids. The per-conversation view is the authenticated `GET /api/dashboard/conversations`.
+
 ---
 
 ## Conversations
@@ -339,6 +341,17 @@ curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -F "files=@screenshot.png"
 ```
 
+**Adoption and supersede.** JSON requests may supply `adopt_run_id` or `supersedes_run_id`,
+but cannot supply both. If the conversation would continue an existing run, either declaration
+is refused before continuation or its fresh fallback. The refusal names the existing run: resume
+it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or
+use a conversation with no open run. An accepted fresh supersede records the replaced run ID in
+`adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
+
+For a continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
+The refusal arrives as a `text` event on the conversation's SSE stream. Callers must read
+the stream to determine whether the workflow started; the JSON response alone does not confirm it.
+
 **Supplying declared inputs.** A workflow that declares [`inputs:`](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs) takes their values through an optional `inputs` map — a flat object of string values. Omit a name to take its declared `default:`.
 
 ```bash
@@ -481,6 +494,7 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/dashboard/runs` | List enriched workflow runs for the dashboard |
+| GET | `/api/dashboard/conversations` | Active and queued conversation processing in this server process, with acquisition and enqueue times |
 
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
 
@@ -490,6 +504,16 @@ nodes remain separate entries. The compatibility fields `current_step_name` and
 `current_step_status` are populated only when exactly one node is active, and are `null` for zero
 or multiple active nodes. `total_steps` is `null`; observed lifecycle events do not define the
 workflow's total node count. This state describes node lifecycle, not process-owner liveness.
+
+Process-owner liveness is `owner_observation`, which dashboard runs and the run in
+`GET /api/workflows/runs/{runId}` carry. The server observes it per request, by the rule
+`archon workflow wait` uses for `owner_lost`: `reachable` when an owner answers,
+`unreachable` when the recorded owner is on the server's host and user and nothing answers,
+and `unknown` when the server cannot observe the owner (another host or user, no recorded
+owner, or no answer in time). It is `null` for a run that is not running. It is never stored
+and never changes `status`; how long a run has been quiet is not an input. The console shows
+a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
+`unreachable`.
 
 ---
 

@@ -1,3 +1,4 @@
+import { bashInvocation } from '../../../bash-invocation';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -108,14 +109,16 @@ export async function executeBashNode(
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
+    const invocation = bashInvocation(finalScript);
     const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
       deps.store,
       workflowRun.id,
       node.id,
       execContext,
       bashPath,
-      ['-c', finalScript],
+      invocation.args,
       {
+        input: invocation.input,
         cwd,
         timeout: node.timeout,
         endTreeOnTimeout: true,

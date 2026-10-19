@@ -12,14 +12,14 @@ import {
 } from './run-credential-env';
 import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
 import { resolveRunDispatch } from './run-dispatch';
-import { prepareRunPaths, resolveAdoptedRunDir } from './run-paths';
+import { prepareRunPaths } from './run-paths';
 import {
   assertRunCredentials,
   effectiveDbCredentialValues,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
-  establishRunSource,
+  establishAdoptedRunSource,
   prepareWorkflowSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
@@ -63,7 +63,8 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { deadlineWaitCursor, type PersistedNodeOutput } from './store';
+import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
+import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
@@ -85,12 +86,17 @@ type ResumePayload =
   | {
       preCreatedRun: WorkflowRun;
       priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+      /** The prior pass's failures; replayed only when `resumeCause` is `continue_after_wait`. */
+      priorFailedNodes?: Map<string, PriorFailedNode>;
+      resumeCause?: ResumeCause;
       priorUsage?: PriorRunUsage;
       priorNodeSessions?: readonly WorkflowRunNodeSession[];
     }
   | {
       preCreatedRun?: undefined;
       priorCompletedNodes?: undefined;
+      priorFailedNodes?: undefined;
+      resumeCause?: undefined;
       priorUsage?: undefined;
       priorNodeSessions?: undefined;
     };
@@ -265,6 +271,8 @@ export async function executeWorkflow(
     codebaseId,
     issueContext,
     priorCompletedNodes,
+    priorFailedNodes,
+    resumeCause,
     priorUsage,
     priorNodeSessions,
     execContext = { kind: 'host' },
@@ -330,18 +338,17 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
-  const sourced = await establishRunSource(
+  const sourced = await establishAdoptedRunSource(
     deps,
     platform,
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts
+    opts,
+    isContinuation
   );
   if (sourced.stopped) return sourced.result;
-  const workflowSourceRoots = sourced.value;
+  const { workflowSourceRoots } = sourced.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
@@ -358,6 +365,8 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const adoptedRunDir = sourced.value.adoptedRunDir();
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
@@ -470,6 +479,8 @@ export async function executeWorkflow(
         configuredCommandFolder,
         issueContext,
         priorCompletedNodes,
+        // Only a run continued after a pause has moved past its earlier failures.
+        replayedFailures: resumeCause === 'continue_after_wait' ? priorFailedNodes : undefined,
         aiProfile,
         workflowPreset,
         scopeArtifactsDir,

@@ -5,7 +5,7 @@ import { z } from '@hono/zod-openapi';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import type { WorkflowRunOptions } from './workflow-shared';
 import { captureWorkflowCommand } from '../test-support/command';
 import { findRepoRoot } from '@archon/git';

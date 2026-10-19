@@ -6,10 +6,11 @@ import {
   isApprovalContext,
   isScheduledWorkflowResume,
   isWorkflowWaitContext,
+  readPauseCause,
   readSourceRelease,
   reRunsOwnNodeOnResume,
 } from './schemas';
-import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
+import type { PersistedNodeOutput, PriorFailedNode, WorkflowResumeCursor } from './store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -20,7 +21,32 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export interface ResumableRunInspection {
   priorCompletedNodes: Map<string, PersistedNodeOutput>;
+  priorFailedNodes: Map<string, PriorFailedNode>;
   priorUsage: PriorRunUsage;
+}
+
+/**
+ * Why a run resumes. `continue_after_wait` continues a run that paused at a node that
+ * waits on purpose: an attention, time or event wait, an approval gate, or children it is
+ * blocked on. The run had moved past any node that failed before that pause, so those
+ * failures replay. `retry_failed` covers everything else, where the failures are what
+ * stopped the run: a failed run an operator resumes, a provider-limit pause, a released
+ * source, or a pause with no recorded cause. Those failed nodes run again, as they always
+ * have.
+ */
+export type ResumeCause = 'continue_after_wait' | 'retry_failed';
+
+/**
+ * Read from the resumed row the compare-and-swap returned, so the cause is the one the
+ * pause it consumed recorded, never a context an earlier pause left in metadata. Failing
+ * a run removes the cause, so a failed run resumed by an operator always retries.
+ */
+function resumeCauseOf(candidate: WorkflowRun, resumed: WorkflowRun): ResumeCause {
+  if (candidate.status !== 'paused') return 'retry_failed';
+  const cause = readPauseCause(resumed.metadata);
+  return cause === 'wait' || cause === 'gate' || cause === 'child'
+    ? 'continue_after_wait'
+    : 'retry_failed';
 }
 
 /** The store reads and the one transition resume preparation needs. */
@@ -73,11 +99,8 @@ export async function inspectResumableRun(
   }
   return {
     priorCompletedNodes,
-    priorUsage: {
-      ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
-      ...(snapshot.tokensUnknown ? { tokensUnknown: true } : {}),
-      costUsd: snapshot.costUsd,
-    },
+    priorFailedNodes: snapshot.failedNodes,
+    priorUsage: snapshot,
   };
 }
 
@@ -101,6 +124,8 @@ export async function hydrateResumableRun(
 ): Promise<{
   preCreatedRun: WorkflowRun;
   priorCompletedNodes: Map<string, PersistedNodeOutput>;
+  priorFailedNodes: Map<string, PriorFailedNode>;
+  resumeCause: ResumeCause;
   priorUsage: PriorRunUsage;
   priorNodeSessions: WorkflowRunNodeSession[];
 } | null> {
@@ -129,6 +154,8 @@ export async function hydrateResumableRun(
   return {
     preCreatedRun,
     priorCompletedNodes,
+    priorFailedNodes: inspection.priorFailedNodes,
+    resumeCause: resumeCauseOf(candidate, preCreatedRun),
     priorUsage,
     priorNodeSessions,
   };

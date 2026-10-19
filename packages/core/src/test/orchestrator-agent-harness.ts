@@ -308,6 +308,8 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
   async (_deps, candidate) => ({
     preCreatedRun: { ...candidate, status: 'running' },
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
+    resumeCause: candidate.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
     priorUsage: { costUsd: 0 },
     priorNodeSessions: [],
   })
@@ -315,6 +317,7 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
 export const mockInspectResumableRun = mock<typeof WorkflowRunResume.inspectResumableRun>(() =>
   Promise.resolve({
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
     priorUsage: { costUsd: 0 },
   })
 );
@@ -499,21 +502,25 @@ export const mockFailPreparedRun = mock<
   import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
 >(async () => ({ failed: true }));
 
+export const mockCreateWorkflowRun = mock<
+  import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
+>(async data =>
+  makeRun({
+    id: data.id,
+    workflow_name: data.workflow_name,
+    status: 'pending',
+    metadata: data.metadata ?? {},
+    adopted_from_run_id: data.adopted_from_run_id ?? null,
+    working_path: null,
+  })
+);
+
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
-      createWorkflowRun: async (
-        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
-      ) =>
-        makeRun({
-          id: data.id,
-          workflow_name: data.workflow_name,
-          status: 'pending',
-          metadata: data.metadata ?? {},
-          working_path: null,
-        }),
+      createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,
     },
@@ -700,9 +707,9 @@ mock.module('@archon/git', () => ({
   verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
-  // /register-project probes git-ness via findRepoRoot; a non-null root marks
-  // the registered path as a repo project (kind: 'repo').
+  // /register-project marks a path whose findRepoRoot root is non-null as kind: 'repo'.
   findRepoRoot: mock((p: string) => Promise.resolve(p)),
+  trustRegisteredPath: mock(async () => {}),
   // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
   // Return null/0/false so the reminder short-circuits without emitting an event.
   getCurrentBranch: mock(() => Promise.resolve(null)),
@@ -827,18 +834,8 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
-// `existsSync` is one shared mock for the whole file, so whatever predicate the
-// last test left behind is what the next one inherits. Resetting it inside a
-// single describe is not enough: everything below that block would run against a
-// leaked predicate, including the `/setproject` and `/update-project` suites,
-// which drive the existsSync call sites in handleSetProject and
-// handleUpdateProject. Today a leak is survivable only because the predicates
-// here reject one literal path — that is luck, not a guarantee, and it stops
-// being true the moment a test rejects something broader. Reset before every
-// test so no describe can poison another.
-//
-// Deliberately no count here: any number rots on the next test added, and the
-// mechanism is the argument.
+// Reset the shared filesystem predicate across all suites, including project
+// commands, so a dispatch test cannot leak its filesystem assumptions.
 beforeEach(() => {
   mockExistsSync.mockImplementation(() => true);
 });
@@ -1005,6 +1002,7 @@ export function resetDispatchMocks(): void {
   mockGetWorkflowRunDb.mockReset();
   mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
   capturedSourceOwnerCalls.length = 0;
+  mockCreateWorkflowRun.mockClear();
   mockFailPreparedRun.mockReset();
   mockFailPreparedRun.mockResolvedValue({ failed: true });
   mockExecuteWorkflow.mockClear();
@@ -1015,6 +1013,7 @@ export function resetDispatchMocks(): void {
   mockInspectResumableRun.mockImplementation(() =>
     Promise.resolve({
       priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+      priorFailedNodes: new Map(),
       priorUsage: { costUsd: 0 },
     })
   );

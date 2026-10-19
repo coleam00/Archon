@@ -35,6 +35,7 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { type Document, isScalar, parseDocument, Scalar, YAMLMap } from 'yaml';
 import { copyArchonSkill } from './skill';
 import {
   SetupExit,
@@ -377,10 +378,12 @@ async function runSetup(options: SetupOptions): Promise<void> {
     log.info(`Backup written to ${writeResult.backupPath}`);
   }
 
-  const { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath } =
-    await installProjectSkill(options.repoPath, s);
+  const { skillInstalledPath, projectPath, projectConfigCreatedPath } = await installProjectSkill(
+    options.repoPath,
+    s
+  );
 
-  await configureDocsPath(options.repoPath);
+  await configureDocsPath(projectPath);
 
   // Summary
   const configuredPlatforms: string[] = [];
@@ -422,8 +425,8 @@ async function runSetup(options: SetupOptions): Promise<void> {
     );
   }
 
-  if (skillInstalledPath && skillInstalledBase) {
-    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon-cli');
+  if (skillInstalledPath) {
+    const codexInstalledPath = join(projectPath, '.agents', 'skills', 'archon-cli');
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
     summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);
@@ -471,14 +474,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
 /**
  * Offer to install the Archon skill, and bootstrap `.archon/config.yaml`, in
- * a project the operator names.
+ * a project the operator names. `projectPath` is that project, or `repoPath`
+ * when the operator declines the install.
  */
 async function installProjectSkill(
   repoPath: string,
   s: ReturnType<typeof spinner>
 ): Promise<{
   skillInstalledPath: string | null;
-  skillInstalledBase: string | null;
+  projectPath: string;
   projectConfigCreatedPath: string | null;
 }> {
   const shouldCopySkill = await confirm({
@@ -489,7 +493,7 @@ async function installProjectSkill(
   if (isCancel(shouldCopySkill)) cancelSetup();
 
   let skillInstalledPath: string | null = null;
-  let skillInstalledBase: string | null = null;
+  let projectPath = repoPath;
   let projectConfigCreatedPath: string | null = null;
 
   if (shouldCopySkill) {
@@ -510,7 +514,7 @@ async function installProjectSkill(
       exitSetup(1);
     }
     s.stop('Archon skill installed');
-    skillInstalledBase = skillTargetRaw;
+    projectPath = skillTargetRaw;
     skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
 
     const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
@@ -524,41 +528,65 @@ async function installProjectSkill(
     }
   }
 
-  return { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath };
+  return { skillInstalledPath, projectPath, projectConfigCreatedPath };
+}
+
+/**
+ * Return `existing` config text with `docs.path` set, or null when a real `docs` key
+ * already exists. Comments and other content are preserved.
+ */
+function withDocsPath(existing: string, docsPath: string): string | null {
+  // Use the runtime loader's parser to resolve aliases, merges and complex keys.
+  const parsed: unknown = Bun.YAML.parse(existing);
+  if (parsed !== null && typeof parsed === 'object' && Object.hasOwn(parsed, 'docs')) return null;
+
+  const document: Document = parseDocument(existing, { uniqueKeys: false });
+  if (document.errors.length > 0) throw document.errors[0];
+  if (isScalar(document.contents) && document.contents.value === null) {
+    const root = new YAMLMap(document.schema);
+    root.commentBefore = document.contents.commentBefore;
+    root.comment = document.contents.comment;
+    root.spaceBefore = document.contents.spaceBefore;
+    document.contents = root;
+  }
+  const path = new Scalar(docsPath);
+  path.type = Scalar.QUOTE_DOUBLE;
+  const docs = new YAMLMap(document.schema);
+  docs.set('path', path);
+  document.set('docs', docs);
+  return document.toString();
 }
 
 /** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
-async function configureDocsPath(repoPath: string): Promise<void> {
+export async function configureDocsPath(repoPath: string): Promise<void> {
   const wantsDocsPath = await confirm({
     message: 'Configure a non-default docs directory? (default: docs/)',
     initialValue: false,
   });
+  if (isCancel(wantsDocsPath) || !wantsDocsPath) return;
 
-  if (!isCancel(wantsDocsPath) && wantsDocsPath) {
-    const docsPath = await text({
-      message: 'Where are your project docs? (relative to repo root)',
-      placeholder: 'docs/',
-    });
+  const docsPath = await text({
+    message: 'Where are your project docs? (relative to repo root)',
+    placeholder: 'docs/',
+  });
+  if (isCancel(docsPath) || typeof docsPath !== 'string' || !docsPath.trim()) return;
 
-    if (!isCancel(docsPath) && typeof docsPath === 'string' && docsPath.trim()) {
-      try {
-        const archonDir = join(repoPath, '.archon');
-        mkdirSync(archonDir, { recursive: true });
-        const configPath = join(archonDir, 'config.yaml');
-        const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        if (!existing.includes('docs:')) {
-          const escaped = docsPath.trim().replace(/"/g, '\\"');
-          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
-        } else {
-          note(
-            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
-            'Docs path not written'
-          );
-        }
-      } catch (err) {
-        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
-        exitSetup(1);
-      }
+  try {
+    const archonDir = join(repoPath, '.archon');
+    mkdirSync(archonDir, { recursive: true });
+    const configPath = join(archonDir, 'config.yaml');
+    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+    const updated = withDocsPath(existing, docsPath.trim());
+    if (updated !== null) {
+      writeFileSync(configPath, updated);
+    } else {
+      note(
+        `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
+        'Docs path not written'
+      );
     }
+  } catch (err) {
+    cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
+    exitSetup(1);
   }
 }

@@ -102,6 +102,7 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+    # toolFreeStructuredOutputModels: [glm-5.3]  # Optional: routes that reject tools + strict schema together
 
 # Streaming preferences per platform
 streaming:
@@ -514,7 +515,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). At `debug` or `trace`, each DAG run compares the usage totals it writes to the run with the sum of its node events, and logs `dag.run_usage_reconciliation_mismatch` with both figures when they differ. | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
@@ -922,7 +923,9 @@ Returns: `{"status":"ok","database":"connected"}`
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
+
+Per-conversation acquisition and queue times are on the authenticated `GET /api/dashboard/conversations`.
 
 **Use cases:**
 - Docker healthcheck configuration

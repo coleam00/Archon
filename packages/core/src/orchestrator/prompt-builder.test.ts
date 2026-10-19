@@ -128,6 +128,24 @@ describe('formatWorkflowSection', () => {
     expect(section).toContain('**current**\n  Current\n  Type:');
     expect(section).toContain('**legacy**\n  Legacy\n  Deprecated: Use current.\n  Type:');
   });
+
+  test('lists declared inputs so the agent can supply them', () => {
+    const section = formatWorkflowSection([
+      {
+        name: 'release',
+        description: 'Release',
+        nodes: [],
+        inputs: {
+          base_branch: { required: true, description: 'Branch to release from' },
+          dry_run: { default: false },
+          note: {},
+        },
+      },
+    ]);
+    expect(section).toContain(
+      '  Inputs:\n    - base_branch (required): Branch to release from\n    - dry_run (default: false)\n    - note (optional)\n  Type:'
+    );
+  });
 });
 
 describe('buildOrchestratorSystemAppend', () => {

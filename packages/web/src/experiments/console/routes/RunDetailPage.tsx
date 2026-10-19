@@ -25,6 +25,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId } from '../primitives/run';
+import { isRunLive } from '../lib/run-status';
 import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -530,6 +531,7 @@ export function RunDetailPage(): ReactElement {
                   workflowName={run.workflow}
                   projectCwd={project.path}
                   nodes={nodes}
+                  live={isRunLive(run)}
                   onNodeSelect={(nodeId): void => {
                     pendingNodeIdRef.current = nodeId;
                     setView('log');

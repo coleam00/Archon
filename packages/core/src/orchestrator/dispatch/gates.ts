@@ -37,8 +37,9 @@ export async function runSignatureGates(
 
 /**
  * Resolve this invocation's declared inputs from the values its channel supplied —
- * the run route's `inputs` map today; chat platforms supply nothing and so still
- * refuse a required-input workflow here. The workflow still lists/loads normally.
+ * the run route's `inputs` map or the chat agent's `invoke_workflow` launch. A channel
+ * that supplies nothing still refuses a required-input workflow here. The workflow still
+ * lists/loads normally.
  */
 async function resolveInvocationInputs(
   scope: DispatchScope,

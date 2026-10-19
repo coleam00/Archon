@@ -1,3 +1,4 @@
+import { bashInvocation } from '../../../bash-invocation';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
@@ -24,14 +25,16 @@ export async function runGroupUntilBash(
   const { ctx, node } = run;
   const { workflowRun, artifactsDir, stateDir, logDir, baseBranch, config } = ctx;
   try {
+    const invocation = bashInvocation(bash.script());
     await runSubprocessUntilRunStops(
       ctx.deps.store,
       workflowRun.id,
       node.id,
       ctx.execContext,
       bash.path,
-      ['-c', bash.script()],
+      invocation.args,
       {
+        input: invocation.input,
         cwd: ctx.cwd,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,
@@ -78,7 +81,8 @@ function untilBashRejected(
       output: '',
       error: bashErr.message,
       failureKind: 'cancelled',
-      ...run.usage,
+      ...run.progress.usage,
+      loopIterations: run.progress.lastStartedIteration,
     };
   }
   // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself

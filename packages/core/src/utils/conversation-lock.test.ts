@@ -66,6 +66,10 @@ function drainUntilIdle(manager: ConversationLockManager): Promise<void> {
   }, 'idle (no active conversations, empty queues)');
 }
 
+function activeIds(manager: ConversationLockManager): string[] {
+  return manager.getStats().activeConversations.map(c => c.conversationId);
+}
+
 describe('ConversationLockManager', () => {
   test('initializes with correct maxConcurrent', () => {
     const manager = new ConversationLockManager(5);
@@ -80,10 +84,10 @@ describe('ConversationLockManager', () => {
     const stats = manager.getStats();
     expect(stats).toEqual({
       active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
       maxConcurrent: 10,
-      activeConversationIds: [],
+      queuedTotal: 0,
+      activeConversations: [],
+      queuedConversations: [],
     });
   });
 
@@ -118,9 +122,12 @@ describe('ConversationLockManager', () => {
     const stats = manager.getStats();
     expect(stats.active).toBe(1);
     expect(stats.queuedTotal).toBe(1);
-    expect(stats.queuedByConversation).toEqual([
-      { conversationId: 'same-conv', queuedMessages: 1 },
-    ]);
+    expect(
+      stats.queuedConversations.map(({ conversationId, queuedMessages }) => ({
+        conversationId,
+        queuedMessages,
+      }))
+    ).toEqual([{ conversationId: 'same-conv', queuedMessages: 1 }]);
     expect(log).toEqual(['first']);
 
     first.release();
@@ -174,7 +181,7 @@ describe('ConversationLockManager', () => {
     const stats = manager.getStats();
     expect(stats.active).toBe(3);
     expect(stats.queuedTotal).toBe(0);
-    expect(stats.activeConversationIds.sort()).toEqual(['conv-1', 'conv-2', 'conv-3']);
+    expect(activeIds(manager).sort()).toEqual(['conv-1', 'conv-2', 'conv-3']);
 
     for (const { gated } of conversations) gated.release();
     await drainUntilIdle(manager);
@@ -238,17 +245,80 @@ describe('ConversationLockManager', () => {
     await manager.acquireLock('conv-b', b.handler);
     await drainUntilStarted(log, 2);
 
-    expect(manager.getStats().activeConversationIds.sort()).toEqual(['conv-a', 'conv-b']);
+    expect(activeIds(manager).sort()).toEqual(['conv-a', 'conv-b']);
 
     a.release();
     await drainUntil(
       () => manager.getStats().active === 1,
       'only conv-b active after conv-a finished'
     );
-    expect(manager.getStats().activeConversationIds).toEqual(['conv-b']);
+    expect(activeIds(manager)).toEqual(['conv-b']);
 
     b.release();
     await drainUntilIdle(manager);
-    expect(manager.getStats().activeConversationIds).toEqual([]);
+    expect(activeIds(manager)).toEqual([]);
+  });
+
+  test('reports real acquisition and enqueue times from the injected clock, and elapsed time changes no state', async () => {
+    const t0 = Date.parse('2026-01-01T00:00:00Z');
+    const minute = 60_000;
+    const week = 7 * 24 * 60 * minute;
+    let t = t0;
+    const manager = new ConversationLockManager(1, () => t);
+    const log: string[] = [];
+    const first = gate(log, 'a-first');
+    const second = gate(log, 'a-second');
+    const other = gate(log, 'b');
+
+    await manager.acquireLock('conv-a', first.handler);
+    await drainUntilStarted(log, 1);
+    t = t0 + minute;
+    expect((await manager.acquireLock('conv-a', second.handler)).status).toBe(
+      'queued-conversation'
+    );
+    t = t0 + 2 * minute;
+    expect((await manager.acquireLock('conv-b', other.handler)).status).toBe('queued-capacity');
+
+    t = t0 + week + 2 * minute;
+    const stats = manager.getStats();
+    expect(stats.activeConversations).toEqual([
+      {
+        conversationId: 'conv-a',
+        acquiredAt: new Date(t0).toISOString(),
+        ageMs: week + 2 * minute,
+      },
+    ]);
+    expect(stats.queuedConversations).toEqual([
+      {
+        conversationId: 'conv-a',
+        queuedMessages: 1,
+        oldestEnqueuedAt: new Date(t0 + minute).toISOString(),
+        oldestAgeMs: week + minute,
+      },
+      {
+        conversationId: 'conv-b',
+        queuedMessages: 1,
+        oldestEnqueuedAt: new Date(t0 + 2 * minute).toISOString(),
+        oldestAgeMs: week,
+      },
+    ]);
+    // A week of elapsed time released, failed and promoted nothing.
+    expect(stats.active).toBe(1);
+    expect(stats.queuedTotal).toBe(2);
+    expect(log).toEqual(['a-first']);
+
+    // A promoted message's slot dates from its acquisition, not its enqueue.
+    t = t0 + week + 3 * minute;
+    first.release();
+    await drainUntilStarted(log, 2);
+    expect(log).toEqual(['a-first', 'a-second']);
+    expect(manager.getStats().activeConversations).toEqual([
+      { conversationId: 'conv-a', acquiredAt: new Date(t).toISOString(), ageMs: 0 },
+    ]);
+
+    second.release();
+    await drainUntilStarted(log, 3);
+    other.release();
+    await drainUntilIdle(manager);
   });
 });

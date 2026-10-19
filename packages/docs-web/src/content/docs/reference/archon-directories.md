@@ -38,14 +38,14 @@ layout below. Existing projects keep their names and storage.
 │   ├── <owner>/<repo>/             #   a registered repo with a remote
 │   ├── _local/<basename>/          #   a no-remote local git repo
 │   ├── _folder/<slug>/             #   a folder project (runs in place; git is user/agent-owned)
-│   └── _cwd/<basename>/            #   an unregistered working directory
+│   └── @cwd/<basename>-<digest>/   #   an unregistered working directory
 │       ├── source/                 # Clone or symlink -> local path (repo kinds only)
 │       ├── worktrees/              # Git worktrees for this project (repo kinds only)
 │       ├── artifacts/              # Workflow artifacts — NEVER in git
 │       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
 │       │   │   ├── .archon/        #     engine-owned bookkeeping, never listed as artifacts
 │       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
-│       │   │   │   └── typed-artifacts/     # one listing per node invocation
+│       │   │   │   └── typed-artifacts/     # typed-artifact observation files
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
 │       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
 │       │   └── uploads/<conv-id>/  #   Web UI file uploads (ephemeral)
@@ -71,8 +71,12 @@ layout below. Existing projects keep their names and storage.
 - `workspaces/<project>/` - Everything one project produces. The project segment is
   resolved once per run from the allocated codebase identity. Default shapes are: `owner/repo` for a repo with a
   remote, `_local/<basename>` for a no-remote local repo, `_folder/<slug>` for a folder
-  project, and `_cwd/<basename>` when a run has no registered codebase at all. Folder
-  projects and `_cwd` projects have no `source/` or `worktrees/` — they run in place.
+  project, and `@cwd/<basename>-<digest>` when a run has no registered codebase at all. Folder
+  projects and `@cwd` projects have no `source/` or `worktrees/` — they run in place.
+  The `@cwd` digest is SHA-256 of the resolved absolute directory path.
+  The `@cwd` namespace cannot be a registered repository owner and is separate from legacy
+  `_cwd/<basename>` output, which remains untouched; see [cross-run state](/reference/variables/)
+  for handling legacy state.
 - `workspaces/<project>/artifacts/` - Run output. `$ARTIFACTS_DIR` is
   `artifacts/runs/<run-id>/`. Oversized values passed to shell nodes are retained in the
   engine-owned `.archon/` child so concurrent runs never share the deferred read and

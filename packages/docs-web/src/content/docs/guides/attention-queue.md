@@ -92,14 +92,17 @@ they cannot disagree about what a run needs.
   the run and resume or abandon it.
 - **`occurrence`** identifies an answerable pause (`attention` or `awaiting_response`).
   Pass it back with `--occurrence`; an answer or
-  label write for a pause the run has left is refused, naming the current occurrence.
+  label write for a pause the run has left is refused. If the diagnostic read succeeds
+  and the run is awaiting another answer, the refusal names the current occurrence.
+  Otherwise, fetch the current item again before retrying.
 - **`revision`** starts at 1 and grows by one with every label write on an attention
   wait. It stays 1 for other kinds, so it does not identify every item change.
 - **`project`** is the project the run belongs to, never a label. `key` is the project
   storage key that [state documents](/reference/cli/#state) scope by, so
   `archon state --project <item.project.key>` reaches the same project. `codebaseId` is
   null for a project with no codebase row, such as a run in an unregistered directory
-  (`_cwd/<name>`). `name` is the codebase's name, or otherwise the key's last segment. A
+  (`@cwd/<basename>-<digest>`). Copy the exact key from `items[].project.key`
+  in `archon workflow attention --all --json` when using `--project`. `name` is the codebase's name, or otherwise the key's last segment. A
   run started before its codebase was renamed keeps the key it started with; that is the
   key its state lives under. `project` is null only for a run with no trusted storage
   root.

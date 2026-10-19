@@ -2,7 +2,7 @@ import { testHome, createTestWorkflowHost } from '../test-support/workflow-comma
 import { describe, it, expect, spyOn, mock } from 'bun:test';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import { pendingDurableWait } from './workflow-wait-continuation';
 
 describe('workflowRunCommand — durable wait occurrence ownership', () => {

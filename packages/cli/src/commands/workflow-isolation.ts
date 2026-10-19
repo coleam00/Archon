@@ -318,8 +318,7 @@ export async function resolveRunCodebase(
       if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
       const err = error as Error;
       if (options.registrationBaseBranch !== undefined) throw err;
-      // Running unregistered would file the run under `_cwd/<folder name>`, storage
-      // and state that every checkout with the same folder name shares (#1192).
+      // Running unregistered would separate this checkout from the registered project state.
       throw options.folder
         ? buildFolderRegistrationFailureError(err)
         : buildRegistrationFailureError(err);

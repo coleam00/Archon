@@ -1,4 +1,4 @@
-import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
+import { mergeTokenUsage, tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { getLog } from './log';
 
 /**
@@ -39,16 +39,14 @@ export function sumTokenUsage(
 }
 
 /**
- * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
+ * Sum finite reported costs, preserving absence when no contribution reported cost.
  *
- * This is Σ of every child, not only the completed ones: a child persists its usage at
+ * Fan-out callers include every child, not only completed ones: a child persists its usage at
  * its run tail whatever its outcome (#2469), so a failed or cancelled child still
  * contributes what it burned. That matters most here — `all_done` is the default join,
  * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
  */
-export function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
+export function sumReportedCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
@@ -63,7 +61,7 @@ export function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number
 /**
  * Σ of defined child token usage; unavailable if any child explicitly cannot count
  * its tokens, or if no child reported tokens. Like
- * {@link sumFanOutCost}, this covers every child regardless of outcome.
+ * {@link sumReportedCost}, this covers every child regardless of outcome.
  */
 export function sumFanOutTokens(
   outcomes: readonly { tokens?: TokenUsage; tokensUnknown?: boolean }[]
@@ -73,4 +71,43 @@ export function sumFanOutTokens(
     outcomes.flatMap(outcome => (outcome.tokens !== undefined ? [outcome.tokens] : [])),
     { scope: 'fan_out' }
   );
+}
+
+/** Run-level usage as either aggregation reports it: the live run total or the event-log fold. */
+export interface RunUsageFigures {
+  costUsd?: number;
+  tokens?: TokenUsage;
+  tokensUnknown?: boolean;
+}
+
+// Float sums taken in a different order differ in the last bits.
+const COST_TOLERANCE_USD = 1e-9;
+
+const RECONCILED_TOKEN_AXES = tokenUsageSchema
+  .omit({
+    cachePartial: true, // Aggregation floor marker, not a counter.
+    total: true, // Provider-defined total; not aggregated across nodes.
+    cost: true, // Provider-defined cost; run cost is reconciled separately.
+  })
+  .keyof().options;
+
+/**
+ * The axes on which two figures for the same run disagree; empty when they agree. The
+ * usage reconciliation tests and the debug-level check in `persistRunUsage` both judge
+ * with it, so a blind comparison would blind both.
+ *
+ * Absent cost equals `0`, because the fold reports `0` when no row carried cost. Tokens
+ * compare per reconciled schema axis.
+ */
+export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost' | 'tokens')[] {
+  const mismatched: ('cost' | 'tokens')[] = [];
+  if (Math.abs((a.costUsd ?? 0) - (b.costUsd ?? 0)) > COST_TOLERANCE_USD) mismatched.push('cost');
+  if (!tokensAgree(a, b)) mismatched.push('tokens');
+  return mismatched;
+}
+
+function tokensAgree(a: RunUsageFigures, b: RunUsageFigures): boolean {
+  const aUnknown = a.tokensUnknown === true;
+  if (aUnknown || b.tokensUnknown === true) return aUnknown === (b.tokensUnknown === true);
+  return RECONCILED_TOKEN_AXES.every(axis => a.tokens?.[axis] === b.tokens?.[axis]);
 }

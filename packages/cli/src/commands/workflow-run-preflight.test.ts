@@ -11,7 +11,7 @@ import {
   makeTestWorkflow,
   makeTestWorkflowWithSource,
 } from '@archon/workflows/test-utils';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import { maybePrintTierNotice } from './workflow-run-preflight';
 
 describe('workflowRunCommand — requires: [github] gate', () => {

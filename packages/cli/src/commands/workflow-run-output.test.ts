@@ -21,7 +21,7 @@ import {
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import { resolveCliExitCode } from '../utils/workflow-exit-code';
 
 describe('workflowRunCommand — progress rendering', () => {

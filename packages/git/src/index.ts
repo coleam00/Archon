@@ -83,6 +83,7 @@ export {
   addSafeDirectory,
 } from './repo';
 export type { CloneCredentials, CloneRepositoryOptions } from './repo';
+export { trustRegisteredPath } from './registration-trust';
 
 export {
   inspectRemoteBranches,

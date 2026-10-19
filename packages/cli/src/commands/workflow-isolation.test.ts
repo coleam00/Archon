@@ -13,7 +13,7 @@ import {
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import {
   folderRunsInContainer,
   resolveContainerBackendConfig,
