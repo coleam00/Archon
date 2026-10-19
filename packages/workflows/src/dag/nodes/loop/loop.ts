@@ -310,29 +310,8 @@ export async function executeLoopNode(
   };
   const { startIteration, iterationLimit } = resume;
   for (let i = startIteration; i <= iterationLimit; i++) {
-    try {
-      const result = await runLoopIteration(run, state, i);
-      if (result !== undefined) return result;
-    } catch (error) {
-      // An iteration reads no node source, reserves no run budget and writes no terminal
-      // status; a failed event write is the only engine error it can raise.
-      if (error instanceof NodeEventWriteError) throw error;
-      const err = error instanceof Error ? error : new Error(String(error));
-      getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
-      const failed = await failLoopNode(ctx, node.id, state, err.message, {
-        failureKind: 'unknown',
-        ...loopSpend(state),
-        loopIterations: state.lastStartedIteration,
-        data: { iteration: i },
-      });
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `Loop node '${node.id}' failed: ${err.message}`,
-        msgContext
-      );
-      return failed;
-    }
+    const result = await runSettledLoopIteration(run, state, i);
+    if (result !== undefined) return result;
   }
 
   // Max iterations exceeded
@@ -350,6 +329,40 @@ export async function executeLoopNode(
     loopIterations: Math.max(iterationLimit, startIteration - 1),
     data: { maxIterations: iterationLimit },
   });
+}
+
+/**
+ * Run one iteration and settle a thrown iteration as a failed node carrying the spend
+ * of the iterations already paid for.
+ */
+async function runSettledLoopIteration(
+  run: LoopRun,
+  state: LoopState,
+  i: number
+): Promise<NodeExecutionResult | undefined> {
+  try {
+    return await runLoopIteration(run, state, i);
+  } catch (error) {
+    // An iteration reads no node source, reserves no run budget and writes no terminal
+    // status; a failed event write is the only engine error it can raise.
+    if (error instanceof NodeEventWriteError) throw error;
+    const { ctx, node } = run;
+    const message = error instanceof Error ? error.message : String(error);
+    getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
+    const failed = await failLoopNode(ctx, node.id, state, message, {
+      failureKind: 'unknown',
+      ...loopSpend(state),
+      loopIterations: state.lastStartedIteration,
+      data: { iteration: i },
+    });
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Loop node '${node.id}' failed: ${message}`,
+      run.msgContext
+    );
+    return failed;
+  }
 }
 
 /** Detect interactive loop resume — whether workflowRun.metadata holds this node's loop gate. */

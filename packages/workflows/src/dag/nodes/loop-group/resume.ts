@@ -63,15 +63,10 @@ export function readLoopGroupResume(
   stepName: string,
   progress: LoopGroupProgress
 ): LoopGroupResume {
-  const rawApproval = ctx.workflowRun.metadata?.approval;
-  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
-  const enclosingPauseFrame = enclosingPauseFrameOf(
+  const { loopGateMeta, ownerInvocationKey, enclosingPauseFrame } = readPausedInvocation(
     ctx,
     node,
-    stepName,
-    loopGateMeta,
-    ownerInvocationKey
+    stepName
   );
   progress.lastStartedIteration = enclosingPauseFrame?.iteration ?? 0;
   const shape = detectResumeShape(ctx, node, loopGateMeta, ownerInvocationKey);
@@ -164,6 +159,32 @@ function detectResumeShape(
       loopGateMeta.nodeId === node.id &&
       loopGateMeta.bodyGateId !== undefined,
     isEscalatedWaitResume: matchesOwnerInvocation && loopOwnedWaitMeta?.nodeId === node.id,
+  };
+}
+
+/** This invocation's identity, and the persisted gate and its frame for it, if any. */
+function readPausedInvocation(
+  ctx: RunLayersContext,
+  node: LoopGroupNode,
+  stepName: string
+): {
+  loopGateMeta: ApprovalContext | undefined;
+  ownerInvocationKey: string;
+  enclosingPauseFrame: { groupId: string; iteration: number } | undefined;
+} {
+  const rawApproval = ctx.workflowRun.metadata?.approval;
+  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
+  return {
+    loopGateMeta,
+    ownerInvocationKey,
+    enclosingPauseFrame: enclosingPauseFrameOf(
+      ctx,
+      node,
+      stepName,
+      loopGateMeta,
+      ownerInvocationKey
+    ),
   };
 }
 

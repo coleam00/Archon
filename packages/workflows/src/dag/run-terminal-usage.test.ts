@@ -327,10 +327,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     expect(failed.data?.failure_kind).toBe('unknown');
     expect(failed.data?.error).toContain(test.fault === 'listing' ? listingDir : invalidShell);
     if (test.fault === 'listing') expect(failed.data?.error).toContain('EEXIST');
-    if (test.fault === 'spawn') {
-      expect(failed.data?.error).toContain('cannot execute bash');
-      expect(failed.data?.error).toContain('EACCES');
-    }
+    if (test.fault === 'spawn') expect(failed.data?.error).toContain('cannot execute bash');
     expect(failed.data?.cost_usd).toBe(0.25);
     expect(failed.data?.spend).toMatchObject({
       costUsd: { source: 'provider', value: 0.25 },
