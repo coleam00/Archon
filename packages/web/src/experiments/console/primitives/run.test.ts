@@ -637,6 +637,11 @@ test('running advisories are normalized through API metadata and disappear for t
   const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
   expect(live.toolCallAttention).toEqual([call]);
   expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
+  // A stalled tool call keeps naming its cause when the owner is also gone or unobservable.
+  for (const observation of ['unreachable', 'unknown'] as const)
+    expect(runStatusLabel({ ...live, ownerObservation: observation })).toBe(
+      'Running · tool call needs attention'
+    );
   expect(
     toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
       .toolCallAttention

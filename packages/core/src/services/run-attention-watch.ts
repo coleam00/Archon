@@ -29,6 +29,7 @@ import {
   type RunLiveOwnerWatchResult,
 } from './run-live-owner';
 import { DETACHED_RUN_STOP_HANDOFF_GRACE_MS } from './run-stop-bounds';
+import type { RunOwnerObservation } from '../schemas/workflow-run';
 
 export type { RunAttentionReadStore };
 export type RunDoorbell = (runId: string, onDoorbell: () => void) => Promise<(() => void) | null>;
@@ -86,6 +87,36 @@ type WakeSource =
   | 'owner_attention'
   | 'owner_disconnect'
   | 'owner_handoff';
+
+type OwnerRequired = Extract<RunResolution, { kind: 'owner_required' }>;
+
+type RunOwnerAttachment =
+  | { kind: 'attached'; runId: string; handle: RunLiveOwnerWatch }
+  | { kind: 'unreachable' | 'unproven' | 'unknown' };
+
+/**
+ * Attach to the first owner candidate that answers. No answer from any candidate is
+ * `unreachable` only when the recorded owner's endpoint lives on this host and user;
+ * otherwise this process cannot observe it and the result is `unknown`.
+ */
+async function attachRunOwner(
+  resolution: OwnerRequired,
+  onEvent: (event: RunLiveOwnerWatchEvent) => void
+): Promise<RunOwnerAttachment> {
+  let attachment: 'unreachable' | 'unproven' = 'unreachable';
+  for (const candidate of resolution.ownerCandidateIds) {
+    const result = await watchRunLiveOwner(candidate, onEvent);
+    if (result.kind === 'attached')
+      return { kind: 'attached', runId: candidate, handle: result.handle };
+    if (result.kind === 'unproven') attachment = 'unproven';
+  }
+  return {
+    kind:
+      attachment === 'unreachable' && !isOwnerEndpointLocal(resolution.recordedOwner)
+        ? 'unknown'
+        : attachment,
+  };
+}
 
 function isNonTerminalStatus(status: WorkflowRunStatus): status is NonTerminalWorkflowRunStatus {
   return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
@@ -177,24 +208,15 @@ export async function waitForRunAttention(
   };
 
   const attachOwner = async (
-    resolution: Extract<RunResolution, { kind: 'owner_required' }>
+    resolution: OwnerRequired
   ): Promise<RunLiveOwnerWatchResult['kind'] | 'unknown'> => {
-    const candidates = resolution.ownerCandidateIds;
-    if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
+    if (ownerWatch && !ownerWatchEnded && resolution.ownerCandidateIds.includes(ownerWatch.runId))
+      return 'attached';
     discardOwnerWatch();
-    let attachment: Exclude<RunLiveOwnerWatchResult['kind'], 'attached'> = 'unreachable';
-    for (const candidate of candidates) {
-      ownerWatchEnded = false;
-      const result = await watchRunLiveOwner(candidate, onOwnerEvent);
-      if (result.kind === 'attached') {
-        ownerWatch = { runId: candidate, handle: result.handle };
-        return ownerWatchEnded ? 'unproven' : 'attached';
-      }
-      if (result.kind === 'unproven') attachment = 'unproven';
-    }
-    return attachment === 'unreachable' && !isOwnerEndpointLocal(resolution.recordedOwner)
-      ? 'unknown'
-      : attachment;
+    const attachment = await attachRunOwner(resolution, onOwnerEvent);
+    if (attachment.kind !== 'attached') return attachment.kind;
+    ownerWatch = { runId: attachment.runId, handle: attachment.handle };
+    return ownerWatchEnded ? 'unproven' : 'attached';
   };
 
   try {
@@ -313,6 +335,41 @@ export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWat
   };
 }
 
+/**
+ * What this process observes about a running row's owner, by the rule `workflow wait`
+ * uses for `owner_lost`. Null when the row is not running, so it makes no ownership claim.
+ * Reads only the owner endpoints and the stored row: how long the run has been quiet is
+ * not an input, and the run is never mutated.
+ */
+export async function observeRunOwner(
+  store: RunAttentionReadStore,
+  run: WorkflowRun
+): Promise<RunOwnerObservation | null> {
+  // A process that died mid-call leaves tool-call attention on a running row, as in
+  // `runOwnerLossWatch`, so the observation asks for the owner instead.
+  const ownerStore: RunAttentionReadStore = {
+    getWorkflowRun: async id => withoutRunningAttention(await store.getWorkflowRun(id)),
+  };
+  let current: WorkflowRun | null = run;
+  for (let read = 1; ; read++) {
+    if (current?.status !== 'running') return null;
+    const resolution = await resolveRunAttention(ownerStore, withoutRunningAttention(current));
+    if (resolution.kind !== 'owner_required') return null;
+    const attachment = await attachRunOwner(resolution, () => undefined);
+    if (attachment.kind === 'attached') {
+      attachment.handle.unsubscribe();
+      return 'reachable';
+    }
+    if (attachment.kind !== 'unreachable') return 'unknown';
+    // An owner closes its endpoint only after its terminal write, so a second read tells a
+    // run that just finished from one whose owner is gone.
+    if (read === 2) return 'unreachable';
+    current = await store.getWorkflowRun(run.id);
+  }
+}
+
+function withoutRunningAttention(run: WorkflowRun): WorkflowRun;
+function withoutRunningAttention(run: WorkflowRun | null): WorkflowRun | null;
 function withoutRunningAttention(run: WorkflowRun | null): WorkflowRun | null {
   if (run?.status !== 'running' || !Object.hasOwn(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY))
     return run;
