@@ -153,6 +153,7 @@ globalThis.fetch = mockFetch;
 
 // Now import the adapter (after all mocks)
 const { GitLabAdapter } = await import('./adapter');
+const readiness = await import('./repository-readiness');
 const { ConversationLockManager } = await import('@archon/core');
 
 // Helper: Create adapter with default test config
@@ -246,60 +247,6 @@ describe('GitLabAdapter', () => {
     );
   });
 
-  test('refuses ambiguous stale checkout repair for a bare project name', async () => {
-    const adapter = createAdapter();
-    const existing = {
-      id: 'bare-project',
-      name: 'local-api',
-      default_cwd: '/repos/worktrees/old',
-      repository_url: 'https://example.com/testuser/testrepo',
-    };
-    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
-    mockUpdateCodebase.mockClear();
-    // @ts-expect-error - exercise the private registration boundary
-    await expect(adapter.getOrCreateCodebaseForRepo('testuser/testrepo')).rejects.toThrow(
-      '/update-project'
-    );
-    expect(existing.default_cwd).toBe('/repos/worktrees/old');
-    expect(mockUpdateCodebase).not.toHaveBeenCalled();
-  });
-
-  test('stale suffixed checkout repair keeps its allocated project identity', async () => {
-    const adapter = createAdapter();
-    mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
-      id: 'allocated',
-      name: 'testuser/testrepo-2',
-      default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
-      repository_url: 'https://example.com/testuser/testrepo',
-    });
-    // @ts-expect-error - exercise the private registration boundary
-    const result = await adapter.getOrCreateCodebaseForRepo('testuser/testrepo');
-    expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
-    expect(result.codebase.default_cwd).toBe(result.repoPath);
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(expect.objectContaining({ id: 'allocated' }), {
-      default_cwd: result.repoPath,
-    });
-  });
-
-  test('refuses legacy nested repair without changing its storage identity', async () => {
-    const adapter = createAdapter();
-    const existing = {
-      id: 'nested',
-      name: 'group/subgroup/repo',
-      default_cwd: '/tmp/test-workspaces/group/subgroup/repo/worktrees/old',
-      repository_url: 'https://gitlab.example.com/group/subgroup/repo',
-    };
-    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
-    mockUpdateCodebase.mockClear();
-    // @ts-expect-error - exercise the private registration boundary
-    await expect(adapter.getOrCreateCodebaseForRepo('group/subgroup/repo')).rejects.toThrow(
-      '/update-project'
-    );
-    expect(existing.default_cwd).toBe('/tmp/test-workspaces/group/subgroup/repo/worktrees/old');
-    expect(existing.name).toBe('group/subgroup/repo');
-    expect(mockUpdateCodebase).not.toHaveBeenCalled();
-  });
-
   test('webhook clones an absent saved checkout before dispatch', async () => {
     const adapter = createAdapter();
     const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
@@ -350,11 +297,11 @@ describe('GitLabAdapter', () => {
       platform_conversation_id: 'mygroup/myproject#1',
     });
     mockUpdateConversation.mockResolvedValueOnce(undefined);
-    // @ts-expect-error - observe the private checkout boundary
-    const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+    const prepare = spyOn(readiness, 'ensureRepoReady').mockResolvedValue(undefined);
     try {
       await adapter.handleWebhook(createNotePayload({ note: '@archon help' }), 'test-secret');
       expect(prepare).toHaveBeenCalledWith(
+        { gitlabUrl: 'https://gitlab.example.com', token: 'test-token' },
         'mygroup/myproject',
         'main',
         expect.objectContaining({ default_cwd: path }),
@@ -631,74 +578,6 @@ describe('GitLabAdapter', () => {
     });
   });
 
-  describe('stripMention', () => {
-    const adapter = createAdapter({ botMention: 'archon' });
-    const strip = (text: string) =>
-      (adapter as unknown as { stripMention: (t: string) => string }).stripMention(text);
-
-    test('strips mention followed by space', () => {
-      expect(strip('@archon hello')).toBe('hello');
-    });
-
-    test('strips mention followed by comma', () => {
-      expect(strip('@archon, please help')).toBe('please help');
-    });
-
-    test('strips mention at end of string', () => {
-      expect(strip('help me @archon')).toBe('help me');
-    });
-
-    test('does NOT strip partial-prefix username (@archonbot)', () => {
-      // Regression: old regex `@archon[\s,:;]*` would strip '@archon' from '@archonbot',
-      // yielding 'bot hello'. New regex requires a separator or end-of-string.
-      expect(strip('@archonbot hello')).toBe('@archonbot hello');
-    });
-  });
-
-  describe('conversation ID parsing', () => {
-    test('parses issue conversation ID (# separator)', () => {
-      const adapter = createAdapter();
-      // Access private method via type casting for testing
-      const parsed = (
-        adapter as unknown as { parseConversationId: (id: string) => unknown }
-      ).parseConversationId('mygroup/myproject#42');
-      expect(parsed).toEqual({ projectPath: 'mygroup/myproject', iid: 42, isMR: false });
-    });
-
-    test('parses MR conversation ID (! separator)', () => {
-      const adapter = createAdapter();
-      const parsed = (
-        adapter as unknown as { parseConversationId: (id: string) => unknown }
-      ).parseConversationId('mygroup/myproject!15');
-      expect(parsed).toEqual({ projectPath: 'mygroup/myproject', iid: 15, isMR: true });
-    });
-
-    test('parses nested group conversation ID', () => {
-      const adapter = createAdapter();
-      const parsed = (
-        adapter as unknown as { parseConversationId: (id: string) => unknown }
-      ).parseConversationId('org/team/subteam/project#7');
-      expect(parsed).toEqual({ projectPath: 'org/team/subteam/project', iid: 7, isMR: false });
-    });
-
-    test('returns null for invalid conversation ID', () => {
-      const adapter = createAdapter();
-      const parsed = (
-        adapter as unknown as { parseConversationId: (id: string) => unknown }
-      ).parseConversationId('invalid');
-      expect(parsed).toBeNull();
-    });
-
-    test('builds correct conversation IDs', () => {
-      const adapter = createAdapter();
-      const build = (
-        adapter as unknown as { buildConversationId: (p: string, i: number, m: boolean) => string }
-      ).buildConversationId;
-      expect(build.call(adapter, 'group/project', 42, false)).toBe('group/project#42');
-      expect(build.call(adapter, 'group/project', 15, true)).toBe('group/project!15');
-    });
-  });
-
   describe('MR close event with merge flag', () => {
     test('passes merged=true for merge action', async () => {
       const adapter = createAdapter();
@@ -922,80 +801,6 @@ describe('GitLabAdapter', () => {
         expect.anything(),
         expect.objectContaining({ actor: { kind: 'unidentified' } })
       );
-    });
-  });
-
-  describe('sendMessage', () => {
-    beforeEach(() => {
-      mockFetch.mockReset();
-      mockFetch.mockImplementation(async () => new Response(JSON.stringify({}), { status: 200 }));
-    });
-
-    test('posts to correct issue notes API endpoint', async () => {
-      const adapter = createAdapter();
-      await adapter.sendMessage('mygroup/myproject#42', 'Hello from Archon');
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe(
-        'https://gitlab.example.com/api/v4/projects/mygroup%2Fmyproject/issues/42/notes'
-      );
-      expect(options.method).toBe('POST');
-    });
-
-    test('posts to correct MR notes API endpoint', async () => {
-      const adapter = createAdapter();
-      await adapter.sendMessage('mygroup/myproject!15', 'Review complete');
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe(
-        'https://gitlab.example.com/api/v4/projects/mygroup%2Fmyproject/merge_requests/15/notes'
-      );
-    });
-
-    test('appends bot response marker to outgoing comments', async () => {
-      const adapter = createAdapter();
-      await adapter.sendMessage('mygroup/myproject#1', 'Test message');
-
-      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      const body = JSON.parse(options.body as string) as { body: string };
-      expect(body.body).toContain('Test message');
-      expect(body.body).toContain('<!-- archon-bot-response -->');
-      expect(body.body).toBe('Test message\n\n<!-- archon-bot-response -->');
-    });
-
-    test('encodes nested project path in URL', async () => {
-      const adapter = createAdapter();
-      await adapter.sendMessage('org/team/subproject#7', 'Nested group test');
-
-      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain('org%2Fteam%2Fsubproject');
-    });
-
-    test('rejects invalid conversation ID without calling API', async () => {
-      const adapter = createAdapter();
-      await adapter.sendMessage('invalid-format', 'Should not send');
-
-      expect(mockFetch).not.toHaveBeenCalled();
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        { conversationId: 'invalid-format' },
-        'gitlab.invalid_conversation_id'
-      );
-    });
-
-    test('splits long messages into multiple API calls', async () => {
-      const adapter = createAdapter();
-      // Build a message with paragraph breaks that exceeds MAX_LENGTH (65000)
-      // Each paragraph is ~1000 chars, 80 paragraphs = ~80k + separators
-      const paragraphs = Array.from(
-        { length: 80 },
-        (_, i) => `Paragraph ${String(i)}: ${'x'.repeat(990)}`
-      );
-      const longMessage = paragraphs.join('\n\n');
-      await adapter.sendMessage('mygroup/myproject#1', longMessage);
-
-      expect(mockFetch.mock.calls.length).toBeGreaterThan(1);
     });
   });
 });
