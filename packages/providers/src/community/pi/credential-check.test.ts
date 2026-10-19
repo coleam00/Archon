@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
-import { PiProvider, resolvePiAuth } from './provider';
+import { resolvePiAuth } from './auth';
+import { PiProvider } from './provider';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
 

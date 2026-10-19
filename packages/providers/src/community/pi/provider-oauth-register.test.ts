@@ -22,7 +22,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { ensurePiOAuthFlowsRegistered, resetOAuthFlowRegistrationForTest } from './provider';
+import { ensurePiOAuthFlowsRegistered, resetOAuthFlowRegistrationForTest } from './sdk-setup';
 
 afterEach(() => {
   resetOAuthFlowRegistrationForTest();
