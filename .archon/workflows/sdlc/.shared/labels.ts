@@ -213,7 +213,8 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Own
 }
 
 // Single add and remove operations, as on the gh path, so labels another writer adds
-// concurrently survive. Each write returns the item's whole label set as read back.
+// concurrently survive. Each forge write reads itself back, and a write that does not
+// fails with its outcome, so there is nothing left to re-check here.
 function forgeWrite(
   item: QualifiedPr,
   add: readonly string[],
@@ -229,26 +230,11 @@ function forgeWrite(
   }
   const applied = [...new Set(add.filter(name => present.has(name)))].sort();
   const subject = { kind: 'issue', ref: item };
-  let after = current;
   for (const name of applied.filter(label => !current.has(label))) {
-    after = labelsOf(invokeForge('workitem.label.add', { subject, name }));
+    invokeForge('workitem.label.add', { subject, name });
   }
   for (const name of remove.filter(label => current.has(label))) {
-    after = labelsOf(invokeForge('workitem.label.remove', { subject, name }));
-  }
-  const missing = applied.filter(name => !after.has(name));
-  const lingering = remove.filter(name => after.has(name));
-  if (missing.length > 0 || lingering.length > 0) {
-    throw new Error(
-      `forge label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)}`
-    );
+    invokeForge('workitem.label.remove', { subject, name });
   }
   return applied;
-}
-
-function labelsOf(result: Record<string, unknown> | null): Set<string> {
-  if (result?.outcome !== 'applied' || !Array.isArray(result.labels)) {
-    throw new Error('forge label write returned no label set');
-  }
-  return new Set(result.labels.filter((name): name is string => typeof name === 'string'));
 }

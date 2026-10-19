@@ -259,11 +259,9 @@ test('a retired size label is never created and never accepted as an area label'
   expect(run.stderr).toContain('may not name a pack label');
 });
 
-test('forge triage adds and removes single labels, keeping labels another writer added', () => {
+test('forge triage adds the labels it lacks and removes only the stale one it owns', () => {
   const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
-  const final = ['archon-ready', 'archon-size-s', 'archon-type-feature', 'area', 'someone-elses'];
-  const written = (op: string) =>
-    forgeOperation(op, { target: item.ref, outcome: 'applied', changed: true, workitem: item, labels: final });
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
   const run = runPackScript('triage/scripts/verdict', {
     source: 'forge',
     inputs,
@@ -275,18 +273,20 @@ test('forge triage adds and removes single labels, keeping labels another writer
           repo: PR.repo,
           labels: ['archon-ready', 'archon-plan', 'archon-size-s', 'archon-type-feature', 'area'].map(name => ({ name })),
         }),
-        written('workitem.label.add'),
-        written('workitem.label.add'),
-        written('workitem.label.add'),
-        written('workitem.label.add'),
-        written('workitem.label.remove'),
+        ...Array.from({ length: 4 }, () => applied('workitem.label.add')),
+        applied('workitem.label.remove'),
       ],
     },
   });
   expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-  expect(run.gh).toEqual([]);
-  const ops = run.forge.map(argv => argv.split(' ')[1]);
-  expect(ops).not.toContain('workitem.labels.set');
-  expect(ops.filter(op => op === 'workitem.label.add')).toHaveLength(4);
-  expect(run.forgeRequests.at(-1)).toContain('"name":"archon-plan"');
+  const writes = run.forge
+    .map((argv, index) => [argv.split(' ')[1], JSON.parse(run.forgeRequests[index] ?? '{}').name])
+    .filter(([op]) => op?.startsWith('workitem.label.'));
+  expect(writes).toEqual([
+    ['workitem.label.add', 'archon-ready'],
+    ['workitem.label.add', 'archon-size-s'],
+    ['workitem.label.add', 'archon-type-feature'],
+    ['workitem.label.add', 'area'],
+    ['workitem.label.remove', 'archon-plan'],
+  ]);
 });

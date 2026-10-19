@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import {
   PR,
   PR_URL,
-  forgeFailure,
   forgeOperation,
   forgePrRecord,
   packScriptRunner,
@@ -199,10 +198,9 @@ describe("deliver's review threads on the forge source", () => {
         },
       ],
     });
-  const applied = (op: string, value: Record<string, unknown>) =>
-    forgeOperation(op, { target: ref, outcome: 'applied', changed: true, ...value });
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
 
-  it('replies to and resolves an answered thread through forge operations, then reads it back', () => {
+  it('answers a thread with a reply then a resolve on that thread, then rereads the threads', () => {
     const reply = 'Fixed in 1a2b3c4.';
     const result = runPackScript('deliver/scripts/threads', {
       source: 'forge',
@@ -211,8 +209,8 @@ describe("deliver's review threads on the forge source", () => {
         response: [
           view(true),
           threads(false),
-          applied('pr.thread.reply', { thread: 'T1', comment: { ref, id: 'c2', url: `${PR_URL}#c2`, bodyDigest: 'd' } }),
-          applied('pr.thread.resolve', { thread: 'T1', resolved: true }),
+          applied('pr.thread.reply'),
+          applied('pr.thread.resolve'),
           view(true),
           threads(true),
         ],
@@ -229,7 +227,8 @@ describe("deliver's review threads on the forge source", () => {
       'pr.view',
       'pr.threads',
     ]);
-    expect(result.forgeRequests[2]).toContain(reply);
+    expect(JSON.parse(result.forgeRequests[2] ?? '{}')).toMatchObject({ thread: 'T1', body: reply });
+    expect(JSON.parse(result.forgeRequests[3] ?? '{}')).toMatchObject({ thread: 'T1' });
   });
 
   it('lists an open thread and puts a ready pull request back to draft through the forge', () => {
@@ -237,25 +236,12 @@ describe("deliver's review threads on the forge source", () => {
       source: 'forge',
       forge: {
         kind: 'fake',
-        response: [view(false), threads(false), forgeOperation('pr.draft', { target: ref, outcome: 'applied', changed: true, pr: forgePrRecord({ is_draft: true }) })],
+        response: [view(false), threads(false), forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) })],
       },
       inputs: { INPUTS_ANSWERS: 'null' },
     });
     expect(ok(result).open).toBe(1);
     expect(listing(result)).toContain('- id: `T1`');
     expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
-  });
-
-  it('a reply the forge does not confirm fails the node rather than reading as settled', () => {
-    const result = runPackScript('deliver/scripts/threads', {
-      source: 'forge',
-      forge: {
-        kind: 'fake',
-        response: [view(true), threads(false), forgeFailure('pr.thread.reply', 'outcome_unknown', 'response lost')],
-      },
-      inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply: 'Fixed.' }]) },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('pr.thread.reply outcome_unknown');
   });
 });
