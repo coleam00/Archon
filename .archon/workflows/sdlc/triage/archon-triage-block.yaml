@@ -12,7 +12,7 @@ description: |
   stage and owns what follows its ending. It never pauses for a person: run
   archon-triage, which adds that pause, by hand.
 
-model: medium
+model: ['@triage', medium]
 
 inputs:
   target:
