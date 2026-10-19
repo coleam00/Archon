@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { ATTENTION_OUTPUT_FORMATS } from '@archon/workflows/schemas/dag-node';
@@ -26,7 +26,9 @@ const cli = { via: 'cli' } as const;
 let store: IWorkflowStore;
 let operations: WorkflowOperations;
 
-async function setup(): Promise<void> {
+async function setup(
+  overrides: Partial<Pick<IWorkflowStore, 'getWorkflowRun' | 'labelAttentionWait'>> = {}
+): Promise<void> {
   store = await createFileWorkflowStore({
     root: roots(await mkdtemp(join(tmpdir(), 'attention-answer-'))),
   });
@@ -34,6 +36,7 @@ async function setup(): Promise<void> {
     getUserRole: async () => undefined,
     store: {
       ...store,
+      ...overrides,
       deleteWorkflowRun: async () => {
         throw new Error('unused');
       },
@@ -252,6 +255,51 @@ describe('labeling an attention wait', () => {
     await expect(operations.labelAttentionWait(id, write, operator, 'cli')).rejects.toThrow(
       "awaiting occurrence 'pause-1'"
     );
+    expect(await storedWait(id)).not.toHaveProperty('labels');
+  });
+
+  test('a lost label race stays a stale answer when the run cannot be re-read', async () => {
+    const lookupError = new Error('connection reset');
+    const getWorkflowRun = mock<IWorkflowStore['getWorkflowRun']>(id => store.getWorkflowRun(id));
+    const labelAttentionWait = mock<IWorkflowStore['labelAttentionWait']>(async () => {
+      getWorkflowRun.mockRejectedValueOnce(lookupError);
+      return { labeled: false };
+    });
+    await setup({ getWorkflowRun, labelAttentionWait });
+    const id = await paused('message');
+
+    const logs = captureLogLines();
+    try {
+      await expect(
+        operations.labelAttentionWait(
+          id,
+          { occurrence: 'pause-1', set: { ci: 'other' }, unset: [] },
+          operator,
+          'cli'
+        )
+      ).rejects.toBeInstanceOf(StaleGateAnswerError);
+      expect(logs.lines).toContainEqual(
+        expect.objectContaining({
+          level: 40,
+          msg: 'operations.workflow_gate_occurrence_lookup_failed',
+          runId: id,
+          err: expect.objectContaining({
+            type: 'Error',
+            message: lookupError.message,
+            stack: lookupError.stack,
+          }),
+        })
+      );
+    } finally {
+      logs.restore();
+    }
+    expect(labelAttentionWait).toHaveBeenCalledWith(id, {
+      pauseId: 'pause-1',
+      set: { ci: 'other' },
+      unset: [],
+      via: 'cli',
+    });
+    expect(getWorkflowRun).toHaveBeenCalledTimes(2);
     expect(await storedWait(id)).not.toHaveProperty('labels');
   });
 
