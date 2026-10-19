@@ -114,6 +114,75 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each(['sql', 'file'] as const)(
+    'clone reuse preserves the requested URL across Git rewrites (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const upstream = join(root, 'bare upstream.git');
+      const config = join(root, 'gitconfig');
+      const requestedUrl = 'https://rewrite.invalid/owner/repo.git';
+      const destination = pathToFileURL(upstream).href;
+      const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+      const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+      await writeFile(config, '');
+      process.env.GIT_CONFIG_GLOBAL = config;
+      process.env.GIT_CONFIG_NOSYSTEM = '1';
+      try {
+        execFileSync('git', ['init', '--bare', '-q', upstream]);
+        const rewriteKey = `url.${destination}.insteadOf`;
+        execFileSync('git', ['config', '--global', rewriteKey, requestedUrl]);
+        const saved = await cloneRepository(store, requestedUrl);
+        expect(saved.alreadyExisted).toBe(false);
+        const rows = await store.listCodebases();
+        expect(rows).toHaveLength(1);
+        const path = rows[0]!.default_cwd;
+        expect(
+          execFileSync('git', ['-C', path, 'config', '--get', 'remote.origin.url'], {
+            encoding: 'utf8',
+          }).trim()
+        ).toBe(requestedUrl);
+        expect(
+          execFileSync('git', ['-C', path, 'remote', 'get-url', 'origin'], {
+            encoding: 'utf8',
+          }).trim()
+        ).toBe(destination);
+        const reused = await cloneRepository(store, requestedUrl);
+        expect(reused).toMatchObject({ ...saved, alreadyExisted: true });
+        expect(await store.listCodebases()).toMatchObject([
+          { id: saved.codebaseId, default_cwd: path, repository_url: requestedUrl },
+        ]);
+        execFileSync('git', ['config', '--global', '--unset', rewriteKey]);
+        expect(await cloneRepository(store, requestedUrl)).toMatchObject({
+          codebaseId: saved.codebaseId,
+          alreadyExisted: true,
+        });
+        execFileSync('git', ['config', '--global', rewriteKey, requestedUrl]);
+        execFileSync('git', [
+          '-C',
+          path,
+          'remote',
+          'set-url',
+          'origin',
+          'https://foreign.invalid/other/repo.git',
+        ]);
+        await expect(cloneRepository(store, requestedUrl)).rejects.toThrow('/update-project');
+        expect(await store.listCodebases()).toHaveLength(1);
+        expect(await store.listCodebases()).toMatchObject([
+          { id: saved.codebaseId, default_cwd: path, repository_url: requestedUrl },
+        ]);
+      } finally {
+        if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+        if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+        else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+      }
+    }
+  );
+
   test.each(['url', 'path'] as const)(
     'a saved checkout whose config selects another remote is still reused on %s reuse',
     async entry => {
