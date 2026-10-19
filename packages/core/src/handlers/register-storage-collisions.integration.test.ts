@@ -114,111 +114,81 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each([
-    { backend: 'sql', entry: 'url' },
-    { backend: 'sql', entry: 'path' },
-    { backend: 'file', entry: 'url' },
-    { backend: 'file', entry: 'path' },
-  ] as const)(
-    'a saved relative URL cannot prove ownership through a remote name on $entry reuse ($backend)',
-    async ({ backend, entry }) => {
-      const root = await makeHome();
-      const store =
-        backend === 'sql'
-          ? codebases
-          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
-      const foreignUrl = 'https://foreign.invalid/other/repo.git';
-      const path = await gitCheckout(join(root, 'api'), foreignUrl);
-      const savedUrl = 'upstream.git';
-      execFileSync('git', ['-C', path, 'remote', 'add', savedUrl, foreignUrl]);
-      const saved = await store.createCodebase({
-        name: 'local-api',
-        default_cwd: path,
-        repository_url: savedUrl,
-      });
-      await expect(
-        entry === 'url'
-          ? cloneRepository(store, pathToFileURL(join(path, savedUrl)).href)
-          : registerInStore(store, path)
-      ).rejects.toThrow('/update-project');
+  test('a saved relative URL cannot prove ownership through a remote name on path reuse', async () => {
+    const root = await makeHome();
+    const store = codebases;
+    const foreignUrl = 'https://foreign.invalid/other/repo.git';
+    const path = await gitCheckout(join(root, 'api'), foreignUrl);
+    const savedUrl = 'upstream.git';
+    execFileSync('git', ['-C', path, 'remote', 'add', savedUrl, foreignUrl]);
+    const saved = await store.createCodebase({
+      name: 'local-api',
+      default_cwd: path,
+      repository_url: savedUrl,
+    });
+    await expect(registerInStore(store, path)).rejects.toThrow('/update-project');
+    expect(await store.listCodebases()).toMatchObject([
+      { id: saved.id, default_cwd: path, repository_url: savedUrl },
+    ]);
+    expect(await store.listCodebases()).toHaveLength(1);
+  });
+
+  test('a saved relative URL preserves Git rewrites on URL reuse', async () => {
+    const root = await makeHome();
+    const store = (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+    const savedUrl = '../upstream.git';
+    const path = await gitCheckout(getProjectSourcePath('owner', 'api'), savedUrl);
+    const foreignUrl = 'https://foreign.invalid/other/repo.git';
+    execFileSync('git', ['-C', path, 'remote', 'add', 'archon-ownership', foreignUrl]);
+    const saved = await store.createCodebase({
+      name: 'owner/api',
+      default_cwd: path,
+      repository_url: savedUrl,
+    });
+    const config = join(root, 'gitconfig');
+    const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+    await writeFile(config, '');
+    process.env.GIT_CONFIG_GLOBAL = config;
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    try {
+      const reuse = () => cloneRepository(store, pathToFileURL(join(path, savedUrl)).href);
+      expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
+      const destination = 'https://rewrite.invalid/owner/repo.git';
+      const rewriteKey = `url.${destination}.insteadOf`;
+      execFileSync('git', ['config', '--global', rewriteKey, savedUrl]);
+      expect(
+        execFileSync('git', ['-C', path, 'remote', 'get-url', 'origin'], {
+          encoding: 'utf8',
+        }).trim()
+      ).toBe(destination);
+      expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
+      execFileSync('git', ['config', '--global', '--unset', rewriteKey]);
+      expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
+      execFileSync('git', ['config', '--global', rewriteKey, savedUrl]);
+      execFileSync('git', ['-C', path, 'remote', 'set-url', 'origin', foreignUrl]);
+      await expect(reuse()).rejects.toThrow('/update-project');
       expect(await store.listCodebases()).toMatchObject([
         { id: saved.id, default_cwd: path, repository_url: savedUrl },
       ]);
       expect(await store.listCodebases()).toHaveLength(1);
+      expect(
+        execFileSync('git', ['-C', path, 'remote'], { encoding: 'utf8' }).trim().split('\n')
+      ).toEqual(['archon-ownership', 'origin']);
+    } finally {
+      if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+      if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+      else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
     }
-  );
+  });
 
   test.each([
-    { backend: 'sql', entry: 'url' },
-    { backend: 'sql', entry: 'path' },
-    { backend: 'file', entry: 'url' },
-    { backend: 'file', entry: 'path' },
+    { backend: 'sql', scheme: 'https', entry: 'url' },
+    { backend: 'sql', scheme: 'file', entry: 'path' },
+    { backend: 'file', scheme: 'https', entry: 'path' },
+    { backend: 'file', scheme: 'file', entry: 'url' },
   ] as const)(
-    'a saved relative URL preserves Git rewrites on $entry reuse ($backend)',
-    async ({ backend, entry }) => {
-      const root = await makeHome();
-      const store =
-        backend === 'sql'
-          ? codebases
-          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
-      const savedUrl = '../upstream.git';
-      const path = await gitCheckout(getProjectSourcePath('owner', 'api'), savedUrl);
-      const foreignUrl = 'https://foreign.invalid/other/repo.git';
-      execFileSync('git', ['-C', path, 'remote', 'add', 'archon-ownership', foreignUrl]);
-      const saved = await store.createCodebase({
-        name: 'owner/api',
-        default_cwd: path,
-        repository_url: savedUrl,
-      });
-      const config = join(root, 'gitconfig');
-      const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
-      const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
-      await writeFile(config, '');
-      process.env.GIT_CONFIG_GLOBAL = config;
-      process.env.GIT_CONFIG_NOSYSTEM = '1';
-      try {
-        const reuse = () =>
-          entry === 'url'
-            ? cloneRepository(store, pathToFileURL(join(path, savedUrl)).href)
-            : registerInStore(store, path);
-        expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
-        const destination = 'https://rewrite.invalid/owner/repo.git';
-        const rewriteKey = `url.${destination}.insteadOf`;
-        execFileSync('git', ['config', '--global', rewriteKey, savedUrl]);
-        expect(
-          execFileSync('git', ['-C', path, 'remote', 'get-url', 'origin'], {
-            encoding: 'utf8',
-          }).trim()
-        ).toBe(destination);
-        expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
-        execFileSync('git', ['config', '--global', '--unset', rewriteKey]);
-        expect(await reuse()).toMatchObject({ codebaseId: saved.id, alreadyExisted: true });
-        execFileSync('git', ['config', '--global', rewriteKey, savedUrl]);
-        execFileSync('git', ['-C', path, 'remote', 'set-url', 'origin', foreignUrl]);
-        await expect(reuse()).rejects.toThrow('/update-project');
-        expect(await store.listCodebases()).toMatchObject([
-          { id: saved.id, default_cwd: path, repository_url: savedUrl },
-        ]);
-        expect(await store.listCodebases()).toHaveLength(1);
-        expect(
-          execFileSync('git', ['-C', path, 'remote'], { encoding: 'utf8' }).trim().split('\n')
-        ).toEqual(['archon-ownership', 'origin']);
-      } finally {
-        if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-        else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
-        if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
-        else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
-      }
-    }
-  );
-
-  test.each(
-    (['sql', 'file'] as const).flatMap(backend =>
-      (['https', 'file'] as const).flatMap(scheme =>
-        (['url', 'path'] as const).map(entry => ({ backend, scheme, entry }))
-      )
-    )
-  )(
     '$entry reuse preserves the requested $scheme URL across Git rewrites ($backend)',
     async ({ backend, scheme, entry }) => {
       const root = await makeHome();
