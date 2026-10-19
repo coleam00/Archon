@@ -54,6 +54,7 @@ describe('setup command', () => {
     it.each([
       'docs:\n  path: existing/\n',
       '"docs": null\n',
+      'docs: null\ndocs: null\n',
       '{docs: {path: existing/}}\n',
       'docs:\n  path: existing/\n...\n',
     ])('preserves an active docs key and asks for a manual edit: %s', async docs => {
@@ -102,6 +103,7 @@ describe('setup command', () => {
       '# docs: example\n{assistants: {claude: {model: opus}},} # trailing comment\n',
       '# docs: example\nassistants:\n  claude:\n    model: opus\n...\n# after document\n',
       '# docs: example\nassistants:\n  claude:\n    model: opus\n',
+      'assistants: {}\nassistants: {claude: {model: opus}}\n',
       '# docs: example\n',
       '',
       '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n',

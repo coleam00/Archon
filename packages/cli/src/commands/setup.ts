@@ -547,12 +547,9 @@ export async function configureDocsPath(repoPath: string): Promise<void> {
         mkdirSync(archonDir, { recursive: true });
         const configPath = join(archonDir, 'config.yaml');
         const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        const parsed: unknown = Bun.YAML.parse(existing);
-        const hasDocs =
-          typeof parsed === 'object' && parsed !== null && Object.hasOwn(parsed, 'docs');
-        if (!hasDocs) {
-          const document: Document = parseDocument(existing);
-          if (document.errors.length > 0) throw document.errors[0];
+        const document: Document = parseDocument(existing, { uniqueKeys: false });
+        if (document.errors.length > 0) throw document.errors[0];
+        if (!document.has('docs')) {
           if (isScalar(document.contents) && document.contents.value === null) {
             const root = new YAMLMap(document.schema);
             root.commentBefore = document.contents.commentBefore;
