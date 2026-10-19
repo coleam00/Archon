@@ -78,7 +78,7 @@ export const stateRevisionSchema = z.object({
 export type StateRevision = z.infer<typeof stateRevisionSchema>;
 /**
  * Where a document lives. Every project key has at least two segments (`owner/repo`,
- * `_folder/<slug>`, `_cwd/<name>`), so the one-segment install key cannot collide with one.
+ * `_folder/<slug>`, `@cwd/<basename>-<digest>`), so the one-segment install key cannot collide with one.
  */
 export const stateProjectKeySchema = z.string().regex(/^[^/]+(?:\/[^/]+)+$/u);
 export const stateScopeSchema = z.discriminatedUnion('kind', [

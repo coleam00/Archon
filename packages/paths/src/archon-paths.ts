@@ -7,7 +7,7 @@
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
  * │   │                                  #   _folder/<slug>     folder project (runs in place)
- * │   │                                  #   _cwd/<basename>    unregistered working dir
+ * │   │                                  #   @cwd/<basename>-<digest>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
@@ -37,6 +37,7 @@ import {
 } from 'path';
 import type { PlatformPath } from 'path';
 import { homedir } from 'os';
+import { createHash } from 'node:crypto';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { createLogger } from './logger';
@@ -768,7 +769,7 @@ export function getScopeArtifactsPath(
  * resolve. This is the *one* key the whole codebase derives output paths from:
  * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
  * folder project (`_folder/<slug>`), or an unregistered working directory
- * (`_cwd/<basename>`).
+ * (`@cwd/<basename>-<digest>`).
  *
  * It exists because the identity → storage rule was previously implemented
  * three times at three different levels of correctness (the executor handled
@@ -842,7 +843,7 @@ export function resolveProjectStorageKey(
 
 /**
  * Compose the output roots for a storage key. Every kind resolves UNDER
- * `ARCHON_HOME` — including `'cwd'`, which maps to the `_cwd` pseudo-owner.
+ * `ARCHON_HOME` — including `'cwd'`, which maps to the `@cwd` namespace.
  *
  * The `'cwd'` mapping is deliberately external: the engine used to write an
  * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
@@ -850,12 +851,8 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * COLLISIONS: registration gives every registered project its own root (a new
- * project whose root is taken registers under a suffixed name). The `'cwd'` key is
- * not registered, so unregistered working directories sharing a basename share
- * `_cwd/<basename>`. For `artifacts/` and `logs/` that is benign — both are keyed
- * by run id. `stateRoot` is NOT: `$STATE_DIR` is per project by design and has no
- * run-id segment, so those runs share one `state/` and every file in it.
+ * Unregistered directories use the resolved absolute path, not just the basename:
+ * same-named directories must never share cross-run state.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -866,9 +863,15 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
     case 'folder':
       root = getFolderProjectRoot(key.slug);
       break;
-    case 'cwd':
-      root = getProjectRoot('_cwd', sanitizeScopeSegment(basename(key.cwd)));
+    case 'cwd': {
+      const cwd = resolve(key.cwd);
+      const digest = createHash('sha256').update(cwd).digest('hex');
+      // Reserve 65 bytes for the separator and digest within a 255-byte directory name.
+      const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
+      // @ cannot occur in registered repo owners; this also stays outside legacy _cwd trees.
+      root = getProjectRoot('@cwd', `${name}-${digest}`);
       break;
+    }
   }
   return getStoragePathsForRoot(root);
 }
@@ -876,7 +879,7 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
 /**
  * True when `candidate` resolves inside `ARCHON_HOME`.
  *
- * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
+ * Every storage key kind composes under `ARCHON_HOME` — including the `@cwd`
  * pseudo-project since #2200 — so this is the trust boundary for any path that
  * did NOT come straight from {@link getProjectStoragePaths}. In practice that
  * means a persisted `workflow_runs.output_root`: the engine only ever writes an
@@ -909,7 +912,7 @@ export function resolveRunStorageRoot(
 
 /**
  * The project key a storage root is filed under: its path below the workspaces
- * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/<name>`).
+ * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `@cwd/<basename>-<digest>`).
  * Project-scoped state documents use it as their identity, so every surface that
  * names a project derives it here. A root outside the workspaces directory has
  * no key and throws rather than yielding a `..` path.
