@@ -16,6 +16,7 @@ import {
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
   mcpUnavailableSchema,
+  executionDiagnosticsSchema,
   type NodeCostScope,
   type NodeDescriptor,
   type NodeExecutionRecord,
@@ -81,6 +82,7 @@ export const serializedNodeDataSchema = z.object({
   child_run_id: z.string().optional(),
   blocked_on_child_run_id: z.string().optional(),
   fan_out: z.boolean().optional(),
+  fan_out_usage: executionDiagnosticsSchema.shape.fanOutUsage,
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
@@ -110,6 +112,7 @@ export interface SerializedNodeEvent {
 
 export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
 export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
+  fan_out_usage: true,
   accounting: true,
   spend: true,
   aggregate: true,
@@ -320,7 +323,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.blockedOnChildRunId !== undefined
         ? { blocked_on_child_run_id: d.blockedOnChildRunId }
         : {}),
-      ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
+      ...(d?.fanOut !== undefined ? { fan_out: d.fanOut, fan_out_usage: d.fanOutUsage } : {}),
       ...(d?.identity !== undefined ? { identity: d.identity } : {}),
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),

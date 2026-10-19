@@ -57,6 +57,7 @@ const record = (): NodeExecutionRecord => ({
     childRunId: 'child-1',
     blockedOnChildRunId: 'child-2',
     fanOut: true,
+    fanOutUsage: { 'child-1': { costUsd: 0.01, tokens: { input: 7, output: 3 } } },
     identity: 'item-a',
     ordinal: 0,
     approvalDecision: 'approve',
@@ -78,12 +79,13 @@ describe('node record serializers', () => {
       event_type: 'node_deferred_usage',
       data: {
         accounting: 'node',
+        fan_out_usage: source.diagnostics?.fanOutUsage,
         tokens: { input: 0, output: 0 },
         cost_usd: 0,
       },
     });
     expect(Object.keys(event.data).sort()).toEqual(
-      ['accounting', 'spend', 'tokens', 'cost_usd'].sort()
+      ['accounting', 'spend', 'tokens', 'cost_usd', 'fan_out_usage'].sort()
     );
     expect(readNodeRecordEvent(event)).toBeUndefined();
   });
@@ -191,6 +193,7 @@ describe('node record serializers', () => {
         child_run_id: 'child-1',
         blocked_on_child_run_id: 'child-2',
         fan_out: true,
+        fan_out_usage: source.diagnostics?.fanOutUsage,
         identity: 'item-a',
         ordinal: 0,
         approval_decision: 'approve',

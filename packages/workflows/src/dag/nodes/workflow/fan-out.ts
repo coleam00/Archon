@@ -23,8 +23,7 @@ import { mapWithHeldSlots } from '../../../utils/map-with-limit';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { unrecordedFanOutUsage } from './fan-out-usage';
-import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { childUsageTotals, recordedFanOutUsage, unrecordedFanOutUsage } from './fan-out-usage';
 import type { ExecutionObservations } from '../../../node-execution';
 import { persistNodeEvent } from '../../../node-event-write';
 import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';
@@ -228,7 +227,14 @@ async function suspendOnHeldChildren(
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'fan_out' },
-    { output: { text: '' }, diagnostics: { fanOut: true }, ...usage }
+    {
+      output: { text: '' },
+      diagnostics: {
+        fanOut: true,
+        fanOutUsage: childUsageTotals([...state.settledByIndex.values()]),
+      },
+      ...usage,
+    }
   );
   const paused = await pauseGateRespectingExternalTransition(
     ctx.deps,
@@ -295,9 +301,8 @@ export async function executeFanOutWorkflowNode(
   const stepName = ctx.stepNamePrefix + node.id;
   let tokensUnknown = false;
   let state: FanOutChildState = { settledByIndex: new Map(), heldByIndex: new Map() };
-  const recorded = await foldDagResumeSnapshot(
-    (await deps.store.listWorkflowEvents(parentRun.id)).filter(row => row.step_name === stepName),
-    parentRun.id
+  const recorded = recordedFanOutUsage(
+    (await deps.store.listWorkflowEvents(parentRun.id)).filter(row => row.step_name === stepName)
   );
   const usage = (): ExecutionObservations =>
     unrecordedFanOutUsage([...state.settledByIndex.values()], recorded);
@@ -323,6 +328,7 @@ export async function executeFanOutWorkflowNode(
           tokensUnknown,
           diagnostics: {
             fanOut: true,
+            fanOutUsage: childUsageTotals([...state.settledByIndex.values()]),
             ...(blockedOnChildRunId !== undefined ? { blockedOnChildRunId } : {}),
           },
         }
@@ -349,7 +355,10 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
-          diagnostics: { fanOut: true },
+          diagnostics: {
+            fanOut: true,
+            fanOutUsage: childUsageTotals([...state.settledByIndex.values()]),
+          },
         }
       )
     );

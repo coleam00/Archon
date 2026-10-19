@@ -52,6 +52,105 @@ describe('workflow: fan-out children that pause (#4044)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  it.each(['join-failed', 'join-completed', 'paused', 'lookup-failed', 'pause-lost'] as const)(
+    'counts a deleted child and its replacement once (%s)',
+    async mode => {
+      const waits = !mode.startsWith('join-');
+      const marker = join(cwd, 'retry-succeeds');
+      await writeWorkflow(
+        'replacement-child',
+        `name: replacement-child
+description: paid child
+nodes:
+  - id: paid
+    prompt: work
+  - id: finish
+    bash: test -f '${marker}' && printf '%s' "$ARGUMENTS"
+    depends_on: [paid]
+  - id: ask
+    approval:
+      message: review
+    depends_on: [finish]
+    when: "$finish.output == 'second'"
+`
+      );
+      await writeWorkflow(
+        'replacement-parent',
+        fanAskParent(
+          'replacement-parent',
+          'replacement-child',
+          waits ? '["first","second"]' : '["first"]',
+          '      max_parallel: 1\n      join: all_success'
+        )
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      const workflow = await discover('replacement-parent');
+      await executeWorkflow(deps, platform, 'replacement', cwd, workflow, 'goal');
+      const parent = [...store.runs.values()].find(
+        row => row.workflow_name === 'replacement-parent'
+      )!;
+      const child = [...store.runs.values()].find(row => row.parent_run_id === parent.id)!;
+      expect(parent.status).toBe('failed');
+      expect(child.status).toBe('failed');
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(waits ? 0.02 : 0.01);
+      store.runs.delete(child.id);
+      if (mode !== 'join-failed') await writeFile(marker, '');
+      const find = store.findChildRuns;
+      store.findChildRuns = async id => {
+        const rows = await find(id);
+        if (mode === 'lookup-failed' && rows.some(row => row.status === 'paused')) {
+          throw new Error('replacement sibling lookup rejected');
+        }
+        return rows;
+      };
+      const pause = store.pauseWorkflowRun;
+      store.pauseWorkflowRun = async (id, gate, ...rest) => {
+        if (mode === 'pause-lost' && gate.type === 'fan_out') await store.cancelWorkflowRun(id);
+        return pause(id, gate, ...rest);
+      };
+      const resumed = await hydrateResumableRun(deps, parent);
+      if (!resumed) throw new Error('parent not resumable');
+      await executeWorkflow(
+        deps,
+        platform,
+        'replacement',
+        cwd,
+        workflow,
+        'goal',
+        undefined,
+        resumed
+      );
+      expect(parent.status).toBe(
+        mode === 'join-completed'
+          ? 'completed'
+          : mode === 'paused'
+            ? 'paused'
+            : mode === 'pause-lost'
+              ? 'cancelled'
+              : 'failed'
+      );
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(waits ? 0.03 : 0.02);
+      expect(parent.metadata.total_tokens_in).toBe(waits ? 21 : 14);
+      const snapshot = await store.getDagResumeSnapshot(parent.id);
+      expect(snapshot.costUsd).toBeCloseTo(waits ? 0.03 : 0.02);
+      expect(snapshot.tokens?.input).toBe(waits ? 21 : 14);
+      if (mode === 'paused') {
+        const held = [...store.runs.values()].find(
+          row => row.parent_run_id === parent.id && row.status === 'paused'
+        )!;
+        await answerChild(deps, store, held.id, 'replacement-child');
+        expect(parent.status).toBe('completed');
+        expect(parent.metadata.total_cost_usd).toBeCloseTo(0.03);
+        expect(parent.metadata.total_tokens_in).toBe(21);
+        const completed = await store.getDagResumeSnapshot(parent.id);
+        expect(completed.costUsd).toBeCloseTo(0.03);
+        expect(completed.tokens?.input).toBe(21);
+      }
+    }
+  );
+
   it.each([false, true, 'missing', 'absent', 'unsettled-missing'] as const)(
     'holds a source-stopped child slot until durable completion (child read fails=%s)',
     async childReadFails => {

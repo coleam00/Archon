@@ -185,6 +185,15 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
+export const fanOutUsageSchema = z.record(
+  z.string(),
+  z.object({
+    costUsd: z.number().optional(),
+    tokens: tokenUsageSchema.optional(),
+    tokensUnknown: z.boolean().optional(),
+  })
+);
+
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),
   loopIterations: z.number().optional(),
@@ -205,6 +214,7 @@ export const executionDiagnosticsSchema = z.object({
    */
   blockedOnChildRunId: z.string().optional(),
   fanOut: z.boolean().optional(),
+  fanOutUsage: fanOutUsageSchema.optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approvalDecision: z.string().optional(),
