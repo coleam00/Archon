@@ -126,7 +126,7 @@ import {
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import {
-  assertDetachedRunProcessOwner,
+  claimDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import {
@@ -504,7 +504,7 @@ async function runWorkflowWithOwnedSource(
   // The flag names a run row this process will execute AS, so three things are checked.
   // Be precise about which one carries the weight, because it is not the first.
   //
-  // The owner marker plus `assertDetachedRunProcessOwner` (called by `workflowRunCommand`
+  // The owner marker plus `claimDetachedRunProcessOwner` (called by `workflowRunCommand`
   // before it reaches this function) raise the bar, they do not prove provenance: a plain
   // scripted process is not its own process-group leader,
   // so cron, CI, and wrapper scripts are blocked — but a foreground command under a real
@@ -1662,9 +1662,9 @@ export async function workflowRunCommand(
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
     try {
-      // Inside the try so a refused process-group claim still records the `pending` row
+      // Inside the try so a refused owner claim still records the `pending` row
       // the launcher handed over (#2872) instead of stranding it.
-      if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      if (detachedProcessOwner) await claimDetachedRunProcessOwner();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource(
           host,
