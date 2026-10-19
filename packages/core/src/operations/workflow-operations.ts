@@ -1186,6 +1186,22 @@ export function createWorkflowOperations({
     await store.deleteWorkflowRun(runId);
   }
 
+  async function cancelCascadeChild(
+    childId: string,
+    cancelRun: CancelWorkflowRun
+  ): Promise<'cancelled' | 'settled' | 'failed'> {
+    try {
+      const result = await cancelRun(childId);
+      if (result.cancelled) return 'cancelled';
+      const current = await store.getWorkflowRun(childId);
+      if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status)) return 'settled';
+      getLog().warn({ childId }, 'operations.workflow_abandon_cascade_cancel_failed');
+    } catch (err) {
+      getLog().warn({ err, childId }, 'operations.workflow_abandon_cascade_cancel_failed');
+    }
+    return 'failed';
+  }
+
   /**
    * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
    * A child sub-run shares the parent's conversation and runs in-process, so
@@ -1221,26 +1237,9 @@ export function createWorkflowOperations({
         seen.add(child.id);
         queue.push(child.id); // traverse deeper even under an already-terminal child
         if (CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(child.status)) continue;
-        try {
-          const result = await cancelRun(child.id);
-          if (result.cancelled) {
-            runs.push(child);
-          } else {
-            const current = await store.getWorkflowRun(child.id);
-            if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status)) continue;
-            getLog().warn(
-              { childId: child.id },
-              'operations.workflow_abandon_cascade_cancel_failed'
-            );
-            failures++;
-          }
-        } catch (err) {
-          getLog().warn(
-            { err, childId: child.id },
-            'operations.workflow_abandon_cascade_cancel_failed'
-          );
-          failures++;
-        }
+        const outcome = await cancelCascadeChild(child.id, cancelRun);
+        if (outcome === 'cancelled') runs.push(child);
+        else if (outcome === 'failed') failures++;
       }
     }
     // Queued runs were already considered for cancellation; only their children

@@ -3197,14 +3197,22 @@ export function describeWorkflowStoreConformance(
       ] as const) {
         for (const hasChild of [false, true]) {
           const run = await create(store, { parent_run_id: parent.id });
-          if (status === 'completed') {
-            await store.updateWorkflowRun(run.id, { status: 'running' });
-            await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+          switch (status) {
+            case 'completed':
+              await store.updateWorkflowRun(run.id, { status: 'running' });
+              await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+              break;
+            case 'cancelled':
+              await store.cancelWorkflowRun(run.id);
+              break;
+            case 'failed':
+              await store.failWorkflowRun(run.id, 'failure');
+              break;
+            case 'running':
+            case 'paused':
+              await store.updateWorkflowRun(run.id, { status });
+              break;
           }
-          if (status === 'cancelled') await store.cancelWorkflowRun(run.id);
-          if (status === 'running') await store.updateWorkflowRun(run.id, { status });
-          if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
-          if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
           if (hasChild) await create(store, { parent_run_id: run.id });
           if (hasChild || (status !== 'completed' && status !== 'cancelled')) expected.push(run.id);
         }
