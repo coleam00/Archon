@@ -35,10 +35,15 @@ export const REQUIRED_FORGE_OPERATIONS = [
   'workitem.view',
   'repo.labels.list',
   'repo.label.ensure',
-  'workitem.labels.set',
   'workitem.comment.upsert',
   'workitem.close',
   'workitem.create',
+  'workitem.edit-body',
+  'workitem.label.add',
+  'workitem.label.remove',
+  'pr.threads',
+  'pr.thread.reply',
+  'pr.thread.resolve',
 ] as const;
 
 export interface ForgeProbe {
@@ -89,7 +94,7 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   if (missing.length)
     throw new Error(
       `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
-        'The released GitHub plugin v0.11.1 is insufficient. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+        'The GitHub plugin has every one from v0.12.1. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
     );
 }
 

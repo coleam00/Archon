@@ -231,7 +231,7 @@ describe('maybePrintTierNotice', () => {
 
   let stderrSpy: ReturnType<typeof spyOn>;
 
-  function makeTierWorkflow(nodeModel?: string, workflowModel?: string) {
+  function makeTierWorkflow(nodeModel?: string | string[], workflowModel?: string) {
     return makeTestWorkflow({
       name: 'tier-test',
       ...(workflowModel !== undefined ? { model: workflowModel } : {}),
@@ -297,6 +297,26 @@ describe('maybePrintTierNotice', () => {
       shownForVersion: '0.0.0-test',
     });
     const workflow = makeTierWorkflow('large');
+    await maybePrintTierNotice(createTestWorkflowHost(), workflow, '/cwd', undefined, false);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+
+  it('counts a preference list by its tier when none of its aliases is configured', async () => {
+    const workflow = makeTierWorkflow(['@reviewer', 'medium']);
+    await maybePrintTierNotice(createTestWorkflowHost(), workflow, '/cwd', undefined, false);
+    expect(stderrSpy).toHaveBeenCalled();
+    expect(markTierNoticeShown).toHaveBeenCalledWith('0.0.0-test');
+  });
+
+  it('prints nothing when a preference list runs on its configured alias', async () => {
+    (loadConfig as ReturnType<typeof mock>).mockResolvedValue({
+      defaults: {},
+      tiers: {},
+      aliases: { '@reviewer': { provider: 'codex', model: 'gpt-5.5' } },
+      assistant: 'claude',
+    });
+    const workflow = makeTierWorkflow(['@reviewer', 'medium']);
     await maybePrintTierNotice(createTestWorkflowHost(), workflow, '/cwd', undefined, false);
     expect(stderrSpy).not.toHaveBeenCalled();
     expect(markTierNoticeShown).not.toHaveBeenCalled();

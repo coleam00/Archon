@@ -17,14 +17,9 @@ import {
 import type { IWorkflowPlatform } from '../../../deps';
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
-import {
-  currentAdoptedRunDir,
-  substituteWorkflowVariables,
-  isInlineScript,
-  formatSubprocessFailure,
-  safeSendMessage,
-  type SendMessageContext,
-} from '../../../executor-shared';
+import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
+import { isInlineScript, formatSubprocessFailure } from '../../../executor-shared';
+import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { assertNodeSourceReadable, RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, observeNodeCheckout, type RunLayersContext } from '../../run-context';

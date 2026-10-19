@@ -295,14 +295,18 @@ export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
 /**
  * Append `## <heading>` and `text` to the issue's body and read it back. A body that
  * already ends with that section is left as it is, so a repeated write adds nothing.
- * GitHub has no conditional body write: an edit someone saves between the read here
- * and the write is lost, and the read-back cannot tell.
+ * Neither source has a conditional body write: an edit someone saves between the read
+ * here and the write is lost, and the read-back cannot tell.
  */
 export function appendSection(item: QualifiedPr, heading: string, text: string): void {
-  if (forgeSource() === 'forge') {
-    throw new Error('the forge contract has no issue body write, so the section cannot be added');
-  }
   const section = `## ${heading}\n\n${text.trim()}\n`;
+  if (forgeSource() === 'forge') {
+    const body = forgeView(item).body;
+    if (body.trimEnd().endsWith(section.trimEnd())) return;
+    // `workitem.edit-body` reads its own write back, and a failure throws with its outcome.
+    invokeForge('workitem.edit-body', { ref: item, body: `${body.trimEnd()}\n\n\n${section}` });
+    return;
+  }
   const before = ghIssue(item);
   const body = typeof before.body === 'string' ? before.body : '';
   if (body.trimEnd().endsWith(section.trimEnd())) return;

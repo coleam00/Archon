@@ -25,6 +25,7 @@ import {
   parseDeprecation,
   parseEvidencePolicy,
   parseFallbackModel,
+  parseWorkflowModel,
   parseInputs,
   parseMutatesCheckout,
   parseOptionalField,
@@ -172,7 +173,8 @@ export function parseWorkflow(
     // (consistent with original behavior) rather than schema-level rejection.
     const provider =
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
-    const model = typeof raw.model === 'string' ? raw.model : undefined;
+    const model = parseWorkflowModel(raw.model);
+    if ('error' in model) return reject(model.error);
 
     const workflowPersistSessions = raw.persist_sessions === true;
     const providerError =
@@ -241,7 +243,7 @@ export function parseWorkflow(
       name: header.name,
       description: header.description,
       provider,
-      model,
+      model: model.value,
       // `modelReasoningEffort` is deliberately absent — it was translated into
       // `effort` by `resolveEffort`, so nothing downstream ever sees the deprecated field.
       webSearchMode,

@@ -1,20 +1,28 @@
 ---
-title: The Essential Workflows
-description: A catalog of the workflows bundled with Archon, with usage examples and guidance on when to use each one.
-category: book
-part: core-workflows
+title: SDLC pack workflows
+description: Every workflow in the bundled sdlc pack, what it produces and when to use it.
+category: reference
 audience: [user]
 sidebar:
   order: 4
 ---
 
-You now know how Archon works. The question becomes: which workflow do I reach for?
+Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from an incoming issue to a merged pull request. Its source and its own README live in `.archon/workflows/sdlc/` in the Archon repository; the README documents the queue bindings, policy files and labels.
 
-Archon bundles one workflow pack, `sdlc`, that covers the software development lifecycle from an incoming issue to a reviewed pull request. This chapter maps your intent to the right workflow and gives you enough detail to use each one confidently.
+## How the factory runs
 
----
+The queues move work forward without you:
 
-## Which Workflow Should I Use?
+1. `archon-intake` triages each new issue and labels its route.
+2. `archon-build-queue` claims a ready issue, writes the brief and runs `archon-ship` on it until its pull request is reviewed Ready.
+3. `archon-merge-queue` brings ready pull requests up to date and merges the clear ones through a gate on the review verdict, CI and open threads.
+4. `archon-discoveries` files, tracks or drops what runs noticed outside their own task.
+
+Anything unclear pauses as one attention item with a recommendation. The pack binds no trigger by default: start the queues by hand, or add the bindings its README shows.
+
+`archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and wait for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
+
+## Which workflow to use
 
 ```
 What do you want to do?
@@ -43,7 +51,7 @@ What do you want to do?
 
 ---
 
-## Workflow Catalog
+## Catalog
 
 ### End to end
 
@@ -111,7 +119,7 @@ The stage after intake, started by a schedule binding. Each run claims one triag
 
 #### `archon-merge-queue`
 
-The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges the base branch into any behind it, sends a pull request whose review a push made stale to a delta review, hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready at the head, CI is green there, no review thread is unresolved and the head contains the base branch, and merges pinned to that head. After a batch it checks the base branch's CI. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices.
+The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges the base branch into any behind it, sends a pull request to a delta review when new code reached it after its review (a conflict the sync resolved, or anyone else's push; a clean sync keeps the verdict), hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready, CI is green at the head and the head contains the base branch (open review threads are the sweep's judgment), and merges pinned to that head. After a batch it checks the base branch's CI. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices.
 
 **When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack installs no binding; the SDLC pack README's "Merge queue" section shows the one to add.
 
@@ -163,7 +171,7 @@ Turns decided intent, such as a feature request, an investigation report, or an 
 archon workflow run archon-plan "Add CSV export to the reports page"
 ```
 
-**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops on a question for a person, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `needs_human`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops for a person: the run pauses as one attention item carrying the questions, and `rerun` plans again with your answer as the note, while `finish` keeps the plan as it stands. The SDLC pack README's sidecar section describes the rulings document.
+**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops to ask a question, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `ask`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops to ask: the run pauses as one attention item carrying the questions, and `rerun` plans again with your answer as the note, while `finish` keeps the plan as it stands. The SDLC pack README's sidecar section describes the rulings document.
 
 ---
 
@@ -264,7 +272,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 
 ---
 
-## Quick Reference
+## Summary
 
 | Workflow | Use When | Creates PR? | Changes code? |
 |----------|----------|-------------|---------------|
@@ -294,16 +302,6 @@ To keep using one of the old workflows, copy its YAML from [`.archon/workflows/d
 
 ---
 
-## Discovering More Workflows
+## Your own workflows
 
-To see all workflows available in your current directory:
-
-```bash
-archon workflow list
-```
-
-The list shows both Archon's bundled workflows and any custom workflows in your repo's `.archon/workflows/` directory. Custom workflows override bundled ones by name: if you create a workflow named `archon-review`, it replaces the bundled one.
-
-Ready to build your own? In [Chapter 7: Creating Your First Workflow →](/book/first-workflow/), you'll build one from scratch, incrementally, version by version, until you have a plan, implement, and review pipeline of your own.
-
-But first, let's cover the isolation system that makes parallel workflows safe. Continue to [Chapter 5: Isolation and Worktrees →](/book/isolation/)
+`archon workflow list` shows the bundled workflows and the ones in your repository's `.archon/workflows/`. A workflow you write overrides a bundled one with the same name.

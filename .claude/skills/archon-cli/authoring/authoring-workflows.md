@@ -96,15 +96,27 @@ Work through these questions in order, with the user where marked:
    the schema, including for script results and composed workflows. Read
    `node-reference.md` → Result contracts before declaring a result, and
    `variables.md` → Artifact pointers when returning a file reference.
-7. **Prompting** per node → see `../prompting-mistakes/prompting-mistakes.md` before writing prose.
+7. **Prompting** per node → see `prompting-mistakes.md` in this folder before writing prose.
 8. **Wiring** into YAML (below), then **fixtures**: every authored workflow ships
    a dry-run fixture under `<pack>/<workflow>/fixtures/*.stubs.yaml` declaring its
    expected outcome. Prove red paths red before trusting them. Fixtures prove the
    paths that dry-run can execute. A reachable `workflow:` or `include:` +
    `fan_out:` node fails dry-run by design, so prove that path with a small real
    acceptance run while keeping fixtures for the surrounding wiring.
-9. Validate: load-time errors surface in `archon workflow list`; then
-   `archon workflow test <workflow>` runs supported fixture paths without AI spend.
+9. **Validate** before any real run. None of these steps spends on a model:
+
+   ```bash
+   archon validate workflows <name>                        # schema, references, command files
+   archon workflow run <name> --dry-run --stubs-init <pack>/<name>/fixtures/<case>.stubs.yaml
+   archon workflow run <name> --dry-run --stubs <pack>/<name>/fixtures/<case>.stubs.yaml
+   archon workflow test <name>                             # every declared fixture
+   ```
+
+   `--stubs-init` writes a stub scaffold to fill in. A dry run walks the graph with
+   stubbed node outputs and prints each node's resolved provider and model; add
+   `--exec-code` only for trusted `bash:` and `script:` nodes. Then make a planted
+   bad case fail: a fixture that never went red proves nothing. Finish with one real
+   run on a genuine task.
 
 ## Start simple, then adapt to what runs teach
 
