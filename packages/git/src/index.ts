@@ -68,6 +68,8 @@ export {
 // Forge detection
 export { detectForge } from './forge';
 export type { ForgeType, ForgeInfo } from './forge';
+export { GITHUB_COM_HOST, parseGitHubHost, readGitHubHost, resolveGitHubHost } from './github-host';
+export type { GitHubHost } from './github-host';
 
 // Repository operations
 export {
