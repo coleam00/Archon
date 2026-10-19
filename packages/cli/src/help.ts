@@ -803,6 +803,11 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--config-from-run <run-id>',
+    description: 'Start a fresh run with the run config another run was started with',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--resume',
     description:
       'Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)',

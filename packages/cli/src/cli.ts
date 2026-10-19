@@ -469,7 +469,8 @@ async function main(): Promise<number> {
       );
     }
 
-    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
+    const runConfigFlag = values.config ?? values['config-from-run'];
+    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, runConfigFlag);
     if (configOutsideRun) {
       console.error(configOutsideRun);
       return 1;
@@ -787,7 +788,7 @@ async function main(): Promise<number> {
               return await fail(jsonFlag, 'Usage: archon workflow run <name> [message]');
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            const configOnContinue = rejectConfigOnContinue(resumeFlag, values.config);
+            const configOnContinue = rejectConfigOnContinue(resumeFlag, runConfigFlag);
             if (configOnContinue) {
               console.error(configOnContinue);
               return 1;
@@ -894,6 +895,7 @@ async function main(): Promise<number> {
               modelAssignments: values.model as string[] | undefined,
               configPath:
                 typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
+              configFromRun: values['config-from-run'] as string | undefined,
               detachedRunConfig,
               detachedRunId: values['internal-detached-run-id'] as string | undefined,
             };
