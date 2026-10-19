@@ -21,13 +21,9 @@ import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { declaredOutputPathsFromSchema, canonicalValueText } from '../../../output-ref';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { logNodeComplete } from '../../../logger';
-import {
-  currentAdoptedRunDir,
-  substituteWorkflowVariables,
-  detectCompletionSignal,
-  stripCompletionTags,
-  safeSendMessage,
-} from '../../../executor-shared';
+import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
+import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { nodeTemplateReferences, buildNodeShellEnvironment } from '../../references';
 import { shouldContinueStreamingForStatus, runSubprocessUntilRunStops } from '../../run-control';

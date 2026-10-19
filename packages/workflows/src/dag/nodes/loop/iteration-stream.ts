@@ -13,11 +13,9 @@ import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { createProviderEventHandler, type ProviderEventHandler } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
-import {
-  substituteWorkflowVariables,
-  stripCompletionTags,
-  safeSendMessage,
-} from '../../../executor-shared';
+import { substituteWorkflowVariables } from '../../../workflow-variables';
+import { stripCompletionTags } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import { resolveRunInputs, nodeTemplateReferences } from '../../references';

@@ -10,12 +10,10 @@ description: |
   pinned to that head. A pull request
   whose verdict a push made stale gets a delta review in the same run. After a batch
   the sweep checks the default branch's CI. A clear case acts on its own; anything
-  unclear pauses as one attention item whose answer is a declared choice. With mode
-  eval the run claims, pushes and merges nothing: it decides the replayed pull requests
-  from the facts recorded for them and returns the decisions as its output.
+  unclear pauses as one attention item whose answer is a declared choice.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Merge queue"), or an operator replays recorded merge decisions in eval mode.
+  README, "Merge queue").
   NOT for: delivering or fixing a pull request (archon-build-queue, archon-ship), or
   reviewing one by hand (archon-review).
 
@@ -37,17 +35,6 @@ inputs:
   merge_method:
     default: "squash"
     description: How the gate merges, squash or merge.
-  mode:
-    default: "live"
-    description: >-
-      live or eval. Eval claims, pushes and merges nothing: it decides the pull
-      requests in replay from the facts recorded with each and returns the decisions
-      as the record's evaluation. Any other value refuses the run at facts.
-  replay:
-    default: "[]"
-    description: >-
-      Eval only. The decisions to replay, as a JSON array of {number, at, facts}: the
-      pull request, when the decision was made, and the facts as they were recorded then.
 
 returns: record
 
@@ -59,13 +46,13 @@ nodes:
       type: object
       properties:
         path: { type: string, enum: [idle, record, sweep] }
-        # The default branch, its head and CI there, read once before the sweep; null in eval.
+        # The default branch, its head and CI there, read once before the sweep.
         base: { type: [object, 'null'] }
         # The claimed pull requests the sweep decides, each with its facts snapshot.
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
         settled: { type: array, items: { type: object } }
-        # The gate command the sweep runs to merge; empty in eval.
+        # The gate command the sweep runs to merge.
         gate: { type: string }
         policy_defaults: { type: string }
       required: [path, base, items, settled, gate, policy_defaults]
@@ -177,13 +164,13 @@ nodes:
   - id: review
     include: archon-review-block
     depends_on: [sweep]
-    when: "$sweep.output.review_url != '' && $INPUTS.mode == 'live'"
+    when: "$sweep.output.review_url != ''"
     with:
       scope: "$sweep.output.review_url"
       prior_report: "$sweep.output.review_prior"
 
   # Checks the decisions, reads back every pull request and records one decision per
-  # item; raises at most one attention item. Eval writes nothing and returns them.
+  # item; raises at most one attention item.
   # all_done: a failed delta review must not lose the record of what the sweep already
   # merged; a failed facts or sweep still fails this node through its bindings.
   - id: record
@@ -214,9 +201,7 @@ nodes:
         class: { type: string, enum: ['', pr, dev] }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
-        # Null in live. In eval, every decision and the attention item live would raise.
-        evaluation: { type: [object, 'null'] }
-      required: [merged, summary, attention, options, class, asked, evaluation]
+      required: [merged, summary, attention, options, class, asked]
 
   # A paused run gives its resource slot back, so the next scheduled sweep can merge
   # other pull requests while this one waits.

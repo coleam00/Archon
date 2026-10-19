@@ -7,7 +7,7 @@ scope:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 result:
   ready: false
-  action: needs_human
+  action: ask
   findings_summary: "Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
   discoveries: []

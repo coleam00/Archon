@@ -28,7 +28,7 @@ import {
 } from './run-budget';
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { logWorkflowError } from './logger';
-import { safeSendMessage } from './executor-shared';
+import { safeSendMessage } from './platform-messages';
 import { isTierName } from './model-validation';
 import { getLog } from './dag/log';
 import { RunSourceUnreadableError } from './dag/node-source';

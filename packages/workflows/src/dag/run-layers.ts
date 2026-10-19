@@ -14,7 +14,7 @@ import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
 import { writeNodeArtifact } from '../artifacts-index';
-import { safeSendMessage } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';

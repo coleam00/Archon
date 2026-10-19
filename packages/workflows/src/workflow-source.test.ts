@@ -45,7 +45,7 @@ import {
   type WorkflowSourceConfig,
 } from './schemas/workflow-run';
 import { discoverScriptsForCwd } from './script-discovery';
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import { withCapturedSource } from './run-source';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';

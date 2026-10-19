@@ -93,7 +93,7 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
-  # The planner makes the design calls. Calls only a person can make come back as
+  # The planner makes the design calls. Calls it cannot make itself come back as
   # open questions, which stop the run before delivery.
   - id: planned
     include: archon-plan-block
@@ -194,27 +194,9 @@ nodes:
       type: object
       properties:
         delivered: { type: boolean }
-        reason:
-          type: string
-          enum:
-            # deliver's own endings
-            - delivered
-            - implement_blocked
-            - review_open
-            - threads_open
-            - replan
-            - ci_pr_caused
-            - ci_other
-            - round_cap
-            - failed
-            # the stops before delivery
-            - no_action
-            - blocked
-            - needs_contract
-            - refuted
-            - not_rooted
-            # a planning stop, or a review or review thread that needs a person
-            - needs_human
+        # Deliver's reason when it ran (or `failed`), otherwise why no delivery ran:
+        # no_action, blocked, needs_contract, refuted, not_rooted or ask.
+        reason: { type: string }
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }
         summary: { type: string }
