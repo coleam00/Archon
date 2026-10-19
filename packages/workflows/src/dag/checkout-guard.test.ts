@@ -142,6 +142,41 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     expect(nodeFailedError(deps, 'guarded')).toContain('untracked/after.txt');
   });
 
+  it('detects a guarded agent editing an already-dirty tracked file', async () => {
+    await writeFile(join(testDir, 'tracked.txt'), 'clean');
+    await initRepo(testDir);
+    await writeFile(join(testDir, 'tracked.txt'), 'dirty');
+    mockSendQueryDag.mockImplementation(async function* () {
+      await writeFile(join(testDir, 'tracked.txt'), 'other');
+      yield { type: 'agent_message_chunk', text: 'Review complete.' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    const deps = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-mc',
+        workflowRun: makeWorkflowRun('mc-run-id'),
+        cwd: testDir,
+        workflow: {
+          name: 'guarded-agent',
+          nodes: [
+            {
+              id: 'guarded',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Review the checkout.' },
+              mutates_checkout: false,
+            },
+          ],
+        },
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(nodeFailedError(deps, 'guarded')).toContain('mutates_checkout: false');
+    expect(nodeFailedError(deps, 'guarded')).toContain('tracked.txt');
+  });
+
   it('accepts an unchanged dirty checkout', async () => {
     await writeFile(join(testDir, 'tracked.txt'), 'clean');
     await initRepo(testDir);
@@ -270,6 +305,74 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     );
     try {
       expect(await snapshotCheckout(testDir, [])).toBeUndefined();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  it.each(['before', 'after'])(
+    'skips the assertion when the %s status exceeds the subprocess output buffer',
+    async phase => {
+      await initRepo(testDir);
+      const execFile = git.execFileAsync;
+      let statusCalls = 0;
+      const exec = spyOn(git, 'execFileAsync').mockImplementation(async (cmd, args, options) => {
+        if (cmd === 'git' && args[0] === 'status') {
+          statusCalls++;
+          if (statusCalls === (phase === 'before' ? 1 : 2)) {
+            expect(options?.maxBuffer).toBeUndefined();
+            const cause = Object.assign(new Error('stdout maxBuffer length exceeded'), {
+              code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+            });
+            throw new git.GitFailure('unclassified', cause.message, cause);
+          }
+        }
+        return execFile(cmd, args, options);
+      });
+      try {
+        const deps = await runBashNode('touch stray.txt', true);
+        expect(statusCalls).toBe(phase === 'before' ? 1 : 2);
+        expect(await readFile(join(testDir, 'stray.txt'), 'utf8')).toBe('');
+        expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+        expect(deps.store.createWorkflowEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ event_type: 'node_completed', step_name: 'guarded' })
+        );
+        expect(deps.store.completeWorkflowRun).toHaveBeenCalled();
+      } finally {
+        exec.mockRestore();
+      }
+    }
+  );
+
+  it('the Git subprocess boundary rejects output above its default 1 MiB limit', async () => {
+    const config = join(testDir, 'buffer-test.config');
+    const args = ['config', '--file', config, '--get', 'buffer.value'];
+    await writeFile(config, `[buffer]\nvalue = ${'x'.repeat(1024 * 1024 - 2)}\n`);
+    expect((await git.execFileAsync('git', args)).stdout.length).toBe(1024 * 1024 - 1);
+    await writeFile(config, `[buffer]\nvalue = ${'x'.repeat(1024 * 1024)}\n`);
+    await expect(git.execFileAsync('git', args)).rejects.toMatchObject({
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+    });
+  });
+
+  it('preserves a completed node when only the post-run Git status fails', async () => {
+    await initRepo(testDir);
+    const execFile = git.execFileAsync;
+    let statusCalls = 0;
+    const exec = spyOn(git, 'execFileAsync').mockImplementation(async (cmd, args, options) => {
+      if (cmd === 'git' && args[0] === 'status' && ++statusCalls === 2) {
+        throw new git.GitFailure('unclassified', 'post-run status failed');
+      }
+      return execFile(cmd, args, options);
+    });
+    try {
+      const deps = await runBashNode('touch stray.txt && echo completed output', true);
+      expect(statusCalls).toBe(2);
+      expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+      expect(deps.store.createWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'node_completed', step_name: 'guarded' })
+      );
+      expect(deps.store.completeWorkflowRun).toHaveBeenCalled();
     } finally {
       exec.mockRestore();
     }
