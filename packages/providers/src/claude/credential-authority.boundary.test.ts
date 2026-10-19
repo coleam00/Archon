@@ -228,24 +228,36 @@ for (const key of ['', 'preflight-test-key']) {
 }
 
 for (const credential of ['', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+  // Helpers are Bun scripts so the env assertions hold under cmd.exe, which does not expand $VAR.
   for (const [helper, expected] of [
-    ['exit 1', 'unusable'],
-    ['printf ""', 'unusable'],
-    ['test "$PREFLIGHT_HELPER_KEY" = helper-key && printf helper-key', 'usable'],
+    ['process.exit(1)', 'unusable'],
+    ['', 'unusable'],
     [
-      'test "$CLAUDE_CODE_ENTRYPOINT" = sdk-ts && test -z "$NODE_OPTIONS" && printf helper-key',
+      "process.env.PREFLIGHT_HELPER_KEY === 'helper-key' && process.stdout.write('helper-key')",
       'usable',
     ],
-    ['test "$CLAUDE_CODE_ENTRYPOINT" != sdk-ts && printf helper-key', 'unusable'],
+    [
+      "process.env.CLAUDE_CODE_ENTRYPOINT === 'sdk-ts' && !process.env.NODE_OPTIONS && process.stdout.write('helper-key')",
+      'usable',
+    ],
+    [
+      "process.env.CLAUDE_CODE_ENTRYPOINT !== 'sdk-ts' && process.stdout.write('helper-key')",
+      'unusable',
+    ],
   ] as const) {
     test(
-      `native preflight resolves apiKeyHelper: ${helper} with ${credential || 'no env key'}`,
+      `native preflight resolves apiKeyHelper: ${helper || '(no output)'} with ${credential || 'no env key'}`,
       async () => {
         const dir = await mkdtemp(join(tmpdir(), 'claude-helper-preflight-'));
         try {
+          const script = join(dir, 'helper.js');
+          await writeFile(script, helper);
           await writeFile(
             join(dir, 'settings.json'),
-            JSON.stringify({ apiKeyHelper: helper, env: { PREFLIGHT_HELPER_KEY: 'helper-key' } })
+            JSON.stringify({
+              apiKeyHelper: `"${process.execPath}" "${script}"`,
+              env: { PREFLIGHT_HELPER_KEY: 'helper-key' },
+            })
           );
           const env: Record<string, string> = {
             CLAUDE_CONFIG_DIR: dir,
