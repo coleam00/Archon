@@ -1171,11 +1171,11 @@ already exited. An owner started by an Archon version without this reports no jo
 tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
 process and its descendants yourself, then use `workflow abandon`.
 
-The job also holds detached runs that a node of the run launched, for example with
-`workflow run --detach`, because the job grants no breakaway. Cancelling the
-launching run therefore stops their owners too, and those runs stay `running` with no
-owner until you abandon them. On POSIX a detached run starts its own process group and
-keeps running.
+A detached run that a node launches with `--detach`, for example `workflow run --detach`,
+starts outside the launching run's job and owns its own. Cancelling the launching run
+leaves it running; stop it with its own `cancel`. The job grants no other way out: a tool
+in the run that asks Windows to start a process outside its job fails to start it. On
+POSIX a detached run starts its own process group, so the same holds.
 
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and

@@ -145,7 +145,8 @@
       "src/utils/workflow-exit-code.test.ts",
       "src/utils/safe-console.test.ts",
       "src/utils/cli-start-telemetry.test.ts",
-      "src/utils/cli-program-arguments.test.ts"
+      "src/utils/cli-program-arguments.test.ts",
+      "src/utils/run-job-escape.test.ts"
     ],
     [
       "src/utils/detached-run-control.integration.spec.ts"

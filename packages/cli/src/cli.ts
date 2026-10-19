@@ -50,6 +50,13 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
+import { cliProgramArguments } from './utils/cli-program-arguments';
+import {
+  isDetachedLaunch,
+  relayOutsideRunJob,
+  RUN_JOB_ESCAPE_ENV,
+  runRunJobEscapeBrokerIfRequested,
+} from './utils/run-job-escape';
 import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
 import {
   isContinueSubcommand,
@@ -261,6 +268,17 @@ function isVersionRequest(args: string[]): boolean {
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
+
+  // Before telemetry: the relayed process counts this invocation, and a broker is not one.
+  if (await runRunJobEscapeBrokerIfRequested()) return 0;
+  const runJobEscapePipe = process.env[RUN_JOB_ESCAPE_ENV];
+  if (runJobEscapePipe !== undefined && isDetachedLaunch(args)) {
+    return await relayOutsideRunJob(runJobEscapePipe, {
+      argv: [...cliProgramArguments(), ...args],
+      cwd: process.cwd(),
+      env: inheritedEnv,
+    });
+  }
 
   // Anonymous startup event (self-gates on opt-out). Emitted before any early
   // return so every invocation — including bare `archon`, `--help`, and

@@ -30,6 +30,12 @@ const trackTempRoot = trackTempRoots();
 const FIXTURE_STATE_DEADLINE_MS = 5_000;
 
 /**
+ * How long the `nested` Windows owner fixture may take to be ready: it starts its job
+ * broker, which boots the CLI, and then a second owner through that broker.
+ */
+const NESTED_LAUNCH_DEADLINE_MS = 30_000;
+
+/**
  * For a test that runs a real stop. On Windows the test checks for survivors through
  * `Get-CimInstance`; once WMI is warm (see `WMI_WARM_UP_TIMEOUT_MS`) a listing takes 1-3 s.
  */
@@ -181,7 +187,7 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
 async function startWindowsRunOwner(
-  mode: 'orphan' | 'spawner'
+  mode: 'orphan' | 'spawner' | 'nested'
 ): Promise<{ runId: string; dir: string; marker: string }> {
   const runId = `windows-${mode}-${crypto.randomUUID()}`;
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), `archon-windows-${mode}-`)));
@@ -192,7 +198,11 @@ async function startWindowsRunOwner(
   });
   if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
   owner.unref();
-  await waitForFixtureProcess(() => existsSync(join(dir, 'ready')));
+  // A nested launch starts two owners and the job broker of each, so it gets a wider window.
+  await waitFor(
+    () => existsSync(join(dir, 'ready')),
+    mode === 'nested' ? NESTED_LAUNCH_DEADLINE_MS : FIXTURE_STATE_DEADLINE_MS
+  );
   return { runId, dir, marker: basename(dir) };
 }
 
@@ -430,6 +440,40 @@ describe('detached run control integration', () => {
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
         // every process that belongs to the tree, the owner included.
+        survivors = await windowsProcessesNaming(marker);
+        expect(survivors).toEqual([]);
+      } finally {
+        await killWindowsProcessesNaming(marker, survivors);
+      }
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'leaves a Windows run that a node launched with --detach running and owned when its launcher is cancelled',
+    async () => {
+      // The launching run's job object holds every process the run starts, so a detached
+      // owner launched from a node would die with it. `--detach` goes through the job
+      // broker instead, so the child owner starts outside the job, and stopping it stays
+      // the operator's call.
+      if (process.platform !== 'win32') return;
+
+      const { runId, dir, marker } = await startWindowsRunOwner('nested');
+      const childRunId = `${runId}-child`;
+      let survivors: number[] | undefined;
+      try {
+        await waitFor(() => existsSync(join(dir, 'child', 'ready')), NESTED_LAUNCH_DEADLINE_MS);
+        const childPid = Number(readFileSync(join(dir, 'child', 'ready'), 'utf8'));
+
+        const parent = await requestDetachedRunStop(runId);
+        await parent.stop();
+
+        // The parent's tree is gone and the child owner is the one process left.
+        expect(await windowsProcessesNaming(marker)).toEqual([childPid]);
+        const child = await requestDetachedRunStop(childRunId);
+        expect(child.pid).toBe(childPid);
+        await child.stop();
+
         survivors = await windowsProcessesNaming(marker);
         expect(survivors).toEqual([]);
       } finally {

@@ -3,6 +3,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
+import { relayOutsideRunJob, RUN_JOB_ESCAPE_ENV } from '../run-job-escape';
 
 /*
  * A real detached run owner for the Windows stop tests. Every process it starts carries
@@ -11,15 +12,18 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  * - `orphan`: start an intermediate that starts a detached grandchild and exits, so the
  *   grandchild's parent is gone before any stop begins.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
+ * - `nested`: start a process, as a node would, that launches an `idle` owner for run
+ *   `<run-id>-child` in `<dir>/child` the way `workflow run --detach` does: `relay` sends
+ *   the launch to the run's job broker, which runs `launch`, which starts the owner
+ *   detached and exits.
+ * - `idle`: own the run and start nothing.
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-if (!runId || !dir || (mode !== 'orphan' && mode !== 'spawner')) {
-  throw new Error('Usage: windows-run-owner.ts <run-id> <dir> <orphan|spawner>');
+const modes = ['orphan', 'spawner', 'nested', 'idle', 'relay', 'launch'];
+if (!runId || !dir || !mode || !modes.includes(mode)) {
+  throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
-
-await claimDetachedRunProcessOwner();
-await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
 const idle = 'setInterval(() => undefined, 1000);';
 
@@ -30,38 +34,77 @@ function writeReady(): void {
   renameSync(`${readyPath}.tmp`, readyPath);
 }
 
-if (mode === 'orphan') {
-  const intermediate = spawn(
-    process.execPath,
-    [
-      '-e',
-      [
-        "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        "const path = require('node:path');",
-        'const dir = process.argv[1];',
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(idle)}, dir], { detached: true, stdio: 'ignore' });`,
-        "fs.writeFileSync(path.join(dir, 'grandchild'), String(child.pid));",
-        'process.exit(0);',
-      ].join('\n'),
-      dir,
-    ],
-    { stdio: 'ignore' }
+if (mode === 'relay') {
+  const pipe = process.env[RUN_JOB_ESCAPE_ENV];
+  if (pipe === undefined) throw new Error(`${RUN_JOB_ESCAPE_ENV} is not set`);
+  process.exit(
+    await relayOutsideRunJob(pipe, {
+      argv: [process.execPath, import.meta.path, runId, dir, 'launch'],
+      cwd: process.cwd(),
+      env: process.env,
+    })
   );
-  intermediate.on('error', error => {
+} else if (mode === 'launch') {
+  const childDir = join(dir, 'child');
+  mkdirSync(childDir);
+  const owner = spawn(process.execPath, [import.meta.path, `${runId}-child`, childDir, 'idle'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  owner.once('error', error => {
     throw error;
   });
-  intermediate.once('exit', writeReady);
+  owner.once('spawn', () => process.exit(0));
 } else {
-  const kidsDir = join(dir, 'kids');
-  const loop = (): void => {
-    const child = spawn(process.execPath, ['-e', idle, dir], { detached: true, stdio: 'ignore' });
-    writeFileSync(join(kidsDir, String(child.pid)), '');
-    setTimeout(loop, 10);
-  };
-  mkdirSync(kidsDir);
-  loop();
-  writeReady();
-}
+  await claimDetachedRunProcessOwner();
+  await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 
-setInterval(() => undefined, 1_000);
+  if (mode === 'orphan') {
+    const intermediate = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          "const path = require('node:path');",
+          'const dir = process.argv[1];',
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(idle)}, dir], { detached: true, stdio: 'ignore' });`,
+          "fs.writeFileSync(path.join(dir, 'grandchild'), String(child.pid));",
+          'process.exit(0);',
+        ].join('\n'),
+        dir,
+      ],
+      { stdio: 'ignore' }
+    );
+    intermediate.on('error', error => {
+      throw error;
+    });
+    intermediate.once('exit', writeReady);
+  } else if (mode === 'spawner') {
+    const kidsDir = join(dir, 'kids');
+    const loop = (): void => {
+      const child = spawn(process.execPath, ['-e', idle, dir], { detached: true, stdio: 'ignore' });
+      writeFileSync(join(kidsDir, String(child.pid)), '');
+      setTimeout(loop, 10);
+    };
+    mkdirSync(kidsDir);
+    loop();
+    writeReady();
+  } else if (mode === 'nested') {
+    const relay = spawn(process.execPath, [import.meta.path, runId, dir, 'relay'], {
+      stdio: 'ignore',
+    });
+    relay.on('error', error => {
+      throw error;
+    });
+    relay.once('exit', code => {
+      if (code !== 0) throw new Error(`The nested launch exited ${String(code)}`);
+      writeReady();
+    });
+  } else {
+    writeReady();
+  }
+
+  setInterval(() => undefined, 1_000);
+}
