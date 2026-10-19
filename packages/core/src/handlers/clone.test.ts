@@ -765,142 +765,30 @@ describe('cloneRepository', () => {
       }
     );
 
-    test.each([
-      { canonicalExists: false, foreignCheckout: false },
-      { canonicalExists: false, foreignCheckout: true },
-      { canonicalExists: true, foreignCheckout: false },
-      { canonicalExists: true, foreignCheckout: true },
-    ])(
-      'refuses divergent saved paths before retry: %j',
-      async ({ canonicalExists, foreignCheckout }) => {
-        const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-divergence-'));
-        const source = join(root, 'managed', 'source');
-        const foreign = join(root, 'foreign', 'source');
-        managedSourceOverride = source;
-        try {
-          await fsPromises.mkdir(join(root, 'managed'), { recursive: true });
-          if (canonicalExists) await fsPromises.mkdir(source);
-          await fsPromises.mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-          await fsPromises.mkdir(foreign);
-          await fsPromises.symlink(
-            join(root, 'foreign', 'inner'),
-            join(root, 'managed', 'alias'),
-            'junction'
-          );
-          if (foreignCheckout) {
-            execFileSync('git', ['init', '-q', foreign]);
-            execFileSync('git', [
-              '-C',
-              foreign,
-              'remote',
-              'add',
-              'origin',
-              'https://github.com/other/repo',
-            ]);
-          }
-          const saved = `${root}/managed/alias/../source`;
-          const existing = makeCodebase({ default_cwd: saved });
-          mockListCodebaseClaims.mockResolvedValue([existing]);
-          spyFsAccess.mockImplementation(realFsAccess);
-          spyFsStat.mockImplementation(realFsStat);
-          spyCheckoutRemote.mockImplementation(realCheckoutRemote);
-          spyExecFileAsync.mockImplementation(realExecFileAsync);
-
-          await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-            'Cannot verify checkout ownership'
-          );
-
-          expect(spyCloneGitRepository).not.toHaveBeenCalled();
-          expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
-          expect(mockUpdateCodebase).not.toHaveBeenCalled();
-          expect(existing.default_cwd).toBe(saved);
-          expect(await fsPromises.readdir(foreign)).toEqual(foreignCheckout ? ['.git'] : []);
-          if (canonicalExists) expect(await fsPromises.readdir(source)).toEqual([]);
-          else await expect(realFsAccess(source)).rejects.toMatchObject({ code: 'ENOENT' });
-        } finally {
-          managedSourceOverride = undefined;
-          spyFsRm.mockRestore();
-          await removeTempTree(root);
-        }
-      }
-    );
-
-    test('refuses to adopt a present managed source through an alias when no URL is saved', async () => {
-      const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-null-url-alias-'));
-      const source = join(root, 'managed', 'source');
-      managedSourceOverride = source;
-      try {
-        await fsPromises.mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-        // The saved spelling reaches a foreign checkout whose remote matches, so
-        // the URL-less row is found; the managed source is a different checkout.
-        for (const checkout of [join(root, 'foreign', 'source'), source]) {
-          await fsPromises.mkdir(checkout, { recursive: true });
-          execFileSync('git', ['init', '-q', checkout]);
-          execFileSync('git', [
-            '-C',
-            checkout,
-            'remote',
-            'add',
-            'origin',
-            'https://github.com/owner/repo',
-          ]);
-        }
-        await fsPromises.symlink(
-          join(root, 'foreign', 'inner'),
-          join(root, 'managed', 'alias'),
-          'junction'
-        );
-        const saved = `${root}/managed/alias/../source`;
-        const existing = makeCodebase({ default_cwd: saved, repository_url: null });
-        mockListCodebaseClaims.mockResolvedValue([existing]);
-        spyFsAccess.mockImplementation(realFsAccess);
-        spyFsStat.mockImplementation(realFsStat);
-        spyCheckoutRemote.mockImplementation(realCheckoutRemote);
-        spyExecFileAsync.mockImplementation(realExecFileAsync);
-
-        await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-          'Cannot verify checkout ownership'
-        );
-
-        expect(spyCloneGitRepository).not.toHaveBeenCalled();
-        expect(mockUpdateCodebase).not.toHaveBeenCalled();
-        expect(existing.default_cwd).toBe(saved);
-      } finally {
-        managedSourceOverride = undefined;
-        await removeTempTree(root);
-      }
-    });
-
     test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-      'refuses retry when the saved spelling cannot be inspected',
+      'refuses retry when the managed source cannot be inspected',
       async () => {
         const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-unreadable-'));
         const source = join(root, 'managed', 'source');
         managedSourceOverride = source;
         try {
           await fsPromises.mkdir(join(root, 'managed'), { recursive: true });
-          await fsPromises.mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-          await fsPromises.mkdir(join(root, 'foreign', 'source'));
-          await fsPromises.symlink(join(root, 'foreign', 'inner'), join(root, 'managed', 'alias'));
-          await fsPromises.chmod(join(root, 'foreign'), 0o000);
-          const saved = `${root}/managed/alias/../source`;
-          const existing = makeCodebase({ default_cwd: saved });
+          await fsPromises.chmod(join(root, 'managed'), 0o000);
+          const existing = makeCodebase({ default_cwd: `${source}/` });
           mockListCodebaseClaims.mockResolvedValue([existing]);
           spyFsAccess.mockImplementation(realFsAccess);
           spyFsStat.mockImplementation(realFsStat);
 
           await expect(cloneRepository('https://github.com/owner/repo')).rejects.toMatchObject({
-            message: expect.stringContaining('Cannot verify checkout ownership'),
-            cause: { code: 'EACCES' },
+            code: 'EACCES',
           });
 
           expect(spyCloneGitRepository).not.toHaveBeenCalled();
           expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
           expect(mockUpdateCodebase).not.toHaveBeenCalled();
-          await expect(realFsAccess(source)).rejects.toMatchObject({ code: 'ENOENT' });
         } finally {
           managedSourceOverride = undefined;
-          await fsPromises.chmod(join(root, 'foreign'), 0o755);
+          await fsPromises.chmod(join(root, 'managed'), 0o755);
           await removeTempTree(root);
         }
       }

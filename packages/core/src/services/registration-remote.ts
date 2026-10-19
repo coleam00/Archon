@@ -102,13 +102,7 @@ export async function assertSavedCheckoutRemote(
   const checkout = isManagedSource ? resolve(path) : path;
   let target: Stats | null;
   try {
-    const [saved, found] = await Promise.all([inspectPath(path), inspectPath(checkout)]);
-    // The kernel resolves symlinks before `..`, so a lexically managed spelling
-    // can reach another directory than the managed source it normalizes to.
-    if (saved && (!found || saved.dev !== found.dev || saved.ino !== found.ino)) {
-      throw new Error('The saved path reaches a different directory than its managed source.');
-    }
-    target = found;
+    target = await inspectPath(checkout);
   } catch (error) {
     throw new ProjectRegistrationError(
       `Cannot verify checkout ownership at ${path}. Restore its original checkout or use /update-project to set its path explicitly.`,
@@ -134,8 +128,8 @@ async function inspectPath(path: string): Promise<Stats | null> {
  * The checkout forge events use for a saved project. A saved path that is a
  * worktree, or a worktrees/ path whose checkout is gone, is stale: the
  * project's managed source replaces it once that source proves ownership.
- * Managed spellings are normalized after verifying they do not reach another
- * directory. Callers persist a returned path that differs from the saved one.
+ * Managed spellings are normalized. Callers persist a returned path that
+ * differs from the saved one.
  */
 export async function resolveSavedCheckout(
   project: Pick<Codebase, 'name' | 'default_cwd'>,

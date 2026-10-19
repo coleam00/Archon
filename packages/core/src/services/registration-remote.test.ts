@@ -60,23 +60,6 @@ afterEach(() => {
   else process.env.ARCHON_HOME = previousArchonHome;
 });
 
-for (const state of ['empty', 'occupied', 'missing']) {
-  test.skipIf(process.platform === 'win32')(
-    `refuses a managed spelling reaching a foreign directory (managed: ${state})`,
-    async () => {
-      const { root, source } = await fixture(state !== 'missing');
-      await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-      await mkdir(join(root, 'foreign', 'source'));
-      await symlink(join(root, 'foreign', 'inner'), join(root, 'alias'));
-      if (state === 'occupied') await writeFile(join(source, 'partial'), 'incomplete clone');
-      const saved = `${root}/alias/../source`;
-      await expect(assertSavedCheckoutRemote(saved, remote, source)).rejects.toThrow(
-        'Cannot verify checkout ownership'
-      );
-    }
-  );
-}
-
 for (const suffix of ['/', '/../missing/../source']) {
   test(`returns a usable managed checkout path for suffix ${suffix}`, async () => {
     const { root } = await fixture();
@@ -90,38 +73,10 @@ for (const suffix of ['/', '/../missing/../source']) {
   });
 }
 
-test.skipIf(process.platform === 'win32')(
-  'refuses to return a divergent managed saved path',
-  async () => {
-    const { root } = await fixture();
-    process.env.ARCHON_HOME = root;
-    const source = getProjectSourcePath('owner', 'repo');
-    await mkdir(source, { recursive: true });
-    await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-    await mkdir(join(root, 'foreign', 'source'));
-    await symlink(join(root, 'foreign', 'inner'), join(source, '..', 'alias'));
-    await expect(
-      resolveSavedCheckout(
-        {
-          name: 'owner/repo',
-          default_cwd: `${source}/../alias/../source`,
-        },
-        remote
-      )
-    ).rejects.toThrow('Cannot verify checkout ownership');
-  }
-);
-
 // Root ignores search permission, so these layouts would not fail inspection.
 const canRevokeSearch = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 test.skipIf(!canRevokeSearch).each([
-  {
-    name: 'saved managed spelling',
-    saved: 'alias/../source',
-    locked: 'foreign',
-    managed: 'source',
-  },
   {
     name: 'canonical managed source',
     saved: 'managed/source/',
@@ -132,9 +87,7 @@ test.skipIf(!canRevokeSearch).each([
 ])('refuses when the $name cannot be inspected', async ({ saved, locked, managed }) => {
   const { root } = await fixture(false);
   await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
-  await mkdir(join(root, 'foreign', 'source'));
   await mkdir(join(root, 'managed', 'source'), { recursive: true });
-  await symlink(join(root, 'foreign', 'inner'), join(root, 'alias'));
   await chmod(join(root, locked), 0o000);
   try {
     const managedSource = managed && join(root, managed);

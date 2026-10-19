@@ -497,27 +497,26 @@ export async function cloneRepository(
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       missing = true;
     }
-    if (missing && (!identity || !isManaged))
-      throw new ProjectRegistrationError(
-        `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
-      );
-    if (isManaged) {
-      // Runs even without a saved URL: the canonical path is persisted below.
+    if (missing) {
+      if (!identity || !isManaged)
+        throw new ProjectRegistrationError(
+          `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
+        );
       await assertSavedCheckoutRemote(
         existing.default_cwd,
         resolveRegistrationUrl(existing.repository_url ?? workingUrl, checkoutPath),
         managedSource
       );
-    } else if (existing.repository_url) {
-      await assertCheckoutRemote(
-        checkoutPath,
-        resolveRegistrationUrl(existing.repository_url, checkoutPath)
-      );
-    }
-    if (missing && identity) {
       const credentials = await repositoryCredentials(workingUrl, options);
       await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
       await cloneCheckout(workingUrl, checkoutPath, credentials);
+    } else if (existing.repository_url) {
+      const remoteUrl = resolveRegistrationUrl(existing.repository_url, checkoutPath);
+      if (isManaged) {
+        await assertSavedCheckoutRemote(existing.default_cwd, remoteUrl, managedSource);
+      } else {
+        await assertCheckoutRemote(checkoutPath, remoteUrl);
+      }
     }
     if (appSource) await setupAppRepository(checkoutPath);
     if (checkoutPath !== existing.default_cwd) {
