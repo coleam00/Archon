@@ -22,6 +22,7 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow';
+import { RunSourceReleaseError } from '@archon/workflows/run-source';
 import { resolveCliExitCode } from '../utils/workflow-exit-code';
 
 describe('workflowRunCommand — progress rendering', () => {
@@ -452,7 +453,16 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
-  type ContainerRunEnd = 'paused' | 'settled' | 'unresolved-writeback' | 'lookup-fails';
+  type ContainerRunEnd =
+    | 'paused'
+    | 'settled'
+    | 'unresolved-writeback'
+    | 'lookup-fails'
+    | 'release-throws'
+    | 'successor-running'
+    | 'successor-pending'
+    | 'failed'
+    | 'cancelled';
 
   /**
    * A container run that receives SIGTERM during its final progress drain, or with
@@ -480,6 +490,16 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
+      if (end === 'release-throws')
+        throw new RunSourceReleaseError(new Error('release unavailable'), OWNED_RUN);
+      if (end === 'failed' || end === 'cancelled')
+        return { success: false, workflowRunId: OWNED_RUN, error: 'terminal control' };
+      if (end === 'successor-running' || end === 'successor-pending')
+        return {
+          success: false,
+          workflowRunId: OWNED_RUN,
+          error: 'Workflow status changed before source release',
+        };
       return end === 'paused'
         ? { success: true, workflowRunId: OWNED_RUN, paused: true }
         : { success: true, workflowRunId: OWNED_RUN };
@@ -488,30 +508,49 @@ describe('workflowRunCommand — progress rendering', () => {
     mockFolderBackendDestroy.mockClear();
     const sigtermBefore = process.listeners('SIGTERM');
     const host = createTestWorkflowHost();
+    const failRun = spyOn(host.deps.store, 'failWorkflowRun');
+    const getStatus = host.deps.store.getWorkflowRunStatus.bind(host.deps.store);
+    host.deps.store.getWorkflowRunStatus = async id =>
+      runSettled && (end === 'release-throws' || end === 'successor-running')
+        ? 'running'
+        : getStatus(id);
     let destroyedAtSignal = -1;
     const signalOnce = async (): Promise<void> => {
       if (!runSettled || destroyedAtSignal !== -1) return;
+      destroyedAtSignal = 0;
       for (const listener of process.listeners('SIGTERM')) {
         if (!sigtermBefore.includes(listener)) (listener as () => void)();
       }
       for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
       destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
     };
-    const getRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
     host.deps.store.getWorkflowRun = async id => {
       if (signalAt === 'lookup') await signalOnce();
       if (end === 'lookup-fails') throw new Error('store unavailable');
-      if (end !== 'unresolved-writeback') return getRun(id);
       return {
         id,
         workflow_name: 'assist',
         conversation_id: null,
         parent_conversation_id: null,
         codebase_id: 'cb-folder',
-        status: 'failed',
+        status:
+          end === 'successor-pending'
+            ? 'pending'
+            : end === 'paused'
+              ? 'paused'
+              : end === 'settled'
+                ? 'completed'
+                : end === 'unresolved-writeback' || end === 'failed'
+                  ? 'failed'
+                  : end === 'cancelled'
+                    ? 'cancelled'
+                    : 'running',
         outcome: null,
         user_message: 'go',
-        metadata: { pending_writeback: { envId: 'env-1' } },
+        metadata:
+          end === 'unresolved-writeback'
+            ? { pending_writeback: { envId: 'env-1' } }
+            : { execution_claim: 'successor' },
         started_at: new Date(),
         completed_at: new Date(),
         last_activity_at: null,
@@ -531,12 +570,34 @@ describe('workflowRunCommand — progress rendering', () => {
     };
 
     try {
-      await workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      const execution = workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      if (end === 'release-throws') await expect(execution).rejects.toThrow('release unavailable');
+      else if (end === 'successor-running' || end === 'successor-pending')
+        await expect(execution).rejects.toThrow('Workflow status changed before source release');
+      else if (end === 'failed' || end === 'cancelled')
+        await expect(execution).rejects.toThrow('terminal control');
+      else await execution;
+      if (end === 'release-throws' || end === 'successor-running' || end === 'successor-pending') {
+        expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
+        expect(failRun).not.toHaveBeenCalled();
+      }
     } finally {
       exitSpy.mockRestore();
     }
     return destroyedAtSignal;
   }
+
+  it.each(['release-throws', 'successor-running', 'successor-pending'] as const)(
+    'keeps an uncertain container through cleanup and signals: %s',
+    async end => {
+      expect(await signalDuringContainerDrain(end)).toBe(0);
+    }
+  );
+
+  it.each(['failed', 'cancelled'] as const)('destroys a confirmed %s run container', async end => {
+    expect(await signalDuringContainerDrain(end)).toBe(0);
+    expect(mockFolderBackendDestroy).toHaveBeenCalledTimes(1);
+  });
 
   it('a signal during the final drain keeps a paused run its container', async () => {
     expect(await signalDuringContainerDrain('paused')).toBe(0);

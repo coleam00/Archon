@@ -186,7 +186,7 @@ import {
   assertResumeWorkingPathExists,
   prepareFolderExecution,
   warnOnReusedWorktree,
-  readUnresolvedWriteback,
+  readContainerPreservation,
   warnPreservedContainer,
   destroyRunContainer,
 } from './workflow-isolation';
@@ -1318,8 +1318,8 @@ async function runWorkflowWithOwnedSource(
     // share parent_conversation_id).
     const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
     if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
-    // Set once the settled run's container is kept (paused, or an un-applied write-back),
-    // so a signal during the final progress drain does not destroy it.
+    // A signal during final settlement must not discard an overlay before its
+    // persisted run status and write-back state permit removal.
     let containerPreserved = false;
     const deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
@@ -1333,7 +1333,12 @@ async function runWorkflowWithOwnedSource(
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
-        if (containerBackend && containerEnvId && !containerPreserved) {
+        if (
+          containerBackend &&
+          containerEnvId &&
+          !containerPreserved &&
+          (await readContainerPreservation(deps.store, ownedRunId, containerEnvId)) === undefined
+        ) {
           try {
             await containerBackend.destroy(containerEnvId);
           } catch (destroyErr) {
@@ -1542,37 +1547,20 @@ async function runWorkflowWithOwnedSource(
         });
       }
     } finally {
-      // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
-      // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
-      // can't orphan a privileged container+volume. A PAUSED run keeps its (already
-      // suspended, by the engine) container + volume for resume — destroying it would
-      // discard the overlay the resume needs. Every OTHER outcome (completed / failed /
-      // cancelled, or a pre-result throw) is terminal for this process → destroy. The
-      // write-back apply already ran inside the engine before completion, so a
-      // completed run's live-root changes are safe before this teardown removes the
-      // volume.
-      const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
-      // H2 — preserve the container+volume whenever the un-applied overlay is still the
-      // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
-      // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
-      // → run failed with pending_writeback still un-applied). Destroying then would
-      // silently discard the changes despite the "reconcile manually" message. A failed
-      // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
-      let unresolvedWriteback = false;
-      // Kept until the lookup below proves it may go: a signal mid-lookup must not
-      // destroy an overlay that may be the only copy of the changes.
+      // A rejected or unsuccessful execution may have lost its claim. Its signal
+      // handler must stop compensating before cleanup reads the successor's row.
+      if (!result?.success) deregisterTermination();
+      // The resolved ID also covers throws before an execution result. Only a confirmed
+      // terminal row with no pending write-back permits removal of its overlay.
       containerPreserved = true;
-      if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
-        unresolvedWriteback = await readUnresolvedWriteback(
-          deps.store,
-          result.workflowRunId,
-          containerEnvId
-        );
-      }
-      containerPreserved = runPaused || unresolvedWriteback;
+      const preservation =
+        containerBackend && containerEnvId
+          ? await readContainerPreservation(deps.store, ownedRunId, containerEnvId)
+          : undefined;
+      containerPreserved = preservation !== undefined;
 
       // Renders the rows the run committed since the last poll, up to its settled state.
-      // The signal handlers stay registered through it, so a Ctrl-C here still destroys
+      // Successful executions keep their signal handlers through it; a Ctrl-C destroys
       // a container this process would destroy below.
       await progress?.close().catch((drainErr: unknown) => {
         getLog().warn(
@@ -1592,15 +1580,25 @@ async function runWorkflowWithOwnedSource(
       // stacking handlers.
       deregisterTermination();
 
-      if (containerBackend && containerEnvId && unresolvedWriteback) {
-        warnPreservedContainer(containerEnvId, result?.workflowRunId);
+      if (containerBackend && containerEnvId && preservation === 'writeback') {
+        warnPreservedContainer(containerEnvId, ownedRunId);
+      }
+      if (
+        containerBackend &&
+        containerEnvId &&
+        preservation === 'unsettled' &&
+        !(result?.success && 'paused' in result && result.paused)
+      ) {
+        console.error(
+          `\nContainer and overlay volume preserved: run ${ownedRunId} is unfinished or its status could not be confirmed. Check its status before cleanup.`
+        );
       }
       if (containerBackend && containerEnvId && !containerPreserved) {
         containerTeardownError = await destroyRunContainer(
           deps.store,
           containerBackend,
           containerEnvId,
-          result?.workflowRunId
+          ownedRunId
         );
       }
     }

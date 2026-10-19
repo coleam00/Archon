@@ -29,7 +29,7 @@ import {
   type PreparedWorkflowSource,
 } from '@archon/workflows/run-source';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -609,26 +609,22 @@ export async function warnOnReusedWorktree(
 
 type RunStore = WorkflowHost['deps']['store'];
 
-/**
- * Whether a settled run's write-back is still un-applied. FAIL CLOSED (R2-F1): if the
- * run's metadata cannot be read, whether an un-applied write-back is pending is unknown
- * — answer true so the volume, which may be the only copy of the changes, is kept and
- * surfaced like an unresolved write-back.
- */
-export async function readUnresolvedWriteback(
+/** An unreadable or unfinished run may still own the container's only copy of its changes. */
+export async function readContainerPreservation(
   store: RunStore,
   runId: string,
   envId: string
-): Promise<boolean> {
+): Promise<'unsettled' | 'writeback' | undefined> {
   try {
-    const finalRun = await store.getWorkflowRun(runId);
-    return hasUnresolvedWriteback(finalRun?.metadata);
+    const run = await store.getWorkflowRun(runId);
+    if (!run || !isTerminalRunStatus(run.status)) return 'unsettled';
+    return hasUnresolvedWriteback(run.metadata) ? 'writeback' : undefined;
   } catch (lookupErr) {
     getLog().error(
       { err: lookupErr as Error, envId, runId },
       'workflow.teardown_run_lookup_failed'
     );
-    return true;
+    return 'unsettled';
   }
 }
 
