@@ -62,12 +62,14 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   it.each(
     (['completed', 'failed', 'cancelled'] as const).flatMap(terminal =>
       (['pending', 'running', 'paused'] as const).flatMap(snapshot =>
-        [false, true].map(reentry => ({ terminal, snapshot, reentry }))
+        [false, true].flatMap(reentry =>
+          [false, true].map(readFails => ({ terminal, snapshot, reentry, readFails }))
+        )
       )
     )
   )(
     'reconciles child completion before the parent pause: %j',
-    async ({ terminal, snapshot, reentry }) => {
+    async ({ terminal, snapshot, reentry, readFails }) => {
       await writeWorkflow(
         'racing-child',
         `name: racing-child
@@ -117,7 +119,15 @@ nodes:
           else await store.cancelWorkflowRun(child.id);
           await maybeResumeParentRun(deps, platform, 'racing', child);
         }
-        return pause(id, gate, ...rest);
+        const paused = await pause(id, gate, ...rest);
+        if (finishOnPause && readFails && gate.type === 'child_workflow') {
+          const read = store.getWorkflowRun;
+          store.getWorkflowRun = async runId => {
+            if (runId === gate.childRunId) throw new Error('post-pause child lookup rejected');
+            return read(runId);
+          };
+        }
+        return paused;
       };
       let result = await executeWorkflow(
         deps,
@@ -143,6 +153,21 @@ nodes:
           undefined,
           hydrated
         );
+      }
+      if (readFails) {
+        expect(parent.status).toBe('paused');
+        expect('paused' in result && result.paused).toBe(true);
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'racing',
+          expect.stringContaining(`resume ${parent.id}`),
+          undefined
+        );
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'racing',
+          expect.stringContaining('Resume it manually'),
+          undefined
+        );
+        return;
       }
       expect(parent.status).toBe(terminal === 'cancelled' ? 'failed' : 'completed');
       expect(result.success).toBe(terminal !== 'cancelled');
