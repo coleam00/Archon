@@ -2299,6 +2299,9 @@ Archon logs `claude.query_tokens_unknown`. Tokens remain unknown for the rest of
 even if later results supply usable totals. The node's tokens also remain absent across
 structured-output reasks and later loop iterations after an unknown interval; cost
 subtraction continues independently.
+OpenCode prices each model step as its own assistant message, so an OpenCode node's cost and
+tokens sum every assistant message its prompt produced, such as the steps before and after a
+tool call.
 An incomplete count is recorded, not dropped: the node's `execution.spend.tokens` (persisted
 as `data.spend.tokens`) is `{ "source": "unavailable", "reason": "incomplete" }` and the row
 carries no `tokens`. Every total containing that node, through retries, loops, fan-outs,
