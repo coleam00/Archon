@@ -42,6 +42,17 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+
+const OWN_PR_OTHER =
+  'Do what the answer text says. The text is recorded as the ruling on this pull request, and the queue stops working it until a new push; nothing goes to the build queue.';
+
+/**
+ * `other` hands the item back to the build queue with the person's text as the ruling.
+ * No build round owns an own pull request, so there it parks with the text recorded.
+ */
+function withQueueOther(attention: MergeAttention, item: Item): MergeAttention {
+  return item.own_pr === true ? withOther(attention, 'park', OWN_PR_OTHER) : withOther(attention, 'return');
+}
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
@@ -52,6 +63,8 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts | null;
   readonly record: MergeRecord | null;
+  /** An enrolled maintainer's own pull request: no build round owns it. */
+  readonly own_pr?: boolean;
 }
 
 interface Decision {
@@ -85,16 +98,19 @@ function message(error: unknown): string {
 
 /**
  * The decisions record acts on: one per claimed pull request, in the sweep's order. A
- * decision about a pull request this run did not claim refuses, because its work item
- * belongs to another run; a claimed one the sweep left out waits for the next sweep.
+ * decision about a pull request this run did not claim is refused with a note, because
+ * its work item belongs to another run, and every other decision is still recorded; a
+ * claimed one the sweep left out waits for the next sweep.
  */
 function decide(items: readonly Item[], sweep: Sweep): Decision[] {
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const strays = sweep.decisions.filter(decision => !wanted.has(decision.number)).map(decision => decision.number);
-  if (strays.length > 0) throw new Error(`the sweep decided PR ${strays.join(', ')}, which this run did not claim`);
+  if (strays.length > 0) {
+    note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
+  }
   const decided = new Map<number, Decision>();
   for (const decision of sweep.decisions) {
-    if (decided.has(decision.number)) continue;
+    if (!wanted.has(decision.number) || decided.has(decision.number)) continue;
     // An ask the sweep wrote no item for has nothing to raise; it waits like any other undecided one.
     const asks = decision.action === 'ask' && decision.attention !== null;
     decided.set(decision.number, asks ? decision : { ...decision, action: decision.action === 'ask' ? 'wait' : decision.action, attention: null });
@@ -250,8 +266,7 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            // `other` hands the item back to the build queue with the person's text as the ruling.
-            attention: withOther(firstAsk.attention as MergeAttention, 'return'),
+            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number)),
           };
   const render = (raised: MergeAsked | null): string =>
     raised === null

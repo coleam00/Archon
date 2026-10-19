@@ -22,7 +22,7 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. |
-| `$TYPED_ARTIFACTS_FILE` | Absolute path to this invocation's typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of the artifacts published before this invocation started, grouped by exact case-sensitive `output_type`. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
+| `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
 | `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
@@ -82,8 +82,15 @@ projects can derive the same one — two no-remote local repos both called `api`
 projects whose display names slugify identically. Registration keeps them apart: a new project
 whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
 `my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
-parallel checkouts. Unregistered working directories (`_cwd/<basename>`) are not registered, so
-two of them with the same folder name still share `$STATE_DIR`.
+parallel checkouts. Unregistered working directories use `@cwd/<basename>-<digest>`, where the digest is
+SHA-256 of the resolved absolute directory path. Distinct directory paths have separate
+`$STATE_DIR` roots, even when their folder names match. Moving a directory changes its root.
+
+Legacy `_cwd/<basename>` trees remain untouched. When legacy output exists, a run logs
+its location and the new root. Inspect the legacy `state/` directory and manually move
+only state belonging to this directory into the new `$STATE_DIR`; legacy state may have
+been shared by unrelated directories. New runs do not read or copy legacy state.
+Runs with an already recorded output root keep using it when resumed.
 
 ## Positional Arguments (not supported)
 
@@ -141,6 +148,8 @@ During the current run, downstream interpolation and `when:` conditions see the 
 ### Shell Quoting in `bash:` vs `script:`
 
 `$nodeId.output` and `$LOOP_PREV.nodeId.output` references, including their field forms, use two substitution regimes in `bash:` and `until_bash:`. Small string outputs are single-quoted inline. For outputs exceeding 32,768 UTF-16 code units (JavaScript `string.length`), Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<write-id>.<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead; like any command substitution, it drops trailing newlines. Each substitution gets a unique write ID, so current and previous iteration values always have separate files, even when their contents match. A bare argument works with the inline form, but the unquoted command substitution splits words and expands globs. **Assign, then quote the variable** to handle both regimes safely. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+
+Resolved `bash:` bodies and plain-loop and loop-group `until_bash:` completion checks are delivered as UTF-8 through stdin to a fixed `bash -c` evaluator, including executable Bash dry runs. Their aggregate inline size is no longer constrained by the OS argument limit. The 32,768-code-unit cutoff above remains a **per-reference** spill rule; memory, environment, and output limits still apply. `$0` and `BASH_SOURCE` retain their `bash -c` behavior. Authored Bash code sees stdin at EOF after delivery, and `BASH_EXECUTION_STRING` contains the evaluator rather than the authored body.
 
 User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
 
@@ -334,11 +343,12 @@ These are standard environment variables read from `process.env` at clone time. 
 
 | Variable | Description |
 |----------|-------------|
-| `GH_TOKEN` | GitHub personal access token for authenticated clone operations |
+| `GH_TOKEN` | GitHub personal access token for authenticated clones from `github.com` or the `GITHUB_URL` host |
 | `GITLAB_TOKEN` | GitLab personal or project access token (`glpat-*`) for authenticated clones from `gitlab.com` or the `GITLAB_URL` host |
 | `GITEA_TOKEN` | Gitea API token for authenticated clones from `gitea.com` or the `GITEA_URL` or `FORGEJO_URL` host |
+| `GITHUB_URL` | Base URL of a GitHub Enterprise Server (e.g. `https://github.example.com`). Clones with this exact scheme, host and port use `GH_TOKEN`, then `GITHUB_TOKEN` |
 | `GITLAB_URL` | Base URL of a self-hosted GitLab (e.g. `https://gitlab.example.com`). Clones with this exact scheme, host and port use `GITLAB_TOKEN` |
 | `GITEA_URL` | Base URL of a self-hosted Gitea. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
 | `FORGEJO_URL` | Base URL of a self-hosted Forgejo. Clones with this exact scheme, host and port use `GITEA_TOKEN` |
 
-A forge token is sent only to the host it is configured for, and only over the scheme it is configured for: HTTPS for `github.com`, `gitlab.com` and `gitea.com`, and the `*_URL`'s own scheme for a self-hosted instance. An `http://` clone of an HTTPS forge gets no token. A hostname that merely contains `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.
+A forge token is sent only to the host it is configured for, and only over the scheme it is configured for: HTTPS for `github.com`, `gitlab.com` and `gitea.com`, and the `*_URL`'s own scheme for a self-hosted instance. An `http://` clone of an HTTPS forge gets no token. A hostname that merely contains `github`, `gitlab`, `gitea` or `forgejo` gets no token; set the matching `*_URL` for a self-hosted instance.

@@ -511,6 +511,9 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
+  A `continue` starts the item's next round at once, a detached `archon-build-queue
+  --input number=<n>` on the run config this run started with; if that launch fails,
+  the item waits for the next queue run.
   A round for an item with an open pull request in its repository passes it to
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
   takes, pushing onto its head so the same pull request updates. A round that failed

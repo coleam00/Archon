@@ -32,7 +32,7 @@ const forges = [
   {
     name: 'GitHub',
     host: 'github.com',
-    route: () => routeGitHub('acme', 'api'),
+    route: () => routeGitHub('https://github.com', 'acme', 'api'),
   },
   {
     name: 'GitLab',
@@ -230,6 +230,7 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
     appId: '1',
     privateKey: 'unused',
     slug: 'archon',
+    apiBaseUrl: 'https://api.github.com',
   });
   const token = spyOn(provider, 'getInstallationToken').mockRejectedValue(
     new Error('token unavailable')
@@ -251,9 +252,17 @@ test('GitHub retries preparation after token failure leaves an empty managed sou
     findCodebase.mockResolvedValue(existing);
     // Registration followed by readiness, as the webhook does
     for (let attempt = 0; attempt < 2; attempt++) {
-      const routed = await routeGitHub('acme', 'api');
+      const routed = await routeGitHub('https://github.com', 'acme', 'api');
       await expect(
-        prepareGitHub({ kind: 'app', provider }, 'acme', 'api', 'main', routed.codebase, false)
+        prepareGitHub(
+          'https://github.com',
+          { kind: 'app', provider },
+          'acme',
+          'api',
+          'main',
+          routed.codebase,
+          false
+        )
       ).rejects.toThrow('token unavailable');
     }
     expect(token).toHaveBeenCalledTimes(2);
@@ -268,7 +277,15 @@ const readiness = [
   {
     name: 'GitHub',
     prepare: (codebase: ProjectCheckout, shouldSync = false) =>
-      prepareGitHub({ kind: 'pat' }, 'acme', 'api', 'main', codebase, shouldSync),
+      prepareGitHub(
+        'https://github.com',
+        { kind: 'pat' },
+        'acme',
+        'api',
+        'main',
+        codebase,
+        shouldSync
+      ),
   },
   {
     name: 'GitLab',

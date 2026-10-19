@@ -22,7 +22,8 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  *
  * `--plan <shard>` walks only the plan steps of that shard. CI runs each shard on its own
  * runner so they finish side by side, except `pack`: CI runs it only on a manual dispatch
- * that asks for it, and `bun run test --plan pack` runs it locally.
+ * that asks for it, and `bun run test --plan pack` runs it locally. A workspace shard too slow
+ * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
  */
 
 /**
@@ -45,6 +46,7 @@ export type RootTestStep =
  */
 export const ROOT_TEST_PLAN = [
   { kind: 'workspace', shard: 'cli', package: '@archon/cli' },
+  { kind: 'workspace', shard: 'core', package: '@archon/core' },
   { kind: 'workspaces', shard: 'packages' },
   { kind: 'root', shard: 'scripts', selectors: ['./scripts/'] },
   { kind: 'root', shard: 'pack', selectors: ['./.archon/scripts/'] },

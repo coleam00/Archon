@@ -328,6 +328,10 @@ export function isTerminalRunStatus(status: WorkflowRunStatus): status is RunTer
   return TERMINAL_STATUS_TUPLE.some(terminal => terminal === status);
 }
 
+/** Cancellation leaves these statuses untouched; failed runs remain cancellable because they can resume. */
+export const CANCELLATION_NOOP_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] =
+  workflowRunStatusSchema.extract(['completed', 'cancelled']).options;
+
 /** Statuses that allow a user to resume execution. */
 export const RESUMABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'failed',
@@ -678,7 +682,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
  * now share a symbol instead of agreeing by luck.
  *
  * `identity_unresolved` — TRUE on a fresh run whose `output_root` was deliberately NOT
- *                       written because `resolveProjectPaths` returned the `_cwd/<basename>`
+ *                       written because `resolveProjectPaths` returned the `@cwd/<basename>-<digest>`
  *                       fallback AFTER `getCodebase` threw on both retry attempts (#2304).
  *                       Distinguishes "this run is on the cwd fallback because the codebase
  *                       had no owner/repo or `_local` identity" (legitimate, the WARN arm

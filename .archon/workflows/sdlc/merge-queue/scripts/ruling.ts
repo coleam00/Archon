@@ -8,7 +8,8 @@
  * sweep wrote; `park` stops working it until the build queue readies it again. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
- * them as the contract. On a red default branch the only answer is `hold`: the queue
+ * them as the contract; an enrolled own pull request has no issue body, so its ruling
+ * stays on its work item. On a red default branch the only answer is `hold`: the queue
  * merges nothing while the branch is red, which every sweep reads from the forge, so
  * nothing is written. A `merge` then starts a sweep at once and a `return` the item's
  * next build-queue round, on the run config this run started with; if that launch fails,
@@ -48,6 +49,20 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
   }
 }
 
+/**
+ * Write the ruling into the issue body as a dated section; returns its heading, or ''.
+ * An enrolled own pull request is its own work item and has no issue body to write, so
+ * its ruling stays on the work item's decision entry, which keeps the answer's text.
+ */
+function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, at: string): string {
+  // Issues and pull requests share one numbering, so an item numbered as its pull request is that pull request.
+  const ownPr = asked.item.number === asked.pr.number && asked.item.repo.path === asked.pr.repo.path && asked.item.repo.host === asked.pr.repo.host;
+  if (ruling === '' || ownPr) return '';
+  const heading = rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
+  appendSection(asked.item, heading, ruling);
+  return heading;
+}
+
 function main(): void {
   const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
@@ -70,8 +85,7 @@ function main(): void {
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
-  const heading = ruling === '' ? '' : rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
-  if (ruling !== '') appendSection(asked.item, heading, ruling);
+  const heading = writeRuling(asked, ruling, at);
 
   const entry: MergeDecisionEntry = {
     at,

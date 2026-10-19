@@ -1,4 +1,4 @@
-import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
+import { mergeTokenUsage, tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { getLog } from './log';
 
 /**
@@ -83,14 +83,21 @@ export interface RunUsageFigures {
 // Float sums taken in a different order differ in the last bits.
 const COST_TOLERANCE_USD = 1e-9;
 
+const RECONCILED_TOKEN_AXES = tokenUsageSchema
+  .omit({
+    cachePartial: true, // Aggregation floor marker, not a counter.
+    total: true, // Provider-defined total; not aggregated across nodes.
+    cost: true, // Provider-defined cost; run cost is reconciled separately.
+  })
+  .keyof().options;
+
 /**
  * The axes on which two figures for the same run disagree; empty when they agree. The
  * usage reconciliation tests and the debug-level check in `persistRunUsage` both judge
  * with it, so a blind comparison would blind both.
  *
  * Absent cost equals `0`, because the fold reports `0` when no row carried cost. Tokens
- * compare per axis; `cachePartial`, `total` and `cost` inside them are a floor marker and
- * provider-defined fields, not reconciled figures.
+ * compare per reconciled schema axis.
  */
 export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost' | 'tokens')[] {
   const mismatched: ('cost' | 'tokens')[] = [];
@@ -102,7 +109,5 @@ export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost
 function tokensAgree(a: RunUsageFigures, b: RunUsageFigures): boolean {
   const aUnknown = a.tokensUnknown === true;
   if (aUnknown || b.tokensUnknown === true) return aUnknown === (b.tokensUnknown === true);
-  return (['input', 'output', 'cacheRead', 'cacheWrite'] as const).every(
-    axis => a.tokens?.[axis] === b.tokens?.[axis]
-  );
+  return RECONCILED_TOKEN_AXES.every(axis => a.tokens?.[axis] === b.tokens?.[axis]);
 }

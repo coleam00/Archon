@@ -328,6 +328,25 @@ describe('GitHubAdapter', () => {
     expect(mockLogger.info).toHaveBeenCalledWith({ authMode: 'pat' }, 'github.adapter_initialized');
   });
 
+  test('the PAT client calls api.github.com, or the GITHUB_URL Enterprise API root', () => {
+    // @ts-expect-error - reading the private Octokit client
+    expect(adapter.octokit.request.endpoint.DEFAULTS.baseUrl).toBe('https://api.github.com');
+    process.env.GITHUB_URL = 'https://ghe.example';
+    try {
+      const enterprise = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager
+      );
+      // @ts-expect-error - reading the private Octokit client
+      expect(enterprise.octokit.request.endpoint.DEFAULTS.baseUrl).toBe(
+        'https://ghe.example/api/v3'
+      );
+    } finally {
+      delete process.env.GITHUB_URL;
+    }
+  });
+
   describe('streaming mode', () => {
     test('should always return batch mode', () => {
       expect(adapter.getStreamingMode()).toBe('batch');
@@ -577,6 +596,29 @@ describe('GitHubAdapter', () => {
       expect(handleMessageSpy).not.toHaveBeenCalled();
     });
 
+    test('signals a wait keyed to the GITHUB_URL Enterprise host, and not a github.com one', async () => {
+      process.env.GITHUB_URL = 'https://ghe.example';
+      try {
+        adapter = new GitHubAdapter(
+          { kind: 'pat', token: 'fake-token-for-testing' },
+          'check-secret',
+          mockLockManager
+        );
+      } finally {
+        delete process.env.GITHUB_URL;
+      }
+      const enterpriseRepo = { host: 'ghe.example', path: 'Example/Repo' };
+      listCandidatesSpy.mockImplementation(async () => [
+        candidate('run-ghe', { ...pullRequestRecord, repo: enterpriseRepo }),
+        candidate('run-dotcom'),
+      ]);
+
+      await deliver(payload());
+
+      expect(signalWaitSpy).toHaveBeenCalledTimes(1);
+      expect(signalWaitSpy).toHaveBeenCalledWith('run-ghe', wait, { conclusion: 'success' });
+    });
+
     test('matches only the qualified repository and PR number, never branch or URL', async () => {
       listCandidatesSpy.mockImplementation(async () => [
         candidate('wrong-repo', {
@@ -811,6 +853,7 @@ describe('GitHubAdapter', () => {
           'mock-signature'
         );
         expect(prepare).toHaveBeenCalledWith(
+          'https://github.com',
           { kind: 'pat', token: 'fake-token-for-testing' },
           'testuser',
           'testrepo',

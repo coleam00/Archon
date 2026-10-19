@@ -110,6 +110,7 @@ function callEnsureRepoReady(
   shouldSync: boolean
 ): Promise<void> {
   return ensureRepoReady(
+    'https://github.com',
     { kind: 'pat' },
     owner,
     repo,
@@ -143,6 +144,20 @@ describe('ensureRepoReady', () => {
     expect(url).toBe('https://github.com/owner/repo.git');
     expect(String(path)).toBe('/nonexistent/path');
     expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
+  });
+
+  test('clones from the configured GitHub web URL', async () => {
+    await ensureRepoReady(
+      'https://ghe.example',
+      { kind: 'pat' },
+      'owner',
+      'repo',
+      'main',
+      { name: 'owner/repo', default_cwd: '/nonexistent/ghe' },
+      false
+    );
+
+    expect(mockCloneRepository.mock.calls[0]?.[0]).toBe('https://ghe.example/owner/repo.git');
   });
 
   test('readiness for a different repository completes while the first clone is held', async () => {
@@ -404,6 +419,7 @@ describe('App-mode readiness', () => {
       process.env.GITHUB_TOKEN = 'ghp_unused_env_token';
       const { auth, getToken } = appAuth();
       await ensureRepoReady(
+        'https://github.com',
         auth,
         'owner',
         'repo',
@@ -468,6 +484,7 @@ describe('App-mode readiness', () => {
         });
         const ready = (auth: ReadinessAuth) => {
           return ensureRepoReady(
+            'https://github.com',
             auth,
             'owner',
             'repo',
@@ -508,6 +525,7 @@ describe('App-mode readiness', () => {
       throw new AppNotInstalledError(owner, repo, 'archon-test');
     });
     const promise = ensureRepoReady(
+      'https://github.com',
       auth,
       'owner',
       'repo',
@@ -521,6 +539,7 @@ describe('App-mode readiness', () => {
   test('credential helper install is attempted after successful App-mode clone', async () => {
     const clonePath = unclonedPath();
     await ensureRepoReady(
+      'https://github.com',
       appAuth().auth,
       'owner',
       'repo',
@@ -553,6 +572,7 @@ describe('App-mode readiness', () => {
       }
       const ensureReady = () => {
         return ensureRepoReady(
+          'https://github.com',
           auth,
           'owner',
           'repo',
@@ -584,6 +604,7 @@ describe('App-mode readiness', () => {
       error: new Error('bundled credential helper unavailable'),
     }));
     const setup = ensureRepoReady(
+      'https://github.com',
       appAuth().auth,
       'owner',
       'repo',
@@ -599,6 +620,7 @@ describe('App-mode readiness', () => {
   test('credential helper install is NOT attempted in PAT mode', async () => {
     try {
       await ensureRepoReady(
+        'https://github.com',
         { kind: 'pat' },
         'owner',
         'repo',

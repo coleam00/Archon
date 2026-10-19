@@ -79,14 +79,17 @@ function owningCandidate(
 }
 
 /** Signal each workflow wait that owns one of the completed check run's pull requests. */
-export async function signalCheckRunWaits(event: CheckRunCompletedEvent): Promise<void> {
+export async function signalCheckRunWaits(
+  event: CheckRunCompletedEvent,
+  host: string
+): Promise<void> {
   const completedAt = Date.parse(event.check_run.completed_at);
   const candidates = await listWorkflowEventSignalCandidates('checks.complete', new Date());
   const runSignals = new Map<string, WorkflowEventSignalCandidate>();
   const pullRequestNumbers = [...new Set(event.check_run.pull_requests.map(pr => pr.number))];
 
   for (const number of pullRequestNumbers) {
-    const pullRequest = { host: 'github.com', path: event.repository.full_name, number };
+    const pullRequest = { host, path: event.repository.full_name, number };
     const match = owningCandidate(candidates, pullRequest, completedAt);
     if (match) runSignals.set(match.runId, match);
   }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { resolveBashPath } from './exec';
+import { execFileAsync, resolveBashPath } from './exec';
 
 describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () => {
   const originalEnv = process.env.ARCHON_BASH_PATH;
@@ -47,5 +47,52 @@ describe('resolveBashPath -- platform-aware bash binary resolution (#1326)', () 
       expect(msg).toContain('/definitely/does/not/exist/bash');
       expect(msg).toContain('LOCALAPPDATA');
     }
+  });
+});
+
+describe('execFileAsync stdin delivery', () => {
+  const read = 'const b = require("node:fs").readFileSync(0); process.stdout.write(b)';
+
+  it('delivers exact UTF-8 and closes even empty input', async () => {
+    for (const input of ["€\nquote' \\ $()`\n\n", '']) {
+      expect(await execFileAsync(process.execPath, ['-e', read], { input })).toEqual({
+        stdout: input,
+        stderr: '',
+      });
+    }
+  });
+
+  it('leaves stdin open when input is absent', async () => {
+    await expect(
+      execFileAsync(process.execPath, ['-e', read], { timeout: 200 })
+    ).rejects.toMatchObject({ killed: true, code: null });
+  });
+
+  it('preserves process errors when the child exits before consuming input', async () => {
+    const input = '€'.repeat(1_000_000);
+    await expect(
+      execFileAsync(process.execPath, ['-e', 'process.stderr.write("failed"); process.exit(7)'], {
+        input,
+      })
+    ).rejects.toMatchObject({ code: 7, stderr: 'failed' });
+    await expect(execFileAsync('/nonexistent/archon-command', [], { input })).rejects.toMatchObject(
+      { code: 'ENOENT' }
+    );
+    await expect(
+      execFileAsync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        input,
+        timeout: 200,
+      })
+    ).rejects.toMatchObject({ killed: true, code: null });
+  });
+
+  it('reports a delivery error even if the child exits successfully', async () => {
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['-e', 'require("node:fs").closeSync(0); setTimeout(() => process.exit(0), 100)'],
+        { input: 'x'.repeat(8_000_000) }
+      )
+    ).rejects.toMatchObject({ code: expect.any(String), stdout: '', stderr: '' });
   });
 });

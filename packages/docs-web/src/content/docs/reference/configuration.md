@@ -589,6 +589,7 @@ These variables take effect only when the `chat-slack` plugin is installed. See 
 | --- | --- | --- |
 | `GITHUB_TOKEN` | Required with `WEBHOOK_SECRET` to activate the GitHub adapter in PAT mode. Used for adapter API calls, cloning and forge credentials when `GH_TOKEN` is unset or empty. | -- |
 | `GH_TOKEN` | Preferred token for adapter API calls in PAT mode, cloning, forge credentials and the GitHub CLI. Takes precedence over `GITHUB_TOKEN`; does not activate the adapter by itself. | -- |
+| `GITHUB_URL` | Base URL of a GitHub Enterprise Server (e.g. `https://github.example.com`). The adapter and the GitHub App call `<GITHUB_URL>/api/v3`, and HTTPS clones with this exact scheme, host and port use `GH_TOKEN`/`GITHUB_TOKEN` (or the App's installation token in App mode). A value that is not a bare `http(s)://host[:port]` URL fails startup. See [GitHub Enterprise Server](/adapters/github/#github-enterprise-server). | github.com |
 | `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification | -- |
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
@@ -925,7 +926,9 @@ Returns: `{"status":"ok","database":"connected"}`
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
+
+Per-conversation acquisition and queue times are on the authenticated `GET /api/dashboard/conversations`.
 
 **Use cases:**
 - Docker healthcheck configuration

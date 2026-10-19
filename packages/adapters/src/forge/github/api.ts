@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import type { ForgeError } from '@archon/forge/operations';
 import type { RepoRef } from '@archon/forge';
+import { parseGitHubHost, type GitHubHost } from '@archon/git';
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -31,36 +32,19 @@ export function repositoryPath(path: string): { owner: string; repo: string } | 
   return owner && repo ? { owner, repo } : null;
 }
 
-export function apiRoot(host: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(`https://${host}`);
-  } catch (cause) {
-    throw new GitHubError(
-      { kind: 'invalid_request', message: `Invalid GitHub host: ${host}` },
-      true,
-      { cause }
-    );
-  }
-  if (
-    parsed.username ||
-    parsed.password ||
-    parsed.pathname !== '/' ||
-    parsed.search ||
-    parsed.hash
-  ) {
+function githubHost(host: string): GitHubHost {
+  const github = parseGitHubHost(`https://${host}`);
+  if (!github) {
     throw new GitHubError(
       { kind: 'invalid_request', message: `Invalid GitHub host: ${host}` },
       true
     );
   }
-  return parsed.hostname.toLowerCase() === 'github.com'
-    ? 'https://api.github.com'
-    : `https://${parsed.host}/api/v3`;
+  return github;
 }
 
-/** The API root and encoded `owner/repo` segment for one qualified repository. */
-export function location(repo: RepoRef): { root: string; path: string } {
+/** The REST and GraphQL roots and encoded `owner/repo` segment for one qualified repository. */
+export function location(repo: RepoRef): { root: string; graphql: string; path: string } {
   const parsed = repositoryPath(repo.path);
   if (!parsed) {
     throw new GitHubError(
@@ -68,17 +52,12 @@ export function location(repo: RepoRef): { root: string; path: string } {
       true
     );
   }
+  const github = githubHost(repo.host);
   return {
-    root: apiRoot(repo.host),
+    root: github.apiBaseUrl,
+    graphql: github.graphqlUrl,
     path: `${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`,
   };
-}
-
-/** GraphQL shares the host but not the REST path; only `markPullRequestReadyForReview` needs it. */
-export function graphqlEndpoint(root: string): string {
-  return root === 'https://api.github.com'
-    ? `${root}/graphql`
-    : `${root.replace(/\/api\/v3$/, '')}/api/graphql`;
 }
 
 /**

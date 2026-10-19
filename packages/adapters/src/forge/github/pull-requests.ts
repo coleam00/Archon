@@ -15,7 +15,6 @@ import {
   GitHubError,
   githubPages,
   githubRequest,
-  graphqlEndpoint,
   location,
   repositoryPath,
   type Fetch,
@@ -243,10 +242,10 @@ export async function setDraftState(
   if (beforeRecord.is_draft === draft)
     return applied(request, { changed: false, pr: beforeRecord });
 
-  const { root } = location(request.ref.repo);
+  const { graphql } = location(request.ref.repo);
   submit('submitted');
   // GitHub exposes these draft transitions through GraphQL, not REST.
-  const raw = await githubRequest(fetchImpl, token, graphqlEndpoint(root), {
+  const raw = await githubRequest(fetchImpl, token, graphql, {
     method: 'POST',
     body: JSON.stringify({
       query: `mutation($id:ID!){${mutation}(input:{pullRequestId:$id}){pullRequest{id}}}`,

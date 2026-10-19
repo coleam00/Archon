@@ -80,7 +80,7 @@ export function NodeDivider({
   // spend other nodes already show, so it is labelled rather than read as this
   // node's own.
   const cost =
-    costUsd !== null && costUsd !== undefined && costUsd > 0
+    typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
       ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
       : '';
   const turns =

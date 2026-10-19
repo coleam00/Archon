@@ -92,7 +92,7 @@ test('sandbox proof rejects dictionary value drift and null on every object fiel
   ];
   const diagnostics = proofDiagnostics(
     `import type { SandboxSettings as ClaudeSandboxSettings } from '@anthropic-ai/claude-agent-sdk';
-import type { SandboxSettings } from '../../workflows/src/schemas/dag-node';
+import type { SandboxSettings } from '../../workflows/src/schemas/provider-options';
 ` + probes.map((probe, i) => `export type Broken${i} = ${probe};`).join('\n')
   );
   expect(diagnostics).toHaveLength(probes.length);
@@ -101,7 +101,7 @@ import type { SandboxSettings } from '../../workflows/src/schemas/dag-node';
 });
 
 test('generated comparison rejects drift in the actual ledgered sandbox schema', () => {
-  const file = join(ROOT, 'packages/workflows/src/schemas/dag-node.ts');
+  const file = join(ROOT, 'packages/workflows/src/schemas/provider-options.ts');
   const original = readFileSync(file, 'utf8');
   const changed = original.replace(
     'ignoreViolations: z.record(z.string(), z.array(z.string())).optional()',

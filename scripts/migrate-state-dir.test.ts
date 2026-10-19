@@ -4,17 +4,24 @@
  * Each case owns its paths so a timed-out assertion cannot read another case's tree.
  */
 import { describe, test, expect, beforeAll, afterAll, spyOn } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, symlink } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { getLogLevel, setLogLevel } from '@archon/paths';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { main } from './migrate-state-dir';
 import { closeDatabase } from '@archon/core/db/connection';
+import { createHash } from 'node:crypto';
 import { format } from 'node:util';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { basename, join, resolve } from 'path';
 
 const SCRIPT = resolve(import.meta.dir, 'migrate-state-dir.ts');
+
+/** `$STATE_DIR` of an unregistered directory: `@cwd/<basename>-<sha256 of its path>`. */
+function unregisteredStateRoot(archonHome: string, dir: string): string {
+  const digest = createHash('sha256').update(dir).digest('hex');
+  return join(archonHome, 'workspaces', '@cwd', `${basename(dir)}-${digest}`, 'state');
+}
 
 /** Per-test paths. Immutable, and never shared between tests. */
 interface Sandbox {
@@ -35,7 +42,8 @@ interface Sandbox {
  * under Bun (#2306). This docblock used to claim that option was the fix.
  */
 async function withSandbox(body: (ctx: Sandbox) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'archon-migrate-'));
+  // Canonical, like the script's cwd: macOS tmpdir() is behind a /var symlink.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-migrate-')));
   const archonHome = join(root, 'home');
   const repo = join(root, 'repo');
   const ctx: Sandbox = {
@@ -43,8 +51,7 @@ async function withSandbox(body: (ctx: Sandbox) => Promise<void>): Promise<void>
     archonHome,
     repo,
     legacyDir: join(repo, '.archon', 'state'),
-    // basename('<root>/repo') === 'repo' → the _cwd pseudo-project segment.
-    stateRoot: join(archonHome, 'workspaces', '_cwd', 'repo', 'state'),
+    stateRoot: unregisteredStateRoot(archonHome, repo),
   };
   await mkdir(archonHome, { recursive: true });
   await mkdir(repo, { recursive: true });
@@ -217,6 +224,18 @@ describe('migrate-state-dir', () => {
       expect(await readFile(join(ctx.stateRoot, 'triage-state.json'), 'utf-8')).toBe('{"a":1}');
     }));
 
+  test('a symlinked --cwd migrates to the $STATE_DIR runs use for the real directory', async () =>
+    withSandbox(async ctx => {
+      await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
+      const link = join(ctx.root, 'repo-link');
+      await symlink(ctx.repo, link, 'junction');
+
+      const result = await runRaw(ctx, '--cwd', link, '--apply');
+
+      expect(result.exitCode).toBe(0);
+      expect(await listOrEmpty(ctx.stateRoot)).toEqual(['triage-state.json']);
+    }));
+
   test('dry run is the default and mutates nothing', async () =>
     withSandbox(async ctx => {
       await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
@@ -308,7 +327,7 @@ describe('migrate-state-dir', () => {
         // The skip is sound only for SQLite: a remote registry's contents cannot
         // be deduced from the absence of a local file. Without the dialect clause
         // the whole suite still passes while every DATABASE_URL install silently
-        // takes the _cwd fallback — a wrong destination for the moved files.
+        // takes the @cwd fallback — a wrong destination for the moved files.
         //
         // The DSN points at a UNIX SOCKET path inside this test's own sandbox, so
         // the lookup fails with ENOENT at the filesystem layer — no TCP, no
@@ -451,7 +470,7 @@ describe('migrate-state-dir', () => {
         archonHome,
         repo,
         legacyDir: join(repo, '.archon', 'state'),
-        stateRoot: join(archonHome, 'workspaces', '_cwd', name, 'state'),
+        stateRoot: unregisteredStateRoot(archonHome, repo),
         subdir: join(repo, 'packages', 'foo'),
         projectStateRoot: join(archonHome, 'workspaces', 'acme', name, 'state'),
       };
@@ -459,7 +478,7 @@ describe('migrate-state-dir', () => {
 
     // The two cases share a read-only registry, with separate source and destination trees.
     beforeAll(async () => {
-      registryRoot = await mkdtemp(join(tmpdir(), 'archon-migrate-c5-'));
+      registryRoot = await realpath(await mkdtemp(join(tmpdir(), 'archon-migrate-c5-')));
       await mkdir(join(registryRoot, 'home'), { recursive: true });
       for (const name of CASE_NAMES) {
         await mkdir(sandboxFor(name).subdir, { recursive: true });

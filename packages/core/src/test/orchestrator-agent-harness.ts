@@ -502,21 +502,25 @@ export const mockFailPreparedRun = mock<
   import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
 >(async () => ({ failed: true }));
 
+export const mockCreateWorkflowRun = mock<
+  import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
+>(async data =>
+  makeRun({
+    id: data.id,
+    workflow_name: data.workflow_name,
+    status: 'pending',
+    metadata: data.metadata ?? {},
+    adopted_from_run_id: data.adopted_from_run_id ?? null,
+    working_path: null,
+  })
+);
+
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
-      createWorkflowRun: async (
-        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
-      ) =>
-        makeRun({
-          id: data.id,
-          workflow_name: data.workflow_name,
-          status: 'pending',
-          metadata: data.metadata ?? {},
-          working_path: null,
-        }),
+      createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,
     },
@@ -830,18 +834,8 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
-// `existsSync` is one shared mock for the whole file, so whatever predicate the
-// last test left behind is what the next one inherits. Resetting it inside a
-// single describe is not enough: everything below that block would run against a
-// leaked predicate, including the `/setproject` and `/update-project` suites,
-// which drive the existsSync call sites in handleSetProject and
-// handleUpdateProject. Today a leak is survivable only because the predicates
-// here reject one literal path — that is luck, not a guarantee, and it stops
-// being true the moment a test rejects something broader. Reset before every
-// test so no describe can poison another.
-//
-// Deliberately no count here: any number rots on the next test added, and the
-// mechanism is the argument.
+// Reset the shared filesystem predicate across all suites, including project
+// commands, so a dispatch test cannot leak its filesystem assumptions.
 beforeEach(() => {
   mockExistsSync.mockImplementation(() => true);
 });
@@ -1008,6 +1002,7 @@ export function resetDispatchMocks(): void {
   mockGetWorkflowRunDb.mockReset();
   mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
   capturedSourceOwnerCalls.length = 0;
+  mockCreateWorkflowRun.mockClear();
   mockFailPreparedRun.mockReset();
   mockFailPreparedRun.mockResolvedValue({ failed: true });
   mockExecuteWorkflow.mockClear();

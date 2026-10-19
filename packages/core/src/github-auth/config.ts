@@ -12,6 +12,7 @@
  * TOKEN_ENCRYPTION_KEY see every per-user code path as a no-op.
  */
 import { createPrivateKey } from 'node:crypto';
+import { resolveGitHubHost } from '@archon/git';
 import { loadAppPrivateKey } from './private-key';
 import { AppPrivateKeyError } from './errors';
 import type { GitHubAppConfig } from './types';
@@ -70,7 +71,8 @@ export function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): GitHu
     );
   }
   assertEncryptionKeyAtBoot(env);
-  return { appId, privateKey, slug, defaultInstallationId };
+  const { apiBaseUrl } = resolveGitHubHost(env);
+  return { appId, privateKey, slug, defaultInstallationId, apiBaseUrl };
 }
 
 /**

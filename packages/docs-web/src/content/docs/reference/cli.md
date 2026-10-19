@@ -861,8 +861,10 @@ The answer a pause is waiting for does not have to come from a person. An
 orchestrating agent can supply it with `workflow respond` or `workflow answer` just as a
 reviewer can; the engine only reports that one is owed, and who answers is the waiting
 host's business. Pass the reported `attention.occurrence` back with `--occurrence` on
-`approve`, `reject`, `respond` or `answer`. The answer is then refused, naming the current
-occurrence, if the run has moved to a different pause in the meantime.
+`approve`, `reject`, `respond` or `answer`. The answer is then refused if the run has moved
+to a different pause in the meantime. If the diagnostic read succeeds and the run is
+awaiting another answer, the refusal names the current occurrence. Otherwise, fetch the
+current item again before retrying.
 For an attention wait, the output carries `attention.kind: "attention"`, the authored
 message, the paused node id, the `form` and the `options` an answer may choose from.
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
@@ -988,7 +990,8 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 - **Scope.** The default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
-  project key such as `_cwd/scratch`; `--all` covers the install. A run is in scope when
+  project key such as `@cwd/scratch-<digest>`; copy the exact key from
+  `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when
   its codebase id matches, when both sides have one, and otherwise when its project key
   matches, so a run paused before its codebase was renamed is still listed under the new
   name.
@@ -1040,9 +1043,11 @@ archon workflow attention label <run-id> --occurrence <id> --set class=ci-other 
 archon workflow attention label <run-id> --occurrence <id> --unset urgency --json
 ```
 
-A set key replaces the same key; every other label stays. The write is refused, naming
-the current occurrence, when the run has moved to another pause, and refused for a gate or
-an answered wait: only `wait: attention` pauses carry labels. Each write bumps the item's
+A set key replaces the same key; every other label stays. The write is refused when the
+run has moved to another pause. If the diagnostic read succeeds and the run is awaiting
+another answer, the refusal names the current occurrence. Otherwise, fetch the current
+item again before retrying. The write is also refused for a gate or an answered wait:
+only `wait: attention` pauses carry labels. Each write bumps the item's
 `revision` and commits an `attention_labeled` event, in the same transaction, carrying the
 occurrence, the keys set and unset, the surface as `via`, and the new revision. Who may
 write is the same as who may answer.
@@ -1157,8 +1162,9 @@ any other run's. Only a `running` run can be
 cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
-operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
-descendant and can report the same cascade failures or blocked parent described below.
+operation as `abandon`. Cancelling a parent therefore attempts descendant cancellation within the
+[500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count)
+and can report the same cascade failures or blocked parent described below.
 
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and
@@ -1225,7 +1231,7 @@ Successful `--json` responses include an optional `cleanupWarnings` array of war
 strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
-**Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+**Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
 ### `workflow respond`
 
