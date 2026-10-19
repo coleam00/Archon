@@ -19,7 +19,10 @@ export type LoopGroupBodyResult = NodeExecutionResult & {
   suspensionPoint?: 'approval' | 'wait';
 };
 
-export type LoopGroupUsage = Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
+export interface LoopGroupProgress {
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
+  lastStartedIteration: number;
+}
 
 /**
  * Where a loop group starts. Three resume shapes are recognized:
@@ -71,8 +74,8 @@ export interface LoopGroupRun {
   directBodyIds: Set<string>;
   msgContext: { workflowId: string; nodeName: string };
   execution: NodeExecutionRecord;
-  /** Usage summed across iterations; the caller reads it when the body throws. */
-  usage: LoopGroupUsage;
+  /** Progress retained by the caller when the body throws. */
+  progress: LoopGroupProgress;
   workflowProvider: string | undefined;
   workflowModel: string | undefined;
   workflowTier: TierName | undefined;

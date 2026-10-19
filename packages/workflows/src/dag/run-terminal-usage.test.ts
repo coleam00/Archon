@@ -309,7 +309,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
           })
         )
       );
-      if (test.kind === 'loop') expect(iterations).toBe(1);
+      expect(iterations).toBe(1);
     } finally {
       if (savedBashPath === undefined) delete process.env.ARCHON_BASH_PATH;
       else process.env.ARCHON_BASH_PATH = savedBashPath;
