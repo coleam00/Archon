@@ -53,8 +53,6 @@ export async function runLoopIteration(
   const { ctx, node } = run;
   const loop = node.loop;
   const iterationStart = Date.now();
-  // Fresh per iteration: this iteration's prompt and until_bash observe the
-  // artifacts published before it.
   const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
 
   const stopped = await stopBeforeIteration(run, state, i);
@@ -71,7 +69,6 @@ export async function runLoopIteration(
     reply,
     structuredText: accepted.structuredText,
     prevIterationOutput: accepted.prevIterationOutput,
-    typedArtifactsFile,
   });
   if (!Array.isArray(completionChecks)) return completionChecks.result;
 
@@ -234,7 +231,6 @@ async function checkCompletion(
     reply: IterationReply;
     structuredText: string | undefined;
     prevIterationOutput: string;
-    typedArtifactsFile: string;
   }
 ): Promise<LoopCompletionCheck[] | IterationFailed> {
   const loop = run.node.loop;
@@ -309,14 +305,14 @@ async function runUntilBash(
   state: LoopState,
   i: number,
   untilBash: string,
-  iteration: { prevIterationOutput: string; typedArtifactsFile: string }
+  iteration: { prevIterationOutput: string }
 ): Promise<boolean | IterationFailed> {
   const { ctx, node } = run;
   const { workflowRun, artifactsDir, stateDir, logDir, baseBranch, config, execContext } = ctx;
-  const { typedArtifactsFile } = iteration;
   // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
   // to the caller instead of being swallowed by the per-iteration catch.
   const loopBashPath = resolveBashPath();
+  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
   try {
     const { prompt: substitutedBash } = substituteWorkflowVariables(
       untilBash,

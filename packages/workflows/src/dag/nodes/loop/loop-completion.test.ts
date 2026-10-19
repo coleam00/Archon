@@ -20,6 +20,8 @@ import {
   makeWorkflowRun,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { writeNodeArtifact } from '../../../artifacts-index';
+import { nodeArtifactsListingSchema } from '../../../schemas/node-artifact';
 import type { DagNode } from '../../../schemas';
 import { dagNodeSchema, workflowDefinitionSchema } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -108,6 +110,62 @@ describe('loop node completion channels', () => {
 
     expect(calls).toBe(2);
     expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
+  });
+
+  it('until_bash observes artifacts published during the iteration while the agent listing stays frozen', async () => {
+    const artifactsDir = join(testDir, 'typed-artifacts');
+    const workflowRun = makeWorkflowRun('loop-typed-until');
+    let agentListingPath = '';
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      agentListingPath = prompt;
+      const listing = nodeArtifactsListingSchema.parse(
+        JSON.parse(await readFile(agentListingPath, 'utf8'))
+      );
+      expect(listing.artifactsByType.verdict).toBeUndefined();
+      await writeNodeArtifact(
+        artifactsDir,
+        {
+          nodeId: 'judge',
+          outputType: 'verdict',
+          runId: workflowRun.id,
+          producedAt: new Date().toISOString(),
+        },
+        'approved'
+      );
+      yield { type: 'agent_message_chunk', text: 'Published verdict.' };
+      yield { type: 'result', sessionId: 'typed-until-session' };
+    });
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        artifactsDir,
+        workflowRun,
+        workflow: {
+          name: 'loop-typed-until',
+          nodes: [
+            {
+              id: 'judge',
+              kind: 'loop',
+              loop: {
+                prompt: '$TYPED_ARTIFACTS_FILE',
+                max_iterations: 1,
+                fresh_context: false,
+                until_bash: 'grep -q \'"verdict"\' "${TYPED_ARTIFACTS_FILE}"',
+              },
+            },
+          ],
+        },
+      })
+    );
+
+    expect(result).toBe('Published verdict.');
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const agentListing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(agentListingPath, 'utf8'))
+    );
+    expect(agentListing.artifactsByType.verdict).toBeUndefined();
   });
 
   it('#2803: loop until_bash fails when an upstream whole-output producer was skipped', async () => {
