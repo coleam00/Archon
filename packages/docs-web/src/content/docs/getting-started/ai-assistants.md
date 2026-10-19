@@ -387,7 +387,7 @@ nodes:
 
 **One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness that Archon integrates as a maintained provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
-Pi is maintained by the Archon core team alongside Claude and Codex. It is registered as `builtIn: true` and exposes both an in-process factory and a provider plugin entry.
+Pi is maintained by the Archon core team alongside Claude and Codex.
 
 ### Azure models
 
@@ -397,7 +397,7 @@ When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azu
 
 ### Install
 
-Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
+Add Pi with `archon provider add pi`; the quick installers offer it. The provider embeds the Pi SDK, so the Pi CLI is optional. Source installs include it already.
 
 ### Quick setup via wizard
 
@@ -563,112 +563,9 @@ assistants:
         extensionFlags: { plan: false }
 ```
 
-#### Recipe: web search and fetch through your own extension
+#### Add tools such as web search or MCP
 
-Archon does not build web search into the Pi engine — and deliberately so: Pi's extension API already lets you register custom tools, and Archon picks them up automatically because extensions load inside the same Pi session Archon drives. The result is a workflow node that can search the web with **zero Archon-side configuration** beyond the extension posture you already know.
-
-Write the extension once, into your global Pi extensions directory:
-
-```ts
-// ~/.pi/agent/extensions/web-search.ts
-export default function (pi) {
-  pi.registerTool({
-    name: "web_search",
-    description:
-      "Search the web. Returns titles, URLs and snippets for each result.",
-    parameters: {
-      type: "object",
-      properties: { query: { type: "string" } },
-      required: ["query"],
-    },
-    async execute(_callId, { query }) {
-      const res = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`,
-      );
-      const body = JSON.stringify(await res.json());
-      return { content: [{ type: "text", text: body }], details: {} };
-    },
-  });
-
-  pi.registerTool({
-    name: "web_fetch",
-    description: "Fetch a URL and return its body as plain text.",
-    parameters: {
-      type: "object",
-      properties: { url: { type: "string" } },
-      required: ["url"],
-    },
-    async execute(_callId, { url }) {
-      const res = await fetch(url);
-      const text = await res.text();
-      return { content: [{ type: "text", text }], details: {} };
-    },
-  });
-}
-```
-
-That's the whole setup. Extensions are on by default (`enableExtensions` defaults to true), Pi discovers `~/.pi/agent/extensions/*.ts` on every session, and Archon restarts Pi sessions fresh per run — so the tools appear on the next workflow run without touching `.archon/config.yaml` at all. For a production extension you'd use a real search API key via the `env:` surface instead of a keyless endpoint, and install it as an npm package with `pi install npm:<package>`.
-
-Then use it from any workflow node — no Archon config changes:
-
-```yaml
-# .archon/workflows/research.yaml
-name: research
-provider: pi
-nodes:
-  - id: research
-    prompt: "Research $ARGUMENTS using web_search/web_fetch and summarize the findings with citations."
-```
-
-To restrict where the tools appear, scope the posture per node exactly as described in [Scoping extension posture per node](#scoping-extension-posture-per-node): leave `assistants.pi` clean and put `pi: { enableExtensions: true }` only on nodes that should search, or flip it to `false` on nodes that shouldn't.
-
-#### Recipe: MCP servers through an extension bridge
-
-Pi rejects MCP by design — there is no `mcpServers` field to set, and Archon does not add one. The supported route is the same as above: an extension that acts as the MCP **client** itself and re-exposes each MCP server's tools as ordinary Pi tools. The model never knows MCP is involved; Archon sees nothing but regular extension tools.
-
-Sketch of such a bridge:
-
-```ts
-// ~/.pi/agent/extensions/mcp-bridge.ts
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
-export default function (pi) {
-  // Module scope persists for the whole process while session_start fires per
-  // session — the loader is reloaded once per run, so connect must be idempotent
-  // or the second session throws.
-  let connected = false;
-  const client = new Client({ name: "archon-mcp-bridge", version: "1.0.0" });
-
-  pi.on("session_start", async () => {
-    if (!connected) {
-      await client.connect(
-        new StdioClientTransport({
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-everything"],
-        }),
-      );
-      connected = true;
-    }
-    const { tools } = await client.listTools();
-    for (const tool of tools) {
-      pi.registerTool({
-        name: `mcp_${tool.name}`,
-        description: tool.description ?? `MCP tool ${tool.name}`,
-        parameters: tool.inputSchema,
-        execute: async (_callId, args) => {
-          const body = JSON.stringify(await client.callTool({ name: tool.name, arguments: args }));
-          return { content: [{ type: "text", text: body }], details: {} };
-        },
-      });
-    }
-  });
-}
-```
-
-Note that `execute` must return an `AgentToolResult` (`{ content, details }`); a bare string is normalized to an empty tool result and the model never sees any output.
-
-The bridge runs inside the Pi session process, subject to everything above: it loads only when `enableExtensions` is true for that node, its tools are just tools (so you can keep them off nodes with a scoped `pi:` block), and if it needs a UI-bound approval gate you give it `interactive: true`. Community bridges exist too — search the [package ecosystem](https://shittycodingagent.ai/packages) for `mcp` before writing your own.
+Archon builds neither web search nor MCP into Pi. Pi rejects MCP by design, and Archon adds no `mcpServers` field for it. Both come from extensions instead: an extension registers tools with `pi.registerTool`, and because extensions load inside the Pi session Archon drives, a workflow node sees those tools with no Archon configuration. A web search extension wraps a search API; an MCP bridge is an extension that acts as the MCP client and re-exposes each server's tools as Pi tools. A tool's `execute` must return `{ content, details }`; a bare string reaches the model as an empty result. Search the [package ecosystem](https://shittycodingagent.ai/packages) before writing your own, and scope where the tools appear with the [per-node posture](#scoping-extension-posture-per-node) above.
 
 :::warning Repo-controlled `.pi/` directories
 Extension discovery also includes `<cwd>/.pi/extensions/*.ts` and `<cwd>/.pi/settings.json` in the **working directory of the run**. When Archon executes a workflow against a repository you didn't write, anything shipped in that repo's `.pi/` loads automatically — arbitrary JS with the Archon server's OS permissions — unless you disable extensions. Before running workflows on third-party repos either audit their `.pi/` directory first or set `enableExtensions: false` (globally, or per node via the `pi:` block). This trust decision lives with the operator; Archon will not make it for you.
