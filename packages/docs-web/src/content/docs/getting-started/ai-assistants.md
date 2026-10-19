@@ -25,9 +25,9 @@ archon provider add claude codex pi   # any subset
 
 ## Deprecated providers
 
-OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.
+OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working until the release that removes them; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal.
 
-The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin add`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
+If you need one of them after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
 Archon shows the notice only to someone who uses one, at most once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log instead.
 
@@ -301,7 +301,7 @@ See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details 
 ## OpenCode (Community Provider)
 
 :::caution[Deprecated]
-This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+This provider is deprecated and will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
 :::
 
 **SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
@@ -640,7 +640,7 @@ Unsupported YAML fields that are ignored trigger a visible warning from the dag-
 ## GitHub Copilot (Community Provider)
 
 :::caution[Deprecated]
-This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+This provider is deprecated and will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
 :::
 
 **Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
