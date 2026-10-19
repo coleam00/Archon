@@ -1124,7 +1124,7 @@ describe('executeWorkflow', () => {
               { conversationId: 'db-conv-1' },
               { preCreatedRun: run, priorCompletedNodes: new Map() }
             )
-          ).rejects.toBe(sourceError);
+          ).rejects.toMatchObject({ cause: sourceError });
           expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
           expect(store.getWorkflowRun).toHaveBeenCalledTimes(failureSite === 'lookup' ? 1 : 0);
           expect(successor.status).toBe('running');

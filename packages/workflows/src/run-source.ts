@@ -406,7 +406,10 @@ export async function prepareWorkflowSource(
 /** A release failure leaves execution ownership unconfirmed, so terminal recovery is unsafe. */
 export class RunSourceReleaseError extends Error {
   constructor(cause: unknown) {
-    super('Could not confirm workflow source release', { cause });
+    super(
+      `Could not confirm workflow source release: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
+    );
     this.name = 'RunSourceReleaseError';
   }
 }

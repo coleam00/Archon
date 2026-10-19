@@ -810,7 +810,7 @@ export async function executeWorkflow(
   } catch (error) {
     if (error instanceof RunSourceReleaseError) {
       sourceExecutionStopped = true;
-      throw error.cause;
+      throw error;
     }
     if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {

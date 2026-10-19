@@ -42,6 +42,7 @@ import {
 } from '@archon/workflows/terminal-status-write';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
+  RunSourceReleaseError,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   withCapturedSource,
@@ -749,10 +750,10 @@ async function dispatchBackgroundWorkflowOwned(
         } catch (error) {
           const err = toError(error);
           const terminalWriteFailed = error instanceof TerminalStatusWriteError;
-          // A rejected terminal write leaves the row saying `running`. Do not compensate
-          // with a second failWorkflowRun over the write channel that just failed, and do
-          // not tell the user the workflow "failed" — its real outcome is unknown.
-          if (!terminalWriteFailed) {
+          const sourceReleaseFailed = error instanceof RunSourceReleaseError;
+          // Recovery cannot retry a rejected terminal write or terminate a run whose
+          // source release may have handed execution to a successor.
+          if (!terminalWriteFailed && !sourceReleaseFailed) {
             await workflowDeps.store
               .failWorkflowRun(preCreatedRun.id, err.message, { exitReason: 'unhandled_error' })
               .catch(dbError => {
@@ -768,18 +769,23 @@ async function dispatchBackgroundWorkflowOwned(
               workflowName: workflow.name,
               workerConversationId: workerPlatformId,
             },
-            terminalWriteFailed
-              ? 'background_workflow_terminal_write_failed'
-              : 'background_workflow_failed'
+            sourceReleaseFailed
+              ? 'background_workflow_source_release_failed'
+              : terminalWriteFailed
+                ? 'background_workflow_terminal_write_failed'
+                : 'background_workflow_failed'
           );
           await closeRunLiveOwner();
           // Surface error to parent conversation — include workflowResult metadata when
           // we have a pre-created run ID so the chat renders a result card with "View full logs"
           const failureRunId = preCreatedRun.id;
-          const failureMessage = terminalWriteFailed
-            ? `⚠️ Workflow **${workflow.name}** finished, but its final status could not be saved. ` +
-              'It may still show as running — check it before starting another.'
-            : `Workflow **${workflow.name}** failed: ${err.message}`;
+          const failureMessage = sourceReleaseFailed
+            ? `Workflow **${workflow.name}** stopped here, but its source release could not be confirmed. ` +
+              'Another execution may own the run; check its status before starting another.'
+            : terminalWriteFailed
+              ? `⚠️ Workflow **${workflow.name}** finished, but its final status could not be saved. ` +
+                'It may still show as running — check it before starting another.'
+              : `Workflow **${workflow.name}** failed: ${err.message}`;
           await ctx.platform
             .sendMessage(
               ctx.conversationId,

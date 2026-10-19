@@ -10,6 +10,7 @@
 
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import { RunSourceReleaseError } from './run-source';
 import { sourceReleaseNotice } from './deps';
 import type { TokenUsage, ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
@@ -386,13 +387,18 @@ export async function executeDagWorkflow(
       { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
       'dag.run_released_source_unreadable'
     );
-    const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-      claimId: executionClaim(workflowRun.metadata),
-      nodeId: error.nodeId,
-      ...(error.path !== undefined ? { path: error.path } : {}),
-      error: error.message,
-      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-    });
+    let released: boolean;
+    try {
+      ({ released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+        claimId: executionClaim(workflowRun.metadata),
+        nodeId: error.nodeId,
+        ...(error.path !== undefined ? { path: error.path } : {}),
+        error: error.message,
+        retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+      }));
+    } catch (cause) {
+      throw new RunSourceReleaseError(cause);
+    }
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
       return false;

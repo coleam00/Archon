@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { RunSourceReleaseError } from '@archon/workflows/run-source';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -782,6 +783,18 @@ describe('dispatchBackgroundWorkflow', () => {
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('final status could not be saved'))).toBe(true);
     expect(sent.some(m => m.includes('failed: Failed to persist'))).toBe(false);
+  });
+
+  test('does not fail a successor when background execution cannot confirm source release', async () => {
+    const workflow = makeWorkflow({ worktree: { enabled: false } });
+    const cause = new Error('release store unavailable');
+    mockExecuteWorkflow.mockRejectedValueOnce(new RunSourceReleaseError(cause));
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
+    await flushBackgroundExecution();
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => c[1]);
+    expect(sent.some(m => m.includes('source release could not be confirmed'))).toBe(true);
+    expect(sent.some(m => m.includes('failed:'))).toBe(false);
   });
 
   test('worktree.enabled: false skips isolation and runs in the parent cwd', async () => {

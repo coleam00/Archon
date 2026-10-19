@@ -18,6 +18,7 @@ import {
 } from './run-preflight';
 import { hydrateResumableRun, inspectResumableRun } from './run-resume';
 import {
+  RunSourceReleaseError,
   prepareWorkflowSource,
   resolveContinuationWorkflow,
   withCapturedSource,
@@ -504,10 +505,12 @@ export async function runChildWorkflow(
       }
       return childOutcomeFromRun(finalChild);
     } catch (err) {
-      if (err instanceof TerminalStatusWriteError) throw err;
+      if (err instanceof TerminalStatusWriteError || err instanceof RunSourceReleaseError)
+        throw err;
 
       // Ordinary setup/read-back failures become failed child outcomes after cleanup.
-      // A terminal write rejection escapes instead: cleanup may not have released the lock.
+      // A terminal write rejection or unconfirmed source release escapes: cleanup
+      // cannot establish an outcome, and a successor may now own the child.
       //
       // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
       // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
@@ -777,7 +780,7 @@ export async function continueBlockedRun(
       }
     );
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
+    if (err instanceof TerminalStatusWriteError || err instanceof RunSourceReleaseError) throw err;
 
     // The hydrate CAS above already flipped the parent paused→running, and
     // executeWorkflow's own failWorkflowRun catch-all doesn't cover its early

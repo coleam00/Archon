@@ -111,6 +111,7 @@ registerBuiltinProviders();
 registerCommunityProviders();
 
 // --- Import after mocks ---
+import { RunSourceReleaseError } from './run-source';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { runWorkflowEngineContractTests } from './engine-contract-tests';
 import { executeWorkflow } from './executor';
@@ -239,6 +240,35 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       `${runId}:workflow_completed:`,
     ]);
     expect(deliveries.some(({ event }) => event.workflow_run_id === unrelated.id)).toBe(false);
+  });
+
+  it('preserves a running successor when resumed execution cannot confirm source release', async () => {
+    const { engine, store } = await makeEngine();
+    const run = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await completeNode(store, run.id, 'first');
+    await store.failWorkflowRun(run.id, 'interrupted');
+    const failed = await store.getWorkflowRun(run.id);
+    if (!failed) throw new Error('missing run');
+    const cause = new Error('release store unavailable');
+    dagBody = async ({ workflowRun }) => {
+      await store.updateWorkflowRun(run.id, {
+        metadata: { ...workflowRun.metadata, execution_claim: 'successor' },
+      });
+      throw new RunSourceReleaseError(cause);
+    };
+    const admission = await engine.resume({
+      platform,
+      conversationId: 'conv-1',
+      cwd: '/tmp/ops',
+      userMessage: '',
+      run: failed,
+      legacyWorkflow: parent,
+    });
+    if (!admission.accepted) throw new Error('expected resume');
+    await expect(admission.settled).rejects.toMatchObject({ cause });
+    expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+    expect((await store.getWorkflowRun(run.id))?.metadata.execution_claim).toBe('successor');
   });
 
   it('a subscription opened before resume sees only the new segment', async () => {

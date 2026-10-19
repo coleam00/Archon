@@ -17,6 +17,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { prepareWorkflowSource, preparedWorkflowSourceRecord } from './run-source';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
@@ -171,6 +172,61 @@ nodes:
           ).toHaveLength(1);
         }
         expect(fail).not.toHaveBeenCalled();
+      });
+
+      it('a DAG release rejection cannot cancel a child successor', async () => {
+        await mkdir(join(cwd, '.archon/scripts'), { recursive: true });
+        await writeFile(join(cwd, '.archon/scripts/check.ts'), 'console.log("done")');
+        await writeWorkflow(
+          'release-child',
+          'name: release-child\ndescription: child\nnodes:\n  - id: check\n    script: check\n    runtime: bun\n'
+        );
+        await writeWorkflow(
+          'release-parent',
+          'name: release-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: release-child\n'
+        );
+        const store = new InMemoryStore();
+        const cause = new Error('source release store unavailable');
+        let successorId: string | undefined;
+        store.releaseRunForUnreadableSource = async id => {
+          const row = store.runs.get(id);
+          if (!row) throw new Error('missing released run');
+          row.metadata.execution_claim = 'successor';
+          successorId = id;
+          throw cause;
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const cancel = spyOn(store, 'cancelWorkflowRun');
+        const persist = store.persistWorkflowEvent;
+        let locked: string | undefined;
+        store.persistWorkflowEvent = async event => {
+          await persist(event);
+          if (event.event_type === 'node_started' && event.step_name === 'check') {
+            const row = store.runs.get(event.workflow_run_id);
+            const capture = await resolveRunSourceCapture(row?.metadata ?? {});
+            if (!capture) throw new Error('missing child source');
+            locked = join(capture.anchor.root, 'project/.archon/scripts/check.ts');
+            await chmod(locked, 0o000);
+          }
+        };
+        try {
+          await executeWorkflow(
+            makeDeps(store),
+            makePlatform(),
+            'conv-plat',
+            cwd,
+            await discover('release-parent'),
+            'goal',
+            { conversationId: 'conv-db' }
+          );
+          expect(successorId).toBeDefined();
+          expect(store.runs.get(successorId!)?.status).toBe('running');
+          expect(store.runs.get(successorId!)?.metadata.execution_claim).toBe('successor');
+          expect(fail.mock.calls.some(([id]) => id === successorId)).toBe(false);
+          expect(cancel.mock.calls.some(([id]) => id === successorId)).toBe(false);
+        } finally {
+          if (locked) await chmod(locked, 0o644);
+        }
       });
 
       it('a child launch that cannot read the parent source releases the parent', async () => {
@@ -1297,6 +1353,98 @@ nodes:
     expect(finalParent?.status).toBe('failed');
     expect(String(finalParent?.metadata.error)).toContain('Auto-resume after sub-run failed');
   });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'preserves a parent successor when auto-resume propagates uncertain source ownership',
+    async () => {
+      await writeWorkflow(
+        'child-gated',
+        `
+name: child-gated
+description: child with an approval gate
+nodes:
+  - id: implement
+    prompt: "implement $ARGUMENTS"
+  - id: review-gate
+    approval:
+      message: "review the sub-run"
+    depends_on: [implement]
+`
+      );
+      await writeWorkflow(
+        'parent-gated',
+        `
+name: parent-gated
+description: parent composing a gated child
+nodes:
+  - id: sub
+    workflow: child-gated
+    input: "goal"
+`
+      );
+
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const parent = await discover('parent-gated');
+      await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
+
+      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
+      expect(parentRun?.status).toBe('paused');
+
+      const prepared = await prepareWorkflowSource(deps, { sourceRoot: cwd });
+      parentRun!.metadata.workflow_source = preparedWorkflowSourceRecord(prepared);
+      const cause = new Error('source release store unavailable');
+      let locked: string | undefined;
+      const update = store.updateWorkflowRun;
+      store.updateWorkflowRun = async (id, changes) => {
+        await update(id, changes);
+        const row = store.runs.get(id);
+        if (id === parentRun!.id && row?.status === 'running' && !locked) {
+          const capture = await resolveRunSourceCapture(row.metadata);
+          if (!capture) throw new Error('missing parent source');
+          locked = capture.anchor.root;
+          await chmod(locked, 0o000);
+        }
+      };
+      store.releaseRunForUnreadableSource = async id => {
+        const row = store.runs.get(id);
+        if (!row) throw new Error('missing successor');
+        row.metadata.execution_claim = 'successor';
+        throw cause;
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+
+      store.approveGate(child!.id);
+      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+      const childWf = await discover('child-gated');
+      try {
+        await expect(
+          executeWorkflow(
+            deps,
+            makePlatform(),
+            'conv-plat',
+            cwd,
+            childWf,
+            child!.user_message,
+            { conversationId: 'conv-db' },
+            {
+              ...hydrated!,
+            }
+          )
+        ).rejects.toMatchObject({ cause });
+
+        expect((await store.getWorkflowRun(child!.id))?.status).toBe('completed');
+        expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('running');
+        expect(parentRun!.metadata.execution_claim).toBe('successor');
+        expect(fail.mock.calls.some(([id]) => id === parentRun!.id)).toBe(false);
+      } finally {
+        if (locked) await chmod(locked, 0o755);
+      }
+    }
+  );
 
   it('surfaces a rejected parent terminal write after the child completes', async () => {
     await writeWorkflow(
