@@ -40,8 +40,9 @@ inputs:
     default: ""
     description: >-
       The number of an open pull request this run continues, as the caller
-      resolved it; empty or `null` when it names none. Delivery finishes it
-      whichever route triage takes; triage naming a different one refuses the run.
+      resolved it; empty or `null` when it names none. When the route admits
+      delivery, it continues this PR and refuses a different number from triage.
+      Stop outcomes leave the PR untouched.
   branch:
     default: ""
     description: >-

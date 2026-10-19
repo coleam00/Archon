@@ -553,10 +553,11 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   --input number=<n>` on the run config this run started with; if that launch fails,
   the item waits for the next queue run.
   A round for an item with an open pull request in its repository passes it to
-  `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
-  takes, pushing onto its head so the same pull request updates. A round that failed
-  after publishing still records its pull request. Otherwise the round opens its
-  pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
+  `archon-ship` as `pull_request`. When the route admits delivery, it continues
+  that PR and pushes onto its head; a different number from triage refuses the run.
+  Stop outcomes leave the PR untouched. A round that failed
+  after publishing still records its pull request. When delivery has no existing
+  PR, it opens one from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
   merged pull request, or one from a fork, is asked about.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's

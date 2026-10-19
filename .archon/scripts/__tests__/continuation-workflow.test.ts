@@ -209,7 +209,6 @@ it.each([
         ...(fixture.triage__triage as Record<string, unknown>),
         decision,
       },
-      continuation: PR,
       inv__investigate: {
         verdict,
         summary: 'No implementation admitted',

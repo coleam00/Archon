@@ -1,8 +1,7 @@
 /**
  * The open pull request delivery continues: the one the caller resolved, else the one
  * triage routed the run to continue, else none. A caller that resolved a pull request
- * owns that fact whichever route triage takes, so a plan or a direct delivery still
- * finishes it rather than opening another. Two different numbers refuse.
+ * owns that fact on every route admitted to delivery. Two different numbers refuse.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_CALLER: the number the caller resolved, or empty or `null`.
