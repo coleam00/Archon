@@ -53,6 +53,7 @@ export interface LoopRun {
 /** What a loop node accumulates across iterations; its failure, gate and completion records read it. */
 export interface LoopState {
   execution: NodeExecutionRecord;
+  lastStartedIteration: number;
   sessionId: string | undefined;
   stopReason: string | undefined;
   numTurns: number | undefined;
