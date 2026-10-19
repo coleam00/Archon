@@ -312,7 +312,7 @@ Claude Code not found. Archon requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They look for it at the native installer's path (`~/.local/bin/claude`, or `%USERPROFILE%\.local\bin\claude.exe` on Windows) unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` points elsewhere. This error means a pin is set but invalid (Archon never falls back from an invalid pin), or no pin is set and that path holds no executable. Correct or remove an invalid `CLAUDE_BIN_PATH` or `claudeBinaryPath` first. Source/dev mode (`bun run`) resolves Claude Code through `node_modules` and is unaffected.
+**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They look for it at the native installer's path (`~/.local/bin/claude`, or `%USERPROFILE%\.local\bin\claude.exe` on Windows) unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` points elsewhere. This error means no pin is set and that path holds no executable. An invalid pin fails with a different error that names the setting (`CLAUDE_BIN_PATH is set to ... but the file does not exist`), in every mode and without falling back to autodetection; correct or remove that setting. Source/dev mode (`bun run`) with no pin resolves Claude Code through `node_modules`.
 
 **Fix:** Install Claude Code with the native installer, which Archon then finds on its own:
 
