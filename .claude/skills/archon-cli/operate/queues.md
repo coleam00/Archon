@@ -23,7 +23,9 @@ reference covers launching and tending the queues by hand.
 - `archon workflow run archon-forge-check` must pass in the checkout. It proves the
   pack can read the repository through its forge source (`gh` by default).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
-  whose issues are triaged and whose review comments count. Without the file every
+  whose issues are triaged and whose review comments count. An entry can be an object,
+  `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
+  maintainer's own open pull requests through the merge queue. Without the file every
   author is an outsider: intake labels their issues `archon-needs-maintainer` and runs
   no agent.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
@@ -102,16 +104,19 @@ A round ends one of three ways, recorded on the item:
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
-Launch another build-queue run to work the next round or the next item.
+An answered `ask` starts its next round by itself. Launch another build-queue run to
+work the next item.
 
 ## Merge queue
 
 A sweep claims every waiting item up to `limit` and merges what policy allows, one
-at a time, through a gate that requires a Ready verdict and green CI at a head that
-contains the default branch. Each merge moves the default branch, so a later pull
-request needs a sync, and its new head needs CI before the gate passes. In practice
-that pull request usually merges in a later sweep. After a batch the sweep waits for
-the default branch's CI.
+at a time, through a gate that requires a Ready verdict and green CI at the head. A
+pull request that merges cleanly into the default branch merges directly, even when
+it is behind, so one sweep can land many. A pull request that conflicts, or that
+reshapes code across a package, is synced first and merges once CI at its synced
+head is green, usually in a later sweep. After a batch the sweep waits for the
+default branch's CI, which judges the combined result; red there is raised with the
+pull requests merged since it was last green.
 
 Run sweeps one after another, not in parallel: two sweeps would sync the same
 branches. Start the next sweep once CI on the pull requests it synced has finished.
@@ -143,7 +148,9 @@ archon workflow respond <run-id> <choice> "<reason>" --detach
 
 The build and merge queues write the answer's text into the issue body as a dated
 "Current scope" section, and later rounds work from it. Write the reason as a ruling a
-later round can act on: what is in scope, what is not, and why.
+later round can act on: what is in scope, what is not, and why. An answer that
+continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
+run at once, on the run config the answered run started with, so you don't relaunch.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to
@@ -154,7 +161,8 @@ later round can act on: what is in scope, what is not, and why.
 ## Merging by hand
 
 A pull request the queues did not deliver has no work item, so the merge queue does
-not take it. To merge one yourself:
+not take it, unless its author's `maintainers.json` entry sets
+`merge_queue: "own-prs"`. To merge one yourself:
 
 1. Read the review verdict and the open review threads, including automated
    reviewers' inline comments.

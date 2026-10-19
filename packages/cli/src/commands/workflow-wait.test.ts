@@ -6,7 +6,7 @@ import {
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { workflowWaitCommand } from './workflow';
+import { workflowWaitCommand } from './workflow-query';
 
 describe('workflowWaitCommand', () => {
   const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';

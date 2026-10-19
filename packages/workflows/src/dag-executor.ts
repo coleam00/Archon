@@ -15,7 +15,7 @@ import type { TokenUsage, ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import type { PersistedNodeOutput } from './store';
+import type { PersistedNodeOutput, PriorFailedNode } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -56,6 +56,8 @@ export interface PriorRunUsage {
 export interface ExecuteDagWorkflowOptions extends RunInputs {
   workflow: ResolvedWorkflow;
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /** Failures from before a pause, replayed instead of re-running their nodes. */
+  replayedFailures?: ReadonlyMap<string, PriorFailedNode>;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`),
    * resolved by executor.ts when the workflow uses session persistence (#1846).
@@ -111,6 +113,7 @@ export async function executeDagWorkflow(
     configuredCommandFolder,
     issueContext,
     priorCompletedNodes,
+    replayedFailures,
     aiProfile,
     workflowPreset,
     scopeArtifactsDir,
@@ -253,6 +256,7 @@ export async function executeDagWorkflow(
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
+    replayedFailures,
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,

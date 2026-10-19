@@ -129,6 +129,12 @@ export interface WorkflowRunOptions {
   modelAssignments?: string[];
   /** Local YAML file supplying a sparse configuration layer for this run. */
   configPath?: string;
+  /**
+   * `--config-from-run <id>`: start with the run config that run was started with, so a
+   * continuation launched for a paused run keeps its provider configuration. Exclusive
+   * with `configPath`.
+   */
+  configFromRun?: string;
   /** @internal Structurally validated immutable layer transferred from a detached parent. */
   detachedRunConfig?: WorkflowRunConfigInput;
   /**

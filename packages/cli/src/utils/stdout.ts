@@ -20,7 +20,7 @@
  * asymmetry is the signature of this class of bug.
  */
 
-function writeStream(stream: NodeJS.WriteStream, text: string): Promise<void> {
+function writeStream(stream: NodeJS.WriteStream, text: string | Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
     stream.write(text, error => {
       if (error) {
@@ -36,10 +36,10 @@ function writeStream(stream: NodeJS.WriteStream, text: string): Promise<void> {
  * Write `text` to stdout and resolve only once the bytes have been handed to
  * the OS in full.
  *
- * @param text - Exact bytes to emit (include any trailing newline yourself).
+ * @param text - Exact bytes or text to emit (include any trailing newline yourself).
  * @throws The underlying stream error if the write fails (e.g. EPIPE).
  */
-export function writeStdout(text: string): Promise<void> {
+export function writeStdout(text: string | Uint8Array): Promise<void> {
   return writeStream(process.stdout, text);
 }
 

@@ -165,6 +165,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     store.getDagResumeSnapshot.mockResolvedValue({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,

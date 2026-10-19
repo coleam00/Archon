@@ -696,7 +696,7 @@ allowed to run (`trigger_rule: all_done`).
 In `bash:` and `until_bash:`, Archon injects `$nodeId.output`, `$nodeId.output.field`, and `$LOOP_PREV.nodeId.output[.field]` using two forms:
 
 - Small string outputs are single-quoted inline, such as `'a b   c *'`.
-- Outputs exceeding 32 KB spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
+- Outputs exceeding 32,768 UTF-16 code units (JavaScript `string.length`) spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<write-id>.<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
 
 A bare argument such as `printf '%s' $emit.output` works with the inline form, but the unquoted command substitution in the spill form splits words and expands globs. Wrapping the reference in double quotes breaks the inline form instead: `value="$emit.output"` becomes `value="'a b   c *'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value.
 
@@ -1127,7 +1127,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 **What happens on resume:**
 
 1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
-2. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
+2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
 > **Why opt-in?** Earlier versions silently auto-resumed on plain `archon workflow run`, which caused state from prior failed runs (e.g. cached node outputs with stale inputs) to bleed into new invocations of the same workflow at the same path. See #1392 for the bug; now resume is always a user-driven decision.
@@ -2136,10 +2136,12 @@ values it ignored. To run fresh with different values, abandon the existing run 
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
 `archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
 
-Chat platforms (Slack, Telegram, Discord, GitHub) have **no** channel for inputs yet: they carry
-only a trigger message, so a required-input workflow invoked there still refuses up front and
-points at the CLI and console. That gap is tracked in
-[#2555](https://github.com/coleam00/Archon/issues/2555).
+In chat (Slack, Telegram, Discord, GitHub, Web UI), the assistant sees each workflow's declared
+inputs, asks you for missing required values in conversation, and passes them through its
+`invoke_workflow` tool. The same validation and pre-cost refusal apply. Assistants without
+[in-process native tools](/reference/provider-capabilities/) launch workflows by writing
+`/invoke-workflow` lines, which carry no inputs, so a required-input workflow launched that way
+still refuses up front and points at the CLI and console.
 
 ---
 

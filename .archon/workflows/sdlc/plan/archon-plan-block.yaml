@@ -23,6 +23,12 @@ inputs:
     description: >-
       Optional path to a prior investigation report to build on — its claims are
       verified, not trusted. Empty means no prior report.
+  related:
+    default: "[]"
+    description: >-
+      Related work triage found, as a JSON list of { url, relation }: overlapping
+      open issues, closed earlier attempts, recent merged changes on the same
+      surface. Defaults to an empty list.
 
 # ready:false is a valid completion (see the plan node): the run succeeds with
 # an authored outcome of false — lifecycle status and work outcome are separate facts.

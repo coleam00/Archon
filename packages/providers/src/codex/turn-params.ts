@@ -161,6 +161,41 @@ export function buildThreadConfig(
   return config;
 }
 
+/**
+ * The thread config that attaches no tool to a model request. Codex has no single "no tools"
+ * switch, so this turns each one off; an unknown `features` key is accepted silently. The
+ * real-binary test in `scope.boundary.test.ts` pins it on the bundled Codex.
+ */
+export const TOOL_FREE_THREAD_CONFIG: CodexConfig = {
+  web_search: 'disabled',
+  tools: { experimental_request_user_input: { enabled: false } },
+  features: {
+    goals: false,
+    multi_agent: false,
+    shell_tool: false,
+    unified_exec: false,
+    view_image: false,
+    image_generation: false,
+    sleep_tool: false,
+    tool_suggest: false,
+    apps: false,
+    plugins: false,
+    browser_use: false,
+    computer_use: false,
+  },
+};
+
+/**
+ * Whether a structured-output turn on `model` runs its tools first and gets a separate
+ * tool-free structured turn. Only a model Archon resolved can be matched.
+ */
+export function splitsStructuredOutput(
+  config: CodexProviderDefaults,
+  model: string | undefined
+): boolean {
+  return model !== undefined && (config.toolFreeStructuredOutputModels ?? []).includes(model);
+}
+
 /** The output schema a turn sends, and whether its final message is parsed as JSON. */
 export function buildOutputSchema(requestOptions?: SendQueryOptions): {
   outputSchema: JsonValue | undefined;

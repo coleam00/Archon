@@ -6,7 +6,7 @@
  * It reads the pull request fresh and refuses unless the trusted review verdict says
  * Ready, CI is green at `head`, and the pull
  * request is open, not a draft, into the default branch, still at `head`, and `head`
- * contains the default branch's head. Without
+ * contains the default branch's head or the forge reports it merges cleanly. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head` and reads the
  * merge back. A pull request that reads back unmerged, as on a branch whose merges the
  * forge queues, fails the gate. The record node reads every pull request back itself.
@@ -26,7 +26,7 @@ import {
   readPr,
   requireGh,
 } from '../../.shared/merge.ts';
-import { readMaintainers } from '../../.shared/workitem.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 
 function flag(args: readonly string[], name: string): string {
   const index = args.indexOf(name);

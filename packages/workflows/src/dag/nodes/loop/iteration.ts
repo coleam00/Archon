@@ -54,12 +54,12 @@ export async function runLoopIteration(
   const loop = node.loop;
   const iterationStart = Date.now();
   // Fresh per iteration: this iteration's prompt and until_bash observe the
-  // artifacts published before it. Materialization failure is an explicit node
-  // provisioning error and propagates to the dispatch boundary.
+  // artifacts published before it.
   const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
 
   const stopped = await stopBeforeIteration(run, state, i);
   if (stopped !== undefined) return stopped;
+  state.lastStartedIteration = i;
   recordIterationStarted(run, i);
 
   const reply = await runIterationAttempts(run, state, i, iterationStart, typedArtifactsFile);

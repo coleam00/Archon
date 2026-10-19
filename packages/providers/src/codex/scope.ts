@@ -225,7 +225,7 @@ export function applyNodeScope(
     ...config,
     // A named plugin turns plugins on for the thread even when the user turned them off
     // globally: the node asked for it, and every other plugin is switched off below.
-    features: { apps: false, plugins: plugins.length > 0 },
+    features: { ...objectAt(config.features), apps: false, plugins: plugins.length > 0 },
   };
   if (Object.keys(mcpServers).length > 0) scoped.mcp_servers = mcpServers;
   if (plugins.length > 0) {
@@ -243,8 +243,11 @@ export function applyNodeScope(
 
 /** The MCP servers the node declares: the `mcp_servers` the provider built from its `mcp:` file. */
 function declaredServers(config: ThreadConfig): JsonObject {
-  const servers = config.mcp_servers;
-  return typeof servers === 'object' && servers !== null && !Array.isArray(servers) ? servers : {};
+  return objectAt(config.mcp_servers);
+}
+
+function objectAt(value: JsonValue | undefined): JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {};
 }
 
 /**

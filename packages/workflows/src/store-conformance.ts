@@ -41,6 +41,7 @@ import {
   type WorkflowWaitContext,
   type WorkflowRun,
 } from './schemas/workflow-run';
+import { PAUSE_CAUSE_METADATA_KEY } from './schemas/pause-cause';
 import { workflowNodeSessionSchema } from './schemas/workflow-node-session';
 import { workflowRunNodeSessionSchema } from './schemas/workflow-run-node-session';
 import { terminalRecordSchema } from './schemas/terminal-record';
@@ -1478,6 +1479,7 @@ export function describeWorkflowStoreConformance(
         keep: true,
         extra: true,
         approval,
+        [PAUSE_CAUSE_METADATA_KEY]: 'gate',
       });
       expect(await types(store, run.id)).toEqual(['workflow_unpaused', 'node_suspended']);
     });
@@ -2814,6 +2816,79 @@ export function describeWorkflowStoreConformance(
       expect(snapshot.unresolvedNodeStarts).toEqual(new Set(['unfinished']));
       expect(snapshot.tokens).toMatchObject({ input: 9, output: 12 });
       expect(snapshot.costUsd).toBe(1);
+    });
+    test('resume reduction keeps the failure of a node whose latest record is node_failed', async () => {
+      const run = await create(store);
+      const rows = [
+        {
+          event_type: 'node_failed' as const,
+          step_name: 'still-failed',
+          data: { error: 'first', failure_kind: 'config' },
+        },
+        { event_type: 'node_failed' as const, step_name: 'recovered', data: { error: 'old' } },
+        { event_type: 'node_started' as const, step_name: 'recovered', data: {} },
+        {
+          event_type: 'node_completed' as const,
+          step_name: 'recovered',
+          data: { node_output: 'ok' },
+        },
+      ];
+      for (const row of rows) await store.persistWorkflowEvent({ ...row, workflow_run_id: run.id });
+      const snapshot = await store.getDagResumeSnapshot(run.id);
+      expect(snapshot.failedNodes).toEqual(
+        new Map([['still-failed', { error: 'first', failureKind: 'config' }]])
+      );
+    });
+    test('every pause records its cause, and failing the run removes it', async () => {
+      const since = new Date().toISOString();
+      const later = new Date(Date.now() + 3_600_000).toISOString();
+      const cause = async (id: string): Promise<unknown> =>
+        (await store.getWorkflowRun(id))?.metadata[PAUSE_CAUSE_METADATA_KEY];
+      const gated = await running(store);
+      await store.pauseWorkflowRun(gated.id, approval);
+      expect(await cause(gated.id)).toBe('gate');
+      const parent = await running(store);
+      await store.pauseWorkflowRun(parent.id, {
+        type: 'child_workflow',
+        nodeId: 'sub',
+        message: 'child',
+        childRunId: 'child-1',
+      });
+      expect(await cause(parent.id)).toBe('child');
+      const waiting = await running(store);
+      await store.pauseWorkflowRunForWait(
+        waiting.id,
+        { owner: 'node', nodeId: 'ask', kind: 'attention', waitingSince: since, message: 'Ok?' },
+        { kind: 'started', stepName: 'ask' }
+      );
+      expect(await cause(waiting.id)).toBe('wait');
+      const released = await running(store);
+      await store.releaseRunForUnreadableSource(released.id, {
+        claimId: executionClaim((await store.getWorkflowRun(released.id))?.metadata ?? {}),
+        nodeId: 'check',
+        error: 'EACCES',
+        retryAt: later,
+      });
+      expect(await cause(released.id)).toBe('source_release');
+      const limited = await running(store);
+      const limit: Extract<WorkflowWaitContext, { kind: 'quota' }> = {
+        owner: 'node',
+        nodeId: 'implement',
+        kind: 'quota',
+        pauseId: 'limit-1',
+        waitingSince: since,
+        resumeAt: later,
+      };
+      await store.pauseWorkflowRunForWait(limited.id, limit, {
+        kind: 'started',
+        stepName: 'implement',
+      });
+      expect(await cause(limited.id)).toBe('quota');
+      // The cause survives the resume that consumes it, and a failure clears it.
+      const resumed = await store.resumeWorkflowRun(limited.id, deadlineWaitCursor(limit));
+      expect(resumed.metadata[PAUSE_CAUSE_METADATA_KEY]).toBe('quota');
+      await store.failWorkflowRun(limited.id, 'boom');
+      expect(await cause(limited.id)).toBeUndefined();
     });
     test('resume reduction rebuilds run-budget work units and spend, failing closed on unknown cost', async () => {
       const run = await create(store);

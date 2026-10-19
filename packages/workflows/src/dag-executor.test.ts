@@ -708,6 +708,7 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
         ['producer', { output: producerEvent!.data!.node_output as string }],
       ]),
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
