@@ -155,16 +155,17 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
  *
- * It reports no Windows job object, as an owner from an older Archon version would.
+ * It reports `windowsJob` as the owner's job object name, or no job object when omitted,
+ * as an owner from an older Archon version would.
  */
-function stubOwner(pid: number): Server {
+function stubOwner(pid: number, windowsJob?: string): Server {
   return createServer((socket: Socket): void => {
     socket.setEncoding('utf8');
     let request = '';
     socket.on('data', (chunk: string): void => {
       request += chunk;
       if (request.includes('stop\n')) {
-        socket.write(`${JSON.stringify({ kind: 'detached', pid })}\n`);
+        socket.write(`${JSON.stringify({ kind: 'detached', pid, windowsJob })}\n`);
         request = request.replace('stop\n', '');
       }
       if (request.includes('terminate\n')) {
@@ -460,6 +461,37 @@ describe('detached run control integration', () => {
         const error = await rejectedError(async (): Promise<void> => stop.stop());
         expect(error.message).toContain('Could not confirm');
         expect(error.message).toContain('reported no job object');
+        expect(processExists(targetPid)).toBe(true);
+      } finally {
+        target.kill();
+        await close(server);
+      }
+    },
+    STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'refuses a Windows owner whose job object cannot be opened, killing nothing',
+    async () => {
+      // The owner names a job that does not exist. A job the stop cannot open proves
+      // nothing about the tree, so the stop must refuse before it kills anything.
+      if (process.platform !== 'win32') return;
+
+      const runId = `unopenable-job-${crypto.randomUUID()}`;
+      const path = runLiveOwnerPath(runId);
+      const target = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
+        stdio: 'ignore',
+      });
+      if (target.pid === undefined) throw new Error('Failed to spawn the target');
+      const targetPid = target.pid;
+
+      const server = stubOwner(targetPid, `Global\\archon-run-${crypto.randomUUID()}`);
+      await listen(server, path);
+      try {
+        const stop = await requestDetachedRunStop(runId);
+        const error = await rejectedError(async (): Promise<void> => stop.stop());
+        expect(error.message).toContain('Could not confirm');
+        expect(error.message).toContain('its job object could not be opened');
         expect(processExists(targetPid)).toBe(true);
       } finally {
         target.kill();
