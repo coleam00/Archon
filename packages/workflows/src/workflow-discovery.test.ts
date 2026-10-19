@@ -1345,7 +1345,7 @@ nodes:
           'nodes:',
           '  - id: work',
           '    prompt: do it',
-          '    interactive: true', // dropped, warned — on THIS file
+          '    contxt: fresh', // dropped, warned — on THIS file
         ].join('\n')
       );
       await writeWorkflowFile(
@@ -1365,7 +1365,7 @@ nodes:
 
       const block = byName.get('block');
       expect((block?.parseWarnings ?? []).length).toBe(1);
-      expect(block?.parseWarnings?.[0]).toContain("unknown key 'interactive'");
+      expect(block?.parseWarnings?.[0]).toContain("unknown key 'contxt'");
 
       // The includer inlines the block's NODES but not its warnings.
       const parent = byName.get('parent');
@@ -1405,7 +1405,7 @@ nodes:
         'nodes:',
         '  - id: a',
         '    prompt: hi',
-        '    interactive: true',
+        '    contxt: fresh',
       ].join('\n');
 
     /** Write root/sub `foo.yaml`, discover, and return the single survivor. */
@@ -1432,7 +1432,7 @@ nodes:
         expect(warnings).toEqual([]); // the clean file won — it declares no unknown key
       } else {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       }
     });
 
@@ -1440,7 +1440,7 @@ nodes:
       const { name, warnings } = await discoverColliding(DIRTY('foo-root'), CLEAN('foo-sub'));
       if (name === 'foo-root') {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       } else {
         expect(warnings).toEqual([]);
       }

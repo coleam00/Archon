@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A workflow node that carries a key belonging to another node type, or a loop setting outside `loop:`/`loop_group:`, now fails the workflow load instead of being ignored or only warned about. For example, `runtime: bun` on a `prompt:` node or a top-level `interactive: true` on a `command:` node is now a load error naming the node, the key and the node types that support it. Move the key to a node that honours it, or delete it. (#2478)
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
 
 ## [0.12.1] - 2026-10-17

@@ -32,19 +32,10 @@ export function nodeIdForMessages(raw: unknown, index: number): string {
 
 /**
  * Guidance for a key the engine drops, appended to the unknown-key warning.
- *
- * `interactive` gets its own text because it is the reported failure (#2213):
- * an author writes it expecting the run to stop and ask, the key is dropped, and
- * the run proceeds without asking. The guidance names the attention wait, the one
- * answerable pause (#4042).
+ * (A node-level `interactive`, the #2213 report, never gets here: it is a loop
+ * setting outside a loop, which `dagNodeSchema` rejects.)
  */
 function unknownNodeKeyHint(key: string): string {
-  if (key === 'interactive') {
-    return (
-      " Nothing on this node pauses. To ask for an answer, add a 'wait: { attention: <message> }'" +
-      " node; to ask on each iteration of a loop, use a 'loop_group' whose body ends in one."
-    );
-  }
   if (WORKFLOW_ONLY_KEYS.has(key)) {
     return ` ('${key}' is valid at workflow level, not on individual nodes.)`;
   }
@@ -138,13 +129,12 @@ function collectUnknownConfigKeys(
 
 /**
  * Warn about unknown keys on a raw node that Zod silently stripped (#2213).
- * Catches misplaced workflow-level keys (`interactive:` on a command node),
+ * Catches misplaced workflow-level keys (`worktree:` on a command node),
  * typos (`contxt:` instead of `context:`), and the same mistakes one level down
  * inside `approval:` / `retry:` / `loop:` / `agents:`.
  *
  * Recurses into a `loop_group` body: those entries are full DAG nodes parsed by
- * the same schema, so they strip unknown keys just as silently — and a body node
- * is exactly where an `interactive: true` gate is most likely to be attempted.
+ * the same schema, so they strip unknown keys just as silently.
  */
 export function collectUnknownNodeKeys(
   raw: unknown,
