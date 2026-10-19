@@ -119,6 +119,7 @@ export type NamedClaim =
   | { readonly kind: 'claimed'; readonly doc: WorkItem }
   | { readonly kind: 'missing' }
   | { readonly kind: 'held'; readonly runId: string }
+  | { readonly kind: 'contended' }
   | { readonly kind: 'not_waiting'; readonly doc: WorkItem };
 
 /**
@@ -136,8 +137,11 @@ export function claimNamed(number: number, at: string, runId: string): NamedClai
   if (!claimable(item, BUILD_PICKUP)) return outcome(item);
   const won = claimItem(item, at, runId, BUILD_PICKUP);
   if (won !== null) return { kind: 'claimed', doc: won };
+  // Both conditional writes lost to concurrent writes, such as intake recording a
+  // request, that left the item waiting: say so rather than give a false reason.
   const fresh = read(item.name);
-  return fresh === undefined ? { kind: 'missing' } : outcome(fresh);
+  if (fresh === undefined) return { kind: 'missing' };
+  return claimable(fresh, BUILD_PICKUP) ? { kind: 'contended' } : outcome(fresh);
 }
 
 /**

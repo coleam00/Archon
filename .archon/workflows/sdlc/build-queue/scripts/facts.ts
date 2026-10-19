@@ -98,6 +98,8 @@ function claimTarget(number: number, runId: string): WorkItem {
       throw new Error(`issue ${String(number)} has no work item: intake has not recorded it`);
     case 'held':
       throw new Error(`issue ${String(number)} is claimed by run ${result.runId}`);
+    case 'contended':
+      throw new Error(`issue ${String(number)} kept changing while this run claimed it; launch it again`);
     case 'not_waiting':
       throw new Error(`issue ${String(number)} is not ready for the build queue: ${notWaitingReason(result.doc)}`);
   }
