@@ -3,6 +3,7 @@
 # the item the assignment gives to part 2 stays open as deferred, and no discovery is
 # filed for it.
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
+review-dir: ""
 scope:
   head_matches: true
   # A standalone review of the working diff: no pull request to publish to.
