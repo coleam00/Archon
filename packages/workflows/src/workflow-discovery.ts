@@ -210,7 +210,7 @@ export async function discoverWorkflowsWithConfig(
   // runtime/validator would (else it silently degrades to WARN on custom-folder repos).
   let commandFolder = sourceConfig?.command_folder;
   let loadDefaultCommands = sourceConfig?.load_default_commands;
-  // A frozen capture already recorded config.yaml's env: names (see workflow-source.ts'
+  // A frozen capture already recorded config.yaml's env: names (see workflow-source/roots.ts'
   // workflowSourceConfigFrom); only the live branch below still needs to read them.
   let envVarNames: readonly string[] | undefined = sourceConfig?.env_var_names;
   if (cwd !== null && sourceConfig === undefined) {
