@@ -93,7 +93,7 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
-  # The planner makes the design calls. Calls only a person can make come back as
+  # The planner makes the design calls. Calls it cannot make itself come back as
   # open questions, which stop the run before delivery.
   - id: planned
     include: archon-plan-block
@@ -195,7 +195,7 @@ nodes:
       properties:
         delivered: { type: boolean }
         # Deliver's reason when it ran (or `failed`), otherwise why no delivery ran:
-        # no_action, blocked, needs_contract, refuted, not_rooted or needs_human.
+        # no_action, blocked, needs_contract, refuted, not_rooted or ask.
         reason: { type: string }
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }
