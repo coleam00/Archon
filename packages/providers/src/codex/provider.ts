@@ -1,5 +1,6 @@
 /**
- * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
+ * Codex provider: one Codex turn per `sendQuery` (two on a model listed in
+ * `toolFreeStructuredOutputModels`), driven over the `codex app-server`
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
@@ -10,12 +11,14 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import type {
-  IAgentProvider,
-  SendQueryOptions,
-  MessageChunk,
-  ResultChunk,
-  ProviderCapabilities,
+import {
+  mergeTokenUsage,
+  type IAgentProvider,
+  type SendQueryOptions,
+  type MessageChunk,
+  type ResultChunk,
+  type ProviderCapabilities,
+  type TokenUsage,
 } from '../types';
 import { sessionPreview } from '@archon/provider-contract';
 import { failureResult } from '../shared/failure';
@@ -44,6 +47,8 @@ import {
   isWorkflowNode,
   loadNodeMcpServers,
   resolveModelReasoningEffort,
+  splitsStructuredOutput,
+  TOOL_FREE_THREAD_CONFIG,
   type CodexConfig,
 } from './turn-params';
 import { streamTurn, type TurnRequest } from './stream';
@@ -90,6 +95,11 @@ const codexSessionId = {
  * closes, then again after SIGTERM.
  */
 const SHUTDOWN_GRACE_MS = 3000;
+
+/** The input of the tool-free turn that gives a split node its structured answer. */
+const FINAL_ANSWER_INSTRUCTION =
+  'Give your final answer now, based on the work above. ' +
+  'If you could not complete the task, say so and why in the answer.';
 
 /** The live app-server of one `sendQuery`, and the ids a cancel interrupts. */
 interface CodexRun {
@@ -305,6 +315,11 @@ export class CodexProvider implements IAgentProvider {
    * One call is one Codex turn on its own app-server process. A failure ends in a
    * `result` carrying a typed `failure`, and the engine decides whether to try again.
    * Observed work must drain before `settled`; lost observation never settles.
+   *
+   * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
+   * two turns on one thread: the tool turn without the schema, then, on a second process
+   * that resumes the thread with every tool off, a turn with the schema. The tool turn's
+   * success result is held back; the final turn's result is the call's only one.
    */
   async *sendQuery(
     prompt: string,
@@ -345,7 +360,7 @@ export class CodexProvider implements IAgentProvider {
       const login = codexLogin(launch.env);
       const binary = await launch.resolveBinary();
       const nodePlugins = nodePluginsOf(requestOptions, titleRequest);
-      const request = turnRequestOf(prompt, cwd, requestOptions, {
+      const { request, finalTurnParams } = turnRequestOf(prompt, cwd, requestOptions, {
         tools,
         login,
         resumeThreadId,
@@ -354,6 +369,7 @@ export class CodexProvider implements IAgentProvider {
         nodePlugins,
         threadConfig: buildThreadConfig(launch.config, mcpServers, nodePlugins !== undefined),
         modelReasoningEffort: launch.config.modelReasoningEffort,
+        splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
       run.connection = AppServerConnection.start(
@@ -367,12 +383,55 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
       const stream = streamTurn({ ...request, connection: run.connection });
+      let toolTurnResult: ResultChunk | undefined;
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
+          if (finalTurnParams && !chunk.failure) {
+            toolTurnResult = chunk;
+            continue;
+          }
           reportResult(chunk, abortSignal, catalogId);
           resultReported = true;
         }
         yield chunk;
+      }
+
+      if (toolTurnResult && finalTurnParams) {
+        if (!(await this.shutDown(run.connection))) observationLost = true;
+        run.connection = AppServerConnection.start(
+          binary,
+          appServerArgs(login, []),
+          launch.env,
+          this.spawner,
+          requestOptions?.protectedEnvKeys
+        );
+        if (abortSignal?.aborted) throw new Error('Query aborted');
+        const finalStream = streamTurn({
+          ...request,
+          connection: run.connection,
+          tools: buildCodexNativeTools([]),
+          resumeSessionId: run.threadId,
+          forkSession: false,
+          // The empty title scope: no plugin, app or MCP server, which the thread check enforces.
+          nodePlugins: [],
+          threadParams: {
+            ...request.threadParams,
+            config: {
+              ...buildThreadConfig(launch.config, undefined, true),
+              ...TOOL_FREE_THREAD_CONFIG,
+            },
+          },
+          turnParams: finalTurnParams,
+          hasOutputFormat: true,
+        });
+        for await (const chunk of closeOpenToolCalls(finalStream, { resultEndsTurn: true })) {
+          if (chunk.type === 'result') {
+            withToolTurnOf(chunk, toolTurnResult);
+            reportResult(chunk, abortSignal, catalogId);
+            resultReported = true;
+          }
+          yield chunk;
+        }
       }
     } catch (error) {
       await run.connection?.finishToolCalls();
@@ -444,23 +503,57 @@ interface TurnInputs {
   nodePlugins: readonly string[] | undefined;
   threadConfig: CodexConfig;
   modelReasoningEffort: Parameters<typeof resolveModelReasoningEffort>[1];
+  /** The model's route cannot take tools and an output schema in one request. */
+  splitsStructuredOutput: boolean;
   run: CodexRun;
 }
 
-/** The turn `streamTurn` runs, less the connection, which starts after it is built. */
+/**
+ * The final turn reports the whole call: both turns' tokens, and whether the node's own
+ * session was resumed. Its internal resume of the tool turn's thread is not one.
+ */
+function withToolTurnOf(final: ResultChunk, toolTurn: ResultChunk): void {
+  const tokens = mergeTokenUsage(
+    [toolTurn.tokens, final.tokens].filter((usage): usage is TokenUsage => usage !== undefined)
+  );
+  if (tokens) final.tokens = tokens;
+  if (toolTurn.resumed) final.resumed = true;
+  else delete final.resumed;
+}
+
+/**
+ * The turn `streamTurn` runs, less the connection, which starts after it is built. When the
+ * output schema must not ride with the tools, the turn goes without it and `finalTurnParams`
+ * is the tool-free turn that carries it.
+ */
 function turnRequestOf(
   prompt: string,
   cwd: string,
   requestOptions: SendQueryOptions | undefined,
   inputs: TurnInputs
-): Omit<TurnRequest, 'connection'> {
+): {
+  request: Omit<TurnRequest, 'connection'>;
+  finalTurnParams: TurnRequest['turnParams'] | undefined;
+} {
   const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
   const effort = resolveModelReasoningEffort(
     requestOptions?.nodeConfig,
     inputs.modelReasoningEffort
   );
   const { model, run } = inputs;
-  return {
+  const split = inputs.splitsStructuredOutput && outputSchema !== undefined;
+  const finalTurnParams = split
+    ? {
+        input: [{ type: 'text' as const, text: FINAL_ANSWER_INSTRUCTION, text_elements: [] }],
+        ...(effort ? { effort } : {}),
+        outputSchema,
+      }
+    : undefined;
+  // Multi-agent is fixed when the thread starts, so a split thread starts without it.
+  const threadConfig = split
+    ? { ...inputs.threadConfig, features: { multi_agent: false } }
+    : inputs.threadConfig;
+  const request: Omit<TurnRequest, 'connection'> = {
     abortSignal: requestOptions?.abortSignal,
     tools: inputs.tools,
     login: inputs.login,
@@ -474,17 +567,17 @@ function turnRequestOf(
       sandbox: inputs.titleRequest ? 'read-only' : 'danger-full-access',
       approvalPolicy: 'never',
       ...(model ? { model } : {}),
-      config: inputs.threadConfig,
+      config: threadConfig,
     },
     turnParams: {
       input: [
         { type: 'text', text: buildEffectivePrompt(prompt, requestOptions), text_elements: [] },
       ],
       ...(effort ? { effort } : {}),
-      ...(outputSchema !== undefined ? { outputSchema } : {}),
+      ...(outputSchema !== undefined && !split ? { outputSchema } : {}),
     },
     nodePlugins: inputs.nodePlugins,
-    hasOutputFormat,
+    hasOutputFormat: hasOutputFormat && !split,
     model,
     onThread: id => {
       run.threadId = id;
@@ -493,4 +586,5 @@ function turnRequestOf(
       run.turnId = id;
     },
   };
+  return { request, finalTurnParams };
 }

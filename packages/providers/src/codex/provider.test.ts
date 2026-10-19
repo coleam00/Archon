@@ -46,6 +46,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
 
@@ -1322,6 +1323,82 @@ describe('CodexProvider', () => {
     test('leaves structuredOutput unset when no format was requested', async () => {
       const chunks = await streamOf({ notifications: [agentMessage('{"a":1}')] });
       expect(resultOf(chunks).structuredOutput).toBeUndefined();
+    });
+
+    describe('on a model that cannot take tools and a schema together', () => {
+      const options = (model: string): SendQueryOptions => ({
+        assistantConfig: { model, toolFreeStructuredOutputModels: ['glm-5.3'] },
+        nodeConfig: { nodeId: 'review', output_format: schema },
+      });
+      const toolTurn: FakeTurnScript = {
+        notifications: [
+          agentMessage('Found a missing null check.', 'm-1'),
+          tokenUsage({ input: 100, output: 10 }),
+        ],
+      };
+      const finalTurn: FakeTurnScript = {
+        notifications: [
+          agentMessage('{"summary":"missing null check"}', 'm-2'),
+          tokenUsage({ input: 150, output: 15 }, { input: 50, output: 5 }),
+        ],
+      };
+      const scripted = (...turns: FakeTurnScript[]): (() => FakeTurnScript) => {
+        let index = 0;
+        return () => turns[index++] ?? {};
+      };
+
+      test('runs the tools without the schema, then one tool-free turn on the same thread with it', async () => {
+        const { provider, server } = providerWith(scripted(toolTurn, finalTurn));
+        const chunks = await run(provider, options('glm-5.3'));
+
+        expect(server.processes).toHaveLength(2);
+        const [first, second] = server.processes.map(
+          ({ requests }) =>
+            (method: string) =>
+              requests.find(r => r.method === method)?.params
+        );
+        expect(first('thread/start')?.config).toMatchObject({ features: { multi_agent: false } });
+        expect(first('turn/start')).not.toHaveProperty('outputSchema');
+        expect(second('thread/resume')).toMatchObject({
+          threadId: THREAD_ID,
+          config: TOOL_FREE_THREAD_CONFIG,
+        });
+        expect(server.processes[1].args).toEqual(['app-server']);
+        expect(second('turn/start')).toMatchObject({
+          outputSchema: { required: ['summary'], additionalProperties: false },
+        });
+        expect(chunks).toContainEqual(
+          expect.objectContaining({
+            type: 'agent_message_chunk',
+            text: expect.stringContaining('Found a missing null check.'),
+          })
+        );
+        const result = resultOf(chunks);
+        expect(result.structuredOutput).toEqual({ summary: 'missing null check' });
+        expect(result.tokens).toMatchObject({ input: 150, output: 15 });
+        expect(result.resumed).toBeUndefined();
+        expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      });
+
+      test('a failed tool turn is the result, and no final turn runs', async () => {
+        const { provider, server } = providerWith(
+          scripted({
+            ...toolTurn,
+            completion: { status: 'failed', error: turnError(null, 'boom') },
+          })
+        );
+        expect(resultOf(await run(provider, options('glm-5.3'))).failure).toBeDefined();
+        expect(server.processes).toHaveLength(1);
+      });
+
+      test('another model keeps one turn with tools and the schema together', async () => {
+        const { provider, server } = providerWith(scripted(finalTurn));
+        const chunks = await run(provider, options('gpt-5.5'));
+        expect(server.processes).toHaveLength(1);
+        expect(paramsOf(server, 'turn/start')?.outputSchema).toBeDefined();
+        expect(paramsOf(server, 'thread/start')?.config).not.toHaveProperty('features.multi_agent');
+        expect(resultOf(chunks).structuredOutput).toEqual({ summary: 'missing null check' });
+      });
     });
   });
 
