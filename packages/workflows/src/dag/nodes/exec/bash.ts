@@ -1,3 +1,4 @@
+import { ArtifactExchangeError } from '../../../artifact-exchange';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -117,6 +118,7 @@ export async function executeBashNode(
       ['-c', finalScript],
       {
         cwd,
+        artifactExchange: ctx.artifactExchange,
         timeout: node.timeout,
         endTreeOnTimeout: true,
         env: subprocessEnv,
@@ -155,6 +157,7 @@ export async function executeBashNode(
     // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
     // rejection. Report it verbatim and keep it outside subprocess classification.
     const contractFailure = error instanceof ExecOutputContractError;
+    const exchangeFailure = error instanceof ArtifactExchangeError;
     const isTimeout = !contractFailure && isSubprocessTimeout(err);
     if (isTimeout && node.on_timeout === 'skip') {
       return recordExecTimeoutSkip(ctx, execution);
@@ -166,7 +169,7 @@ export async function executeBashNode(
     const formatted = formatSubprocessFailure(err, label);
     const spawnFailure = hostSpawnFailure(execContext, err);
     let errorMsg: string;
-    if (contractFailure) {
+    if (contractFailure || exchangeFailure) {
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
@@ -186,7 +189,13 @@ export async function executeBashNode(
     }
 
     getLog().error(
-      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
+      {
+        ...formatted.logFields,
+        ...(exchangeFailure ? { err } : {}),
+        nodeId: node.id,
+        nodeType: 'bash',
+        isTimeout,
+      },
       'dag_node_failed'
     );
 
@@ -197,14 +206,16 @@ export async function executeBashNode(
         {
           status: 'failed',
           error: errorMsg,
-          failureKind: contractFailure
-            ? 'output_contract'
-            : err.cancelled
-              ? 'cancelled'
-              : isTimeout
-                ? 'timeout'
-                : 'exec_failed',
-          ...(contractFailure ? { retryable: false as const } : {}),
+          failureKind: exchangeFailure
+            ? 'unknown'
+            : contractFailure
+              ? 'output_contract'
+              : err.cancelled
+                ? 'cancelled'
+                : isTimeout
+                  ? 'timeout'
+                  : 'exec_failed',
+          ...(contractFailure || exchangeFailure ? { retryable: false as const } : {}),
         },
         { output: { text: '' } }
       )

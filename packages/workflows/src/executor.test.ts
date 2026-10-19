@@ -4440,6 +4440,11 @@ describe('executeWorkflow', () => {
           throw new Error('network down');
         }),
       };
+      const publish = mock(async () => {
+        await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
+        await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
+      });
+      const collect = mock(async () => {});
       try {
         const result = await executeWorkflow(
           deps,
@@ -4449,9 +4454,27 @@ describe('executeWorkflow', () => {
           makeWorkflow(),
           'msg',
           { conversationId: 'db-c1', userId: 'u-1' },
-          {}
+          {
+            container: {
+              envId: 'env-1',
+              writeBack: 'auto',
+              backend: {
+                suspend: mock(async () => {}),
+                finalize: mock(async () => ({ requiresApproval: false })),
+                applyChanges: mock(async () => ({
+                  filesApplied: 0,
+                  filesDeleted: 0,
+                  warnings: [],
+                })),
+                discardChanges: mock(async () => {}),
+              },
+              artifactExchange: { publish, collect },
+            },
+          }
         );
         expect(result.success).toBe(false);
+        expect(publish).toHaveBeenCalledTimes(1);
+        expect(collect).not.toHaveBeenCalled();
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
         await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();

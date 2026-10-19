@@ -14,11 +14,7 @@ export async function withArtifactExchange<T>(
   invoke: () => Promise<T>
 ): Promise<T> {
   if (!exchange) return invoke();
-  try {
-    await exchange.publish();
-  } catch (cause) {
-    throw new ArtifactExchangeError('publish', cause);
-  }
+  await publishArtifactInputs(exchange);
   let result: T;
   try {
     result = await invoke();
@@ -39,4 +35,13 @@ export async function withArtifactExchange<T>(
     throw new ArtifactExchangeError('collect', cause);
   }
   return result;
+}
+
+export async function publishArtifactInputs(exchange: ArtifactExchange | undefined): Promise<void> {
+  if (!exchange) return;
+  try {
+    await exchange.publish();
+  } catch (cause) {
+    throw new ArtifactExchangeError('publish', cause);
+  }
 }

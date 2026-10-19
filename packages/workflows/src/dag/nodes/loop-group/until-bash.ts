@@ -33,6 +33,7 @@ export async function runGroupUntilBash(
       ['-c', bash.script()],
       {
         cwd: ctx.cwd,
+        artifactExchange: ctx.artifactExchange,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,
         protectedCredentialValues: config.protectedCredentialValues,

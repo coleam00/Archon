@@ -227,6 +227,7 @@ export async function executeDagWorkflow(
     conversationId,
     cwd,
     execContext,
+    artifactExchange: containerCtx?.artifactExchange,
     runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,

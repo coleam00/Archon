@@ -51,15 +51,37 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   execution. This is acceptable only on a single-tenant host the operator controls.
   A transient in-container env file is a tracked follow-up.
 
-- **`$ARTIFACTS_DIR` is the one writable host bind.** The run's artifacts directory
-  is bind-mounted read-write at the same absolute path, so a node's screenshots,
-  reports, and the `evidence_policy` marker land on the host where the engine and the
-  operator read them. Everything the container writes there is run output and is
-  treated as untrusted data by the host, never executed. In-container root writes
-  root-owned files on a rootful Linux daemon; Archon `chown`s the mount back to the
-  host user on suspend and destroy, best-effort and logged
-  (`isolation.container_artifacts_chown_failed`). The run's frozen workflow source is a
-  separate read-only bind, never under `$ARTIFACTS_DIR`.
+- **New environments separate artifact storage.** The main container has a private
+  writable output volume at the logical `$ARTIFACTS_DIR`; it has no canonical
+  artifacts bind, even read-only, in either overlay mode. Canonical storage must
+  not overlap another project/source bind. Trusted helpers publish engine-owned
+  `nodes/`, `.archon/` inputs and managed credential leaves as byte copies, then
+  collect container-authored output after every invocation, including errors and
+  cancellation. Host creation/update/deletion visibility is delayed until collection.
+  Engine namespaces stay host-authoritative; container copies never write back.
+
+  Transfers freeze the producer and serialize against suspension/destruction.
+  Helpers have no network, workspace/source mounts, SYS_ADMIN or privilege escalation.
+  Publish mounts canonical storage read-only; collect mounts output read-only.
+  Collection produces real directories and independent regular bytes with ordinary
+  modes and canonical-root ownership, dropping source modes, hardlinks, xattrs and
+  ownership. Contained regular-file leaf links are materialized; linked directory
+  components, escaping/dangling/cyclic links and special files fail visibly. Engine
+  leaf links are replaced by temporary-file rename, never written through.
+
+  The output volume and version 1 exchange metadata survive pause/recreation.
+  Missing storage refuses resume. Destruction removes the producer, collects, then
+  deletes volumes; collection failure preserves volumes and the environment record.
+  An interrupted helper or unexplained paused producer requires explicit ownership
+  inspection using the identifiers in the error, before removing the helper or
+  unpausing. Ambiguous helper completion never authorizes unfreezing the producer.
+
+  **Legacy environments without `artifactExchange` metadata retain the writable
+  canonical bind and its symlink-write exposure until they end.** Resume does not
+  migrate them. Legacy rootful ownership hand-back remains best-effort and logged
+  (`isolation.container_artifacts_chown_failed`). Continue new environments using
+  a binary that understands version 1; downgrade continuation is not promised.
+  This artifact boundary does not fix native mode's project-root remount escape.
 
 - **Captured-source integrity is checkpoint detection, not containment.** Archon
   hashes the host capture against the run's pinned identity before dispatching each

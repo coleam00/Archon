@@ -1,3 +1,4 @@
+import { publishArtifactInputs } from './artifact-exchange';
 import {
   continueBlockedRun,
   isFanOutParentReleased,
@@ -385,6 +386,7 @@ export async function executeWorkflow(
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
     // returns empty bags when the feature is disabled or no userId is present).
     await clearManagedProviderCredentialFiles(artifactsDir);
+    await publishArtifactInputs(containerCtx?.artifactExchange);
     await assertRunCredentials(deps, prepared);
     const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
       deps,

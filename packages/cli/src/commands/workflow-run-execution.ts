@@ -221,6 +221,7 @@ function commonRunOptions(launch: ForegroundLaunch): CommonRunOptions {
         envId: container.envId,
         writeBack: admission.workflow.container?.write_back ?? ('approve' as const),
         backend: container.backend,
+        artifactExchange: workspace.container?.artifactExchange,
         ...(overlayMode ? { overlayMode } : {}),
       }
     : undefined;

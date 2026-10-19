@@ -343,6 +343,7 @@ async function runUntilBash(
       ['-c', substitutedBash],
       {
         cwd: ctx.cwd,
+        artifactExchange: ctx.artifactExchange,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,
         protectedCredentialValues: config.protectedCredentialValues,
