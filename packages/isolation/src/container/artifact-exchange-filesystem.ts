@@ -191,6 +191,16 @@ async function transferArtifacts(options: TransferOptions): Promise<void> {
   };
   for (const child of await fs.readdir(output)) await snapshot(child);
 
+  for (const dir of dirs) {
+    let current = canonical;
+    for (const part of dir.split('/')) {
+      current = path.join(current, part);
+      const info = await maybeStat(current);
+      if (info?.isSymbolicLink()) refuse(dir, 'canonical parent is a symlink');
+      if (!info?.isDirectory()) break;
+    }
+  }
+
   const reconcile = async (rel: string): Promise<void> => {
     if (reserved(rel)) return;
     const file = path.join(canonical, rel);

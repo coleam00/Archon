@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   rmSync,
   symlinkSync,
@@ -204,10 +205,10 @@ describe('trusted artifact transfer program', () => {
     const f = fixture();
     f.put(f.canonical, 'becomes-dir', 'old');
     f.put(f.canonical, 'becomes-file/child', 'old');
-    f.put(f.output, 'becomes-dir/child', 'new');
+    f.put(f.output, 'becomes-dir/nested/child', 'new');
     f.put(f.output, 'becomes-file', 'new');
     expect(f.transfer('collect').code).toBe(0);
-    expect(readFileSync(join(f.canonical, 'becomes-dir/child'), 'utf8')).toBe('new');
+    expect(readFileSync(join(f.canonical, 'becomes-dir/nested/child'), 'utf8')).toBe('new');
     expect(readFileSync(join(f.canonical, 'becomes-file'), 'utf8')).toBe('new');
   });
 
@@ -270,6 +271,42 @@ describe('trusted artifact transfer program', () => {
     expect(lstatSync(join(f.canonical, 'report')).isFile()).toBe(true);
     expect(readFileSync(join(f.outside, 'sentinel'), 'utf8')).toBe('sentinel');
   });
+
+  for (const parent of ['reports', 'reports/nested/deep']) {
+    for (const targetKind of ['external', 'internal', 'dangling']) {
+      for (const hasFile of [false, true]) {
+        symlinkTest(
+          `collect refuses canonical ${parent} linked to ${targetKind} storage for an ${hasFile ? 'occupied' : 'empty'} output directory`,
+          () => {
+            const f = fixture();
+            const target = targetKind === 'external' ? f.outside : join(f.canonical, 'target');
+            if (targetKind === 'internal') f.put(f.canonical, 'target/sentinel');
+            f.put(f.canonical, 'deleted', 'retained');
+            mkdirSync(dirname(join(f.canonical, parent)), { recursive: true });
+            symlinkSync(target, join(f.canonical, parent));
+            mkdirSync(join(f.output, parent), { recursive: true });
+            if (hasFile) f.put(f.output, `${parent}/result.txt`, 'container output');
+            f.put(f.output, 'valid', 'not imported');
+
+            const result = f.transfer('collect');
+            expect(result.code).not.toBe(0);
+            expect(result.error).toContain('Artifact exchange refused');
+            expect(result.error).toContain('canonical parent is a symlink');
+            expect(lstatSync(join(f.canonical, parent)).isSymbolicLink()).toBe(true);
+            expect(readlinkSync(join(f.canonical, parent))).toBe(target);
+            expect(existsSync(join(f.canonical, parent, 'result.txt'))).toBe(false);
+            expect(readFileSync(join(f.canonical, 'deleted'), 'utf8')).toBe('retained');
+            expect(existsSync(join(f.canonical, 'valid'))).toBe(false);
+            expect(readdirSync(f.outside)).toEqual(['sentinel']);
+            expect(readFileSync(join(f.outside, 'sentinel'), 'utf8')).toBe('sentinel');
+            if (targetKind === 'internal')
+              expect(readFileSync(join(target, 'sentinel'), 'utf8')).toBe('sentinel');
+            if (targetKind === 'dangling') expect(existsSync(target)).toBe(false);
+          }
+        );
+      }
+    }
+  }
 
   test('refuses engine file/directory conflicts without removing output', () => {
     const f = fixture();
