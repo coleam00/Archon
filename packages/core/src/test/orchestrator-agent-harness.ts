@@ -502,21 +502,25 @@ export const mockFailPreparedRun = mock<
   import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
 >(async () => ({ failed: true }));
 
+export const mockCreateWorkflowRun = mock<
+  import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
+>(async data =>
+  makeRun({
+    id: data.id,
+    workflow_name: data.workflow_name,
+    status: 'pending',
+    metadata: data.metadata ?? {},
+    adopted_from_run_id: data.adopted_from_run_id ?? null,
+    working_path: null,
+  })
+);
+
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
-      createWorkflowRun: async (
-        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
-      ) =>
-        makeRun({
-          id: data.id,
-          workflow_name: data.workflow_name,
-          status: 'pending',
-          metadata: data.metadata ?? {},
-          working_path: null,
-        }),
+      createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,
     },
@@ -1008,6 +1012,7 @@ export function resetDispatchMocks(): void {
   mockGetWorkflowRunDb.mockReset();
   mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
   capturedSourceOwnerCalls.length = 0;
+  mockCreateWorkflowRun.mockClear();
   mockFailPreparedRun.mockReset();
   mockFailPreparedRun.mockResolvedValue({ failed: true });
   mockExecuteWorkflow.mockClear();

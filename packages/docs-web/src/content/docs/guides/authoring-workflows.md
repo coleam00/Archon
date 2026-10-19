@@ -2129,12 +2129,18 @@ map goes through — so a map accepted when composing is accepted here:
 
 One consequence worth knowing on **chat, the run route, and the console** — the surfaces that reuse a
 conversation. Invoking a workflow there when a resumable run of it already exists in that
-conversation *continues that run* rather than starting a new one, without any resume vocabulary
+conversation normally *continues that run* rather than starting a new one, without any resume vocabulary
 (see [DAG Resume on Failure](#dag-resume-on-failure)). New `inputs` values passed on such a call are
 **not applied** — the continued run keeps what it started with, and Archon says so, naming the
 values it ignored. To run fresh with different values, abandon the existing run first
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
 `archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
+
+Adoption and supersede declarations are exceptions: if the dispatch would continue an existing run,
+Archon refuses the declaration before continuation or its fresh fallback. The refusal names the
+existing run and tells you to resume or abandon it first, or use a conversation with no open run.
+An accepted fresh supersede records the replaced run ID and `supersede` continuation mode on the
+new run. Adoption and supersede cannot be declared together.
 
 In chat (Slack, Telegram, Discord, GitHub, Web UI), the assistant sees each workflow's declared
 inputs, asks you for missing required values in conversation, and passes them through its

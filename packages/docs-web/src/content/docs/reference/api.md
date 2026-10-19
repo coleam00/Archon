@@ -339,6 +339,13 @@ curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -F "files=@screenshot.png"
 ```
 
+**Adoption and supersede.** JSON requests may supply `adopt_run_id` or `supersedes_run_id`,
+but cannot supply both. If the conversation would continue an existing run, either declaration
+is refused before continuation or its fresh fallback. The refusal names the existing run: resume
+it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or
+use a conversation with no open run. An accepted fresh supersede records the replaced run ID in
+`adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
+
 **Supplying declared inputs.** A workflow that declares [`inputs:`](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs) takes their values through an optional `inputs` map — a flat object of string values. Omit a name to take its declared `default:`.
 
 ```bash
