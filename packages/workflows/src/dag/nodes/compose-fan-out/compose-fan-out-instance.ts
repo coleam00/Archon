@@ -150,7 +150,7 @@ async function claimInstanceStart(
     await deriveInstanceSinks(ctx, instance.execution);
   } catch (err) {
     return {
-      status: 'failed',
+      status: 'error',
       output: '',
       error: `instance ${instance.snapshot.identity} could not persist its start: ${(err as Error).message}`,
     };

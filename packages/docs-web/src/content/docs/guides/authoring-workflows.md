@@ -2792,10 +2792,11 @@ What you get, compared with the `workflow:` fan-out above:
   aggregate value, and `$INPUTS` binding follows the block's declared `inputs:`. The item
   binding named by `fan_out.as` is required; there is no implicit `$ARGUMENTS` fallback.
 - **Ordered aggregate.** `$<id>.output` is a JSON array of the instances' terminal outputs
-  **in item order**, not completion order; under `join: all_done` a failed instance
-  contributes the `{ archon_failed: true, error, status }` marker. An empty item list
-  completes immediately with `[]`. Under `join: all_success` any failed instance fails the
-  node.
+  **in item order**, not completion order; under `join: all_done` an authored child failure
+  contributes the `{ archon_failed: true, error, status }` marker. Required artifact writes,
+  artifact exchange failures, and instance persistence errors fail either join. An empty
+  item list completes immediately with `[]`. Under `join: all_success` any failed instance
+  fails the node.
 - **Content-addressed resume.** Each instance is keyed by a hash of its item value (plus an
   ordinal for byte-identical duplicates). The first ordered snapshot is persisted before
   anything schedules and remains authoritative: a resume ignores and logs a producer list

@@ -493,6 +493,48 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     expect(new Set(ownedNodeIds).size).toBe(2);
   });
 
+  it('fails all_done when the still-running parent cannot persist an instance start', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: test block\nnodes:\n  - id: work\n    prompt: work\n'
+    );
+    const store = createMockStore();
+    const refused = new Error('start storage unavailable');
+    (
+      store.persistWorkflowEventIfRunning as Mock<IWorkflowStore['persistWorkflowEventIfRunning']>
+    ).mockRejectedValue(refused);
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('claim-rejected'),
+        workflow: {
+          name: 'claim-rejected',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
+            },
+          ],
+        },
+      })
+    );
+    expect(store.persistWorkflowEventIfRunning).toHaveBeenCalled();
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(eventsOf(store)).toContainEqual(
+      expect.objectContaining({
+        event_type: 'node_failed',
+        step_name: 'fan',
+        data: expect.objectContaining({
+          error: expect.stringContaining('start storage unavailable'),
+        }),
+      })
+    );
+  });
+
   it('does not start a later instance when its atomic running-state claim loses', async () => {
     await writeBlock(
       [

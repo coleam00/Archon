@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { withArtifactWriteRoot } from './artifact-writes';
+import {
+  withArtifactWriteRoot,
+  withArtifactWriteFailureObserver,
+  writeArtifactFile,
+  writeArtifactFileSync,
+} from './artifact-writes';
 import { writeNodeArtifact, writeNodeArtifactsListing } from './artifacts-index';
 import { writeSpillFile, shellQuoteOrFile } from './dag/shell-quote';
 import { formatPersistedNodeOutput } from './dag/node-output';
@@ -134,3 +139,34 @@ test('concurrent host and protected scopes do not share a write policy', async (
   ]);
   expect(await readFile(join(outside, 'probe.md'), 'utf8')).toBe('host output');
 });
+
+test.each(['async', 'sync'] as const)(
+  'observes ordinary %s write errors only in protected scopes',
+  async kind => {
+    const destination = join(root, 'destination');
+    await mkdir(destination);
+    const failures: unknown[] = [];
+    const write = () =>
+      kind === 'async'
+        ? writeArtifactFile(destination, 'output')
+        : writeArtifactFileSync(destination, 'output');
+    for (const writeRoot of [root, undefined]) {
+      let caught: unknown;
+      await withArtifactWriteFailureObserver(
+        error => failures.push(error),
+        () =>
+          withArtifactWriteRoot(writeRoot, async () => {
+            try {
+              await write();
+            } catch (error) {
+              caught = error;
+            }
+          })
+      );
+      expect(caught).toBeInstanceOf(Error);
+      expect(failures).toHaveLength(1);
+      if (writeRoot !== undefined) expect(failures[0]).toBe(caught);
+    }
+    expect(await readdir(root)).toEqual(['destination']);
+  }
+);

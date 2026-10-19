@@ -377,6 +377,123 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     }
   );
 
+  it.each([
+    'agent-listing',
+    'bash-listing',
+    'script-listing',
+    'loop-listing',
+    'loop-group-listing',
+    'bash-persisted',
+    'script-persisted',
+    'bash-reference',
+    'nested-sidecar',
+  ] as const)('fails composed all_done after required %s refusal', async kind => {
+    mockLogFn.mockClear();
+    const artifactsDir = join(root, 'canonical');
+    const outside = join(root, 'outside');
+    await mkdir(artifactsDir);
+    await mkdir(outside);
+    await writeFile(join(outside, 'sentinel'), 'untouched');
+    const workflows = join(root, '.archon', 'workflows');
+    await mkdir(workflows, { recursive: true });
+    const large = 'x'.repeat(40_000);
+    const body =
+      kind === 'agent-listing' || kind === 'nested-sidecar'
+        ? 'prompt: work\n    output_type: text'
+        : kind === 'loop-listing'
+          ? 'loop: {prompt: work, until: DONE, max_iterations: 1}'
+          : kind === 'loop-group-listing'
+            ? 'loop_group: {until: DONE, max_iterations: 1, nodes: [{id: child, prompt: work}]}'
+            : kind.startsWith('script')
+              ? 'runtime: bun\n    script: console.log("work")'
+              : kind === 'bash-reference'
+                ? 'bash: echo $seed.output'
+                : 'bash: echo work';
+    await writeFile(
+      join(workflows, 'block.yaml'),
+      `name: block\ndescription: Required write failure\nnodes:\n  - id: work\n    ${body}\n`
+    );
+    if (kind === 'nested-sidecar') {
+      await writeFile(
+        join(workflows, 'nested.yaml'),
+        'name: nested\ndescription: Nested join\nnodes:\n  - id: inner\n    include: block\n    fan_out: {items: "[1]", as: item, max_parallel: 1, join: all_done}\n'
+      );
+      await symlink(outside, join(artifactsDir, 'nodes'));
+    } else {
+      await mkdir(join(artifactsDir, '.archon'));
+      await symlink(
+        outside,
+        join(
+          artifactsDir,
+          '.archon',
+          kind.endsWith('listing') ? 'typed-artifacts' : 'node-output-spills'
+        )
+      );
+    }
+    if (kind === 'bash-reference') {
+      await writeFile(
+        join(workflows, 'block.yaml'),
+        `name: block\ndescription: Reference spill\nnodes:\n  - id: seed\n    prompt: seed\n  - id: work\n    depends_on: [seed]\n    ${body}\n`
+      );
+    }
+    const store = createMockStore();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: kind === 'bash-reference' ? large : 'work' };
+      yield { type: 'result' };
+    });
+    const exec = spyOnNodeExec().mockResolvedValue({ stdout: large, stderr: '' });
+    try {
+      await executeDagWorkflow(
+        exchangeOptions({
+          deps: createMockDeps(store),
+          cwd: root,
+          artifactsDir,
+          workflowRun: makeWorkflowRun('required-write', { output_root: root }),
+          artifactExchange: { async publish() {}, async collect() {} },
+          workflow: {
+            name: 'required-write',
+            nodes: [
+              dagNodeSchema.parse({
+                id: 'outer',
+                include: kind === 'nested-sidecar' ? 'nested' : 'block',
+                fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
+              }),
+            ],
+          },
+        })
+      );
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      expect(store.createWorkflowEvent.mock.calls).toContainEqual([
+        expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
+      ]);
+      expect(mockLogFn.mock.calls).toContainEqual([
+        expect.objectContaining({
+          err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
+        }),
+        'artifacts.write_failed',
+      ]);
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(
+        kind === 'nested-sidecar' || kind === 'bash-reference' ? 1 : 0
+      );
+      expect(exec).toHaveBeenCalledTimes(kind.endsWith('persisted') ? 1 : 0);
+      if (kind.endsWith('persisted') || kind === 'bash-reference') {
+        expect(mockLogFn.mock.calls).toContainEqual([
+          expect.objectContaining({
+            dir: kind.endsWith('persisted')
+              ? join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
+              : join(artifactsDir, '.archon', 'node-output-spills'),
+          }),
+          'dag.spill_file_write_failed',
+        ]);
+      }
+      expect(await readdir(outside)).toEqual(['sentinel']);
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('untouched');
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
   for (const joinRule of ['all_success', 'all_done'] as const) {
     it.each(['collision', 'linked-parent', 'io'] as const)(
       `fails composed ${joinRule} after a required %s sidecar failure`,

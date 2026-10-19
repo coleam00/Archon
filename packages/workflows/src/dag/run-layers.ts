@@ -1,4 +1,4 @@
-import { withArtifactWriteRoot } from '../artifact-writes';
+import { withArtifactWriteRoot, withArtifactWriteFailureObserver } from '../artifact-writes';
 /**
  * The layer walker: runs a DAG's (or subgraph's) topological layers, deciding per node
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
@@ -54,6 +54,16 @@ async function settleSequentially(
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(ctx: RunLayersContext): Promise<void> {
+  return withArtifactWriteFailureObserver(
+    error => {
+      getLog().error({ err: error, workflowRunId: ctx.workflowRun.id }, 'artifacts.write_failed');
+      ctx.onRequiredArtifactFailure?.(error);
+    },
+    () => runObservedLayers(ctx)
+  );
+}
+
+async function runObservedLayers(ctx: RunLayersContext): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {

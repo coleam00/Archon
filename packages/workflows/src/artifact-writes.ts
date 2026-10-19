@@ -13,6 +13,19 @@ export function withArtifactWriteRoot<T>(root: string | undefined, operation: ()
   return roots.run(root === undefined ? undefined : resolve(root), operation);
 }
 
+const failureObservers = new AsyncLocalStorage<(error: unknown) => void>();
+
+export function withArtifactWriteFailureObserver<T>(
+  observer: (error: unknown) => void,
+  operation: () => T
+): T {
+  return failureObservers.run(observer, operation);
+}
+
+function reportWriteFailure(error: unknown): void {
+  if (roots.getStore() !== undefined) failureObservers.getStore()?.(error);
+}
+
 export function isProtectedArtifactPath(path: string): boolean {
   const root = roots.getStore();
   if (root === undefined) return false;
@@ -54,33 +67,43 @@ export async function prepareArtifactParent(path: string): Promise<void> {
 }
 
 export async function writeArtifactFile(path: string, value: string, mode?: number): Promise<void> {
-  await prepareArtifactParent(path);
-  if (roots.getStore() === undefined) {
-    await writeFile(path, value, { encoding: 'utf8', ...(mode === undefined ? {} : { mode }) });
-    return;
-  }
-  const temporary = resolve(dirname(path), `.archon-${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, value, { flag: 'wx', mode: mode ?? 0o644 });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
+    await prepareArtifactParent(path);
+    if (roots.getStore() === undefined) {
+      await writeFile(path, value, { encoding: 'utf8', ...(mode === undefined ? {} : { mode }) });
+      return;
+    }
+    const temporary = resolve(dirname(path), `.archon-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, value, { flag: 'wx', mode: mode ?? 0o644 });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  } catch (error) {
+    reportWriteFailure(error);
+    throw error;
   }
 }
 
 export function writeArtifactFileSync(path: string, value: string): void {
-  if (roots.getStore() === undefined) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, value);
-    return;
-  }
-  checkedParent(path);
-  const temporary = resolve(dirname(path), `.archon-${randomUUID()}.tmp`);
   try {
-    writeFileSync(temporary, value, { flag: 'wx', mode: 0o644 });
-    renameSync(temporary, path);
-  } finally {
-    rmSync(temporary, { force: true });
+    if (roots.getStore() === undefined) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, value);
+      return;
+    }
+    checkedParent(path);
+    const temporary = resolve(dirname(path), `.archon-${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, value, { flag: 'wx', mode: 0o644 });
+      renameSync(temporary, path);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  } catch (error) {
+    reportWriteFailure(error);
+    throw error;
   }
 }
 
