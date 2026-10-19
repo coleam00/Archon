@@ -106,8 +106,10 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
-Keep `gh` as the default until a compatible release passes a real-PR check.
+The GitHub plugin passes this preflight from v0.12.1; v0.11.1 lacks eight required
+operations. Keep `gh` as the default: on `forge`, the merge queue still refuses, delivery
+doesn't read or answer review threads, and a ruling can't be written into an issue body,
+because the forge contract has no review-thread or issue-body operation yet.
 
 The merge queue reads through `gh` alone and refuses `forge`: its sweep judges a pull
 request's unresolved review threads, which the forge contract does not report. The gate
@@ -163,8 +165,8 @@ leaves it as its author left it. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
-another writer adds survive. On the `forge` source it still writes the whole label set back, because
-the forge contract has no single-label add or remove yet. No delivery node files
+another writer adds survive. On the `forge` source it still writes the whole label set back,
+although the GitHub plugin has single-label add and remove from v0.12.1. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
 [`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
 `archon-ship-block` that is the `report` node, which also runs when a node fails, so a
