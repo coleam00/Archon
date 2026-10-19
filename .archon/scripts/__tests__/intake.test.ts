@@ -503,6 +503,7 @@ const READY_VERDICT = {
   INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
   INPUTS_SUMMARY: 'Ready to deliver',
   INPUTS_CLOSURE: 'null',
+  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
@@ -611,6 +612,13 @@ describe('the intake scripts', () => {
       importance: { value: 'high' },
       urgency: { value: 'soon' },
     });
+    // Related work is stored for later rounds; the run-only fields are not.
+    expect(doc.facts.triage?.related).toEqual([
+      { url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' },
+    ]);
+    expect(Object.keys(doc.facts.triage ?? {}).sort()).toEqual(
+      ['at', 'complexity', 'importance', 'pull_request', 'related', 'run_id', 'size', 'type', 'urgency', 'verdict']
+    );
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'deliver',
       verdict: 'READY',

@@ -358,8 +358,10 @@ too — a `gh` update notice merged into a read becomes the value.
 [`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
 Trigger bindings start it on issue events. Each issue has a work item, the state document `work/<number>` in the
 project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
-document is the item's state: its trust, stage, triage fields, promotion, claim and
-a short history. The issue's pack labels mirror it, and a label a person adds is a
+document is the item's state: its trust, stage, triage fields (the five judged
+fields and the related work triage found: overlapping issues, earlier attempts and
+merged changes on the same surface, which plan reads), promotion, claim and a short
+history. The issue's pack labels mirror it, and a label a person adds is a
 request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` (a JSON

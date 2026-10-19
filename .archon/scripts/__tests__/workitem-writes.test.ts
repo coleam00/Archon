@@ -20,6 +20,7 @@ const inputs = {
   INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
   INPUTS_SUMMARY: 'Ready',
   INPUTS_AREA_LABELS: '["area","nonexistent"]',
+  INPUTS_RELATED: '[]',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
 test('gh triage applies wanted labels', () => {
@@ -129,6 +130,21 @@ test("a close link that is not a qualified URL is refused, so a guess never reac
   });
   expect(run.code).not.toBe(0);
   expect(run.stderr).toContain('closure.url must be a fully qualified');
+});
+
+test('related work reaches the verdict as declared, and a related link that is not a qualified URL is refused', () => {
+  const related = [{ url: 'https://ghe.example.com/example/repo/pull/5', relation: 'merged change on the same surface' }];
+  const passed = runPackScript('triage/scripts/verdict', {
+    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: JSON.stringify(related) },
+  });
+  expect({ code: passed.code, stderr: passed.stderr }).toEqual({ code: 0, stderr: '' });
+  expect((JSON.parse(passed.stdout) as { related: unknown }).related).toEqual(related);
+
+  const refused = runPackScript('triage/scripts/verdict', {
+    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: '[{"url":"issue 5","relation":"overlaps"}]' },
+  });
+  expect(refused.code).not.toBe(0);
+  expect(refused.stderr).toContain('related urls must be fully qualified');
 });
 
 test('malformed qualified triage identity refuses before invoking a transport', () => {

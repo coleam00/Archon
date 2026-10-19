@@ -130,6 +130,7 @@ nodes:
       blocked_reason: { from: "$triage.output.blocked_reason", if_skipped: null }
       blocked_by: { from: "$triage.output.blocked_by", if_skipped: null }
       closure: { from: "$triage.output.closure", if_skipped: null }
+      related: { from: "$triage.output.related", if_skipped: null }
     output_format:
       type: object
       properties:
