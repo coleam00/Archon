@@ -330,7 +330,8 @@ always used. A user who sets nothing gets the same models as before.
 | Alias | Nodes | Falls back to |
 |---|---|---|
 | `@triage` | triage | `medium` |
-| `@planner` | plan, investigate | `large` (plan), `medium` (investigate) |
+| `@planner` | plan | `large` |
+| `@investigator` | investigate | `medium` |
 | `@implementer` | implement, including delivery's reshape | `large` |
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code`, `medium` for the rest) |
