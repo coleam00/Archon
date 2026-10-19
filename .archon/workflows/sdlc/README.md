@@ -477,9 +477,8 @@ The predicate only saves runs; intake ignores any other label. A binding install
 
 Before launching ship, route can finish an open PR whose trusted canonical Archon
 review says Ready at its current full head SHA and whose CI is green at that head.
-Apply verifies the head, takes the PR out of draft, and rechecks the head, trusted
-review and CI before recording ready
-without a delivery round or push. A triage-linked PR needs no earlier build round.
+Apply verifies the head, trusted review and CI before taking the PR out of draft,
+then rechecks the head and records ready without a delivery round or push. A triage-linked PR needs no earlier build round.
 On the forge source, the plugin must support `pr.comments` to read conversation reviews;
 install a release/plugin carrying that operation before using this path. Route-agent
 read failures ask for a setup remedy. An initial facts read failure stops the run
@@ -544,8 +543,8 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
   defects asks the scope question instead of running another round.
-- **Writes.** On direct completion, `apply` verifies the reviewed head before and after
-  draft conversion, rechecks the trusted Ready review and green CI at that head, then
+- **Writes.** On direct completion, `apply` rechecks the trusted Ready review and green
+  CI at the reviewed head before draft conversion, verifies the head again, then
   records ready and releases the claim. The `apply` script
   refuses an attention item without the choice it recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one

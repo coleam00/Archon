@@ -162,6 +162,7 @@ function finishReviewedPr(pr: PrRecord | null, head: string): PrRecord {
   const before = viewPr(ref, source).pr;
   if (before.state !== 'open' || before.head_revision !== head)
     throw new Error(`${before.url} is ${before.state} at ${before.head_revision}; expected open at ${head}`);
+  verifyReady(ref, head);
   let after: PrRecord;
   try {
     after = setPrDraft(ref, false, source);
@@ -170,7 +171,6 @@ function finishReviewedPr(pr: PrRecord | null, head: string): PrRecord {
   }
   if (after.state !== 'open' || after.is_draft || after.head_revision !== head)
     throw new Error(`draft conversion may have landed: ${after.url} is ${after.state}, draft=${String(after.is_draft)} at ${after.head_revision}; expected open and non-draft at ${head}`);
-  verifyReady(ref, head);
   return after;
 }
 

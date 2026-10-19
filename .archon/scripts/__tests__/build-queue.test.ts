@@ -556,14 +556,15 @@ if (argv[0] === 'forge') {
       expect(applied.stderr).toContain(eligibility === 'removed_review' ? 'one trusted Ready review' : 'green CI');
       expect(stored(at).value?.facts.build?.status).not.toBe('ready');
       expect(stored(at).value?.claim?.run_id).toBe('run-1');
+      expect(readFileSync(calls, 'utf8')).not.toContain('pr.ready');
       return;
     }
     expect(ok(applied)).toMatchObject({ decision: 'ready' });
     expect(readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line))).toEqual([
       { op: 'pr.view', request: { selector: { kind: 'number', ref: PR } } },
-      { op: 'pr.ready', request: { ref: PR } },
       { op: 'pr.comments', request: { ref: PR } },
       { op: 'checks.state', request: { ref: PR } },
+      { op: 'pr.ready', request: { ref: PR } },
     ]);
     expect(applied.gh).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
@@ -608,6 +609,8 @@ if (argv[0] === 'forge') {
     }, { ...options, pr: { headRefOid: 'a'.repeat(40), ...options.pr } });
     expect(applied.code).not.toBe(0);
     expect(applied.stderr).toContain(options.error);
+    if (options.error === 'green CI' || options.error === 'one trusted Ready review')
+      expect(applied.gh.some(call => call.startsWith('pr ready'))).toBe(false);
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 
