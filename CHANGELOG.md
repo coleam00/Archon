@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The server no longer contains a Slack adapter; Slack runs only as the `chat-slack` plugin. After upgrading, run `archon plugin add coleam00/Archon/plugins/chat-slack` (in Docker, `docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/chat-slack`) and restart. Until you do, Slack stays off, and when `SLACK_BOT_TOKEN` is set startup logs a `chat.bundled_adapter_retired` warning naming that command. The Slack app, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_USER_IDS`, `SLACK_STREAMING_MODE`, and existing Slack conversations, linked identities and workspaces are unchanged. In Slack, `/archon connect github` now points to the Web UI or `archon auth github` instead of running the device flow. Remove the plugin before downgrading to a release without chat plugin support, which rejects its receipt. (#3646)
+
 ### Changed
 
+- Server telemetry reports how many chat plugins it hosts (`chat_plugins`), and `adapter_slack` now means the Slack plugin is installed rather than that Slack tokens are set. Plugin ids are not sent. Telemetry `schema_version` is 11. (#3646)
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
 
 ## [0.12.1] - 2026-10-17

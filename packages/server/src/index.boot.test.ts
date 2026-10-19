@@ -10,9 +10,7 @@ import {
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
-import type { ServerResumeOutcome, WorkflowResumeTarget } from './services/workflow-resume-service';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import {
   clearConfigCache,
@@ -23,122 +21,65 @@ import {
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
-let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
-type SlackWorkflowResume = (
-  runId: string,
-  slackUserId: string
-) => Promise<ServerResumeOutcome['kind']>;
+const DEFAULT_POLICY_IDS = [
+  'api',
+  'cli',
+  'discord',
+  'gitea',
+  'github',
+  'gitlab',
+  'telegram',
+  'web',
+];
+let expectedPolicyIds = DEFAULT_POLICY_IDS;
 
-const persistedRun: WorkflowRun = {
-  origin: { conversationId: 'conversation-1' },
-  id: 'run-1',
-  workflow_name: 'deliver',
-  conversation_id: 'conversation-1',
-  parent_conversation_id: null,
-  codebase_id: null,
-  status: 'paused',
-  outcome: null,
-  user_message: 'deliver',
-  metadata: {},
-  started_at: new Date('2026-10-03T10:00:00.000Z'),
-  completed_at: null,
-  last_activity_at: null,
-  working_path: '/tmp/worktree',
-  user_id: null,
-  parent_run_id: null,
-  adopted_from_run_id: null,
-  output_root: null,
-  checkout_baseline: null,
-};
-
-const workflowPlatform = {
-  sendMessage: mock(async (): Promise<void> => undefined),
-  getStreamingMode: (): 'batch' => 'batch',
-  getPlatformType: (): string => 'slack',
-} satisfies IWorkflowPlatform;
-const resumeTarget: WorkflowResumeTarget = {
-  kind: 'platform',
-  destination: {
-    platform: workflowPlatform,
-    conversationId: 'slack-thread-1',
-  },
-};
-
-const mockGetWorkflowRun = mock(
-  async (_runId: string): Promise<WorkflowRun | null> => persistedRun
-);
-const mockFindOrCreateUser = mock(async (): Promise<{ id: string }> => ({ id: 'actor-user-1' }));
-const mockWorkflowResumeTargetForRun = mock(
-  async (
-    _run: WorkflowRun,
-    _platforms: ReadonlyMap<string, IWorkflowPlatform>
-  ): Promise<WorkflowResumeTarget> => resumeTarget
-);
-const mockResumeWorkflowRunFromServer = mock(
-  async (): Promise<ServerResumeOutcome> => ({ kind: 'resumed' })
-);
+async function writeChatReceipt(
+  id: string,
+  policy: { workspaceRetention: 'age-based' | 'retain'; streaming?: object }
+): Promise<string> {
+  const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
+  await mkdir(dirname(file), { recursive: true });
+  const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
+  await writeFile(
+    file,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: 'owner/chat-fixture',
+      manifest: {
+        schemaVersion: 1,
+        kind: 'chat',
+        name: 'fixture',
+        description: 'Fixture',
+        executable: 'archon-chat-fixture',
+      },
+      tag: 'v1',
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+      files: [{ path: executable, sha256: 'b'.repeat(64) }],
+      descriptor: {
+        protocol: 'archon-chat/1',
+        id,
+        displayName: 'Fixture',
+        version: '1',
+        capabilities: { defaultWorkflowDispatch: 'background' },
+        policy,
+      },
+    })
+  );
+  return file;
+}
 
 const hostedPlugins: string[][] = [];
 const mockChatHostStart = mock(() => {});
 const mockChatHostStop = mock(async () => {});
 const mockWebStop = mock(async () => {});
-const mockSlackStop = mock(() => {});
-const mockBridgeDetach = mock(() => {});
 mock.module('./chat-host/runtime', () => ({
   createChatHost: (installed: { descriptor: { id: string } }[]) => {
     hostedPlugins.push(installed.map(plugin => plugin.descriptor.id));
     return { start: mockChatHostStart, stop: mockChatHostStop, attentionDestinations: [] };
   },
 }));
-
-let capturedResume: SlackWorkflowResume | undefined;
-let slackAdapterInstance: MockSlackAdapter | undefined;
-
-class MockSlackAdapter implements IWorkflowPlatform {
-  constructor(_botToken: string, _appToken: string, _streamingMode: 'stream' | 'batch') {
-    slackAdapterInstance = this;
-  }
-
-  onMessage(_handler: (event: never) => Promise<void>): void {}
-  getConversationId(): string {
-    return 'slack-thread-1';
-  }
-  stripBotMention(text: string): string {
-    return text;
-  }
-  isThread(): boolean {
-    return false;
-  }
-  async fetchThreadHistory(): Promise<string[]> {
-    return [];
-  }
-  getParentConversationId(): undefined {
-    return undefined;
-  }
-  async start(): Promise<void> {}
-  stop(): void {
-    mockSlackStop();
-  }
-  async sendMessage(): Promise<void> {}
-  getStreamingMode(): 'batch' {
-    return 'batch';
-  }
-  getPlatformType(): string {
-    return 'slack';
-  }
-}
-
-class MockSlackWorkflowBridge {
-  constructor(_adapter: MockSlackAdapter, resumeWorkflow: SlackWorkflowResume) {
-    capturedResume = resumeWorkflow;
-  }
-
-  attach(): void {}
-  detach(): void {
-    mockBridgeDetach();
-  }
-}
 
 class DisabledAdapter {
   constructor(..._args: unknown[]) {}
@@ -223,10 +164,7 @@ mock.module('@archon/core', () => ({
       getRegisteredPlatformPolicies()
         .map(policy => policy.id)
         .sort()
-    ).toEqual(['api', 'cli', 'discord', 'gitea', 'github', 'gitlab', 'slack', 'telegram', 'web']);
-    expect(
-      getRegisteredPlatformPolicies().find(policy => policy.id === 'slack')?.workspaceRetention
-    ).toBe(expectedSlackRetention);
+    ).toEqual(expectedPolicyIds);
     return loadConfig();
   },
   logConfig: (): void => undefined,
@@ -238,10 +176,6 @@ mock.module('@archon/core', () => ({
   assertProviderKeysKeyAtBoot: (): void => undefined,
   getDecryptedAccessToken: async (): Promise<undefined> => undefined,
 }));
-mock.module('@archon/core/db/users', () => ({
-  findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
-}));
-mock.module('@archon/core/db/workflows', () => ({ getWorkflowRun: mockGetWorkflowRun }));
 mock.module('@archon/core/config/store-selection', () => ({
   loadStoreSelection: async (): Promise<'database'> => 'database',
 }));
@@ -286,8 +220,6 @@ mock.module('@archon/adapters', () => ({
   TelegramAdapter: DisabledAdapter,
   GitHubAdapter: MockGitHubAdapter,
   DiscordAdapter: DisabledAdapter,
-  SlackAdapter: MockSlackAdapter,
-  SlackWorkflowBridge: MockSlackWorkflowBridge,
 }));
 mock.module('@archon/adapters/community/forge/gitea', () => ({ GiteaAdapter: DisabledAdapter }));
 mock.module('@archon/adapters/community/forge/gitlab', () => ({ GitLabAdapter: DisabledAdapter }));
@@ -387,10 +319,14 @@ mock.module('@archon/core/workflows/sql-host', () => ({
 mock.module('@archon/core/workflows/store-adapter', () => ({ createWorkflowStore: () => ({}) }));
 
 mock.module('./services/workflow-resume-service', () => ({
-  resumeWorkflowRunFromServer: mockResumeWorkflowRunFromServer,
+  resumeWorkflowRunFromServer: async (): Promise<never> => {
+    throw new Error('No resume expected during boot');
+  },
   startWorkflowContinuationScheduler: (): void => undefined,
   stopWorkflowContinuationScheduler: (): void => undefined,
-  workflowResumeTargetForRun: mockWorkflowResumeTargetForRun,
+  workflowResumeTargetForRun: async (): Promise<never> => {
+    throw new Error('No resume expected during boot');
+  },
 }));
 mock.module('./discord-mention', () => ({ isDiscordMentionRequired: (): boolean => false }));
 mock.module('./auth', () => ({
@@ -430,7 +366,6 @@ const envKeys = [
   'GITLAB_TOKEN',
   'GITLAB_WEBHOOK_SECRET',
   'HOST',
-  'SLACK_APP_TOKEN',
   'SLACK_BOT_TOKEN',
   'TELEGRAM_BOT_TOKEN',
   'WEB_UI_DEV',
@@ -447,8 +382,6 @@ beforeAll(async () => {
   for (const key of envKeys) delete process.env[key];
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
   process.env.HOST = '127.0.0.1';
-  process.env.SLACK_APP_TOKEN = 'xapp-test';
-  process.env.SLACK_BOT_TOKEN = 'xoxb-test';
   process.env.WEB_UI_DEV = '1';
 });
 
@@ -566,7 +499,7 @@ describe('server conversation admission configuration', () => {
   });
 });
 
-describe('Slack workflow resume composition', () => {
+describe('server platform composition', () => {
   test.each([
     {
       GH_TOKEN: 'gh-selected-identity',
@@ -748,48 +681,19 @@ describe('Slack workflow resume composition', () => {
   });
 
   test('server reads a chat receipt before config loading and supersedes its bundled policy', async () => {
-    const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
-    await mkdir(dirname(file), { recursive: true });
-    const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
-    await writeFile(
-      file,
-      JSON.stringify({
-        schemaVersion: 1,
-        id: 'owner/chat-fixture',
-        manifest: {
-          schemaVersion: 1,
-          kind: 'chat',
-          name: 'fixture',
-          description: 'Fixture',
-          executable: 'archon-chat-fixture',
-        },
-        tag: 'v1',
-        commit: 'a'.repeat(40),
-        installedAt: new Date(0).toISOString(),
-        files: [{ path: executable, sha256: 'b'.repeat(64) }],
-        descriptor: {
-          protocol: 'archon-chat/1',
-          id: 'slack',
-          displayName: 'Fixture',
-          version: '1',
-          capabilities: { defaultWorkflowDispatch: 'background' },
-          policy: {
-            workspaceRetention: 'retain',
-            streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
-          },
-        },
-      })
-    );
+    const file = await writeChatReceipt('discord', {
+      workspaceRetention: 'retain',
+      streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
+    });
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
       port: 12345,
     })) as unknown as typeof Bun.serve);
     try {
       const { startServer } = await import('./index');
-      expectedSlackRetention = 'retain';
       await startServer({ port: 12345, skipPlatformAdapters: true });
-      expect(getRegisteredPlatformPolicies().filter(policy => policy.id === 'slack')).toEqual([
+      expect(getRegisteredPlatformPolicies().filter(policy => policy.id === 'discord')).toEqual([
         {
-          id: 'slack',
+          id: 'discord',
           workspaceRetention: 'retain',
           streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
         },
@@ -797,106 +701,61 @@ describe('Slack workflow resume composition', () => {
     } finally {
       serveSpy.mockRestore();
       await unlink(file);
-      expectedSlackRetention = 'age-based';
     }
   });
 
-  test('an installed Slack receipt supersedes the bundled adapter and its bridge at boot', async () => {
-    const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
-    await mkdir(dirname(file), { recursive: true });
-    const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
-    await writeFile(
-      file,
-      JSON.stringify({
-        schemaVersion: 1,
-        id: 'owner/chat-fixture',
-        manifest: {
-          schemaVersion: 1,
-          kind: 'chat',
-          name: 'fixture',
-          description: 'Fixture',
-          executable: 'archon-chat-fixture',
-        },
-        tag: 'v1',
-        commit: 'a'.repeat(40),
-        installedAt: new Date(0).toISOString(),
-        files: [{ path: executable, sha256: 'b'.repeat(64) }],
-        descriptor: {
-          protocol: 'archon-chat/1',
-          id: 'slack',
-          displayName: 'Fixture',
-          version: '1',
-          capabilities: { defaultWorkflowDispatch: 'background' },
-          policy: { workspaceRetention: 'retain' },
-        },
-      })
-    );
-    capturedResume = undefined;
-    slackAdapterInstance = undefined;
+  test('a Slack token without the Slack plugin logs the install command and hosts no Slack', async () => {
+    process.env.SLACK_BOT_TOKEN = 'xoxb-test';
+    const warnSpy = spyOn(logger, 'warn');
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
       port: 12345,
     })) as unknown as typeof Bun.serve);
     try {
-      expectedSlackRetention = 'retain';
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345 });
+      expect(warnSpy).toHaveBeenCalledWith(
+        {
+          platform: 'slack',
+          hint: 'Install its plugin: archon plugin add coleam00/Archon/plugins/chat-slack',
+        },
+        'chat.bundled_adapter_retired'
+      );
+      expect(hostedPlugins.at(-1)).toEqual([]);
+    } finally {
+      serveSpy.mockRestore();
+      warnSpy.mockRestore();
+      delete process.env.SLACK_BOT_TOKEN;
+    }
+  });
+
+  test('an installed Slack plugin is hosted at boot and silences the retired-adapter notice', async () => {
+    process.env.SLACK_BOT_TOKEN = 'xoxb-test';
+    const file = await writeChatReceipt('slack', { workspaceRetention: 'age-based' });
+    const warnSpy = spyOn(logger, 'warn');
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      expectedPolicyIds = [...DEFAULT_POLICY_IDS, 'slack'].sort();
       const { startServer } = await import('./index');
       mockChatHostStart.mockClear();
       await startServer({ port: 12345 });
       expect(mockChatHostStart).toHaveBeenCalledTimes(1);
       expect(hostedPlugins.at(-1)).toEqual(['slack']);
-      expect(capturedResume).toBeUndefined();
-      expect(slackAdapterInstance).toBeUndefined();
-    } finally {
-      serveSpy.mockRestore();
-      await unlink(file);
-      expectedSlackRetention = 'age-based';
-    }
-  });
-
-  test('server startup injects the persisted, destination-aware resume path', async () => {
-    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
-      port: 12345,
-    })) as unknown as typeof Bun.serve);
-    try {
-      const { startServer } = await import('./index');
-      await startServer({ port: 12345 });
-
-      expect(capturedResume).toBeDefined();
-      expect(slackAdapterInstance).toBeDefined();
-
-      const accepted = await capturedResume?.('run-1', 'U123');
-
-      expect(accepted).toBe('resumed');
-      expect(mockGetWorkflowRun).toHaveBeenCalledWith('run-1');
-      expect(mockFindOrCreateUser).toHaveBeenCalledWith('slack', 'U123', undefined);
-      expect(mockWorkflowResumeTargetForRun).toHaveBeenCalledTimes(1);
-      expect(mockWorkflowResumeTargetForRun.mock.calls[0]?.[0]).toBe(persistedRun);
-      const platforms = mockWorkflowResumeTargetForRun.mock.calls[0]?.[1];
-      expect(platforms?.get('slack')).toBe(slackAdapterInstance);
-      expect(platforms?.get('web')).toBeInstanceOf(MockWebAdapter);
-      expect(mockResumeWorkflowRunFromServer).toHaveBeenCalledWith(
-        workflowHost,
-        persistedRun,
-        'actor-user-1',
-        resumeTarget
+      expect(warnSpy.mock.calls.map(call => call.at(-1))).not.toContain(
+        'chat.bundled_adapter_retired'
       );
-      mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
-        kind: 'waiting_for_capacity',
-        message: 'busy',
-      });
-      expect(await capturedResume?.('run-1', 'U123')).toBe('waiting_for_capacity');
-      // A refused run that keeps no place is not waiting for capacity.
-      mockResumeWorkflowRunFromServer.mockResolvedValueOnce({
-        kind: 'resource_busy',
-        message: 'busy',
-      });
-      expect(await capturedResume?.('run-1', 'U123')).toBe('not_resumed');
     } finally {
       serveSpy.mockRestore();
+      warnSpy.mockRestore();
+      await unlink(file);
+      expectedPolicyIds = DEFAULT_POLICY_IDS;
+      delete process.env.SLACK_BOT_TOKEN;
     }
   });
 });
 
-test('a chat host stop error preserves diagnostics and still stops bundled and web adapters', async () => {
+test('a chat host stop error preserves diagnostics and still stops the web adapter', async () => {
   const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
     port: 12345,
   })) as unknown as typeof Bun.serve);
@@ -906,8 +765,6 @@ test('a chat host stop error preserves diagnostics and still stops bundled and w
   const logSpy = spyOn(logger, 'error');
   const failure = new Error('tree termination failed');
   const previous = new Set(processEmitter.listeners('SIGTERM'));
-  mockSlackStop.mockClear();
-  mockBridgeDetach.mockClear();
   mockWebStop.mockClear();
   mockChatHostStop.mockRejectedValueOnce(failure);
   try {
@@ -919,8 +776,6 @@ test('a chat host stop error preserves diagnostics and still stops bundled and w
     for (let i = 0; i < 100 && exitSpy.mock.calls.length === 0; i++) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
-    expect(mockSlackStop).toHaveBeenCalledTimes(1);
-    expect(mockBridgeDetach).toHaveBeenCalledTimes(1);
     expect(mockWebStop).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith({ err: failure }, 'chat_host_stop_error');
     expect(exitSpy).toHaveBeenCalledWith(0);

@@ -111,7 +111,9 @@ export async function collectSlackConfig(): Promise<SlackConfig> {
       '   - app_mention, message.im\n' +
       '5. Install to Workspace\n' +
       '   - Copy the Bot User OAuth Token (xoxb-...)\n' +
-      '6. Invite bot to your channel: /invite @YourBotName\n\n' +
+      '6. Invite bot to your channel: /invite @YourBotName\n' +
+      '7. Install the Slack plugin, then restart the server:\n' +
+      '   archon plugin add coleam00/Archon/plugins/chat-slack\n\n' +
       'Get your user ID: Click profile -> ... -> Copy member ID',
     'Slack Setup'
   );

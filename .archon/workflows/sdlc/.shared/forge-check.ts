@@ -121,8 +121,8 @@ async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
       failures.push(
         `${name}: ${tokenNames.join(' or ')} is set and empty, so gh would act as ` +
           `the host's stored login. Remove an empty \`${tokenNames[0]}=\` line from an env file to use ` +
-          '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github`, ' +
-          '`/archon connect github` in Slack, or the Web UI Settings page'
+          '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github` ' +
+          'or the Web UI Settings page'
       );
       continue;
     }

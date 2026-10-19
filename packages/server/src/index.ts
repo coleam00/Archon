@@ -1,6 +1,6 @@
 /**
  * Remote Coding Agent - Main Entry Point
- * Multi-platform AI coding assistant (Telegram, Discord, Slack, GitHub, Gitea)
+ * Multi-platform AI coding assistant (Telegram, Discord, GitHub, Gitea, chat plugins)
  */
 
 // Strip CWD .env keys FIRST — before any application imports read process.env.
@@ -43,19 +43,13 @@ await registerHostProviders();
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { serveWebUi } from './static-cache';
 import { validationErrorHook } from './routes/openapi-defaults';
-import {
-  TelegramAdapter,
-  GitHubAdapter,
-  DiscordAdapter,
-  SlackAdapter,
-  SlackWorkflowBridge,
-} from '@archon/adapters';
+import { TelegramAdapter, GitHubAdapter, DiscordAdapter } from '@archon/adapters';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { retiredAdapterNotices } from '@archon/adapters/retired-adapters';
 import { loadPlatformPolicies, loadChatPlugins } from '@archon/core/platforms/chat-plugins';
 import { createChatHost } from './chat-host/runtime';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
-import { slackPolicy } from '@archon/adapters/chat/slack/policy';
 import { discordPolicy } from '@archon/adapters/community/chat/discord/policy';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
@@ -79,7 +73,6 @@ import { createServerResourceStartHost } from './services/resource-start-hosting
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
-  resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
   workflowResumeTargetForRun,
@@ -103,7 +96,6 @@ import {
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
-import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import {
@@ -170,7 +162,7 @@ export interface ServerOptions {
   webDistPath?: string;
   /** Override the port. Range: 1–65535. */
   port?: number;
-  /** Run in standalone web-only mode (no Telegram/Slack/GitHub/Discord adapters). */
+  /** Run in standalone web-only mode (no platform adapters or chat plugins). */
   skipPlatformAdapters?: boolean;
 }
 
@@ -188,6 +180,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   recordNodeProcessTrees();
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
+  const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
   // Deployment shape is categorical only — booleans/enums derived from which
@@ -199,7 +192,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     webAuthEnabled: isWebAuthEnabled(),
     multiUser: isPerUserProviderKeysEnabled(),
     githubAuthMode: selectGitHubAuthMode(process.env).kind,
-    adapterSlack: Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN),
+    chatPluginIds: chatPlugins.map(plugin => plugin.descriptor.id),
     adapterTelegram: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     adapterDiscord: Boolean(process.env.DISCORD_BOT_TOKEN),
     adapterGitea: Boolean(
@@ -356,8 +349,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Must be a live reference because Telegram starts after the HTTP listener begins
   // accepting requests, so a snapshot taken at registration time would miss it.
   const activePlatforms: string[] = ['Web'];
-  const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
   const installedChatIds = new Set(chatPlugins.map(plugin => plugin.descriptor.id));
+  if (!opts.skipPlatformAdapters) {
+    for (const notice of retiredAdapterNotices(process.env, installedChatIds)) {
+      getLog().warn(
+        { platform: notice.id, hint: `Install its plugin: ${notice.command}` },
+        'chat.bundled_adapter_retired'
+      );
+    }
+  }
   const inlinePlatforms = new Set(
     chatPlugins
       .filter(plugin => plugin.descriptor.capabilities.runEvents)
@@ -393,8 +393,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   let gitea: GiteaAdapter | null = null;
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
-  let slack: SlackAdapter | null = null;
-  let slackBridge: SlackWorkflowBridge | null = null;
 
   if (!opts.skipPlatformAdapters) {
     // Check that at least one platform is configured
@@ -586,89 +584,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       }
     } else {
       getLog().info('discord_adapter_skipped');
-    }
-
-    // Initialize Slack adapter (conditional)
-    if (
-      !installedChatIds.has(slackPolicy.id) &&
-      process.env.SLACK_BOT_TOKEN &&
-      process.env.SLACK_APP_TOKEN
-    ) {
-      const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
-        slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
-      slack = new SlackAdapter(
-        process.env.SLACK_BOT_TOKEN,
-        process.env.SLACK_APP_TOKEN,
-        slackStreamingMode
-      );
-      const slackAdapter = slack; // Capture for use in callback
-
-      // Register message handler
-      slackAdapter.onMessage(async event => {
-        const conversationId = slackAdapter.getConversationId(event);
-
-        // Skip if no text
-        if (!event.text) return;
-
-        // Strip the bot mention from the message
-        const content = slackAdapter.stripBotMention(event.text);
-        if (!content) return; // Message was only a mention with no content
-
-        // Check for thread context
-        let threadContext: string | undefined;
-        let parentConversationId: string | undefined;
-
-        if (slackAdapter.isThread(event)) {
-          // Fetch thread history for context (exclude current message)
-          const history = await slackAdapter.fetchThreadHistory(event);
-          if (history.length > 1) {
-            threadContext = history.slice(0, -1).join('\n');
-          }
-
-          // Get parent conversation ID for context inheritance
-          parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
-        }
-
-        // Resolve Slack user → Archon user UUID. displayName comes from
-        // the adapter's users.info enrichment (cached per slackUserId).
-        const userId = await resolveUserId('slack', event.user, event.displayName);
-
-        // Fire-and-forget: handler returns immediately, processing happens async
-        lockManager
-          .acquireLock(conversationId, async () => {
-            await handleMessage(slackAdapter, conversationId, content, {
-              threadContext,
-              parentConversationId,
-              isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
-            });
-          })
-          .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
-      });
-
-      // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
-      // refuses new event-handler registrations once the connection is open,
-      // so `app.action(...)` calls inside the bridge must run first.
-      workflowPlatforms.set(slack.getPlatformType(), slack);
-      slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
-        const run = await workflowDb.getWorkflowRun(runId);
-        if (!run) return 'not_resumed';
-        const actorUserId = await resolveUserId('slack', slackUserId, undefined);
-        const target = await workflowResumeTargetForRun(run, workflowPlatforms);
-        const outcome = await resumeWorkflowRunFromServer(
-          createSqlWorkflowHost(),
-          run,
-          actorUserId,
-          target
-        );
-        return outcome.kind === 'resource_busy' ? 'not_resumed' : outcome.kind;
-      });
-      slackBridge.attach();
-
-      await slack.start();
-      activePlatforms.push('Slack');
-    } else {
-      getLog().info('slack_adapter_skipped');
     }
   } else {
     getLog().info('platform_adapters_skipped');
@@ -997,10 +912,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         try {
           telegram?.stop();
           discord?.stop();
-          // Detach Slack workflow bridge BEFORE stopping the adapter so a
-          // pending debounced chat.update can't fire against a closed socket.
-          slackBridge?.detach();
-          slack?.stop();
           gitea?.stop();
           gitlab?.stop();
           pgNotifyListener?.stop();

@@ -18,11 +18,6 @@ test('bundled policies are valid and keep existing retention and streaming defau
       streaming: { defaultMode: 'stream', envVar: 'TELEGRAM_STREAMING_MODE' },
     },
     {
-      id: 'slack',
-      workspaceRetention: 'age-based',
-      streaming: { defaultMode: 'batch', envVar: 'SLACK_STREAMING_MODE' },
-    },
-    {
       id: 'discord',
       workspaceRetention: 'age-based',
       streaming: { defaultMode: 'batch', envVar: 'DISCORD_STREAMING_MODE' },
