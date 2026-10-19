@@ -15,7 +15,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   itemPr,
   MERGE_METHODS,
@@ -96,7 +96,13 @@ function main(): void {
   requireGh();
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
-  enrollOwnPrs(repo, list.ownPrs, new Date().toISOString());
+  // Enrollment only adds work items; a failed listing must not stop the sweep merging
+  // the ones that already exist. Items enrolled before the failure are kept.
+  try {
+    enrollOwnPrs(repo, list.ownPrs, new Date().toISOString());
+  } catch (error) {
+    note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
   for (const doc of claimAll(limit, order, runId)) {
