@@ -15,7 +15,7 @@
  * The package-cwd test preload checks its own temporary ARCHON_HOME after each
  * test (src/test/no-archon-home-writes.ts).
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach, afterEach, afterAll } from 'bun:test';
 import { createHmac } from 'crypto';
 
 // --- Module mocks (must be before imports that use them) ---
@@ -146,14 +146,25 @@ mock.module('child_process', () => ({
   ),
 }));
 
-// Note: fs/promises is NOT mocked here. The adapter methods that use readdir/access
-// (ensureRepoReady, autoDetectAndLoadCommands) are mocked at the adapter level in
-// createTestAdapter(). Using mock.module('fs/promises') would leak globally and break
+// Note: fs/promises is NOT mocked here. The functions that use readdir/access
+// (ensureRepoReady, autoDetectAndLoadCommands) are stubbed with spies below.
+// Using mock.module('fs/promises') would leak globally and break
 // other tests (e.g., version.test.ts) since Bun's mock.module persists across files.
 
 // --- Imports (after mocks) ---
 
 import { GitHubAdapter } from './adapter';
+import * as readiness from './repository-readiness';
+import * as registration from './registration';
+
+const ensureRepoReadySpy = spyOn(readiness, 'ensureRepoReady').mockResolvedValue(undefined);
+const loadCommandsSpy = spyOn(registration, 'autoDetectAndLoadCommands').mockResolvedValue(
+  undefined
+);
+afterAll(() => {
+  ensureRepoReadySpy.mockRestore();
+  loadCommandsSpy.mockRestore();
+});
 
 // --- Test helpers ---
 
@@ -258,12 +269,6 @@ function createTestAdapter(): GitHubAdapter {
       },
     },
   };
-
-  // @ts-expect-error - mock private method to skip filesystem operations
-  adapter.ensureRepoReady = mock(async () => {});
-
-  // @ts-expect-error - mock private method to skip command loading
-  adapter.autoDetectAndLoadCommands = mock(async () => {});
 
   return adapter;
 }

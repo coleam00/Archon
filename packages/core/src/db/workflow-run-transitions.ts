@@ -13,6 +13,7 @@ import {
   type WorkflowCancellationEventDetails,
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
+import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
 import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
@@ -332,10 +333,12 @@ export async function failWorkflowRun(
   // it, and a run can reach 'running' again carrying a stale stop reason (resume, or a
   // fan-out cancel recovery) — under json_patch alone that would leave a previous signal
   // attached to a new reason, the #2673 defect through the same mechanism.
+  // A failed run is not paused at anything, so its last pause cause goes too.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
-    RUN_STOP_REASON_METADATA_KEY
+    RUN_STOP_REASON_METADATA_KEY,
+    PAUSE_CAUSE_METADATA_KEY
   );
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {

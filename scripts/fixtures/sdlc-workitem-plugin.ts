@@ -18,7 +18,8 @@ const metadata = {
   capabilities: [
     'workitem.view',
     'workitem.create',
-    'workitem.labels.set',
+    'workitem.label.add',
+    'workitem.label.remove',
     'repo.labels.list',
     'repo.label.ensure',
   ],
@@ -37,7 +38,14 @@ const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
 };
 const request = forgeRequestSchema.parse(await Bun.stdin.json());
 state.operations.push(request.op);
-const repo = 'repo' in request ? request.repo : 'ref' in request ? request.ref.repo : undefined;
+const repo =
+  'repo' in request
+    ? request.repo
+    : 'ref' in request
+      ? request.ref.repo
+      : 'subject' in request
+        ? request.subject.ref.repo
+        : undefined;
 if (repo?.host !== 'tracker.example' || repo.path !== 'group/team/project')
   throw new Error('unexpected qualified target');
 const item = (number: number): ForgeWorkItemRecord => ({
@@ -101,19 +109,22 @@ switch (request.op) {
     };
     break;
   }
-  case 'workitem.labels.set': {
-    const issue = state.issues.find(row => row.number === request.ref.number);
-    if (!issue || request.labels.some(name => !state.labels.some(label => label.name === name)))
+  case 'workitem.label.add':
+  case 'workitem.label.remove': {
+    const issue = state.issues.find(row => row.number === request.subject.ref.number);
+    if (!issue || !state.labels.some(label => label.name === request.name))
       throw new Error('invalid label target');
-    const changed =
-      issue.labels.length !== request.labels.length ||
-      issue.labels.some(name => !request.labels.includes(name));
+    const has = issue.labels.includes(request.name);
+    const adding = request.op === 'workitem.label.add';
+    const changed = adding !== has;
     if (changed) {
-      issue.labels = request.labels;
+      issue.labels = adding
+        ? [...issue.labels, request.name]
+        : issue.labels.filter(name => name !== request.name);
       state.writes.push(request.op);
     }
     value = {
-      target: request.ref,
+      target: request.subject.ref,
       outcome: 'applied',
       changed,
       workitem: item(issue.number),

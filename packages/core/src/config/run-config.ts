@@ -21,6 +21,7 @@ import {
   type WorkflowRunConfigMetadata,
   type WorkflowRunConfigSource,
 } from '@archon/workflows/schemas/run-config';
+import { readWorkflowRunConfigMetadata } from '@archon/workflows/run-config';
 import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { GlobalConfig, RepoConfig } from './config-types';
 import { unsealWorkflowRunConfigStructure } from './run-config-handoff';
@@ -257,4 +258,21 @@ export function unsealWorkflowRunConfig(
   metadata: WorkflowRunConfigMetadata
 ): WorkflowRunConfigLayer {
   return normalizeRunConfigSemantics(unsealWorkflowRunConfigStructure(metadata));
+}
+
+/**
+ * The run config another run was started with, for `--config-from-run`. A run started
+ * without one returns undefined: it ran on the install's config alone, so the new launch
+ * does too. The source label names the run it came from.
+ */
+export function workflowRunConfigFromRun(run: {
+  id: string;
+  metadata?: Record<string, unknown>;
+}): WorkflowRunConfigInput | undefined {
+  const sealed = readWorkflowRunConfigMetadata(run.metadata);
+  if (!sealed) return undefined;
+  return {
+    layer: unsealWorkflowRunConfig(sealed),
+    source: { kind: sealed.source.kind, label: `run ${run.id} (${sealed.source.label})` },
+  };
 }

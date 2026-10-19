@@ -86,8 +86,8 @@ assistants:
     settingSources:   # Which sources the Claude SDK loads (default: ['project', 'user'])
       - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Optional: absolute path to the Claude Code executable. Compiled binaries
+    # find the native installer's ~/.local/bin/claude without it.
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
@@ -102,6 +102,7 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+    # toolFreeStructuredOutputModels: [glm-5.3]  # Optional: routes that reject tools + strict schema together
 
 # Streaming preferences per platform
 streaming:
@@ -142,7 +143,9 @@ tiers:
   medium: { provider: codex, model: gpt-5.6-terra, effort: high }
   small: { provider: pi, model: minimax-m3 }
 
-# Model aliases — optional custom refs for project workflows.
+# Model aliases — custom refs. Project workflows can name one directly; a bundled
+# workflow names one in a preference list that ends in a tier, such as the SDLC pack's
+# '@implementer' or '@reviewer', so an unset alias falls back to that tier.
 aliases:
   '@reasoning': { provider: claude, model: opus, effort: max }
 
@@ -512,7 +515,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). At `debug` or `trace`, each DAG run compares the usage totals it writes to the run with the sum of its node events, and logs `dag.run_usage_reconciliation_mismatch` with both figures when they differ. | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |

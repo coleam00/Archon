@@ -17,6 +17,7 @@ export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-co
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
+import { modelRefSchema } from './model-binding';
 export { MAX_DURABLE_WAIT_MS } from './durable-wait';
 export { effortLevelSchema, EFFORT_LEVELS } from './effort';
 export type { EffortLevel } from './effort';
@@ -215,7 +216,7 @@ export const dagNodeBaseSchema = z.object({
   depends_on: z.array(z.string()).optional(),
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
-  model: z.string().optional(),
+  model: modelRefSchema.optional(),
   provider: z.string().trim().min(1).optional(),
   context: nodeContextSchema.optional(),
   output_format: z.record(z.string(), z.unknown()).optional(),

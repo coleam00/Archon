@@ -20,6 +20,7 @@
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
+    "./community/deprecation": "./src/community/deprecation.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts",
     "./claude/plugin": "./src/claude/plugin.ts",

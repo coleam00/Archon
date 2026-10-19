@@ -19,6 +19,7 @@ import {
   createMockPlatform,
   deliveredMessages,
   persistedEvents,
+  failedLoopIterations,
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
@@ -1423,8 +1424,24 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         },
       });
       pause.resolved = 'approved';
-      const resume = async (state: Record<string, unknown>) => {
+      const resume = async (state: Record<string, unknown>, failBeforeReplay = false) => {
         const resumedStore = createEscalationStore('addressable-run');
+        if (failBeforeReplay) {
+          const getStatus = resumedStore.getWorkflowRunStatus.getMockImplementation();
+          let rejected = false;
+          resumedStore.getWorkflowRunStatus.mockImplementation(async id => {
+            if (
+              !rejected &&
+              persistedEvents(resumedStore).some(
+                event => event.event_type === 'node_started' && event.step_name === 'outer'
+              )
+            ) {
+              rejected = true;
+              throw new Error('Enclosing replay status read failed');
+            }
+            return getStatus?.(id) ?? 'running';
+          });
+        }
         await executeDagWorkflow(
           dagOptions({
             deps: createMockDeps(resumedStore),
@@ -1447,11 +1464,18 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         return resumedStore;
       };
       const callsBeforeInvalidResume = mockSendQueryDag.mock.calls.length;
-      const invalid = await resume({
-        ...metadata,
-        approval: { ...pause, bodySessionCursorAncestry: undefined },
-      });
-      expect(invalid.failWorkflowRun).toHaveBeenCalled();
+      let invalid: Awaited<ReturnType<typeof resume>> | undefined;
+      expect(
+        await failedLoopIterations('outer', async () => {
+          invalid = await resume({
+            ...metadata,
+            approval: { ...pause, bodySessionCursorAncestry: undefined },
+          });
+        })
+      ).toBe(1);
+      expect(invalid?.failWorkflowRun).toHaveBeenCalled();
+      expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
+      expect(await failedLoopIterations('outer', () => resume(metadata, true))).toBe(1);
       expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
       const resumedStore = await resume(metadata);
       expect(resumedStore.failWorkflowRun.mock.calls).toEqual([]);

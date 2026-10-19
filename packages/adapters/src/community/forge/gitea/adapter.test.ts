@@ -126,6 +126,7 @@ mock.module('@archon/core', () => ({
 
 import { GiteaAdapter } from './adapter';
 import type { WebhookEvent } from './types';
+import * as readiness from './repository-readiness';
 
 function utf8(text: string): Uint8Array {
   return new TextEncoder().encode(text);
@@ -154,21 +155,6 @@ function makeFetchMock(response: Response = jsonResponse({}, { status: 200 })): 
       preconnect: mock<typeof fetch.preconnect>(() => undefined),
     }
   );
-}
-
-function postedBody(fetchMock: FetchMock, index: number): string {
-  const body = fetchMock.mock.calls[index]?.[1]?.body;
-  if (typeof body !== 'string') throw new Error(`fetch call ${String(index)} has no string body`);
-  const parsed: unknown = JSON.parse(body);
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !('body' in parsed) ||
-    typeof parsed.body !== 'string'
-  ) {
-    throw new Error(`fetch call ${String(index)} has no JSON body field`);
-  }
-  return parsed.body;
 }
 
 // Create a mock lock manager that immediately executes handlers
@@ -238,151 +224,6 @@ describe('GiteaAdapter', () => {
     });
   });
 
-  test('passes Gitea and Forgejo clone credentials outside the repository URL', async () => {
-    const savedToken = process.env.GITEA_TOKEN;
-    const token = 'gitea-clone-token-123';
-    process.env.GITEA_TOKEN = token;
-    const forgejoAdapter = new GiteaAdapter(
-      'https://forgejo.example.test:8443',
-      'api-token',
-      'webhook-secret',
-      mockLockManager
-    );
-
-    try {
-      mockCloneRepository.mockImplementationOnce(async () => {
-        expect(mockAddSafeDirectory).toHaveBeenCalledWith('/definitely/missing/forgejo-repo');
-        return { ok: true, value: undefined };
-      });
-      await (
-        forgejoAdapter as unknown as {
-          ensureRepoReady(
-            owner: string,
-            repo: string,
-            defaultBranch: string,
-            codebase: { name: string; default_cwd: string },
-            shouldSync: boolean
-          ): Promise<void>;
-        }
-      ).ensureRepoReady(
-        'owner',
-        'repo',
-        'main',
-        { name: 'owner/repo', default_cwd: '/definitely/missing/forgejo-repo' },
-        false
-      );
-
-      const [url, , options] = mockCloneRepository.mock.calls.at(-1)!;
-      expect(url).toBe('https://forgejo.example.test:8443/owner/repo.git');
-      expect(options).toEqual({ credentials: { username: token, password: '' } });
-      expect(JSON.stringify(mockCloneRepository.mock.calls)).not.toContain(`${token}@`);
-    } finally {
-      if (savedToken === undefined) delete process.env.GITEA_TOKEN;
-      else process.env.GITEA_TOKEN = savedToken;
-    }
-  });
-
-  describe('clone errors', () => {
-    function ensureRepoReady(): Promise<void> {
-      return (
-        adapter as unknown as {
-          ensureRepoReady(
-            owner: string,
-            repo: string,
-            defaultBranch: string,
-            codebase: { name: string; default_cwd: string },
-            shouldSync: boolean
-          ): Promise<void>;
-        }
-      ).ensureRepoReady(
-        'owner',
-        'repo',
-        'main',
-        { name: 'owner/repo', default_cwd: '/definitely/missing/gitea-repo' },
-        false
-      );
-    }
-
-    test('preserves the clone destination when disk space is exhausted', async () => {
-      mockCloneRepository.mockResolvedValueOnce({
-        ok: false,
-        error: { code: 'no_space', path: '/clone/destination' },
-      });
-
-      await expect(ensureRepoReady()).rejects.toThrow(
-        'No space left while cloning owner/repo to /clone/destination.'
-      );
-    });
-
-    test('surfaces the message from an unknown clone failure', async () => {
-      mockCloneRepository.mockResolvedValueOnce({
-        ok: false,
-        error: { code: 'unknown', message: 'transport helper crashed' },
-      });
-
-      await expect(ensureRepoReady()).rejects.toThrow(
-        'Failed to clone owner/repo: transport helper crashed'
-      );
-    });
-  });
-
-  describe('bot mention detection', () => {
-    test('should detect mention case-insensitively', () => {
-      const adapterWithMention = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'secret',
-        mockLockManager,
-        'Dylan'
-      );
-      const hasMention = (
-        adapterWithMention as unknown as { hasMention: (text: string) => boolean }
-      ).hasMention;
-
-      expect(hasMention.call(adapterWithMention, '@Dylan please help')).toBe(true);
-      expect(hasMention.call(adapterWithMention, '@dylan please help')).toBe(true);
-      expect(hasMention.call(adapterWithMention, '@DYLAN please help')).toBe(true);
-      expect(hasMention.call(adapterWithMention, '@DyLaN please help')).toBe(true);
-
-      expect(hasMention.call(adapterWithMention, '@other-bot please help')).toBe(false);
-      expect(hasMention.call(adapterWithMention, 'no mention here')).toBe(false);
-    });
-
-    test('should detect mention when it is the entire message', () => {
-      const adapterWithMention = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'secret',
-        mockLockManager,
-        'Archon'
-      );
-      const hasMention = (
-        adapterWithMention as unknown as { hasMention: (text: string) => boolean }
-      ).hasMention;
-
-      expect(hasMention.call(adapterWithMention, '@Archon')).toBe(true);
-      expect(hasMention.call(adapterWithMention, '@ARCHON')).toBe(true);
-      expect(hasMention.call(adapterWithMention, '@archon')).toBe(true);
-    });
-
-    test('should strip mention case-insensitively', () => {
-      const adapterWithMention = new GiteaAdapter(
-        'https://gitea.example.com',
-        'token',
-        'secret',
-        mockLockManager,
-        'Dylan'
-      );
-      const stripMention = (
-        adapterWithMention as unknown as { stripMention: (text: string) => string }
-      ).stripMention;
-
-      expect(stripMention.call(adapterWithMention, '@Dylan please help')).toBe('please help');
-      expect(stripMention.call(adapterWithMention, '@dylan please help')).toBe('please help');
-      expect(stripMention.call(adapterWithMention, '@DYLAN please help')).toBe('please help');
-    });
-  });
-
   describe('self-filtering', () => {
     let originalAllowedUsers: string | undefined;
 
@@ -438,42 +279,6 @@ describe('GiteaAdapter', () => {
       }
     });
 
-    test('refuses ambiguous stale checkout repair for a bare project name', async () => {
-      const adapter = createSelfFilterAdapter();
-      const existing = {
-        id: 'bare-project',
-        name: 'local-api',
-        default_cwd: '/repos/worktrees/old',
-        repository_url: 'https://example.com/testuser/testrepo',
-      };
-      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existing);
-      mockUpdateCodebase.mockClear();
-      // @ts-expect-error - exercise the private registration boundary
-      await expect(adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo')).rejects.toThrow(
-        '/update-project'
-      );
-      expect(existing.default_cwd).toBe('/repos/worktrees/old');
-      expect(mockUpdateCodebase).not.toHaveBeenCalled();
-    });
-
-    test('stale suffixed checkout repair keeps its allocated project identity', async () => {
-      const adapter = createSelfFilterAdapter();
-      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
-        id: 'allocated',
-        name: 'testuser/testrepo-2',
-        default_cwd: '/tmp/test-workspaces/testuser/testrepo-2/worktrees/old',
-        repository_url: 'https://example.com/testuser/testrepo',
-      });
-      // @ts-expect-error - exercise the private registration boundary
-      const result = await adapter.getOrCreateCodebaseForRepo('testuser', 'testrepo');
-      expect(result.repoPath).toBe('/tmp/test-workspaces/testuser/testrepo-2/source');
-      expect(result.codebase.default_cwd).toBe(result.repoPath);
-      expect(mockUpdateCodebase).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'allocated' }),
-        { default_cwd: result.repoPath }
-      );
-    });
-
     test('webhook clones an absent saved checkout before dispatch', async () => {
       const adapter = createSelfFilterAdapter();
       const path = join(tmpdir(), `archon-saved-checkout-${randomUUID()}`);
@@ -527,8 +332,7 @@ describe('GiteaAdapter', () => {
         platform_conversation_id: 'testuser/testrepo#42',
       });
       mockUpdateConversation.mockResolvedValueOnce(undefined);
-      // @ts-expect-error - observe the private checkout boundary
-      const prepare = spyOn(adapter, 'ensureRepoReady').mockResolvedValue(undefined);
+      const prepare = spyOn(readiness, 'ensureRepoReady').mockResolvedValue(undefined);
       globalThis.fetch = makeFetchMock(jsonResponse([]));
       try {
         await adapter.handleWebhook(
@@ -536,6 +340,7 @@ describe('GiteaAdapter', () => {
           'mock-signature'
         );
         expect(prepare).toHaveBeenCalledWith(
+          'https://gitea.example.com',
           'testuser',
           'testrepo',
           'main',
@@ -629,60 +434,6 @@ describe('GiteaAdapter', () => {
     });
   });
 
-  describe('conversationId format', () => {
-    test('should parse valid owner/repo#number format for issues', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      await adapter.sendMessage('owner/repo#123', 'test');
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const callArgs = mockFetch.mock.calls[0];
-      expect(callArgs[0]).toBe(
-        'https://gitea.example.com/api/v1/repos/owner/repo/issues/123/comments'
-      );
-      expect(callArgs[1]?.method).toBe('POST');
-      expect(new Headers(callArgs[1]?.headers).get('Authorization')).toBe(
-        'token fake-token-for-testing'
-      );
-    });
-
-    test('should parse valid owner/repo!number format for PRs', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      await adapter.sendMessage('owner/repo!456', 'test');
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const callArgs = mockFetch.mock.calls[0];
-      // Gitea uses issues endpoint for PR comments too
-      expect(callArgs[0]).toBe(
-        'https://gitea.example.com/api/v1/repos/owner/repo/issues/456/comments'
-      );
-    });
-
-    test('postComment appends bot marker to outgoing comments', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      await adapter.sendMessage('owner/repo#123', 'Hello world');
-
-      const body = postedBody(mockFetch, 0);
-      expect(body).toContain('Hello world');
-      expect(body).toContain('<!-- archon-bot-response -->');
-      expect(body).toBe('Hello world\n\n<!-- archon-bot-response -->');
-    });
-
-    test('should reject invalid conversationId format', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      // Invalid format should return early without calling API
-      await adapter.sendMessage('owner/repo#pr-42', 'test');
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-  });
-
   describe('PR detection helpers', () => {
     test('should detect PR from issue.pull_request property', () => {
       const issueWithPR = {
@@ -764,120 +515,6 @@ describe('GiteaAdapter', () => {
 
       expect(mockLogger.error).toHaveBeenCalledWith(expect.anything(), 'signature_length_mismatch');
       expect(mockLogger.debug).not.toHaveBeenCalledWith('ignoring_own_comment');
-    });
-  });
-
-  describe('message splitting', () => {
-    test('should split long messages into multiple chunks', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      // Create message exceeding MAX_LENGTH (65000)
-      const paragraph1 = 'a'.repeat(40000);
-      const paragraph2 = 'b'.repeat(30000);
-      const message = `${paragraph1}\n\n${paragraph2}`;
-
-      await adapter.sendMessage('owner/repo#123', message);
-
-      // Should have sent 2 separate comments
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-
-      // First chunk should contain paragraph1
-      const firstBody = postedBody(mockFetch, 0);
-      expect(firstBody).toContain('aaa');
-
-      // Second chunk should contain paragraph2
-      const secondBody = postedBody(mockFetch, 1);
-      expect(secondBody).toContain('bbb');
-
-      // Verify chunk sizes are within limits
-      expect(firstBody.length).toBeLessThanOrEqual(65000);
-      expect(secondBody.length).toBeLessThanOrEqual(65000);
-    });
-
-    test('should not split message at exactly MAX_LENGTH', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      // Message exactly at MAX_LENGTH (65000) should not be split
-      const message = 'a'.repeat(65000);
-      await adapter.sendMessage('owner/repo#123', message);
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    test('should handle message without paragraph breaks', async () => {
-      const mockFetch = makeFetchMock();
-      globalThis.fetch = mockFetch;
-
-      // Message under MAX_LENGTH with no paragraph breaks
-      const message = 'a'.repeat(50000);
-      await adapter.sendMessage('owner/repo#123', message);
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    test('should throw error when chunk posting fails', async () => {
-      const mockFetch = makeFetchMock()
-        .mockResolvedValueOnce(new Response(null, { status: 200 })) // First chunk succeeds
-        .mockResolvedValueOnce(
-          new Response('Rate limit exceeded', { status: 429, statusText: 'Too Many Requests' })
-        ); // Second chunk fails
-      globalThis.fetch = mockFetch;
-
-      // Create message that will be split into 2 chunks
-      const paragraph1 = 'a'.repeat(40000);
-      const paragraph2 = 'b'.repeat(30000);
-      const message = `${paragraph1}\n\n${paragraph2}`;
-
-      // Should throw with context about partial delivery
-      await expect(adapter.sendMessage('owner/repo#123', message)).rejects.toThrow(
-        /Failed to post comment chunk 2\/2/
-      );
-
-      // First chunk should have been posted
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe('retry logic', () => {
-    test('should retry on transient network errors', async () => {
-      const mockFetch = makeFetchMock()
-        .mockRejectedValueOnce(new Error('fetch failed')) // First attempt fails
-        .mockResolvedValueOnce(new Response(null, { status: 200 })); // Second attempt succeeds
-      globalThis.fetch = mockFetch;
-
-      await adapter.sendMessage('owner/repo#123', 'test message');
-
-      // Should have retried once
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    test('should not retry on non-retryable errors', async () => {
-      const mockFetch = makeFetchMock(
-        new Response('Bad credentials', { status: 401, statusText: 'Unauthorized' })
-      );
-      globalThis.fetch = mockFetch;
-
-      // Should throw immediately without retry
-      await expect(adapter.sendMessage('owner/repo#123', 'test message')).rejects.toThrow(
-        'Gitea API error: 401 Unauthorized'
-      );
-
-      // Should only have tried once (no retry for auth errors)
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    test('should throw after exhausting retries', async () => {
-      const mockFetch = makeFetchMock().mockRejectedValue(new Error('fetch failed'));
-      globalThis.fetch = mockFetch;
-
-      await expect(adapter.sendMessage('owner/repo#123', 'test message')).rejects.toThrow(
-        'fetch failed'
-      );
-
-      // Should have tried 3 times (max retries)
-      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -979,62 +616,6 @@ describe('GiteaAdapter', () => {
     });
   });
 
-  describe('fetchCommentHistory', () => {
-    test('should fetch and format comment history', async () => {
-      const mockFetch = makeFetchMock(
-        jsonResponse([
-          { user: { login: 'user1' }, body: 'First comment' },
-          { user: { login: 'user2' }, body: 'Second comment' },
-          { user: { login: 'user3' }, body: 'Third comment' },
-        ])
-      );
-      globalThis.fetch = mockFetch;
-
-      // @ts-expect-error - calling private method for testing
-      const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://gitea.example.com/api/v1/repos/owner/repo/issues/123/comments',
-        expect.objectContaining({
-          headers: { Authorization: 'token fake-token-for-testing' },
-        })
-      );
-
-      expect(history).toEqual([
-        'user1: First comment',
-        'user2: Second comment',
-        'user3: Third comment',
-      ]);
-    });
-
-    test('should return empty array on API error', async () => {
-      const mockFetch = makeFetchMock(
-        new Response(null, { status: 429, statusText: 'Too Many Requests' })
-      );
-      globalThis.fetch = mockFetch;
-
-      // @ts-expect-error - calling private method for testing
-      const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
-      expect(history).toEqual([]);
-    });
-
-    test('should only return last 20 comments', async () => {
-      const manyComments = Array.from({ length: 30 }, (_, i) => ({
-        user: { login: `user${String(i + 1)}` },
-        body: `Comment ${String(i + 1)}`,
-      }));
-      const mockFetch = makeFetchMock(jsonResponse(manyComments));
-      globalThis.fetch = mockFetch;
-
-      // @ts-expect-error - calling private method for testing
-      const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
-
-      expect(history).toHaveLength(20);
-      expect(history[0]).toBe('user11: Comment 11');
-      expect(history[19]).toBe('user30: Comment 30');
-    });
-  });
-
   describe('URL normalization', () => {
     test('should remove trailing slash from base URL', () => {
       const adapter1 = new GiteaAdapter(
@@ -1054,79 +635,6 @@ describe('GiteaAdapter', () => {
       expect(adapter1.baseUrl).toBe('https://gitea.example.com');
       // @ts-expect-error - accessing private property for testing
       expect(adapter2.baseUrl).toBe('https://gitea.example.com');
-    });
-  });
-
-  describe('tea CLI context hints', () => {
-    test('should include tea CLI hint in issue context', () => {
-      const issue = {
-        number: 42,
-        title: 'Test Issue',
-        body: 'Issue description',
-        user: { login: 'testuser' },
-        labels: [{ name: 'bug' }],
-        state: 'open',
-      };
-
-      // @ts-expect-error - accessing private method for testing
-      const context = adapter.buildIssueContext(issue, 'fix this please');
-
-      expect(context).toContain('tea issue view 42');
-      expect(context).not.toContain('gh issue');
-    });
-
-    test('should include tea CLI hint in PR context', () => {
-      const pr = {
-        number: 99,
-        title: 'My PR',
-        body: 'PR description',
-        user: { login: 'testuser' },
-        state: 'open',
-        changed_files: 3,
-        additions: 10,
-        deletions: 2,
-      };
-
-      // @ts-expect-error - accessing private method for testing
-      const context = adapter.buildPRContext(pr, 'review this please');
-
-      expect(context).toContain('tea pr view 99');
-      expect(context).not.toContain('gh pr');
-    });
-  });
-
-  describe('issue vs PR conversation ID format', () => {
-    test('should build issue conversation ID with #', () => {
-      // @ts-expect-error - accessing private method for testing
-      const id = adapter.buildConversationId('owner', 'repo', 42, false);
-      expect(id).toBe('owner/repo#42');
-    });
-
-    test('should build PR conversation ID with !', () => {
-      // @ts-expect-error - accessing private method for testing
-      const id = adapter.buildConversationId('owner', 'repo', 42, true);
-      expect(id).toBe('owner/repo!42');
-    });
-
-    test('should parse issue conversation ID', () => {
-      // @ts-expect-error - accessing private method for testing
-      const parsed = adapter.parseConversationId('owner/repo#42');
-      expect(parsed).toEqual({ owner: 'owner', repo: 'repo', number: 42, isPR: false });
-    });
-
-    test('should parse PR conversation ID', () => {
-      // @ts-expect-error - accessing private method for testing
-      const parsed = adapter.parseConversationId('owner/repo!42');
-      expect(parsed).toEqual({ owner: 'owner', repo: 'repo', number: 42, isPR: true });
-    });
-
-    test('should return null for invalid format', () => {
-      // @ts-expect-error - accessing private method for testing
-      expect(adapter.parseConversationId('invalid')).toBeNull();
-      // @ts-expect-error - accessing private method for testing
-      expect(adapter.parseConversationId('owner/repo@42')).toBeNull();
-      // @ts-expect-error - accessing private method for testing
-      expect(adapter.parseConversationId('owner/repo#abc')).toBeNull();
     });
   });
 

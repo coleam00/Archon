@@ -25,9 +25,9 @@ archon provider add claude codex pi   # any subset
 
 ## Deprecated providers
 
-OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.
+OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working until the release that removes them; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal.
 
-The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin add`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
+If you need one of them after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
 Archon shows the notice only to someone who uses one, at most once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log instead.
 
@@ -161,8 +161,8 @@ assistants:
     settingSources:
       - project      # Default: only project-level CLAUDE.md
       - user         # Optional: also load ~/.claude/CLAUDE.md
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries if CLAUDE_BIN_PATH is not set.
+    # Optional: absolute path to the Claude Code executable. Compiled binaries
+    # find the native installer's ~/.local/bin/claude without it.
     # claudeBinaryPath: /absolute/path/to/claude
 ```
 
@@ -278,7 +278,15 @@ assistants:
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
       - /absolute/path/to/other/repo
+    toolFreeStructuredOutputModels:  # routes that reject tools and a strict schema together
+      - glm-5.3
 ```
+
+Some model routes reject a request that carries tools and a strict output schema at the same time. List those models in `toolFreeStructuredOutputModels`. A node with `output_format` on one of them runs its tool turn without the schema, then one final turn on the same thread with the schema and no tools, so the final answer still sees the work and evidence of the tool turn. Each such node costs one extra model request.
+
+- The model must be resolved by Archon (`assistants.codex.model`, a tier, an alias or the node's `model:`). A model chosen only in Codex's own `config.toml` is never matched.
+- Codex multi-agent is off on these models' threads, because Codex fixes it when a thread starts.
+- The list is read live and is not recorded with a run, so a resumed run uses the current list.
 
 ### Set as Default (Optional)
 
@@ -301,7 +309,7 @@ See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details 
 ## OpenCode (Community Provider)
 
 :::caution[Deprecated]
-This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+This provider is deprecated and will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
 :::
 
 **SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
@@ -387,7 +395,7 @@ nodes:
 
 **One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness that Archon integrates as a maintained provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
-Pi is maintained by the Archon core team alongside Claude and Codex. It is registered as `builtIn: true` and exposes both an in-process factory and a provider plugin entry.
+Pi is maintained by the Archon core team alongside Claude and Codex.
 
 ### Azure models
 
@@ -397,7 +405,7 @@ When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azu
 
 ### Install
 
-Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
+Add Pi with `archon provider add pi`; the quick installers offer it. The provider embeds the Pi SDK, so the Pi CLI is optional. Source installs include it already.
 
 ### Quick setup via wizard
 
@@ -563,112 +571,9 @@ assistants:
         extensionFlags: { plan: false }
 ```
 
-#### Recipe: web search and fetch through your own extension
+#### Add tools such as web search or MCP
 
-Archon does not build web search into the Pi engine — and deliberately so: Pi's extension API already lets you register custom tools, and Archon picks them up automatically because extensions load inside the same Pi session Archon drives. The result is a workflow node that can search the web with **zero Archon-side configuration** beyond the extension posture you already know.
-
-Write the extension once, into your global Pi extensions directory:
-
-```ts
-// ~/.pi/agent/extensions/web-search.ts
-export default function (pi) {
-  pi.registerTool({
-    name: "web_search",
-    description:
-      "Search the web. Returns titles, URLs and snippets for each result.",
-    parameters: {
-      type: "object",
-      properties: { query: { type: "string" } },
-      required: ["query"],
-    },
-    async execute(_callId, { query }) {
-      const res = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`,
-      );
-      const body = JSON.stringify(await res.json());
-      return { content: [{ type: "text", text: body }], details: {} };
-    },
-  });
-
-  pi.registerTool({
-    name: "web_fetch",
-    description: "Fetch a URL and return its body as plain text.",
-    parameters: {
-      type: "object",
-      properties: { url: { type: "string" } },
-      required: ["url"],
-    },
-    async execute(_callId, { url }) {
-      const res = await fetch(url);
-      const text = await res.text();
-      return { content: [{ type: "text", text }], details: {} };
-    },
-  });
-}
-```
-
-That's the whole setup. Extensions are on by default (`enableExtensions` defaults to true), Pi discovers `~/.pi/agent/extensions/*.ts` on every session, and Archon restarts Pi sessions fresh per run — so the tools appear on the next workflow run without touching `.archon/config.yaml` at all. For a production extension you'd use a real search API key via the `env:` surface instead of a keyless endpoint, and install it as an npm package with `pi install npm:<package>`.
-
-Then use it from any workflow node — no Archon config changes:
-
-```yaml
-# .archon/workflows/research.yaml
-name: research
-provider: pi
-nodes:
-  - id: research
-    prompt: "Research $ARGUMENTS using web_search/web_fetch and summarize the findings with citations."
-```
-
-To restrict where the tools appear, scope the posture per node exactly as described in [Scoping extension posture per node](#scoping-extension-posture-per-node): leave `assistants.pi` clean and put `pi: { enableExtensions: true }` only on nodes that should search, or flip it to `false` on nodes that shouldn't.
-
-#### Recipe: MCP servers through an extension bridge
-
-Pi rejects MCP by design — there is no `mcpServers` field to set, and Archon does not add one. The supported route is the same as above: an extension that acts as the MCP **client** itself and re-exposes each MCP server's tools as ordinary Pi tools. The model never knows MCP is involved; Archon sees nothing but regular extension tools.
-
-Sketch of such a bridge:
-
-```ts
-// ~/.pi/agent/extensions/mcp-bridge.ts
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
-export default function (pi) {
-  // Module scope persists for the whole process while session_start fires per
-  // session — the loader is reloaded once per run, so connect must be idempotent
-  // or the second session throws.
-  let connected = false;
-  const client = new Client({ name: "archon-mcp-bridge", version: "1.0.0" });
-
-  pi.on("session_start", async () => {
-    if (!connected) {
-      await client.connect(
-        new StdioClientTransport({
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-everything"],
-        }),
-      );
-      connected = true;
-    }
-    const { tools } = await client.listTools();
-    for (const tool of tools) {
-      pi.registerTool({
-        name: `mcp_${tool.name}`,
-        description: tool.description ?? `MCP tool ${tool.name}`,
-        parameters: tool.inputSchema,
-        execute: async (_callId, args) => {
-          const body = JSON.stringify(await client.callTool({ name: tool.name, arguments: args }));
-          return { content: [{ type: "text", text: body }], details: {} };
-        },
-      });
-    }
-  });
-}
-```
-
-Note that `execute` must return an `AgentToolResult` (`{ content, details }`); a bare string is normalized to an empty tool result and the model never sees any output.
-
-The bridge runs inside the Pi session process, subject to everything above: it loads only when `enableExtensions` is true for that node, its tools are just tools (so you can keep them off nodes with a scoped `pi:` block), and if it needs a UI-bound approval gate you give it `interactive: true`. Community bridges exist too — search the [package ecosystem](https://shittycodingagent.ai/packages) for `mcp` before writing your own.
+Archon builds neither web search nor MCP into Pi. Pi rejects MCP by design, and Archon adds no `mcpServers` field for it. Both come from extensions instead: an extension registers tools with `pi.registerTool`, and because extensions load inside the Pi session Archon drives, a workflow node sees those tools with no Archon configuration. A web search extension wraps a search API; an MCP bridge is an extension that acts as the MCP client and re-exposes each server's tools as Pi tools. A tool's `execute` must return `{ content, details }`; a bare string reaches the model as an empty result. Search the [package ecosystem](https://shittycodingagent.ai/packages) before writing your own, and scope where the tools appear with the [per-node posture](#scoping-extension-posture-per-node) above.
 
 :::warning Repo-controlled `.pi/` directories
 Extension discovery also includes `<cwd>/.pi/extensions/*.ts` and `<cwd>/.pi/settings.json` in the **working directory of the run**. When Archon executes a workflow against a repository you didn't write, anything shipped in that repo's `.pi/` loads automatically — arbitrary JS with the Archon server's OS permissions — unless you disable extensions. Before running workflows on third-party repos either audit their `.pi/` directory first or set `enableExtensions: false` (globally, or per node via the `pi:` block). This trust decision lives with the operator; Archon will not make it for you.
@@ -724,8 +629,8 @@ nodes:
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
-| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists, so a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers). An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
-| In-process native tools | ✅ | none — Archon's `invoke_workflow` and `register_project` tools are auto-injected in every chat, and `manage_run` in project-scoped chat, via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
+| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists, so a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers). An extension can act as MCP client and expose the tools in-process — see [Add tools such as web search or MCP](#add-tools-such-as-web-search-or-mcp). |
+| In-process native tools | ✅ | none — Archon's `invoke_workflow` and `register_project` tools are auto-injected in every chat, and `manage_run` in project-scoped chat, via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see [Add tools such as web search or MCP](#add-tools-such-as-web-search-or-mcp)). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
@@ -743,7 +648,7 @@ Unsupported YAML fields that are ignored trigger a visible warning from the dag-
 ## GitHub Copilot (Community Provider)
 
 :::caution[Deprecated]
-This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+This provider is deprecated and will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
 :::
 
 **Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.

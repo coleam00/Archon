@@ -62,6 +62,7 @@ rereview__publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:

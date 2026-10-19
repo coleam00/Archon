@@ -126,6 +126,7 @@ const workflowWaitAttentionFields = {
   answeredAt: z.string().datetime().optional(),
   labels: attentionLabelsSchema.optional(),
   revision: z.number().int().positive().optional(),
+  reaskedFrom: z.string().min(1).optional(), // occurrence whose answer was discarded as stale
 } as const;
 const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),

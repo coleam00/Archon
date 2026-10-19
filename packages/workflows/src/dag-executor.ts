@@ -15,7 +15,7 @@ import type { TokenUsage, ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import type { PersistedNodeOutput } from './store';
+import type { PersistedNodeOutput, PriorFailedNode } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -29,8 +29,9 @@ import {
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { logWorkflowError } from './logger';
 import { safeSendMessage } from './platform-messages';
-import { isTierName } from './model-validation';
+import { isTierName, selectModelRef } from './model-validation';
 import { getLog } from './dag/log';
+import { runUsageMismatch, type RunUsageFigures } from './dag/usage';
 import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
@@ -56,6 +57,8 @@ export interface PriorRunUsage {
 export interface ExecuteDagWorkflowOptions extends RunInputs {
   workflow: ResolvedWorkflow;
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /** Failures from before a pause, replayed instead of re-running their nodes. */
+  replayedFailures?: ReadonlyMap<string, PriorFailedNode>;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`),
    * resolved by executor.ts when the workflow uses session persistence (#1846).
@@ -111,6 +114,7 @@ export async function executeDagWorkflow(
     configuredCommandFolder,
     issueContext,
     priorCompletedNodes,
+    replayedFailures,
     aiProfile,
     workflowPreset,
     scopeArtifactsDir,
@@ -137,7 +141,8 @@ export async function executeDagWorkflow(
     );
   }
 
-  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
+  const workflowRef = selectModelRef(workflow.model, aiProfile);
+  const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
     fallbackModel: workflow.fallbackModel,
@@ -252,6 +257,7 @@ export async function executeDagWorkflow(
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
+    replayedFailures,
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,
@@ -262,6 +268,35 @@ export async function executeDagWorkflow(
     stepNamePrefix: '',
     loopGroupPath: [],
     loopBodyScopes: [],
+  };
+
+  /** Log both figures when the run total and its node events disagree; never fails the run. */
+  const reconcileRunUsage = async (): Promise<void> => {
+    try {
+      const events = await deps.store.getDagResumeSnapshot(workflowRun.id);
+      const run: RunUsageFigures = {
+        costUsd: runCtx.totalCostUsd,
+        tokens: runCtx.totalTokens,
+        tokensUnknown: runCtx.totalTokensUnknown,
+      };
+      const eventFigures: RunUsageFigures = {
+        costUsd: events.costUsd,
+        tokens: events.tokens,
+        tokensUnknown: events.tokensUnknown,
+      };
+      const mismatched = runUsageMismatch(run, eventFigures);
+      if (mismatched.length > 0) {
+        getLog().error(
+          { workflowRunId: workflowRun.id, mismatched, run, events: eventFigures },
+          'dag.run_usage_reconciliation_mismatch'
+        );
+      }
+    } catch (err) {
+      getLog().warn(
+        { err, workflowRunId: workflowRun.id },
+        'dag.run_usage_reconciliation_read_failed'
+      );
+    }
   };
 
   /**
@@ -285,8 +320,13 @@ export async function executeDagWorkflow(
    *
    * Best-effort by design — a bookkeeping write must not fail an otherwise-fine run —
    * but never silent: the whole defect was a number quietly going missing.
+   *
+   * At debug or trace level this one point also compares the totals it writes with the
+   * fold of the run's node events, the figure resume and terminal telemetry read.
    */
   const persistRunUsage = async (): Promise<void> => {
+    const level = getLog().level;
+    if (level === 'debug' || level === 'trace') await reconcileRunUsage();
     const usage = {
       // No usage stays absent: a bash-only workflow must not read as a free AI run.
       ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),

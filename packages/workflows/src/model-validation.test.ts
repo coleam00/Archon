@@ -20,13 +20,14 @@ import {
   resolvePresetEffort,
   resolveModelSpec,
   resolveTierWithFallback,
+  selectModelRef,
   TIER_NAMES,
   validEffortsForProvider,
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
 import builtInTierDefaults from './defaults/tier-defaults.json';
-import { EFFORT_LEVELS } from './schemas';
+import { EFFORT_LEVELS, modelRefSchema } from './schemas';
 
 // The effort helpers read `effortControl` off the provider registry, so the
 // registry has to be populated the way a real entrypoint populates it.
@@ -514,10 +515,18 @@ describe('per-run model bindings', () => {
     ).toThrow(/cannot apply effort/);
   });
 
+  test('binds an alias nobody configured when the spec names its provider', () => {
+    expect(
+      resolveRunModelOverrides(providerRegistry, base, {
+        aliases: { '@implementer': 'codex/gpt-5.5' },
+      }).aliases?.['@implementer']
+    ).toEqual({ provider: 'codex', model: 'gpt-5.5' });
+  });
+
   test('rejects unknown alias targets and references', () => {
     expect(() =>
       resolveRunModelOverrides(providerRegistry, base, { aliases: { '@missing': 'opus' } })
-    ).toThrow(/unknown alias '@missing'/);
+    ).toThrow(/'@missing' is not configured/);
     expect(() =>
       resolveRunModelOverrides(providerRegistry, base, { tiers: { large: '@missing' } })
     ).toThrow(/Unknown alias '@missing'/);
@@ -978,4 +987,41 @@ test('a missing maintained prefix cannot fall through to Pi vendor model ownersh
   expect(() =>
     resolveRunModelOverrides(providers, profile, { tiers: { large: 'claude/sonnet' } })
   ).toThrow('archon provider add claude');
+});
+
+describe('model preference lists', () => {
+  const profile = buildAiProfile('claude', {
+    repoAliases: { '@reviewer': { provider: 'codex', model: 'gpt-5.5' } },
+  });
+
+  test('the schema accepts @aliases ending in a tier or model id', () => {
+    expect(modelRefSchema.safeParse(['@review-seams', '@reviewer', 'medium']).success).toBe(true);
+    expect(modelRefSchema.safeParse(['@implementer', 'claude-opus-5-5']).success).toBe(true);
+    expect(modelRefSchema.safeParse('large').success).toBe(true);
+  });
+
+  test('the schema rejects lists that might not resolve or have dead entries', () => {
+    expect(modelRefSchema.safeParse(['@reviewer', '@implementer']).success).toBe(false);
+    expect(modelRefSchema.safeParse(['medium', '@reviewer', 'large']).success).toBe(false);
+    expect(modelRefSchema.safeParse(['medium']).success).toBe(false);
+  });
+
+  test('the first configured alias wins', () => {
+    expect(selectModelRef(['@review-seams', '@reviewer', 'medium'], profile)).toBe('@reviewer');
+    const withLens = buildAiProfile('claude', {
+      repoAliases: {
+        '@reviewer': { provider: 'codex', model: 'gpt-5.5' },
+        '@review-seams': { provider: 'claude', model: 'opus' },
+      },
+    });
+    expect(selectModelRef(['@review-seams', '@reviewer', 'medium'], withLens)).toBe(
+      '@review-seams'
+    );
+  });
+
+  test('a list with no configured alias, or no profile, selects its final entry', () => {
+    expect(selectModelRef(['@implementer', 'large'], profile)).toBe('large');
+    expect(selectModelRef(['@reviewer', 'medium'])).toBe('medium');
+    expect(selectModelRef('@reviewer', profile)).toBe('@reviewer');
+  });
 });

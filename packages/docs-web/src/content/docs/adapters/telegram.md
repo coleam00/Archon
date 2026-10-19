@@ -11,11 +11,15 @@ sidebar:
 
 Connect Archon to Telegram so you can interact with your AI coding assistant from any Telegram client.
 
+:::caution[Deprecated]
+The Telegram adapter is deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns it. It keeps working until then, and the server logs a deprecation notice when it starts the adapter. If you need Telegram after that, build and own it as a [chat plugin](/guides/publishing-plugins/#chat-plugins). [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal.
+:::
+
 New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it. See [Who can act on a run](/reference/security/#who-can-act-on-a-run).
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - A Telegram account
 
 ## Create Telegram Bot

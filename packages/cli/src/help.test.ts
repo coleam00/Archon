@@ -215,6 +215,7 @@ Commands:
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
+  project list               List registered projects (id, kind, name, key, path)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -226,6 +227,7 @@ Commands:
   workflow status            Show running/paused workflows for this project
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow artifacts <run-id> [path] List a run's artifact files, or print one
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
   workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
@@ -298,6 +300,7 @@ Options:
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
+  --config-from-run <run-id> Start a fresh run with the run config another run was started with
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
@@ -311,7 +314,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
@@ -344,6 +347,8 @@ Examples:
   archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
+  archon workflow artifacts <run-id> plan.md
+  archon project list --json
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json

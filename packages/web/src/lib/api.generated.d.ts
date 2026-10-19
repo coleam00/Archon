@@ -4924,7 +4924,7 @@ export interface components {
       name: string;
       description: string;
       provider?: string;
-      model?: string;
+      model?: string | string[];
       /** @enum {string} */
       modelReasoningEffort?:
         | 'minimal'
@@ -5012,7 +5012,7 @@ export interface components {
       when?: string;
       /** @enum {string} */
       trigger_rule?: 'all_success' | 'one_success' | 'none_failed_min_one_success' | 'all_done';
-      model?: string;
+      model?: string | string[];
       provider?: string;
       context?:
         | ('fresh' | 'shared')
@@ -5992,6 +5992,7 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          reaskedFrom?: string;
         }
       | {
           /** @enum {string} */
@@ -6122,6 +6123,7 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          reaskedFrom?: string;
         };
     RunStopReason: {
       /** @enum {string} */

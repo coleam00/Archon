@@ -1,4 +1,6 @@
 import type { ProviderFailureClass } from '@archon/provider-contract';
+import { failureClassOfThrown } from '../shared/failure';
+import { ConnectionClosedError } from './app-server';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 
@@ -130,4 +132,107 @@ function exhaustedWindowReset(rateLimits: RateLimitSnapshot | undefined): string
   if (resets.length === 0) return undefined;
   const resetAt = new Date(Math.max(...resets));
   return Number.isFinite(resetAt.getTime()) ? resetAt.toISOString() : undefined;
+}
+
+/**
+ * Why an auth failure happened on a managed ChatGPT login. Codex's protocol lets it ask
+ * the client for a new token when its access token is rejected; `AppServerConnection`
+ * declines that request, because Archon mints the token only when a run starts or
+ * resumes, or per chat turn. Shown on any `auth` failure of a managed login, whether or
+ * not Codex sent the request.
+ */
+export const MANAGED_CHATGPT_TOKEN_REJECTED =
+  'The ChatGPT access token Archon delivered from the connected subscription was rejected ' +
+  '(expired or revoked), and Archon cannot refresh it during a turn. Resuming the run, or ' +
+  'sending the chat message again, delivers a fresh token; if this repeats, reconnect with ' +
+  '`archon ai login openai`.';
+
+// Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
+// suggestions/defaults) to a current, plan-accepted slug to suggest instead.
+const CODEX_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.3-codex': 'gpt-5.6-sol',
+  'gpt-5.2-codex': 'gpt-5.6-sol',
+  'gpt-5.2': 'gpt-5.6-sol',
+};
+
+// A display-only heuristic over vendor text: it decides whether the operator sees
+// model-access advice, never the failure class.
+function isModelAccessError(errorMessage: string): boolean {
+  const m = errorMessage.toLowerCase();
+  const hasModel = m.includes('model');
+  const hasAvailabilitySignal =
+    m.includes('not available') || m.includes('not found') || m.includes('access denied');
+  return hasModel && hasAvailabilitySignal;
+}
+
+function buildModelAccessMessage(model?: string): string {
+  const normalizedModel = model?.trim();
+  const selectedModel = normalizedModel || 'the configured model';
+  const suggested = normalizedModel ? CODEX_MODEL_FALLBACKS[normalizedModel] : undefined;
+
+  const fixLine = suggested
+    ? `To fix: update your model in ~/.archon/config.yaml:\n  assistants:\n    codex:\n      model: ${suggested}`
+    : 'To fix: update your model in ~/.archon/config.yaml to one your account can access.';
+
+  const workflowLine = suggested
+    ? `Or set it per-workflow with \`model: ${suggested}\` in workflow YAML.`
+    : 'Or set it per-workflow with a valid `model:` in workflow YAML.';
+
+  return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
+}
+
+/**
+ * @param scanned the text that decides whether the advice applies: Codex's own message,
+ *   never a stderr tail, whose log lines can mention a model for unrelated reasons.
+ */
+export function withModelAccessAdvice(
+  evidence: string,
+  model: string | undefined,
+  scanned = evidence
+): string {
+  return isModelAccessError(scanned)
+    ? `${buildModelAccessMessage(model)}\n\n${evidence}`
+    : evidence;
+}
+
+/**
+ * Spawn errnos that fail the same way every time: the binary path is missing, not
+ * executable, the wrong architecture, not a file, blocked by policy, too long or a
+ * symlink loop, or the environment is too large to exec. Others, such as EMFILE, EAGAIN
+ * and ENOMEM, are the machine running short and may clear.
+ */
+const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'EACCES',
+  'ENOEXEC',
+  'EISDIR',
+  'ENOTDIR',
+  'EPERM',
+  'E2BIG',
+  'ENAMETOOLONG',
+  'ELOOP',
+]);
+
+/**
+ * The class of a failure that ended a turn before `turn/completed`, from how the process
+ * ended. A process that exits on its own before answering any request never ran a turn:
+ * the binary has no `app-server` or rejects a flag, and another attempt fails the same
+ * way. Any other process end is a process failure, which is what `transient` names.
+ *
+ * JSON-RPC errors are not classified by code, because one code covers setups that need
+ * different classes. Probed against Codex 0.160.0 on 2026-10-03, every one of these came
+ * back as -32600 with only the message differing: an unknown method ("Invalid request:
+ * unknown variant ..."), `thread/resume` of a missing thread ("no rollout found for
+ * thread id ..."), a malformed thread id ("invalid session id: ..."), and `thread/start`
+ * with an unparseable config.toml ("failed to load configuration: ...").
+ */
+export function failureClassOfStop(error: unknown): ProviderFailureClass {
+  if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
+  const { end } = error;
+  if (end.kind === 'spawn_failed') {
+    return end.error.code !== undefined && MISCONFIGURED_SPAWN_ERRNOS.has(end.error.code)
+      ? 'misconfigured'
+      : 'transient';
+  }
+  return error.beforeFirstResponse && end.signal === null ? 'misconfigured' : 'transient';
 }

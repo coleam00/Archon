@@ -10,6 +10,10 @@ Optional prior investigation report to build on (may be empty — empty means no
 
 $INPUTS.report
 
+Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface (may be `[]`). Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
+
+$INPUTS.related
+
 The operator's request — the message that started this run:
 
 $ARGUMENTS
@@ -60,10 +64,11 @@ Write `$ARTIFACTS_DIR/plan.md`:
 - **Problem** — what this work solves and why it matters, from the request.
 - **Approach** — the chosen design, the alternatives rejected with reasons, and for each design call what settled it.
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
+- **Contract coverage** — every acceptance item, invariant and steering constraint the work order states, each with the steps that deliver or keep it. An item no step covers is not a gap to leave: it is the blocking question above, because the plan would deliver less than the stated outcome.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused and behavior-proving, only where a plausible regression would cost a user something. Many changes need none. Plan no guard, check, or test for a failure no supported path reaches.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
 - **Contract additions** — each addition to a shipped surface the plan makes without a person: what it adds and why every existing value keeps its meaning. The pull request body flags each one as a contract addition.
-- **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
+- **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it. Only work outside the contract belongs here. A contract item you believe can't or shouldn't be done is never out of scope: stop and ask, with the reason.
 - **Open questions** — only when a call belongs to a person: each question, as declared below.
 
 Omit a section that does not apply; never write a placeholder to preserve one.
