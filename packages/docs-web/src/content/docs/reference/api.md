@@ -346,6 +346,10 @@ it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before
 use a conversation with no open run. An accepted fresh supersede records the replaced run ID in
 `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
 
+For a continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
+The refusal arrives as a `text` event on the conversation's SSE stream. Callers must read
+the stream to determine whether the workflow started; the JSON response alone does not confirm it.
+
 **Supplying declared inputs.** A workflow that declares [`inputs:`](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs) takes their values through an optional `inputs` map — a flat object of string values. Omit a name to take its declared `default:`.
 
 ```bash

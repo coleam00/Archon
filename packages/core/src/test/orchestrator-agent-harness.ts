@@ -834,18 +834,8 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
-// `existsSync` is one shared mock for the whole file, so whatever predicate the
-// last test left behind is what the next one inherits. Resetting it inside a
-// single describe is not enough: everything below that block would run against a
-// leaked predicate, including the `/setproject` and `/update-project` suites,
-// which drive the existsSync call sites in handleSetProject and
-// handleUpdateProject. Today a leak is survivable only because the predicates
-// here reject one literal path — that is luck, not a guarantee, and it stops
-// being true the moment a test rejects something broader. Reset before every
-// test so no describe can poison another.
-//
-// Deliberately no count here: any number rots on the next test added, and the
-// mechanism is the argument.
+// Reset the shared filesystem predicate across all suites, including project
+// commands, so a dispatch test cannot leak its filesystem assumptions.
 beforeEach(() => {
   mockExistsSync.mockImplementation(() => true);
 });
