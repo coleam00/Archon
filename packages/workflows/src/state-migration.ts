@@ -14,7 +14,8 @@
  * `maybeWarnLegacyHomePath()` in `workflow-discovery.ts`.
  */
 import { access } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
+import { getProjectRoot, sanitizeScopeSegment } from '@archon/paths/archon-paths';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -202,5 +203,31 @@ async function probeLegacyStatePath(
   getLog().warn(
     { legacyPath, newPath, moveCommand, isolated, message },
     'workflow.legacy_state_path_detected'
+  );
+}
+
+/** Legacy cwd storage has ambiguous ownership; never migrate it or read it as a fallback. */
+export async function maybeWarnLegacyCwdStoragePath(cwd: string, newRoot: string): Promise<void> {
+  const legacyPath = getProjectRoot('_cwd', sanitizeScopeSegment(basename(cwd)));
+  if (legacyPath === newRoot) return;
+  try {
+    await access(legacyPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return;
+    getLog().warn({ err, legacyPath }, 'workflow.legacy_cwd_storage_probe_error');
+    return;
+  }
+  getLog().warn(
+    {
+      legacyPath,
+      newPath: newRoot,
+      message:
+        `Legacy unregistered-directory output remains at ${legacyPath}. ` +
+        'It may contain data from multiple directories with the same name. Nothing was moved or copied. ' +
+        `Inspect ${join(legacyPath, 'state')} and manually move only state belonging to this directory ` +
+        `into ${join(newRoot, 'state')}. New runs do not read the legacy tree.`,
+    },
+    'workflow.legacy_cwd_storage_detected'
   );
 }

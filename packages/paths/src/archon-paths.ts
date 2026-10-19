@@ -7,7 +7,7 @@
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
  * │   │                                  #   _folder/<slug>     folder project (runs in place)
- * │   │                                  #   _cwd/<basename>    unregistered working dir
+ * │   │                                  #   _cwd/<basename>-<digest>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
@@ -37,6 +37,7 @@ import {
 } from 'path';
 import type { PlatformPath } from 'path';
 import { homedir } from 'os';
+import { createHash } from 'node:crypto';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { createLogger } from './logger';
@@ -768,7 +769,7 @@ export function getScopeArtifactsPath(
  * resolve. This is the *one* key the whole codebase derives output paths from:
  * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
  * folder project (`_folder/<slug>`), or an unregistered working directory
- * (`_cwd/<basename>`).
+ * (`_cwd/<basename>-<digest>`).
  *
  * It exists because the identity → storage rule was previously implemented
  * three times at three different levels of correctness (the executor handled
@@ -850,12 +851,8 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * COLLISIONS: registration gives every registered project its own root (a new
- * project whose root is taken registers under a suffixed name). The `'cwd'` key is
- * not registered, so unregistered working directories sharing a basename share
- * `_cwd/<basename>`. For `artifacts/` and `logs/` that is benign — both are keyed
- * by run id. `stateRoot` is NOT: `$STATE_DIR` is per project by design and has no
- * run-id segment, so those runs share one `state/` and every file in it.
+ * Unregistered directories use the resolved absolute path, not just the basename:
+ * same-named directories must never share cross-run state.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -866,9 +863,14 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
     case 'folder':
       root = getFolderProjectRoot(key.slug);
       break;
-    case 'cwd':
-      root = getProjectRoot('_cwd', sanitizeScopeSegment(basename(key.cwd)));
+    case 'cwd': {
+      const cwd = resolve(key.cwd);
+      const digest = createHash('sha256').update(cwd).digest('hex');
+      // Reserve 65 bytes for the separator and digest within a 255-byte directory name.
+      const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
+      root = getProjectRoot('_cwd', `${name}-${digest}`);
       break;
+    }
   }
   return getStoragePathsForRoot(root);
 }

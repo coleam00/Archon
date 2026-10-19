@@ -1,11 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
-import { dirname, join, posix, sep, win32 } from 'path';
+import { basename, dirname, join, posix, resolve, sep, win32 } from 'path';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 import { removeTempTree } from './test-utils';
 
 const isWindows = process.platform === 'win32';
+const cwdDigest = (cwd: string): string => createHash('sha256').update(resolve(cwd)).digest('hex');
 
 import {
   isDocker,
@@ -690,7 +692,9 @@ describe('archon-paths', () => {
           '/srv/ops'
         )
       ).toBe('_folder/my-ops-folder');
-      expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe('_cwd/scratch-repo');
+      expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe(
+        `_cwd/scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
+      );
     });
 
     test('a storage root and the codebase it came from give the same key', () => {
@@ -743,9 +747,14 @@ describe('archon-paths', () => {
       });
     });
 
-    test('cwd key resolves UNDER ARCHON_HOME at _cwd/<basename>, never into the repo', () => {
+    test('cwd key resolves UNDER ARCHON_HOME at _cwd/<basename>-<digest>, never into the repo', () => {
       const paths = getProjectStoragePaths({ kind: 'cwd', cwd: '/home/u/scratch-repo' });
-      const root = join('/custom/archon', 'workspaces', '_cwd', 'scratch-repo');
+      const root = join(
+        '/custom/archon',
+        'workspaces',
+        '_cwd',
+        `scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
+      );
       expect(paths).toEqual({
         root,
         artifactsRoot: join(root, 'artifacts'),
@@ -759,13 +768,33 @@ describe('archon-paths', () => {
       expect(paths.root).not.toContain(join('.archon', 'artifacts'));
     });
 
+    test('same-basename directories and sanitization collisions have separate state', () => {
+      const state = (cwd: string) =>
+        getProjectStoragePaths(resolveProjectStorageKey(null, cwd)).stateRoot;
+      expect(state('/a/notes')).not.toBe(state('/b/notes'));
+      expect(state('/a/my notes')).not.toBe(state('/a/my_notes'));
+      expect(state('/a/notes')).toBe(state('/a/other/../notes/'));
+      expect(state('notes')).toBe(state(join(process.cwd(), 'notes')));
+    });
+
+    test('a long cwd basename leaves room for the digest in the filesystem segment', () => {
+      const root = getProjectStoragePaths({ kind: 'cwd', cwd: join('/a', 'n'.repeat(255)) }).root;
+      expect(basename(root).length).toBe(255);
+      expect(basename(root)).toBe(`${'n'.repeat(190)}-${cwdDigest(join('/a', 'n'.repeat(255)))}`);
+    });
+
     test('cwd basename is sanitised to a single traversal-safe segment', () => {
       expect(getProjectStoragePaths({ kind: 'cwd', cwd: '/home/u/my repo.v2' }).root).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', 'my_repo_v2')
+        join(
+          '/custom/archon',
+          'workspaces',
+          '_cwd',
+          `my_repo_v2-${cwdDigest('/home/u/my repo.v2')}`
+        )
       );
       // basename('/') is '' → the `_` fallback, not an empty segment.
       expect(getProjectStoragePaths({ kind: 'cwd', cwd: '/' }).root).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', '_')
+        join('/custom/archon', 'workspaces', '_cwd', `_-${cwdDigest('/')}`)
       );
     });
 
@@ -835,7 +864,15 @@ describe('archon-paths', () => {
 
     test('resolves a cwd key under _cwd, separated by run id', () => {
       expect(getRunArtifactsDirForKey({ kind: 'cwd', cwd: '/home/u/scratch' }, 'run-1')).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', 'scratch', 'artifacts', 'runs', 'run-1')
+        join(
+          '/custom/archon',
+          'workspaces',
+          '_cwd',
+          `scratch-${cwdDigest('/home/u/scratch')}`,
+          'artifacts',
+          'runs',
+          'run-1'
+        )
       );
     });
   });

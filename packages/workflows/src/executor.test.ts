@@ -13,7 +13,8 @@ import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
+import * as realStorage from '@archon/paths/archon-paths';
 import { NodeEventWriteError } from './node-event-write';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 
@@ -39,29 +40,11 @@ const mockCaptureWorkflowInvoked = mock<typeof import('@archon/paths').captureWo
 const mockCaptureWorkflowTerminal = mock<typeof import('@archon/paths').captureWorkflowTerminal>(
   _props => {}
 );
-/**
- * Deterministic stand-ins for the shared identity→paths resolver (#2200). They
- * mirror the real branch order and layout, so `resolveProjectPaths` is exercised
- * as delegation rather than re-implementation, while the asserted paths stay
- * readable literals rooted at `/tmp/ws`.
- */
-type FakeStorageKey =
-  | { kind: 'repo'; owner: string; repo: string }
-  | { kind: 'folder'; slug: string }
-  | { kind: 'cwd'; cwd: string };
-function fakeResolveProjectStorageKey(
-  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
-  cwd: string
-): FakeStorageKey {
-  if (codebase) {
-    if (codebase.kind === 'folder') return { kind: 'folder', slug: codebase.name };
-    const [owner, repo] = codebase.name.split('/');
-    if (owner && repo) return { kind: 'repo', owner, repo };
-    const base = codebase.default_cwd.split(/[\\/]/).filter(Boolean).pop();
-    if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
-  }
-  return { kind: 'cwd', cwd };
-}
+const realParseOwnerRepo = realStorage.parseOwnerRepo;
+const realResolveRepoProjectIdentity = realStorage.resolveRepoProjectIdentity;
+const fakeResolveProjectStorageKey = realStorage.resolveProjectStorageKey;
+const realGetProjectStoragePaths = realStorage.getProjectStoragePaths;
+const realGetArchonWorkspacesPath = realStorage.getArchonWorkspacesPath;
 /** Root of the fake workspace tree; segments joined so win32 separators match. */
 const WS = join('/tmp', 'ws');
 function wsPath(...segments: string[]): string {
@@ -86,21 +69,21 @@ function fakeStoragePathsForRoot(root: string): {
   };
 }
 function fakeGetProjectStoragePaths(
-  key: FakeStorageKey
+  key: realStorage.ProjectStorageKey
 ): ReturnType<typeof fakeStoragePathsForRoot> {
-  const root =
-    key.kind === 'repo'
-      ? wsPath(key.owner, key.repo)
-      : key.kind === 'folder'
-        ? wsPath('_folder', key.slug)
-        : wsPath('_cwd', key.cwd.split(/[\\/]/).filter(Boolean).pop() ?? '_');
+  const root = wsPath(
+    relative(realGetArchonWorkspacesPath(), realGetProjectStoragePaths(key).root)
+  );
   return fakeStoragePathsForRoot(root);
+}
+function cwdPath(cwd: string, ...segments: string[]): string {
+  return join(fakeGetProjectStoragePaths({ kind: 'cwd', cwd }).root, ...segments);
 }
 
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
-  parseOwnerRepo: mock(() => null),
-  resolveRepoProjectIdentity: mock(() => null),
+  parseOwnerRepo: mock(realParseOwnerRepo),
+  resolveRepoProjectIdentity: mock(realResolveRepoProjectIdentity),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
@@ -3991,13 +3974,11 @@ describe('executeWorkflow', () => {
         { conversationId: 'db-conv-1' }
       );
       // Positional arg 20 = scopeArtifactsDir (after workflowPreset). Root is the
-      // unregistered-cwd project (`_cwd/tmp`, #2200); scope = workflow name +
+      // unregistered-cwd project (`_cwd/<basename>-<digest>`, #2200); scope = workflow name +
       // conversation UUID ('conv-1' from the createWorkflowRun mock;
       // getScopeArtifactsPath is mocked to `${root}/scopes/${wf}/${scope}`).
       const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].scopeArtifactsDir;
-      expect(scopeArg).toBe(
-        wsPath('_cwd', 'tmp', 'artifacts', 'scopes', 'test-workflow', 'conv-1')
-      );
+      expect(scopeArg).toBe(cwdPath('/tmp', 'artifacts', 'scopes', 'test-workflow', 'conv-1'));
     });
 
     it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
@@ -4376,7 +4357,7 @@ describe('executeWorkflow', () => {
     }
 
     it('removes stale credential files before a credential refresh failure', async () => {
-      const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');
+      const artifactsDir = cwdPath('/tmp', 'artifacts', 'runs', 'run-123');
       const codexAuthPath = join(artifactsDir, 'codex-home', 'auth.json');
       const piAuthPath = join(artifactsDir, 'pi-home', 'auth.json');
       await mkdir(dirname(codexAuthPath), { recursive: true });

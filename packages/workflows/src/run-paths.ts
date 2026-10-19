@@ -16,7 +16,11 @@ import {
   type ResolvedWorkflow,
   type WorkflowRun,
 } from './schemas';
-import { maybeWarnLegacyArtifactsPath, maybeWarnLegacyStatePath } from './state-migration';
+import {
+  maybeWarnLegacyArtifactsPath,
+  maybeWarnLegacyStatePath,
+  maybeWarnLegacyCwdStoragePath,
+} from './state-migration';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -91,7 +95,7 @@ export interface ResolvedProjectPaths {
  *     identity→paths resolver in `@archon/paths`, which handles repo,
  *     `_local`, and folder projects.
  *  3. With no codebase (or a lookup failure, or an unresolvable identity) the
- *     run falls back to the `_cwd/<basename>` pseudo-project — still UNDER
+ *     run falls back to the `_cwd/<basename>-<digest>` pseudo-project — still UNDER
  *     `ARCHON_HOME`. This used to write into `<cwd>/.archon/`, i.e. the user's
  *     repository; relocating it is the breaking change accepted in #2200 so
  *     that every run's output survives worktree teardown and is retrievable.
@@ -131,7 +135,7 @@ export async function resolveProjectPaths(
   let key: archonPaths.ProjectStorageKey | undefined;
   let identityResolution: 'resolved' | 'unregistered' | 'faulted' | undefined;
   if (codebaseId) {
-    // Retried once (#2304). A failing lookup drops the run onto the `_cwd/<basename>`
+    // Retried once (#2304). A failing lookup drops the run onto the `_cwd/<basename>-<digest>`
     // pseudo-project. The fallback itself stays — a registry blip must not kill a run.
     // What changed is what happens to the row afterwards: a faulted run no longer
     // has its fault-derived location PERSISTED as `output_root` (so the rename hazard
@@ -185,11 +189,11 @@ export async function resolveProjectPaths(
     identityResolution = 'unregistered';
   }
 
+  key ??= archonPaths.resolveProjectStorageKey(null, cwd);
+  const storage = archonPaths.getProjectStoragePaths(key);
+  if (key.kind === 'cwd') await maybeWarnLegacyCwdStoragePath(key.cwd, storage.root);
   return {
-    ...composeRunPaths(
-      archonPaths.getProjectStoragePaths(key ?? { kind: 'cwd', cwd }),
-      workflowRunId
-    ),
+    ...composeRunPaths(storage, workflowRunId),
     identityResolution,
   };
 }
