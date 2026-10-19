@@ -63,6 +63,8 @@ curl http://localhost:3090/api/health
 # {"status":"ok","adapter":"...","concurrency":{...},"runningWorkflows":0}
 ```
 
+`/api/health` is public, so its `concurrency` object carries counts and the oldest active and queued ages, never conversation ids. The per-conversation view is the authenticated `GET /api/dashboard/conversations`.
+
 ---
 
 ## Conversations
@@ -492,6 +494,7 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/dashboard/runs` | List enriched workflow runs for the dashboard |
+| GET | `/api/dashboard/conversations` | Active and queued conversation processing in this server process, with acquisition and enqueue times |
 
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
 

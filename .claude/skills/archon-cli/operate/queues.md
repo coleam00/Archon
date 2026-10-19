@@ -150,7 +150,8 @@ The build and merge queues write the answer's text into the issue body as a date
 "Current scope" section, and later rounds work from it. Write the reason as a ruling a
 later round can act on: what is in scope, what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
-run at once, on the run config the answered run started with, so you don't relaunch.
+run at once, on the run config the answered run started with, so you don't relaunch. A
+build round that decides `continue` on its own starts its next round the same way.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to

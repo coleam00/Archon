@@ -924,7 +924,9 @@ Returns: `{"status":"ok","database":"connected"}`
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
+
+Per-conversation acquisition and queue times are on the authenticated `GET /api/dashboard/conversations`.
 
 **Use cases:**
 - Docker healthcheck configuration

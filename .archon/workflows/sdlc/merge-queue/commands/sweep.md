@@ -25,7 +25,7 @@ Work through them one at a time, in that order:
 6. **Ask.** An unclear pull request whose gate passes, or any case the policy and the facts do not settle: `ask`, with the attention item below. Its `brief` is what a `return` choice launches. A `review` or `wait` that still needs a maintainer's decision afterwards is asked in a later sweep, once the decision is all that is left.
 7. **Anything else** that only time settles, such as CI still running: `wait`, saying what it waits for.
 
-Every pull request gets exactly one decision. `head` is always the head your decision is about. `reason` is one line a maintainer can check.
+Every pull request gets exactly one decision. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
 
 ## The default branch after a batch
 

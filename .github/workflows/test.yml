@@ -90,7 +90,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         # @archon/cli runs on its own runner: with every package on one 4-vCPU Windows
         # runner the packages step took about 19 minutes, and cli finished last (#4430).
-        shard: [cli, packages]
+        # @archon/core has its own runner for the same reason: sharing one with the other
+        # packages, it finished last on every green Windows leg (8.4-9.4 min of a ~9 min step),
+        # about a minute behind @archon/workflows.
+        shard: [cli, core, packages]
     runs-on: ${{ matrix.os }}
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
     # every other PR queues behind it.
@@ -109,8 +112,16 @@ jobs:
       # No Bun download cache on Windows either. Restoring the ~600MB cache took as long
       # as a plain install (52s + 10s against 53s, measured side by side on PR #3438), and
       # it took Actions cache space that the Docker layer cache needs.
+      #
+      # Bun's install cache defaults to the user profile on C:, the slow remote-backed OS
+      # disk (see the Windows validate steps), and node_modules is on D: with the checkout.
+      # With the cache on D: as well, a Windows install takes 14-19 s instead of 40-86 s.
+      # The directory starts empty on every runner, so nothing carries over between runs.
+      # Every job with a Windows leg sets it.
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
@@ -130,6 +141,10 @@ jobs:
       - name: Validate (Linux, cli)
         if: runner.os == 'Linux' && matrix.shard == 'cli'
         run: bun run validate --only cli-tests
+
+      - name: Validate (Linux, core)
+        if: runner.os == 'Linux' && matrix.shard == 'core'
+        run: bun run validate --only core-tests
 
       - name: Validate (Linux, packages)
         if: runner.os == 'Linux' && matrix.shard == 'packages'
@@ -157,6 +172,15 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only cli-tests
+
+      - name: Validate (Windows, core)
+        if: runner.os == 'Windows' && matrix.shard == 'core'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only core-tests
 
       - name: Validate (Windows, packages)
         if: runner.os == 'Windows' && matrix.shard == 'packages'
@@ -190,6 +214,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          # On D: beside the checkout; see the install step in `test`.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
       - name: Compile Slack chat conformance fixture
         if: runner.os == 'Linux'
@@ -541,6 +568,9 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          # On D: beside the checkout; see the install step in `test`.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
       - name: Build web UI
         run: bun run build:web
       - name: Build matching server and CLI

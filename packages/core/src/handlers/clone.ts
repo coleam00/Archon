@@ -41,7 +41,6 @@ import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resol
 import { assertAbsoluteDefaultCwd } from '../utils/codebase-path';
 import {
   allocateProjectName,
-  resolveRegistrationUrl,
   type ProjectIdentity,
 } from '../services/project-registration-identity';
 import { quoteCommandArg } from '../utils/command-args';
@@ -365,14 +364,13 @@ async function reuseRegisteredCheckout(
       throw new ProjectRegistrationError(
         `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
       );
-    const remoteUrl = resolveRegistrationUrl(existing.repository_url ?? workingUrl, checkoutPath);
+    const remoteUrl = existing.repository_url ?? workingUrl;
     await assertSavedCheckoutRemote(existing.default_cwd, remoteUrl, managedSource);
     const credentials = await repositoryCredentials(workingUrl, options);
     await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
     await cloneCheckout(workingUrl, checkoutPath, credentials);
   } else if (existing.repository_url) {
-    const remoteUrl = resolveRegistrationUrl(existing.repository_url, checkoutPath);
-    await assertSavedCheckoutRemote(existing.default_cwd, remoteUrl, managedSource);
+    await assertSavedCheckoutRemote(existing.default_cwd, existing.repository_url, managedSource);
   }
   if (appSource) await setupAppRepository(checkoutPath);
   if (checkoutPath !== existing.default_cwd) {
@@ -504,10 +502,7 @@ export async function registerRepository(
   if (existing) {
     rejectExistingChoice(options);
     if (existing.repository_url)
-      await assertCheckoutRemote(
-        existing.default_cwd,
-        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
-      );
+      await assertCheckoutRemote(existing.default_cwd, existing.repository_url);
     return {
       codebaseId: existing.id,
       name: existing.name,

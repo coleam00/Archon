@@ -503,6 +503,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
       previous: 'S'.repeat(33_000),
       current: 'S'.repeat(33_000),
     })),
+    ...['', '.data'].map(field => ({
+      label: `inline euro ${field || 'whole'}`,
+      field,
+      previous: '€'.repeat(11_000),
+      current: '€'.repeat(11_000),
+    })),
   ])(
     'keeps current and previous $label distinct in a body bash node',
     async ({ field, previous, current }) => {
@@ -575,7 +581,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(await readFile(previousFile, 'utf8')).toBe(previous);
       const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
       // Shell spills sit directly in spillDir; the resume spill under persisted/ is not one.
-      const files = await readdir(spillDir);
+      const files = existsSync(spillDir) ? await readdir(spillDir) : [];
+      if (current.length <= 32_768) {
+        expect(files.filter(file => file.endsWith('.nodeoutput'))).toEqual([]);
+        return;
+      }
       const contents = await Promise.all(
         files
           .filter(file => file.endsWith('.nodeoutput'))
