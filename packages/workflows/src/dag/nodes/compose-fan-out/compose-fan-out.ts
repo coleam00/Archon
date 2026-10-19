@@ -21,7 +21,7 @@ import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
 import { mapWithLimit } from '../../../utils/map-with-limit';
-import { collectComposedSuspensionPaths } from '../../../include-expander';
+import { collectComposedSuspensionPaths } from '../../../include/suspension';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
 import { safeSendMessage } from '../../../executor-shared';
 import { getLog } from '../../log';

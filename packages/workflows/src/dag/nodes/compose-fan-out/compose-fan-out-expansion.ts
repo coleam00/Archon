@@ -7,7 +7,7 @@ import type {
 } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import type { IncludeCommandContent } from '../../../compiled-command';
-import { instantiateResolvedInclude } from '../../../include-expander';
+import { instantiateResolvedInclude } from '../../../include/inline';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { substituteWorkflowVariables } from '../../../executor-shared';
 import { getLog } from '../../log';
