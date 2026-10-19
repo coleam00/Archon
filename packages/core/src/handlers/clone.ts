@@ -502,6 +502,11 @@ export async function cloneRepository(
         throw new ProjectRegistrationError(
           `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
         );
+      await assertSavedCheckoutRemote(
+        existing.default_cwd,
+        resolveRegistrationUrl(existing.repository_url ?? workingUrl, checkoutPath),
+        managedSource
+      );
       const credentials = await repositoryCredentials(workingUrl, options);
       await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
       await cloneCheckout(workingUrl, checkoutPath, credentials);
