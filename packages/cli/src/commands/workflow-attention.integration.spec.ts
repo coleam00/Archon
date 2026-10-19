@@ -181,10 +181,11 @@ test('the queue scopes by project the way archon state names it, across a rename
 
   const scratch = await list(scratchDir);
   expect(scratch.map(item => item.runId)).toEqual([unregistered]);
+  const scratchKey = await stateKey(scratchDir);
   expect(scratch[0]?.project).toEqual({
-    key: await stateKey(scratchDir),
+    key: scratchKey,
     codebaseId: null,
-    name: (await stateKey(scratchDir)).split('/').at(-1),
+    name: scratchKey.slice(scratchKey.lastIndexOf('/') + 1),
   });
   expect(
     (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.runId)
@@ -368,9 +369,17 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
       line.type === 'attention' ? [[(line.item as AttentionQueueItem).runId, line.project]] : []
     );
   const alphaKey = projectKeyForCodebase(null, alphaDir);
-  const alphaProject = { key: alphaKey, codebaseId: null, name: alphaKey.split('/').at(-1) };
+  const alphaProject = {
+    key: alphaKey,
+    codebaseId: null,
+    name: alphaKey.slice(alphaKey.lastIndexOf('/') + 1),
+  };
   const betaKey = projectKeyForCodebase(null, betaDir);
-  const betaProject = { key: betaKey, codebaseId: null, name: betaKey.split('/').at(-1) };
+  const betaProject = {
+    key: betaKey,
+    codebaseId: null,
+    name: betaKey.slice(betaKey.lastIndexOf('/') + 1),
+  };
 
   const own = await watch();
   expect(own.code).toBe(0);
