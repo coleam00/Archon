@@ -2,8 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setLogSink } from '@archon/paths';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { ATTENTION_OUTPUT_FORMATS } from '@archon/workflows/schemas/dag-node';
@@ -269,8 +268,7 @@ describe('labeling an attention wait', () => {
     await setup({ getWorkflowRun, labelAttentionWait });
     const id = await paused('message');
 
-    const warnings: unknown[] = [];
-    setLogSink(line => warnings.push(JSON.parse(line)));
+    const logs = captureLogLines();
     try {
       await expect(
         operations.labelAttentionWait(
@@ -280,7 +278,7 @@ describe('labeling an attention wait', () => {
           'cli'
         )
       ).rejects.toBeInstanceOf(StaleGateAnswerError);
-      expect(warnings).toContainEqual(
+      expect(logs.lines).toContainEqual(
         expect.objectContaining({
           level: 40,
           msg: 'operations.workflow_gate_occurrence_lookup_failed',
@@ -293,7 +291,7 @@ describe('labeling an attention wait', () => {
         })
       );
     } finally {
-      setLogSink(undefined);
+      logs.restore();
     }
     expect(labelAttentionWait).toHaveBeenCalledWith(id, {
       pauseId: 'pause-1',
