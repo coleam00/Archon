@@ -1,6 +1,4 @@
-import type { ExecutionContext } from '@archon/provider-contract';
-import type { ContainerRunContext } from './container-context';
-import { suspendContainerForPause } from './dag/container-gate';
+import { reportContainerPauseSuspension } from './dag/container-gate';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { randomUUID } from 'crypto';
@@ -436,6 +434,8 @@ export async function establishAdoptedRunSource(
     | 'priorCompletedNodes'
     | 'preparedSource'
     | 'capturedSourceOwner'
+    | 'execContext'
+    | 'container'
   >,
   isContinuation: boolean
 ): Promise<
@@ -536,7 +536,7 @@ export async function establishRunSource(
   workflowSourceDir: string,
   opts: Pick<
     ExecuteWorkflowOptions,
-    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner'
+    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner' | 'execContext' | 'container'
   >
 ): Promise<SourcePhase<WorkflowSourceRoots | undefined>> {
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
@@ -569,13 +569,44 @@ export async function establishRunSource(
           { workflowRunId: workflowRun.id, path, err: error },
           'workflow.source_restore_unreadable'
         );
-        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-          claimId: executionClaim(workflowRun.metadata),
-          nodeId: 'workflow-source',
-          path,
-          error: error instanceof Error ? error.message : String(error),
-          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-        });
+        const { execContext, container } = opts;
+        let suspension: Promise<void> | undefined;
+        const beforeRelease =
+          execContext?.kind === 'container' && container
+            ? async (): Promise<void> => {
+                suspension = Promise.resolve().then(() =>
+                  container.backend.suspend(container.envId)
+                );
+                // Suspension is best-effort; publish the recoverable pause even on backend failure.
+                await suspension.catch(() => undefined);
+              }
+            : undefined;
+        let released: boolean;
+        try {
+          ({ released } = await deps.store.releaseRunForUnreadableSource(
+            workflowRun.id,
+            {
+              claimId: executionClaim(workflowRun.metadata),
+              nodeId: 'workflow-source',
+              path,
+              error: error instanceof Error ? error.message : String(error),
+              retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+            },
+            beforeRelease
+          ));
+        } finally {
+          if (suspension && execContext?.kind === 'container' && container) {
+            await reportContainerPauseSuspension(
+              deps,
+              platform,
+              conversationId,
+              container,
+              execContext,
+              workflowRun.id,
+              suspension
+            );
+          }
+        }
         if (released) {
           await safeSendMessage(
             platform,
@@ -745,37 +776,4 @@ export async function establishRunSource(
     getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
   }
   return { stopped: false, value: workflowSourceRoots };
-}
-
-export async function suspendReleasedSourceContainer(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  runId: string,
-  execContext: ExecutionContext,
-  containerCtx: ContainerRunContext | undefined
-): Promise<void> {
-  if (execContext.kind !== 'container' || !containerCtx) return;
-  try {
-    if ((await deps.store.getWorkflowRunStatus(runId)) === 'paused') {
-      await suspendContainerForPause(
-        deps,
-        platform,
-        conversationId,
-        containerCtx,
-        execContext,
-        runId
-      );
-    }
-  } catch (error) {
-    getLog().error(
-      { err: error, workflowRunId: runId },
-      'workflow.source_release_container_cleanup_failed'
-    );
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `Run ${runId} paused, but container cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
 }

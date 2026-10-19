@@ -10,7 +10,7 @@ import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 export type ChildWorkflowOutcome = ChildWorkflowResult &
   (
     | { status: Exclude<WorkflowRun['status'], 'running' | 'pending'> }
-    | { status: 'unsettled'; error: string }
+    | { status: 'unsettled' | 'unknown'; error: string }
   );
 
 interface ChildWorkflowResult {
@@ -167,8 +167,19 @@ export async function readChildOutcomeAfterExecution(
         { err: error, childRunId },
         'workflow.child_source_stopped_read_failed'
       );
+      return {
+        status: 'unknown',
+        childRunId,
+        error: `Could not read child run ${childRunId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
-    if (child && isTerminalRunStatus(child.status)) return childOutcomeFromRun(child);
+    if (!child)
+      return {
+        status: 'unknown',
+        childRunId,
+        error: 'Child run row disappeared after source execution stopped.',
+      };
+    if (isTerminalRunStatus(child.status)) return childOutcomeFromRun(child);
     return {
       status: 'unsettled',
       childRunId,

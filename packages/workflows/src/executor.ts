@@ -20,7 +20,6 @@ import {
 } from './run-preflight';
 import {
   establishAdoptedRunSource,
-  suspendReleasedSourceContainer,
   prepareWorkflowSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
@@ -345,20 +344,10 @@ export async function executeWorkflow(
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts,
+    { ...opts, execContext, container: containerCtx },
     isContinuation
   );
   if (sourced.stopped) {
-    if (sourced.released) {
-      await suspendReleasedSourceContainer(
-        deps,
-        platform,
-        conversationId,
-        workflowRun.id,
-        execContext,
-        containerCtx
-      );
-    }
     // A source stop relinquishes lifecycle authority before the execution backstop.
     return sourced.result;
   }

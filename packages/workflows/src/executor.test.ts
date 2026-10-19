@@ -5956,24 +5956,30 @@ describe('source establishment after admission', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
-  it.each(['paused', 'suspend-error', 'status-error', 'resumed', 'refused'] as const)(
-    'suspends only a won source release that is still paused: %s',
+  it.each(['paused', 'suspend-error', 'resumed', 'refused', 'release-error'] as const)(
+    'suspends within source release before a successor can resume: %s',
     async mode => {
       unreadable();
       const f = fixture();
-      const suspend = mock(async () => {
-        if (mode === 'suspend-error') throw new Error('suspend rejected');
-      });
-      f.store.releaseRunForUnreadableSource = mock(async (_id, release) => {
+      const suspend = mock<() => Promise<void>>();
+      const phases: string[] = [];
+      f.store.releaseRunForUnreadableSource = mock(async (_id, release, beforeRelease) => {
+        if (mode !== 'refused') {
+          await beforeRelease?.();
+          if (mode === 'release-error') throw new Error('release commit rejected');
+          phases.push('released');
+        }
         Object.assign(f.row.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
         f.row.status = mode === 'resumed' ? 'running' : 'paused';
         if (mode === 'resumed') f.row.metadata.execution_claim = 'new-owner';
         return { released: mode !== 'refused' };
       });
-      if (mode === 'status-error')
-        f.store.getWorkflowRunStatus = mock(async () => {
-          throw new Error('status rejected');
-        });
+      suspend.mockImplementation(async () => {
+        expect(f.row.status).toBe('running');
+        expect(f.row.metadata.execution_claim).toBe('owner');
+        phases.push('suspend');
+        if (mode === 'suspend-error') throw new Error('suspend rejected');
+      });
       const result = await f.execute({
         execContext: { kind: 'container', containerId: 'cid' },
         container: {
@@ -5987,12 +5993,26 @@ describe('source establishment after admission', () => {
           },
         },
       });
+      if (mode === 'release-error') {
+        expect(result).toMatchObject({ success: false, error: 'release commit rejected' });
+        expect(suspend).toHaveBeenCalledTimes(1);
+        expect(f.row.status).toBe('failed');
+        expect(f.fail).toHaveBeenCalledTimes(1);
+        expect(f.store.createWorkflowEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event_type: 'container_stopped',
+          })
+        );
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        return;
+      }
       expect(result).toMatchObject({
         success: true,
         paused: true,
         executionDisposition: 'source_stopped',
       });
-      expect(suspend).toHaveBeenCalledTimes(mode === 'paused' || mode === 'suspend-error' ? 1 : 0);
+      expect(suspend).toHaveBeenCalledTimes(mode === 'refused' ? 0 : 1);
+      expect(phases).toEqual(mode === 'refused' ? [] : ['suspend', 'released']);
       expect(f.row.status).toBe(mode === 'resumed' ? 'running' : 'paused');
       expect(f.row.metadata.continuation_retry_at).toEqual(expect.any(String));
       expect(f.row.metadata.source_release).toMatchObject({
@@ -6001,11 +6021,6 @@ describe('source establishment after admission', () => {
       });
       expect(f.fail).not.toHaveBeenCalled();
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-      if (mode === 'status-error')
-        expect(mockLogFn).toHaveBeenCalledWith(
-          expect.objectContaining({ err: expect.any(Error) }),
-          'workflow.source_release_container_cleanup_failed'
-        );
       if (mode === 'suspend-error')
         expect(mockLogFn).toHaveBeenCalledWith(
           expect.objectContaining({ err: expect.any(Error) }),

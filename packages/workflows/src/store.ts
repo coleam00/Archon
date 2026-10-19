@@ -977,10 +977,14 @@ export interface IWorkflowStore
    * store-minted `releaseId` and `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
    * `source_released` in the same transaction. Writes nothing, and returns
    * `released: false`, when status or `claimId` no longer matches: another execution owns it.
+   * beforeRelease runs only for a matching owner, under the transition's write lock,
+   * before the pause becomes resumable. It must not call the store. A rejection aborts
+   * the release; external side effects cannot be rolled back.
    */
   releaseRunForUnreadableSource(
     id: string,
-    release: SourceReleaseWrite
+    release: SourceReleaseWrite,
+    beforeRelease?: () => Promise<void>
   ): Promise<{ released: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or

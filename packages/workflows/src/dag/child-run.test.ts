@@ -121,7 +121,7 @@ describe('stopped child source execution', () => {
     }
   );
 
-  it('leaves a missing or unreadable child unsettled', async () => {
+  it('reports a missing or unreadable child as unknown', async () => {
     for (const getWorkflowRun of [
       async () => null,
       async () => {
@@ -130,7 +130,7 @@ describe('stopped child source execution', () => {
     ]) {
       expect(
         await readChildOutcomeAfterExecution({ getWorkflowRun }, 'child-1', result)
-      ).toMatchObject({ status: 'unsettled', error: result.error });
+      ).toMatchObject({ status: 'unknown', error: expect.any(String) });
     }
   });
 });

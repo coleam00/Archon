@@ -253,6 +253,8 @@ export async function executeWorkflowNode(
     switch (outcome.status) {
       case 'completed':
         return await asCompleted(outcome);
+      case 'unknown':
+        return failResult(outcome.error, 'unknown');
       case 'unsettled':
         return pauseParentOnChild(outcome.childRunId, outcome.error);
       case 'paused':

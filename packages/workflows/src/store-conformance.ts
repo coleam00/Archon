@@ -1408,6 +1408,102 @@ export function describeWorkflowStoreConformance(
       );
       expect(await types(store, run.id)).toContain('source_released');
     });
+    test('a source release holds resume behind container suspension', async () => {
+      const run = await running(store);
+      const release = {
+        claimId: executionClaim(run.metadata),
+        nodeId: 'workflow-source',
+        error: 'EACCES',
+        retryAt: new Date().toISOString(),
+      };
+      let enter!: () => void;
+      const entered = new Promise<void>(resolve => {
+        enter = resolve;
+      });
+      let finish!: () => void;
+      const suspended = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      const phases: string[] = [];
+      const releasing = store.releaseRunForUnreadableSource(run.id, release, async () => {
+        enter();
+        await suspended;
+        phases.push('suspended');
+      });
+      let resuming: Promise<WorkflowRun> | undefined;
+      try {
+        await Promise.race([
+          entered,
+          releasing.then(() => {
+            throw new Error('Release skipped suspension');
+          }),
+        ]);
+        resuming = store.resumeWorkflowRun(run.id).then(row => {
+          phases.push('resumed');
+          return row;
+        });
+        // Give the competing transition a turn while suspension remains blocked.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(phases).toEqual([]);
+      } finally {
+        finish();
+        await releasing;
+        await resuming;
+      }
+      expect(phases).toEqual(['suspended', 'resumed']);
+      const successor = await store.getWorkflowRun(run.id);
+      expect(successor?.status).toBe('running');
+      expect(executionClaim(successor?.metadata ?? {})).not.toBe(release.claimId);
+    });
+    test('a rejected source pre-release action leaves the owned run running', async () => {
+      const run = await running(store);
+      await expect(
+        store.releaseRunForUnreadableSource(
+          run.id,
+          {
+            claimId: executionClaim(run.metadata),
+            nodeId: 'workflow-source',
+            error: 'EACCES',
+            retryAt: new Date().toISOString(),
+          },
+          async () => {
+            throw new Error('pre-release failed');
+          }
+        )
+      ).rejects.toThrow('pre-release failed');
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+      expect(await types(store, run.id)).not.toContain('source_released');
+    });
+    test.each(['pending', 'running', 'paused', 'failed', 'cancelled', 'completed'] as const)(
+      'source cleanup never runs for a mismatched %s owner',
+      async status => {
+        const run =
+          status === 'pending'
+            ? await store.createWorkflowRun({ workflow_name: 'unclaimed-source', user_message: '' })
+            : await running(store);
+        if (status === 'paused') await store.pauseWorkflowRun(run.id, approval);
+        if (status === 'failed') await store.failWorkflowRun(run.id, 'failed');
+        if (status === 'cancelled') await store.cancelWorkflowRun(run.id);
+        if (status === 'completed') await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        let called = false;
+        expect(
+          await store.releaseRunForUnreadableSource(
+            run.id,
+            {
+              claimId: status === 'running' ? 'wrong-owner' : executionClaim(run.metadata),
+              nodeId: 'workflow-source',
+              error: 'EACCES',
+              retryAt: new Date().toISOString(),
+            },
+            async () => {
+              called = true;
+            }
+          )
+        ).toEqual({ released: false });
+        expect(called).toBe(false);
+        expect((await store.getWorkflowRun(run.id))?.status).toBe(status);
+      }
+    );
     test('a source release never overrides another transition', async () => {
       const release = {
         claimId: null,

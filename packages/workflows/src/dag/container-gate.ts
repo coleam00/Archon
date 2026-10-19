@@ -83,8 +83,29 @@ export async function suspendContainerForPause(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   runId: string
 ): Promise<void> {
+  await reportContainerPauseSuspension(
+    deps,
+    platform,
+    conversationId,
+    containerCtx,
+    execContext,
+    runId,
+    Promise.resolve().then(() => containerCtx.backend.suspend(containerCtx.envId))
+  );
+}
+
+// Reporting writes store events, so callers holding a source-release lock defer it until commit.
+export async function reportContainerPauseSuspension(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  containerCtx: ContainerRunContext,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  runId: string,
+  suspension: Promise<void>
+): Promise<void> {
   try {
-    await containerCtx.backend.suspend(containerCtx.envId);
+    await suspension;
     emitContainerLifecycleEvent(
       deps,
       runId,

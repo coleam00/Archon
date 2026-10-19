@@ -154,7 +154,10 @@ async function driveChildWindow(
       waiting,
       maxParallel - state.heldByIndex.size,
       spawn,
-      outcome => outcome.status === 'paused' || outcome.status === 'unsettled'
+      outcome =>
+        outcome.status === 'paused' ||
+        outcome.status === 'unsettled' ||
+        outcome.status === 'unknown'
     );
     const claimed = settled.flatMap((result, k) =>
       result === undefined ? [] : [{ index: waiting[k], result }]
@@ -165,7 +168,11 @@ async function driveChildWindow(
     );
     claimed.forEach(({ index }, k) => {
       const outcome = outcomes[k];
-      if (outcome.status === 'paused' || outcome.status === 'unsettled')
+      if (
+        outcome.status === 'paused' ||
+        outcome.status === 'unsettled' ||
+        outcome.status === 'unknown'
+      )
         state.heldByIndex.set(index, outcome.childRunId);
       else state.settledByIndex.set(index, outcome);
     });

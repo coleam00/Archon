@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { maybeResumeParentRun } from './parent-resume';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
 import * as workflowSource from './workflow-source';
@@ -58,8 +59,8 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
-  it.each(['record-write', 'follow-up-read'] as const)(
-    'holds a child whose source segment lost authority: %s',
+  it.each(['record-write', 'follow-up-read', 'completed-before-read'] as const)(
+    'fails visibly when a stopped child cannot be read: %s',
     async mode => {
       await writeWorkflow(
         'stopped-child',
@@ -133,7 +134,7 @@ nodes:
       store.updateWorkflowRun = async (id, changes) => {
         const row = store.runs.get(id)!;
         if (
-          mode === 'record-write' &&
+          mode !== 'follow-up-read' &&
           row.workflow_name === 'stopped-child' &&
           changes.metadata?.workflow_source
         ) {
@@ -146,6 +147,10 @@ nodes:
       store.getWorkflowRun = async id => {
         if (id === stoppedId) {
           childReads++;
+          if (mode === 'completed-before-read') {
+            await store.completeWorkflowRun(id, { duration_ms: 1 });
+            await maybeResumeParentRun(deps, platform, 'source-stopped', store.runs.get(id)!);
+          }
           throw new Error('child read rejected');
         }
         return read(id);
@@ -165,23 +170,20 @@ nodes:
           run => run.workflow_name === 'stopped-parent'
         )!;
         const child = store.runs.get(stoppedId!)!;
-        expect(child.status).toBe('running');
+        expect(child.status).toBe(mode === 'completed-before-read' ? 'completed' : 'running');
         expect(child.metadata.execution_claim).toBe('new-owner');
         expect(cancel).not.toHaveBeenCalled();
-        expect(fail).toHaveBeenCalledTimes(1);
+        expect(fail).toHaveBeenCalledTimes(2);
         expect(childReads).toBe(mode === 'follow-up-read' ? 2 : 1);
-        expect(parent.status).toBe('paused');
-        expect(parent.metadata.approval).toMatchObject({
-          type: 'child_workflow',
-          childRunId: child.id,
-        });
-        const notices = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
-          .map(call => String(call[1]))
-          .join('\n');
-        expect(notices).toContain('Inspect it');
-        expect(notices).not.toContain('Approve it');
+        expect(parent.status).toBe('failed');
+        expect(parent.metadata.approval).toBeUndefined();
+        const failure = store.events.find(
+          event => event.workflow_run_id === parent.id && event.event_type === 'node_failed'
+        );
+        expect(failure?.data?.error).toContain('child read rejected');
         store.getWorkflowRun = read;
-        await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+        if (child.status !== 'completed')
+          await store.completeWorkflowRun(child.id, { duration_ms: 1 });
         const resumed = await hydrateResumableRun(deps, (await read(parent.id))!);
         if (!resumed) throw new Error('parent not resumable');
         await executeWorkflow(
