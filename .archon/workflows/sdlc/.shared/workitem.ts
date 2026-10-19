@@ -37,8 +37,8 @@ import {
   claimDisposition,
   runStatus,
   stateAppend,
+  stateDocuments,
   stateGet,
-  stateList,
   statePut,
 } from './state.ts';
 
@@ -682,8 +682,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-export function read(name: string): Read | undefined {
-  const stored = stateGet(name);
+export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
@@ -783,9 +782,10 @@ export function claimable(item: Read | undefined, pickup: Pickup): item is Read 
 }
 
 /**
- * Release terminal claims, then claim the first waiting item in `order` with a
- * conditional write. A conflict re-reads the item once and claims it only if it
- * still waits unclaimed; otherwise the next candidate is tried.
+ * Read every work item in one state call, release terminal claims, then claim the
+ * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * item once and claims it only if it still waits unclaimed; otherwise the next
+ * candidate is tried.
  */
 export function claimNext(
   order: readonly OrderKey[],
@@ -793,8 +793,8 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateList('work/')
-    .map(read)
+  const items = stateDocuments('work/')
+    .map(stored => read(stored.name, stored))
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));
