@@ -130,7 +130,8 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     const run = check({
       forge: { kind: 'fake', response: ANSWERED },
       capabilities: REQUIRED_FORGE_OPERATIONS.filter(op => op !== 'pr.comments'),
-    }, entry);
+      entry,
+    });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('missing: pr.comments');
     expect(run.forge).toHaveLength(1);

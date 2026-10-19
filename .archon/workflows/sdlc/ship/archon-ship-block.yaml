@@ -129,7 +129,7 @@ nodes:
     model: small
     mutates_checkout: false
     depends_on: [forge, triage, continues]
-    when: "$continues.output.pull_request != 'null'"
+    when: "$continues.output.pull_request != ''"
     with:
       pull_request: "$continues.output.pull_request"
       target: "$INPUTS.target"
