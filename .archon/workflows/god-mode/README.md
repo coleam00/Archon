@@ -88,10 +88,11 @@ Each of these is a general primitive the engine could gain, not a god-mode featu
   `fan_out:` (#1961), so a god-mode run is bounded by mission caps and attempt limits
   rather than by dollars.
 - **Dry runs stop at child runs.** A `workflow:` node cannot be stubbed, so the
-  conductor's fixtures prove routing only up to the fan-out.
+  conductor's fixtures prove routing only up to the fan-out (#2818).
 - **Dry runs ignore executed verdicts.** `authoredOutcome` reads only stubbed return
   values, so a fixture cannot assert the verdict an executed script authored. The pack
-  tests (`.archon/scripts/__tests__/god-mode.test.ts`) cover those decisions instead.
+  tests (`.archon/scripts/__tests__/god-mode.test.ts`) cover those decisions instead
+  (#4670).
 - **No native schedule on Linux.** Native trigger scheduling installs launchd jobs
   only; elsewhere the host scheduler runs `archon trigger fire`.
 
