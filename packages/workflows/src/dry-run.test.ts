@@ -1610,6 +1610,23 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('executable bash dry runs reject NUL without executing a prefix', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'nul-bash',
+        nodes: [{ id: 'code', bash: "printf before # '\0'\nexit 7" }],
+      }),
+      cwd: process.cwd(),
+      userMessage: '',
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: 'Bash source cannot contain NUL bytes',
+    });
+  });
+
   test('executable bash dry runs deliver large inline values and stdin EOF', async () => {
     const value = '€'.repeat(32_000);
     const result = await dryRunWorkflow({

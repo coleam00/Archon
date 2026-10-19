@@ -321,6 +321,35 @@ describe('executeDagWorkflow -- bash nodes', () => {
       },
     ],
   ];
+  it.each(containerBashNodes)(
+    'rejects NUL in a %s before executing a prefix',
+    async (_label, node) => {
+      const marker = join(testDir, 'nul-prefix');
+      const source = `printf before > ${JSON.stringify(marker)} # '\0'\nexit 7`;
+      if (node.kind === 'exec') node = { ...node, script: source };
+      else if (node.kind === 'loop') {
+        node = { ...node, loop: { ...node.loop, until_bash: source } };
+      } else if (node.kind === 'loop_group') {
+        node = { ...node, loop_group: { ...node.loop_group, until_bash: source } };
+      } else throw new Error('Expected a Bash invocation fixture');
+      const deps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow: { name: 'nul-source', nodes: [node] },
+          workflowRun: makeWorkflowRun('nul-source'),
+        })
+      );
+      expect(await Bun.file(marker).exists()).toBe(false);
+      const events = persistedEvents(deps.store).filter(event => event.step_name === 'shell');
+      expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+      expect(events.find(event => event.event_type === 'node_failed')?.data?.error).toContain(
+        'NUL'
+      );
+    }
+  );
+
   it.each(
     containerBashNodes.flatMap(([label, node]) =>
       (['ENOENT', 'EACCES'] as const).map(code => [label, code, node] as const)

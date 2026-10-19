@@ -3,6 +3,21 @@ import { execFileAsync, resolveBashPath } from '@archon/git';
 import { bashInvocation } from './bash-invocation';
 
 describe('Bash stdin evaluator', () => {
+  it('rejects NUL before a body can execute', () => {
+    expect(() => bashInvocation("printf before # '\0'\nexit 7")).toThrow('NUL');
+  });
+
+  it('preserves trailing newlines in an EOF-terminated heredoc', async () => {
+    const script = 'cat <<EOF\nhello\n\n';
+    const invocation = bashInvocation(script);
+    const native = await execFileAsync(resolveBashPath(), ['-c', script]);
+    const delivered = await execFileAsync(resolveBashPath(), invocation.args, {
+      input: invocation.input,
+    });
+    expect(delivered.stdout).toBe(native.stdout);
+    expect(delivered.stdout).toBe('hello\n\n');
+  });
+
   it.each([
     '',
     'printf "0=%s source=%s flags=%s\\n" "$0" "${BASH_SOURCE[*]}" "$-"; f() { printf "function=%s" "${BASH_SOURCE[*]}"; }; f',

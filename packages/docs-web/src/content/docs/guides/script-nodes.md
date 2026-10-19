@@ -346,9 +346,10 @@ const data = JSON.parse(String.raw`$fetch-issue.output`);  // DON'T
 ```
 :::
 
-For **named scripts**, variables are not passed automatically. Read them from
-the environment (`process.env.USER_MESSAGE`, `os.environ['USER_MESSAGE']`)
-or accept them via stdin. For **inline scripts**, substituted variables are
+For **named scripts**, read workflow variables from the environment
+(`process.env.USER_MESSAGE`, `os.environ['USER_MESSAGE']`) and `with:` bindings
+from `INPUTS_<UPPER_SNAKE>` environment variables. Named scripts receive no stdin
+payload. For **inline scripts**, substituted variables are
 literally embedded into the code string at execution time.
 
 ## Environment and Isolation
