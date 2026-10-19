@@ -125,70 +125,84 @@ test('Claude cannot admit a helper when the SDK does not expose its subprocess e
   });
 });
 
-for (const output of ['helper-key', '', 'failed']) {
-  test(`Claude checks container helpers inside the runner: ${output || 'empty'}`, async () => {
-    account = { apiKeySource: 'apiKeyHelper' };
-    const child = new childProcess.ChildProcess();
-    Object.defineProperties(child, {
-      stdin: { value: new PassThrough() },
-      stdout: { value: new PassThrough() },
-      stderr: { value: new PassThrough() },
-    });
-    const spawn = mock(() => child);
-    const execute = mock(
-      (
-        _command: string,
-        _args: string[],
-        _options: { signal: AbortSignal },
-        callback: (
-          error: childProcess.ExecFileException | null,
-          stdout: string,
-          stderr: string
-        ) => void
-      ) => {
-        callback(
-          output === 'failed' ? Object.assign(new Error('helper failed'), { code: 1 }) : null,
-          output === 'helper-key' ? output : '',
-          ''
-        );
-        return child;
-      }
-    );
-    mock.module('node:child_process', () => ({ ...childProcess, spawn, execFile: execute }));
-    query.mockImplementationOnce(({ options }) => {
-      options.spawnClaudeCodeProcess?.({
-        signal: new AbortController().signal,
-        command: 'claude',
-        args: [],
-        cwd: '/runner',
-        env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
+const { execFile: runInRunner } = childProcess;
+const helpers = { succeeds: 'echo helper-key', empty: 'true', fails: 'exit 1' } as const;
+for (const runnerKey of [
+  undefined,
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_API_KEY',
+]) {
+  for (const [helperResult, helper] of Object.entries(helpers)) {
+    const usable =
+      helperResult === 'succeeds' || (runnerKey !== undefined && runnerKey !== 'CLAUDE_API_KEY');
+    test(`Claude container helper ${helperResult}, runner key ${runnerKey ?? 'none'}: ${usable ? 'usable' : 'unusable'}`, async () => {
+      account = { apiKeySource: 'apiKeyHelper' };
+      const child = new childProcess.ChildProcess();
+      Object.defineProperties(child, {
+        stdin: { value: new PassThrough() },
+        stdout: { value: new PassThrough() },
+        stderr: { value: new PassThrough() },
       });
-      return {
-        accountInfo,
-        close,
-        request: async () => ({ response: { effective: { apiKeyHelper: 'runner-helper' } } }),
-      };
+      const spawn = mock(() => child);
+      // Stands in for `docker exec`: runs the in-runner command with the image's
+      // inherited environment, which the forwarded env bag never contains.
+      const execute = mock(
+        (
+          _command: string,
+          args: string[],
+          options: { signal: AbortSignal },
+          callback: (
+            error: childProcess.ExecFileException | null,
+            stdout: string,
+            stderr: string
+          ) => void
+        ) => {
+          const command = args.slice(args.indexOf('runner') + 1);
+          return runInRunner(
+            command[0] ?? '',
+            command.slice(1),
+            {
+              ...options,
+              env: { PATH: process.env.PATH, ...(runnerKey ? { [runnerKey]: 'image-key' } : {}) },
+            },
+            callback
+          );
+        }
+      );
+      mock.module('node:child_process', () => ({ ...childProcess, spawn, execFile: execute }));
+      query.mockImplementationOnce(({ options }) => {
+        options.spawnClaudeCodeProcess?.({
+          signal: new AbortController().signal,
+          command: 'claude',
+          args: [],
+          cwd: '/runner',
+          env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' },
+        });
+        return {
+          accountInfo,
+          close,
+          request: async () => ({ response: { effective: { apiKeyHelper: helper } } }),
+        };
+      });
+      const status = await new ClaudeProvider().checkCredential({
+        ...request(),
+        cwd: '/runner',
+        execContext: { kind: 'container', containerId: 'runner', execUser: 'worker' },
+      });
+      expect(status.state).toBe(usable ? 'usable' : 'unusable');
+      expect(execute.mock.calls[0]?.[0]).toBe('docker');
+      expect(execute.mock.calls[0]?.[1].slice(0, 9)).toEqual([
+        'exec',
+        '-i',
+        '-u',
+        'worker',
+        '-w',
+        '/runner',
+        '-e',
+        'CLAUDE_CODE_ENTRYPOINT=sdk-ts',
+        'runner',
+      ]);
     });
-    const status = await new ClaudeProvider().checkCredential({
-      ...request(),
-      cwd: '/runner',
-      execContext: { kind: 'container', containerId: 'runner', execUser: 'worker' },
-    });
-    expect(status.state).toBe(output === 'helper-key' ? 'usable' : 'unusable');
-    expect(execute.mock.calls[0]?.[0]).toBe('docker');
-    expect(execute.mock.calls[0]?.[1]).toEqual([
-      'exec',
-      '-i',
-      '-u',
-      'worker',
-      '-w',
-      '/runner',
-      '-e',
-      'CLAUDE_CODE_ENTRYPOINT=sdk-ts',
-      'runner',
-      'sh',
-      '-c',
-      'runner-helper',
-    ]);
-  });
+  }
 }

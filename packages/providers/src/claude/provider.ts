@@ -604,12 +604,16 @@ async function checkNativeKeyHelper(
       }
     };
     if (request.execContext?.kind === 'container') {
+      // The runner image can supply a key the forwarded env never saw; Claude in the
+      // runner uses it, so the helper matters only when the runner has none.
       execFile(
         'docker',
         [
           ...buildDockerExecPrefix(request.execContext, request.cwd, env),
           'sh',
           '-c',
+          'if [ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN" ]; then echo runner-env; else exec sh -c "$1"; fi',
+          'check-credential',
           settings.apiKeyHelper,
         ],
         { signal: request.signal },
