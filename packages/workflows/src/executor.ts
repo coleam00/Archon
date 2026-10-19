@@ -12,14 +12,14 @@ import {
 } from './run-credential-env';
 import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
 import { resolveRunDispatch } from './run-dispatch';
-import { prepareRunPaths, resolveAdoptedRunDir } from './run-paths';
+import { prepareRunPaths } from './run-paths';
 import {
   assertRunCredentials,
   effectiveDbCredentialValues,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
-  establishRunSource,
+  establishAdoptedRunSource,
   prepareWorkflowSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
@@ -330,18 +330,17 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
-  const sourced = await establishRunSource(
+  const sourced = await establishAdoptedRunSource(
     deps,
     platform,
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts
+    opts,
+    isContinuation
   );
   if (sourced.stopped) return sourced.result;
-  const workflowSourceRoots = sourced.value;
+  const { workflowSourceRoots } = sourced.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
@@ -358,6 +357,8 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const adoptedRunDir = sourced.value.adoptedRunDir();
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
