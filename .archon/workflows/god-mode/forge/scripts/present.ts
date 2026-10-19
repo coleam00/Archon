@@ -23,7 +23,7 @@ run('forge present', () => {
     .join('\n');
   emit({
     message: [
-      `The forge built \`${name}\`. Approve to commit it to this run's branch; reject to discard it.`,
+      `The forge built \`${name}\`. Approve to push it and open a draft pull request; reject to discard it.`,
       '',
       text(process.env.INPUTS_SUMMARY),
       '',

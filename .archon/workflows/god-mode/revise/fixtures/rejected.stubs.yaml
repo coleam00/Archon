@@ -1,0 +1,12 @@
+# The revision is eligible on its first attempt, a person rejects it, and the real
+# publish script records the rejection without pushing or opening anything.
+baseline: { start: abc123, invalid: [], failing: [] }
+revise: { title: Sharpen the deliver prompt, summary: s, acceptance: ["true"] }
+check: { attempt: 1, done: true, valid: true, report: Eligible, paths: [".archon/x.md"], title: Sharpen the deliver prompt, summary: s }
+present: { message: "God mode proposes: Sharpen the deliver prompt" }
+review: { decision: reject, text: not now }
+fixture:
+  inputs: { need: fix the deliver prompt }
+  expect: completed
+  reached: [baseline, revisions, present, review, publish]
+exec-code: true

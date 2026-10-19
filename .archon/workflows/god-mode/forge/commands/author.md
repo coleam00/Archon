@@ -48,7 +48,7 @@ Read these first, every time:
   goes behind a `wait: attention` approval.
 - Declare `inputs:` for anything a caller must supply.
 
-Do not commit: the forge commits only after a person approves.
+Do not commit or push: that happens only after a person approves.
 
 Reply with the workflow's `name` and a `summary` of what it does and how it is
 governed.

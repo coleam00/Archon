@@ -1,0 +1,16 @@
+# Every attempt breaks a rule (here, touching god mode itself): the revision cancels
+# with the evidence and never reaches a person.
+baseline: { start: abc123, invalid: [], failing: [] }
+revise: { title: t, summary: s, acceptance: ["true"] }
+check:
+  attempt: 3
+  done: true
+  valid: false
+  report: "Not allowed: `.archon/workflows/god-mode/.shared/trust.ts` is god mode's own governance or repository config."
+  paths: [".archon/workflows/god-mode/.shared/trust.ts"]
+  title: t
+  summary: s
+fixture:
+  inputs: { need: loosen the trust ladder }
+  expect: cancelled
+  reached: [baseline, revisions]

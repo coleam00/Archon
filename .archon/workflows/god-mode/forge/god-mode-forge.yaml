@@ -109,6 +109,7 @@ nodes:
     runtime: bun
     with:
       name: "$drafts.output.name"
+      summary: "$drafts.output.summary"
       decision: "$review.output.decision"
       note: "$review.output.text"
     output_format:
@@ -118,5 +119,6 @@ nodes:
         name: { type: string }
         branch: { type: string }
         commit: { type: string }
+        pr_url: { type: string }
         reason: { type: string }
-      required: [installed, name, branch, commit, reason]
+      required: [installed, name, branch, commit, pr_url, reason]

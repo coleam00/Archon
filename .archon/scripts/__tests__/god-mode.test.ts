@@ -1,7 +1,8 @@
 /**
  * The god-mode pack's deterministic core: the trust ladder that decides how much a run
  * may do unasked, the per-attempt verdict that decides whether a mission succeeded,
- * the tally that feeds the ladder, and the forge's draft judge. The routing around
+ * the tally that feeds the ladder, the forge's draft judge, and the rules a revision
+ * of existing automation must pass. The routing around
  * them is proved by the dry-run fixtures beside each workflow.
  */
 import { describe, expect, it } from 'bun:test';
@@ -9,6 +10,8 @@ import { type Charter, plan, proceed, standingCharter, tally } from '../../workf
 import { judgeDraft } from '../../workflows/god-mode/.shared/forge';
 import { fresh, recall } from '../../workflows/god-mode/.shared/lessons';
 import { type AttemptInput, decideAttempt, type Mission, parseMission } from '../../workflows/god-mode/.shared/mission';
+import { parseRemote } from '../../workflows/god-mode/.shared/publish';
+import { governance, judgeRevision, regressions } from '../../workflows/god-mode/.shared/revise';
 import { assess, type MissionRecord, needsApproval } from '../../workflows/god-mode/.shared/trust';
 
 function records(outcomes: boolean[]): { records: MissionRecord[] } {
@@ -201,5 +204,49 @@ describe('forge judge', () => {
 
   it('reports a draft the validator never found', () => {
     expect(judgeDraft('w', 0, { results: [] }, 'raw', null, '').report).toContain('no workflow named `w`');
+  });
+});
+
+describe('revise governance', () => {
+  it('allows only automation and policy under .archon', () => {
+    expect(governance(['.archon/workflows/sdlc/deliver/commands/implement.md', '.archon/direction.md'])).toEqual([]);
+    expect(governance(['packages/workflows/src/executor.ts'])[0]).toContain('outside `.archon/`');
+  });
+
+  it('refuses god mode itself and repository config', () => {
+    expect(governance(['.archon/workflows/god-mode/.shared/trust.ts'])[0]).toContain('own governance');
+    expect(governance(['.archon/config.yaml'])).toHaveLength(1);
+  });
+
+  it('counts only what the change made worse', () => {
+    const before = { invalid: ['broken'], failing: ['a.stubs.yaml'] };
+    expect(regressions(before, { invalid: ['broken'], failing: ['a.stubs.yaml'] })).toEqual([]);
+    expect(regressions(before, { invalid: ['broken', 'deliver'], failing: ['a.stubs.yaml', 'b.stubs.yaml'] })).toEqual([
+      'workflow `deliver` no longer validates',
+      'fixture `b.stubs.yaml` now fails',
+    ]);
+  });
+
+  it('is eligible only with files changed, no problems, and passing acceptance', () => {
+    const pass = [{ command: 'true', code: 0, output: '' }];
+    expect(judgeRevision(0, ['.archon/x.md'], [], [], pass)).toMatchObject({ valid: true, done: true });
+    expect(judgeRevision(0, [], [], [], pass)).toMatchObject({ valid: false, done: false });
+    expect(judgeRevision(0, ['.archon/x.md'], [], [], [])).toMatchObject({ valid: false });
+    expect(judgeRevision(0, ['.archon/x.md'], [], [], [{ command: 'false', code: 1, output: 'no' }]).report).toContain(
+      'Acceptance failed',
+    );
+    expect(judgeRevision(2, ['.archon/x.md'], ['nope'], [], pass)).toMatchObject({ valid: false, done: true, attempt: 3 });
+  });
+});
+
+describe('publish remote', () => {
+  it('reads https and ssh remotes', () => {
+    expect(parseRemote('https://github.com/coleam00/Archon.git')).toEqual({ host: 'github.com', path: 'coleam00/Archon' });
+    expect(parseRemote('git@github.com:coleam00/Archon.git')).toEqual({ host: 'github.com', path: 'coleam00/Archon' });
+    expect(parseRemote('https://x:token@gitea.example.com:3000/team/repo')).toEqual({
+      host: 'gitea.example.com',
+      path: 'team/repo',
+    });
+    expect(() => parseRemote('not a url')).toThrow('cannot read');
   });
 });

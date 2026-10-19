@@ -6,8 +6,11 @@ documents, structured output, and triggers. It needs nothing pack-specific from 
 engine.
 
 You give it a goal. It plans the work, runs it in parallel, proves each result,
-remembers what it learned, earns autonomy from its track record, and writes new
-workflows for problems that keep recurring.
+remembers what it learned, and earns autonomy from its track record. Running on a
+schedule, it studies every workflow in the project, the SDLC pack included, and
+proposes improvements: it revises the prompts and policies behind recurring failures,
+and writes new workflows for recurring problems. Each proposal arrives as a draft
+pull request a person approved.
 
 ```
 god-mode "<goal>"
@@ -18,11 +21,15 @@ god-mode "<goal>"
     ─▶ debrief ─▶ remember lessons  (state: god-mode/lessons)
 
 god-mode-learn                      (scheduled, always on)
-  observe runs, attention labels, trust, memory ─▶ reflect
-    ─▶ consolidate the memory | forge a handler workflow | do nothing
+  observe every workflow's runs, attention by every label, trust, memory ─▶ reflect
+    ─▶ revise existing automation | forge a new workflow | consolidate the memory | nothing
+
+god-mode-revise "<need>"
+  baseline health ─▶ revise ⟲ (allowed paths + no regressions + acceptance)
+    ─▶ person approves the diff ─▶ draft pull request
 
 god-mode-forge "<need>"
-  survey ─▶ author ⟲ validate + dry run ─▶ person approves ─▶ commit to the run's branch
+  survey ─▶ author ⟲ validate + dry run ─▶ person approves ─▶ draft pull request
 ```
 
 ## The workflows
@@ -31,12 +38,14 @@ god-mode-forge "<need>"
 |---|---|
 | `god-mode` | The conductor. Turns a goal into a six-part brief and independent missions, decides from the trust ladder whether a person approves the plan, fans the missions out, and records the outcomes. |
 | `god-mode-mission` | One mission as its own governed run. It succeeds only when its acceptance commands exit 0 **and** an independent reviewer with fresh context approves. The implementer never grades its own work. |
-| `god-mode-forge` | Writes a new workflow under `.archon/workflows/forged/<name>/` and iterates until `archon validate workflows` accepts it and a dry run reaches an end. A person always approves before it is committed. |
-| `god-mode-learn` | The self-improvement loop. It reads what the engine recorded and makes at most one evidence-backed change. |
+| `god-mode-revise` | Changes existing automation: a workflow, prompt, script or policy document under `.archon/`. Its checks are deterministic: only allowed paths, no workflow newly invalid and no fixture newly failing compared with a snapshot taken before the edit, and every declared acceptance command passes. A person approves the full diff. |
+| `god-mode-forge` | Writes a new workflow under `.archon/workflows/forged/<name>/` and iterates until `archon validate workflows` accepts it and a dry run reaches an end. A person approves the full file set. |
+| `god-mode-learn` | The self-improvement loop. It reads what the engine recorded about every workflow and makes at most one evidence-backed change. |
 
 ```bash
 archon workflow run god-mode "Make the CLI's error messages name the flag the user got wrong"
 archon workflow run god-mode-forge --input need="Triage every new issue labelled bug into ..."
+archon workflow run god-mode-revise --input need="The deliver stage keeps ending not ready because ..."
 archon workflow run god-mode-learn
 ```
 
@@ -63,6 +72,36 @@ mission reads them before it starts. The learner periodically rewrites the memor
 fewer, sharper lessons, guarded by the revision it read, so a concurrent write fails
 the rewrite rather than being lost.
 
+## Improving the SDLC pack, and every other pack
+
+The learner knows no pack's conventions, which is what lets it improve all of them:
+
+- **Run outcomes** are grouped by workflow name, so an SDLC stage that keeps ending
+  `failed` stands out next to everything else.
+- **Recurring attention** is counted by every label key the open items carry, whatever
+  pack set them: `stage` from the SDLC attention block, `build` from the build queue,
+  `discoveries`, `god-mode`, or your own.
+- **The fix fits the cause.**
+  - A prompt or policy that keeps producing the same failure gets a `revise`, which
+    changes it in place, for example sharpening an SDLC stage's command or correcting a
+    pack policy document.
+  - A recurring class of question that needs new automation gets a `forge`: a handler
+    workflow, matching the SDLC pack's own rule that "a recurring failure class gets a
+    handler".
+
+Both go through the same draft pull request as any other change, so the SDLC pack's own
+review and merge queue can pick them up. The reviser reads the target pack's README and
+constitution before it edits, and a regression in any of that pack's fixtures blocks
+the change.
+
+## Publishing
+
+Every revised or forged change is pushed and opened as a **draft** pull request only
+after a person approves it, against the run's base branch. It opens through the GitHub
+CLI by default; set `GOD_MODE_FORGE=forge` to open it through Archon's forge seam
+(`archon forge pr.create`), which reaches any forge an installed plugin serves.
+Nothing in this pack merges.
+
 ## Always on
 
 Schedule the learner with a trigger binding. `triggers/god-mode-learn.example.json` is
@@ -75,9 +114,12 @@ run the same `trigger fire` command from cron or a systemd timer. See the
 
 - Decide that work succeeded from an agent's prose. Every verdict is a typed field that
   a script derives from exit codes and structured review output.
-- Install a workflow, merge, or push without a person. Missions and forged workflows
-  end as commits on branches, and forged workflows always pass an approval wait.
-- Change its own governance: the trust ladder, these workflows, or the engine.
+- Push or open a pull request without a person, or merge at all. Missions end as
+  commits on their branches. Revised and forged changes pass an approval wait on the
+  full diff before they are pushed as draft pull requests.
+- Change its own governance: the trust ladder, these workflows, or the engine. A
+  revision touching `.archon/workflows/god-mode/`, `.archon/config.yaml`, or anything
+  outside `.archon/` is refused before a person ever sees it.
 - Parse prose between nodes. Every hand-off is structured output.
 
 ## Engine gaps god mode runs into
@@ -99,6 +141,7 @@ Each of these is a general primitive the engine could gain, not a god-mode featu
 ## Tests
 
 - `bun run test .archon/scripts/__tests__/god-mode.test.ts`: the trust ladder, the
-  attempt verdict, the tally, memory, and the forge judge.
-- `bun run cli workflow test`: dry-run fixtures beside the conductor and the mission,
-  with the mission's scripts executing for real.
+  attempt verdict, the tally, memory, the forge judge, the revision rules, and remote
+  parsing for publishing.
+- `bun run cli workflow test`: dry-run fixtures beside each workflow, with the
+  deterministic scripts executing for real where the fixture says `exec-code: true`.

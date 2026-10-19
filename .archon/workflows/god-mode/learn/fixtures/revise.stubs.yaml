@@ -1,0 +1,15 @@
+# The evidence points at an existing SDLC prompt: the learner launches a revision.
+# Dry-run never launches a `workflow:` child, so the revise node fails here, and
+# `report` fails with it: a failed producer always fails the bindings that read it.
+observe: { evidence: "stage: archon-deliver 6", lessons_revision: 0 }
+reflect:
+  action: revise
+  rationale: the deliver stage keeps ending not ready on the same review finding
+  evidence: "label stage=archon-deliver: 6 open items"
+  need: "Sharpen the deliver implementer prompt so it runs the package's type-check before finishing"
+  lessons: []
+fixture:
+  expect: failed
+  fail-node: [revise, report]
+  reached: [observe, reflect]
+exec-code: true
