@@ -98,16 +98,19 @@ function message(error: unknown): string {
 
 /**
  * The decisions record acts on: one per claimed pull request, in the sweep's order. A
- * decision about a pull request this run did not claim refuses, because its work item
- * belongs to another run; a claimed one the sweep left out waits for the next sweep.
+ * decision about a pull request this run did not claim is refused with a note, because
+ * its work item belongs to another run, and every other decision is still recorded; a
+ * claimed one the sweep left out waits for the next sweep.
  */
 function decide(items: readonly Item[], sweep: Sweep): Decision[] {
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const strays = sweep.decisions.filter(decision => !wanted.has(decision.number)).map(decision => decision.number);
-  if (strays.length > 0) throw new Error(`the sweep decided PR ${strays.join(', ')}, which this run did not claim`);
+  if (strays.length > 0) {
+    note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
+  }
   const decided = new Map<number, Decision>();
   for (const decision of sweep.decisions) {
-    if (decided.has(decision.number)) continue;
+    if (!wanted.has(decision.number) || decided.has(decision.number)) continue;
     // An ask the sweep wrote no item for has nothing to raise; it waits like any other undecided one.
     const asks = decision.action === 'ask' && decision.attention !== null;
     decided.set(decision.number, asks ? decision : { ...decision, action: decision.action === 'ask' ? 'wait' : decision.action, attention: null });

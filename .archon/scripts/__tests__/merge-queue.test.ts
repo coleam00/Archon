@@ -648,13 +648,13 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
   }, 60_000);
 
-  test('a decision for a pull request the run did not claim refuses, and one left undecided waits', () => {
+  test('a decision for a pull request the run did not claim is noted and skipped, and the rest is still recorded', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
-    const extra = run(at, 'record', recordInputs([decision({ action: 'wait' }), decision({ number: 43, action: 'wait' })]));
-    expect(extra.stderr).toContain('the sweep decided PR 43, which this run did not claim');
-    ok(run(at, 'record', recordInputs([])));
-    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+    const extra = run(at, 'record', recordInputs([decision({ number: 7, action: 'merged' }), decision({ action: 'wait', reason: 'CI pending' })]));
+    expect(extra.code).toBe(0);
+    expect(extra.stderr).toContain('the sweep decided PR 7, which this run did not claim; not recorded');
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
