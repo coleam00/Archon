@@ -1,6 +1,7 @@
 // @archon-test-isolated
+import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
-import { mkdir, readFile } from 'fs/promises';
+import { mkdir, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -483,10 +484,150 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(consumeRows[1].node_output).toContain('prev=[draft-1] now=[DONE]');
   });
 
+  it.each([
+    {
+      label: 'whole ASCII output',
+      field: '',
+      previous: 'P'.repeat(33_000),
+      current: 'C'.repeat(33_000),
+    },
+    {
+      label: 'ASCII field',
+      field: '.data',
+      previous: 'P'.repeat(33_000),
+      current: 'C'.repeat(33_000),
+    },
+    ...['', '.data'].map(field => ({
+      label: `equal consecutive values ${field || 'whole'}`,
+      field,
+      previous: 'S'.repeat(33_000),
+      current: 'S'.repeat(33_000),
+    })),
+    {
+      label: 'whole spilled output with trailing newlines',
+      field: '',
+      previous: 'A'.repeat(33_000) + '\n',
+      current: 'A'.repeat(33_000) + '\n\n',
+    },
+    {
+      label: 'spilled field with trailing newlines',
+      field: '.data',
+      previous: 'A'.repeat(33_000) + '\n',
+      current: 'A'.repeat(33_000) + '\n\n',
+    },
+    {
+      label: 'whole spilled output with a long newline suffix',
+      field: '',
+      previous: 'A' + '\n'.repeat(600_000),
+      current: 'B' + '\n'.repeat(600_001),
+    },
+    {
+      label: 'spilled field with a long newline suffix',
+      field: '.data',
+      previous: 'A' + '\n'.repeat(600_000),
+      current: 'B' + '\n'.repeat(600_001),
+    },
+    {
+      label: 'whole multibyte output',
+      field: '',
+      previous: 'é'.repeat(20_000) + '\n',
+      current: 'é'.repeat(20_000) + '\n\n',
+    },
+    {
+      label: 'multibyte field',
+      field: '.data',
+      previous: 'é'.repeat(20_000) + '\n',
+      current: 'é'.repeat(20_000) + '\n\n',
+    },
+  ])(
+    'keeps current and previous $label distinct in a body bash node',
+    async ({ field, previous, current }) => {
+      let iteration = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'agent_message_chunk',
+          text: field
+            ? JSON.stringify({ data: iteration++ === 0 ? previous : current })
+            : iteration++ === 0
+              ? previous
+              : current,
+        };
+        yield { type: 'result', sessionId: `spill-${iteration}` };
+      });
+      const currentFile = join(testDir, 'current.txt');
+      const previousFile = join(testDir, 'previous.txt');
+      const logDir = join(testDir, 'logs');
+      const artifactsDir = join(testDir, 'artifacts');
+      const stateDir = join(testDir, 'state');
+      const result = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('lg-distinct-spills'),
+          logDir,
+          artifactsDir,
+          stateDir,
+          workflow: {
+            name: 'lg-distinct-spills',
+            nodes: [
+              {
+                id: 'group',
+                kind: 'loop_group',
+                loop_group: {
+                  until_bash:
+                    `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                    `test $compare.output = done && test "$current" ${current === previous ? '=' : '!='} "$previous"`,
+                  max_iterations: 2,
+                  fresh_context: false,
+                  nodes: [
+                    {
+                      id: 'work',
+                      kind: 'agent',
+                      source: { kind: 'inline', prompt: 'produce output' },
+                    },
+                    {
+                      id: 'compare',
+                      kind: 'exec',
+                      runtime: 'sh',
+                      depends_on: ['work'],
+                      script:
+                        `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                        `printf '%s' "$current" > ${JSON.stringify(currentFile)}; ` +
+                        `printf '%s' "$previous" > ${JSON.stringify(previousFile)}; ` +
+                        'if [ -n "$previous" ]; then printf done; else printf again; fi',
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        })
+      );
+      expect(result).toBe('done');
+      expect(iteration).toBe(2);
+      expect(existsSync(join(logDir, '.archon', 'node-output-spills'))).toBe(false);
+      expect(existsSync(join(stateDir, '.archon', 'node-output-spills'))).toBe(false);
+      expect(await readFile(currentFile, 'utf8')).toBe(current);
+      expect(await readFile(previousFile, 'utf8')).toBe(previous);
+      if (previous.length > 32_768) {
+        const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
+        const files = await readdir(spillDir, { recursive: true });
+        const contents = await Promise.all(
+          files
+            .filter(file => file.endsWith('.nodeoutput'))
+            .map(file => readFile(join(spillDir, file), 'utf8'))
+        );
+        expect(contents).toContain(previous);
+        if (current === previous) {
+          expect(contents.filter(content => content === previous).length).toBeGreaterThan(1);
+        }
+      }
+    }
+  );
+
   it('reads oversized $LOOP_PREV output from the run-owned spill directory', async () => {
     const artifactsDir = join(testDir, 'loop-prev-artifacts');
     const logDir = join(testDir, 'loop-prev-logs');
-    const largeOutput = 'x'.repeat(33_000);
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('lg-large-loopprev');
@@ -531,12 +672,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(result).toContain('33000');
-    expect(
-      await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'work.nodeoutput'),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'work.nodeoutput')).exists()).toBe(false);
   });
 
@@ -590,12 +725,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(result).toBe(largeOutput);
-    expect(
-      await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'bump.nodeoutput'),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'bump.nodeoutput')).exists()).toBe(false);
   });
 

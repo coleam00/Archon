@@ -1,6 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
-import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import { writeEngineFile } from './engine-file';
 import { getLog } from './log';
 import { NODE_OUTPUT_FILE_THRESHOLD } from './node-output';
 
@@ -13,20 +13,21 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * Write `value` to `<dir>/<filename>`, creating `dir` as needed. Returns the full
+ * Write `value` under the run engine directory, creating parents as needed. Returns the full
  * path on success, or `undefined` after logging on any failure (permission, disk
  * space, etc.) — callers own their own fallback; this never throws.
  */
-export function writeSpillFile(dir: string, filename: string, value: string): string | undefined {
-  const filePath = joinPath(dir, filename);
+export function writeSpillFile(
+  artifactsDir: string,
+  path: string,
+  value: string
+): string | undefined {
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(filePath, value);
-    return filePath;
+    return writeEngineFile(artifactsDir, path, value);
   } catch (fileErr) {
     const err = fileErr as Error;
     getLog().error(
-      { err, dir, filename, valueSize: value.length, filePath },
+      { err, artifactsDir, path, valueSize: Buffer.byteLength(value, 'utf8') },
       'dag.spill_file_write_failed'
     );
     return undefined;
@@ -35,8 +36,8 @@ export function writeSpillFile(dir: string, filename: string, value: string): st
 
 /**
  * Shell-quote a value for bash, or write it under the run artifact directory's
- * engine-owned spill child and return a $(cat ...) reference when the value exceeds
- * the inline size threshold.
+ * engine-owned spill child when the value exceeds the inline size threshold.
+ * The shell expression restores trailing newlines stripped by command substitution.
  */
 export function shellQuoteOrFile(
   value: string,
@@ -45,10 +46,16 @@ export function shellQuoteOrFile(
   artifactsDir: string | undefined
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
-    const spillDir = joinPath(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'node-output-spills');
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
-    const filePath = writeSpillFile(spillDir, filename, value);
-    if (filePath) return `$(cat ${shellQuote(filePath)})`;
+    const path = joinPath('node-output-spills', `${randomUUID()}.${filename}`);
+    const filePath = writeSpillFile(artifactsDir, path, value);
+    if (filePath) {
+      // Command substitution strips every trailing LF; append that suffix outside it.
+      let suffixStart = value.length;
+      while (suffixStart > 0 && value[suffixStart - 1] === '\n') suffixStart--;
+      const trailingNewlines = value.slice(suffixStart);
+      return `$(cat ${shellQuote(filePath)})${trailingNewlines ? shellQuote(trailingNewlines) : ''}`;
+    }
     return shellQuote(value); // fallback: inline (pre-file-spill behavior)
   }
   return shellQuote(value);

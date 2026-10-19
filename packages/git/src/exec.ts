@@ -1,4 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { GitFailure } from './errors';
 import { execFile } from 'child_process';
@@ -146,52 +148,63 @@ export async function execFileAsync(
     env?: NodeJS.ProcessEnv;
     windowsHide?: boolean;
     killSignal?: NodeJS.Signals;
+    input?: string;
   }
 ): Promise<{ stdout: string; stderr: string }> {
-  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options }).catch(
-    async (cause: unknown) => {
-      if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
-      if (cmd !== 'git') throw cause;
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      let kind: 'unclassified' | 'not_repository' | 'timeout' = 'unclassified';
-      if (
-        cause instanceof Error &&
-        'killed' in cause &&
-        cause.killed === true &&
-        'code' in cause &&
-        cause.code === null &&
-        options?.timeout
-      )
-        kind = 'timeout';
-      const path = args[0] === '-C' ? args[1] : options?.cwd;
-      const env = options?.env ?? process.env;
-      if (
-        path &&
-        cause instanceof Error &&
-        'code' in cause &&
-        (cause.code === 128 || cause.code === 'ENOENT') &&
-        !env.GIT_DIR
-      ) {
-        try {
-          // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
-          // ENOENT; either way no repository is there.
-          if (await isMissingPath(path)) kind = 'not_repository';
-          else if (cause.code === 128 && !(await hasRepositoryMarker(path, env))) {
-            // Repository discovery also exits 128 for invalid configuration. Verify
-            // Git can load its configuration before treating absence as the cause.
-            await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {
-              windowsHide: true,
-              ...options,
-            });
-            kind = 'not_repository';
+  const { input, ...execOptions } = options ?? {};
+  const pending = promisifiedExecFile(cmd, args, { windowsHide: true, ...execOptions });
+  const completed =
+    input !== undefined && pending.child.stdin
+      ? Promise.allSettled([pending, pipeline(Readable.from([input]), pending.child.stdin)]).then(
+          ([execution, writing]) => {
+            if (execution.status === 'rejected') throw execution.reason;
+            if (writing.status === 'rejected') throw writing.reason;
+            return execution.value;
           }
-        } catch {
-          // Failed inspection leaves the original Git evidence unclassified.
+        )
+      : pending;
+  const result = await completed.catch(async (cause: unknown) => {
+    if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
+    if (cmd !== 'git') throw cause;
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    let kind: 'unclassified' | 'not_repository' | 'timeout' = 'unclassified';
+    if (
+      cause instanceof Error &&
+      'killed' in cause &&
+      cause.killed === true &&
+      'code' in cause &&
+      cause.code === null &&
+      options?.timeout
+    )
+      kind = 'timeout';
+    const path = args[0] === '-C' ? args[1] : options?.cwd;
+    const env = options?.env ?? process.env;
+    if (
+      path &&
+      cause instanceof Error &&
+      'code' in cause &&
+      (cause.code === 128 || cause.code === 'ENOENT') &&
+      !env.GIT_DIR
+    ) {
+      try {
+        // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
+        // ENOENT; either way no repository is there.
+        if (await isMissingPath(path)) kind = 'not_repository';
+        else if (cause.code === 128 && !(await hasRepositoryMarker(path, env))) {
+          // Repository discovery also exits 128 for invalid configuration. Verify
+          // Git can load its configuration before treating absence as the cause.
+          await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {
+            windowsHide: true,
+            ...options,
+          });
+          kind = 'not_repository';
         }
+      } catch {
+        // Failed inspection leaves the original Git evidence unclassified.
       }
-      throw new GitFailure(kind, detail, cause);
     }
-  );
+    throw new GitFailure(kind, detail, cause);
+  });
   // The `.toString()` these two lines used to carry is gone deliberately. Passing an
   // options OBJECT unconditionally (rather than possibly `undefined`) resolves
   // execFile to its string-encoding overload, so both fields are already strings and

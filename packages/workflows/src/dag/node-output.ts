@@ -1,12 +1,10 @@
 import { join as joinPath } from 'path';
-import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { buildTruncationMarker } from '../utils/output-truncation';
 import type { WorkflowRun } from '../schemas';
 import { validateArtifactPointers } from '../artifact-pointer';
 import { writeSpillFile } from './shell-quote';
 
-/** Threshold (bytes) above which $nodeId.output values are written to a temp file
- *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
+/** UTF-16 code-unit threshold for shell reference spills (JavaScript string.length). */
 export const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
 
 /** Maximum UTF-8 bytes retained for a successful exec node's stdout in workflow events. */
@@ -70,13 +68,11 @@ export function formatPersistedNodeOutput(
     if (headEnd - sequenceStart < expectedLength) headEnd = sequenceStart;
   }
 
-  const spillDir = joinPath(
+  const spillPath = writeSpillFile(
     artifactsDir,
-    RUN_ARTIFACTS_ENGINE_SUBDIR,
-    'node-output-spills',
-    'persisted'
+    joinPath('node-output-spills', 'persisted', `${spillKey}.nodeoutput`),
+    output
   );
-  const spillPath = writeSpillFile(spillDir, `${spillKey}.nodeoutput`, output);
 
   return {
     nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,
