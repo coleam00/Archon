@@ -3204,14 +3204,22 @@ This checks resource resolution beyond what load-time validation covers. Bundled
 
 ### Unknown Keys Are Reported, Not Rejected
 
-A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a pause and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
+A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something, Archon reports every dropped key as a **warning** naming the key, where it was found, and, when it can tell, what to write instead:
 
 ```text
-WARNING [parse_warning] Node 'plan': unknown key 'interactive' will be ignored.
-  Nothing on this node pauses. To ask for an answer, add a 'wait: { attention:
-  <message> }' node; to ask on each iteration of a loop, use a 'loop_group' whose
-  body ends in one.
+WARNING [parse_warning] Node 'plan': unknown key 'contxt' will be ignored.
 ```
+
+A key that belongs to a different node type is not dropped: it is a **load error** naming the node, the key and the node types that support it, because the node would silently not do what the key says. That covers `runtime:` and `deps:` off a `script:` node; `timeout:` off `bash:`, `script:`, `loop:` and `loop_group:`; `on_timeout:` off `bash:` and `script:`; `with:` off `command:`, `script:`, `include:` and `workflow:`; `input:` and `isolation:` off `workflow:`; and `fan_out:` off `workflow:` and `include:`. A loop setting such as `until_bash:`, `max_iterations:` or `interactive:` written at the top level of a node, instead of inside `loop:` or `loop_group:`, is a load error too. A node-level `interactive: true` reads like a pause and is not one:
+
+```text
+Node 'plan': 'interactive' 'interactive' is only honoured inside 'loop:' or 'loop_group:';
+  at the top level of node 'plan' nothing reads it. Nothing on this node pauses. To ask
+  for an answer, add a 'wait: { attention: <message> }' node; to ask on each iteration
+  of a loop, use a 'loop_group' whose body ends in one.
+```
+
+An AI field on a node that runs no AI (`model:` on a `bash:` node, for example) still only warns: the node does what it says, the field is simply unread.
 
 (The `WARNING [parse_warning]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
 
