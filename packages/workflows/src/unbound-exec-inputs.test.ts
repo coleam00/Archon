@@ -106,7 +106,7 @@ nodes:
     expect(result.warnings).toEqual([]);
   });
 
-  test('bash reads can use declared inputs but not an ignored local with binding', () => {
+  test('bash reads can use declared inputs, and an undeclared read names the fix', () => {
     const declared = parseWorkflow(
       `name: bash-declared
 description: A bash input comes from the workflow declaration
@@ -116,25 +116,20 @@ inputs:
 nodes:
   - id: verify
     bash: printf '%s' "$INPUTS_READY"
-    with:
-      ignored: value
 `,
       'bash-declared.yaml',
       providerRegistry
     );
     expect(declared.workflow).not.toBeNull();
-    expect((declared.warnings ?? []).join('\n')).toContain("'with' is only supported");
 
     const ignored = parseWorkflow(
       `name: bash-ignored
-description: An ignored bash binding cannot provide an input
+description: A bash node has no local binding to provide an input
 inputs:
   declared: {}
 nodes:
   - id: verify
     bash: printf '%s' "$INPUTS_LOCAL"
-    with:
-      local: value
 `,
       'bash-ignored.yaml',
       providerRegistry

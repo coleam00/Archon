@@ -2,10 +2,8 @@ import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
-import {
-  discoverWorkflowsWithConfig,
-  resolveWorkflowCommandContents,
-} from '../../../workflow-discovery';
+import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
+import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
 import { findWorkflowLoadError } from '../../../schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
@@ -23,7 +21,7 @@ import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
 import { mapWithLimit } from '../../../utils/map-with-limit';
-import { collectComposedSuspensionPaths } from '../../../include-expander';
+import { collectComposedSuspensionPaths } from '../../../include/suspension';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';

@@ -46,6 +46,7 @@ import {
   isRunBlockedOnChild,
   isFanOutBlockReleased,
 } from './schemas';
+import { NODE_MODE_KEYS, type NodeMode } from './schemas/dag-node';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
 import type {
   DagNode,
@@ -1145,128 +1146,156 @@ describe('dagNodeSchema — ExecNode', () => {
     }
   });
 
-  test('ignores deferred exec fields on every mode that does not select them', () => {
-    const cases: readonly {
-      name: string;
-      node: Record<string, unknown>;
-      ignored: Record<string, unknown>;
-    }[] = [
-      {
-        name: 'command',
-        node: { id: 'command', command: 'review' },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
+  // One valid node per mode, and one valid value for every mode-owned key. Typed by
+  // NodeMode so a new mode fails to compile until it has a row; a new key fails the
+  // completeness check below until it has a sample.
+  const MINIMAL_NODE: Record<NodeMode, Record<string, unknown>> = {
+    command: { command: 'review' },
+    prompt: { prompt: 'Review this.' },
+    bash: { bash: 'echo hi' },
+    loop: { loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 } },
+    loop_group: {
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 1,
+        nodes: [{ id: 'review', prompt: 'Review this.' }],
       },
-      {
-        name: 'prompt',
-        node: { id: 'prompt', prompt: 'Review this.' },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      // `timeout` is absent from both loop cases: these two modes SELECT it, because
-      // an until_bash check is a subprocess that needs a budget. See
-      // 'dagNodeSchema — loop and loop_group select timeout'.
-      {
-        name: 'loop',
-        node: {
-          id: 'loop',
-          loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 },
-        },
-        ignored: { bash: '   ', script: '   ', on_timeout: 'skip' },
-      },
-      {
-        name: 'loop_group',
-        node: {
-          id: 'loop-group',
-          loop_group: {
-            until: 'DONE',
-            max_iterations: 1,
-            nodes: [{ id: 'review', prompt: 'Review this.' }],
-          },
-        },
-        ignored: { bash: '   ', script: '   ', on_timeout: 'skip' },
-      },
-      {
-        name: 'approval',
-        node: { id: 'approval', approval: { message: 'Continue?' } },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      {
-        name: 'wait',
-        node: { id: 'wait', wait: { duration_ms: 1 } },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      {
-        name: 'cancel',
-        node: { id: 'cancel', cancel: 'Stop.' },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      {
-        name: 'include',
-        node: { id: 'include', include: 'child' },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      {
-        name: 'workflow',
-        node: { id: 'workflow', workflow: 'child' },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
-      },
-      {
-        name: 'bash',
-        node: { id: 'bash', bash: 'echo hi' },
-        ignored: { script: '   ' },
-      },
-      {
-        name: 'script',
-        node: { id: 'script', script: 'console.log("hi")', runtime: 'bun' },
-        ignored: { bash: '   ' },
-      },
-    ];
+    },
+    approval: { approval: { message: 'Continue?' } },
+    wait: { wait: { duration_ms: 1 } },
+    cancel: { cancel: 'Stop.' },
+    script: { script: 'console.log("hi")', runtime: 'bun' },
+    include: { include: 'child' },
+    workflow: { workflow: 'child' },
+  };
+  const SAMPLE_VALUE: Record<string, unknown> = {
+    with: { topic: 'x' },
+    timeout: 1000,
+    on_timeout: 'skip',
+    runtime: 'bun',
+    deps: ['zod'],
+    fan_out: { items: '$list.output', as: 'item' },
+    input: 'do the thing',
+    isolation: 'worktree',
+  };
+  const modes = [...NODE_MODE_KEYS.keys()];
+  // Another mode's selector is the mutual-exclusion error, covered elsewhere.
+  const nonSelectorKeys = [
+    ...new Set(modes.flatMap(m => [...(NODE_MODE_KEYS.get(m) ?? [])])),
+  ].filter(key => !(modes as string[]).includes(key));
 
-    for (const { name, node, ignored } of cases) {
-      const baseline = dagNodeSchema.safeParse(node);
-      const withIgnoredFields = dagNodeSchema.safeParse({ ...node, ...ignored });
-      expect(baseline.success, `${name} baseline`).toBe(true);
-      expect(withIgnoredFields.success, name).toBe(true);
-      if (baseline.success && withIgnoredFields.success) {
-        expect(withIgnoredFields.data, name).toEqual(baseline.data);
+  test('every non-selector mode key has a sample value', () => {
+    expect(Object.keys(SAMPLE_VALUE).sort()).toEqual([...nonSelectorKeys].sort());
+  });
+
+  const foreignKeyCases = modes.flatMap(mode =>
+    nonSelectorKeys
+      .filter(key => !NODE_MODE_KEYS.get(mode)?.has(key))
+      .map(key => [mode, key] as const)
+  );
+
+  test.each(foreignKeyCases)(
+    'rejects %s node carrying %s, naming the key, node and owning modes',
+    (mode, key) => {
+      const result = dagNodeSchema.safeParse({
+        id: 'n1',
+        ...MINIMAL_NODE[mode],
+        [key]: SAMPLE_VALUE[key],
+      });
+      const issues = result.error?.issues ?? [];
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.path).toEqual([key]);
+      expect(issues[0]?.message).toContain(`'${key}'`);
+      // The include launch-only reasons point at 'workflow:' instead of naming the node.
+      if (mode === 'include' && (key === 'isolation' || key === 'input')) return;
+      expect(issues[0]?.message).toContain(`not on ${mode} node 'n1'`);
+      for (const owner of modes.filter(m => NODE_MODE_KEYS.get(m)?.has(key))) {
+        expect(issues[0]?.message).toContain(owner);
+      }
+    }
+  );
+
+  test.each([
+    [
+      { id: 'n1', prompt: 'p', runtime: 'bun' },
+      "'runtime' is only supported on script nodes, not on prompt node 'n1'",
+    ],
+    [
+      { id: 'n1', command: 'c', input: 'x' },
+      "'input' is only supported on workflow nodes, not on command node 'n1'",
+    ],
+    [
+      { id: 'n1', bash: 'echo', deps: ['zod'] },
+      "'deps' is only supported on script nodes, not on bash node 'n1'",
+    ],
+    [
+      { id: 'n1', prompt: 'p', with: { a: 'b' } },
+      "'with' is only supported on command, script, include or workflow nodes",
+    ],
+    [
+      { id: 'n1', command: 'c', timeout: 5 },
+      "'timeout' is only supported on bash, loop, loop_group or script nodes",
+    ],
+    // A value the owning mode would also refuse still reports the placement.
+    [
+      { id: 'n1', prompt: 'p', on_timeout: 123 },
+      "'on_timeout' is only supported on bash or script nodes, not on prompt node 'n1'",
+    ],
+    [
+      { id: 'n1', prompt: 'p', runtime: 'perl' },
+      "'runtime' is only supported on script nodes, not on prompt node 'n1'",
+    ],
+  ])('names the owning modes for %o', (node, expected) => {
+    const result = dagNodeSchema.safeParse(node);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toContain(expected);
+  });
+
+  test('accepts every key on a mode that owns it', () => {
+    for (const mode of modes) {
+      for (const key of NODE_MODE_KEYS.get(mode) ?? []) {
+        if (!(key in SAMPLE_VALUE)) continue;
+        const result = dagNodeSchema.safeParse({
+          id: 'n1',
+          ...MINIMAL_NODE[mode],
+          [key]: SAMPLE_VALUE[key],
+        });
+        expect(result.success, `${key} on ${mode}`).toBe(true);
       }
     }
   });
 
-  test('ignores unsupported with values on every mode that drops with', () => {
-    const cases: readonly { name: string; node: Record<string, unknown> }[] = [
-      { name: 'bash', node: { id: 'bash', bash: 'echo hi' } },
-      { name: 'prompt', node: { id: 'prompt', prompt: 'Review this.' } },
-      {
-        name: 'loop',
-        node: {
-          id: 'loop',
-          loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 },
-        },
-      },
-      {
-        name: 'loop_group',
-        node: {
-          id: 'loop-group',
-          loop_group: {
-            until: 'DONE',
-            max_iterations: 1,
-            nodes: [{ id: 'review', prompt: 'Review this.' }],
-          },
-        },
-      },
-      { name: 'approval', node: { id: 'approval', approval: { message: 'Continue?' } } },
-      { name: 'wait', node: { id: 'wait', wait: { duration_ms: 1 } } },
-      { name: 'cancel', node: { id: 'cancel', cancel: 'Stop.' } },
-    ];
+  test('rejects a loop setting written at the top level of a node', () => {
+    const untilBash = dagNodeSchema.safeParse({ id: 'n1', prompt: 'p', until_bash: 'exit 0' });
+    expect(untilBash.success).toBe(false);
+    if (!untilBash.success) {
+      expect(untilBash.error.issues[0]?.path).toEqual(['until_bash']);
+      expect(untilBash.error.issues[0]?.message).toBe(
+        "'until_bash' is only honoured inside 'loop:' or 'loop_group:'; at the top level of node 'n1' nothing reads it."
+      );
+    }
 
-    for (const { name, node } of cases) {
-      const baseline = dagNodeSchema.safeParse(node);
-      const withIgnoredValue = dagNodeSchema.safeParse({ ...node, with: ['ignored'] });
-      expect(baseline.success, `${name} baseline`).toBe(true);
-      expect(withIgnoredValue.success, name).toBe(true);
-      if (baseline.success && withIgnoredValue.success) {
-        expect(withIgnoredValue.data, name).toEqual(baseline.data);
-      }
+    const misplacedOnLoop = dagNodeSchema.safeParse({
+      id: 'n1',
+      ...MINIMAL_NODE.loop,
+      max_iterations: 3,
+    });
+    expect(misplacedOnLoop.success).toBe(false);
+
+    const bodyInteractive = dagNodeSchema.safeParse({
+      id: 'outer',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 1,
+        nodes: [{ id: 'check', prompt: 'check it', interactive: true }],
+      },
+    });
+    expect(bodyInteractive.success).toBe(false);
+    if (!bodyInteractive.success) {
+      const message = bodyInteractive.error.issues.map(i => i.message).join(' | ');
+      expect(message).toContain("'interactive' is only honoured inside");
+      expect(message).toContain("node 'check'");
+      expect(message).toContain('wait: { attention: <message> }');
     }
   });
 
@@ -2265,6 +2294,7 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     const result = dagNodeSchema.safeParse({ id: 'review', include: 'blk', ...extra });
     expect(result.success).toBe(false);
     if (!result.success) {
+      expect(result.error.issues).toHaveLength(1);
       const message = result.error.issues.map(i => i.message).join(' | ');
       expect(message).toContain(`'${field}' is not supported on an include node`);
       expect(message).toContain("'workflow:' node");
@@ -2343,7 +2373,7 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     for (const f of BASH_NODE_AI_FIELDS) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
     }
-    for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
+    for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
     }
     // Structural fields the include node legitimately carries are NOT ignored.

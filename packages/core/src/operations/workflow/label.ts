@@ -16,7 +16,7 @@ import type { OperationContext } from './context';
 import {
   assertAnswerAdmissible,
   expectedGateForOccurrence,
-  staleGateError,
+  lostGateError,
 } from './answer-admission';
 
 /** A label write on an attention wait: the occurrence it is for, keys to set and keys to remove. */
@@ -103,7 +103,8 @@ export async function labelAttentionWait(
     unset: request.unset,
     via,
   });
-  if (!result.labeled) throw staleGateError(run.id, await ctx.store.getWorkflowRun(run.id));
+  if (!result.labeled)
+    throw await lostGateError(ctx, run.id, expectedGateForOccurrence(run, occurrence));
   return {
     runId: run.id,
     occurrence,

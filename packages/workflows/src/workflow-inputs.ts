@@ -2,7 +2,7 @@
  * The declared-input contract (#2470, #2554), shared by every call surface.
  *
  * A workflow's `inputs:` block is one contract with three callers:
- *   - `include:` resolves it at LOAD time (include-expander.ts), splicing values into
+ *   - `include:` resolves it at LOAD time (include/inputs-macro.ts), splicing values into
  *     `$INPUTS.<name>` before the DAG is ever persisted;
  *   - `workflow:` resolves it at RUN time (executor.ts), persisting the resolved map to
  *     the child's `metadata.inputs`;

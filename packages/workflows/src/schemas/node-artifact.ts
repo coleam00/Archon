@@ -75,7 +75,7 @@ export const nodeArtifactReadResultSchema = z.object({
 export type NodeArtifactReadResult = z.infer<typeof nodeArtifactReadResultSchema>;
 
 /**
- * The on-disk delivery envelope for a per-invocation typed-artifact listing.
+ * The on-disk delivery envelope for a typed-artifact observation.
  * `runId` identifies the run whose artifacts the listing observed, so a consumer
  * that has `$WORKFLOW_ID` can reject a listing handed to it out of scope.
  */

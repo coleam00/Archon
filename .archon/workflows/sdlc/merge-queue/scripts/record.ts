@@ -42,6 +42,17 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+
+const OWN_PR_OTHER =
+  'Do what the answer text says. The text is recorded as the ruling on this pull request, and the queue stops working it until a new push; nothing goes to the build queue.';
+
+/**
+ * `other` hands the item back to the build queue with the person's text as the ruling.
+ * No build round owns an own pull request, so there it parks with the text recorded.
+ */
+function withQueueOther(attention: MergeAttention, item: Item): MergeAttention {
+  return item.own_pr === true ? withOther(attention, 'park', OWN_PR_OTHER) : withOther(attention, 'return');
+}
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
@@ -52,6 +63,8 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts | null;
   readonly record: MergeRecord | null;
+  /** An enrolled maintainer's own pull request: no build round owns it. */
+  readonly own_pr?: boolean;
 }
 
 interface Decision {
@@ -250,8 +263,7 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            // `other` hands the item back to the build queue with the person's text as the ruling.
-            attention: withOther(firstAsk.attention as MergeAttention, 'return'),
+            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number)),
           };
   const render = (raised: MergeAsked | null): string =>
     raised === null

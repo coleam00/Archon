@@ -1,12 +1,6 @@
 import type { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
-import {
-  isAgentNode,
-  isComposeFanOutNode,
-  isExecNode,
-  isIncludeDirective,
-  isWorkflowNode,
-} from '../schemas';
+import { isComposeFanOutNode, isIncludeDirective } from '../schemas';
 import { dagNodeSchema, ignoredFieldsForNode } from '../schemas/dag-node';
 import { getLog } from './log';
 import {
@@ -66,31 +60,6 @@ function parseDagNode(
   }
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
   collectLoopUntilDeprecationWarnings(node, id, warnings);
-
-  // `with:` is live on an agent node's command-sourced form (node-local bindings,
-  // #2637), on exec (script-runtime only), and on include/workflow (caller inputs).
-  // On every other node type Zod strips it silently — surface that through the
-  // parse-warnings channel (#2213) so an author learns the binding never attached,
-  // without rejecting YAML that loaded fine before.
-  const hasWithSupport =
-    isIncludeDirective(node) ||
-    isWorkflowNode(node) ||
-    isComposeFanOutNode(node) ||
-    (isExecNode(node) && node.runtime !== 'sh') ||
-    (isAgentNode(node) && node.source.kind === 'command');
-  if ((raw as Record<string, unknown>).with !== undefined && !hasWithSupport) {
-    warnings.push(
-      `Node '${id}': 'with' is only supported on command, script, include, and workflow nodes — it is ignored here`
-    );
-    getLog().debug({ id: node.id }, 'node_with_ignored');
-  }
-
-  if ((raw as Record<string, unknown>).on_timeout !== undefined && node.kind !== 'exec') {
-    warnings.push(
-      `Node '${id}': 'on_timeout' is only supported on bash and script nodes — it is ignored here`
-    );
-    getLog().debug({ id: node.id }, 'node_on_timeout_ignored');
-  }
 
   // parseWarnings owns author-facing diagnostics; the structured log observes the
   // same message for operators without becoming a second classification path.

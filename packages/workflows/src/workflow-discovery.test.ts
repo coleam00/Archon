@@ -122,7 +122,7 @@ describe('workflow discovery', () => {
     await mkdir(testDir, { recursive: true });
     process.env.ARCHON_HOME = join(testDir, 'home');
     delete process.env.ARCHON_DOCKER;
-    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
     resetLegacyHomeWarningForTests();
   });
 
@@ -806,7 +806,7 @@ nodes:
       delete process.env.ARCHON_DOCKER;
       // The deprecation warning uses a module-scoped flag; reset between tests
       // so each case is independent.
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
       mockLogger.warn.mockClear();
     });
@@ -920,7 +920,7 @@ nodes:
       await mkdir(homeDir, { recursive: true });
       process.env.ARCHON_HOME = homeDir;
       delete process.env.ARCHON_DOCKER;
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
       mockLogger.warn.mockClear();
     });
@@ -1099,9 +1099,8 @@ nodes:
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
-      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } = await import(
-        './workflow-discovery'
-      );
+      const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
       resetLegacyHomeWarningForTests();
 
       const homeDir = join(
@@ -1345,7 +1344,7 @@ nodes:
           'nodes:',
           '  - id: work',
           '    prompt: do it',
-          '    interactive: true', // dropped, warned — on THIS file
+          '    contxt: fresh', // dropped, warned — on THIS file
         ].join('\n')
       );
       await writeWorkflowFile(
@@ -1365,7 +1364,7 @@ nodes:
 
       const block = byName.get('block');
       expect((block?.parseWarnings ?? []).length).toBe(1);
-      expect(block?.parseWarnings?.[0]).toContain("unknown key 'interactive'");
+      expect(block?.parseWarnings?.[0]).toContain("unknown key 'contxt'");
 
       // The includer inlines the block's NODES but not its warnings.
       const parent = byName.get('parent');
@@ -1405,7 +1404,7 @@ nodes:
         'nodes:',
         '  - id: a',
         '    prompt: hi',
-        '    interactive: true',
+        '    contxt: fresh',
       ].join('\n');
 
     /** Write root/sub `foo.yaml`, discover, and return the single survivor. */
@@ -1432,7 +1431,7 @@ nodes:
         expect(warnings).toEqual([]); // the clean file won — it declares no unknown key
       } else {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       }
     });
 
@@ -1440,7 +1439,7 @@ nodes:
       const { name, warnings } = await discoverColliding(DIRTY('foo-root'), CLEAN('foo-sub'));
       if (name === 'foo-root') {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       } else {
         expect(warnings).toEqual([]);
       }

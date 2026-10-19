@@ -31,7 +31,7 @@ import {
 /**
  * The reserved scope name for workflow inputs. The loader's ref scans (`loader/dag-references.ts`,
  * `loader/dag-structure.ts`) import this rather than re-typing the literal. It is NOT the only spelling in the tree —
- * `include-expander.ts` and `output-ref.ts` still hardcode the word, and
+ * `include/command-prompts.ts` and `output-ref.ts` still hardcode the word, and
  * `dagNodeSchema` (which enforces the reservation) cannot import it back without a cycle.
  *
  * `INPUTS` can never be a node id: `dagNodeSchema.superRefine` rejects it outright

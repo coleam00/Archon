@@ -153,7 +153,7 @@ describe('Workflow Loader', () => {
     await mkdir(testDir, { recursive: true });
     process.env.ARCHON_HOME = join(testDir, 'home');
     delete process.env.ARCHON_DOCKER;
-    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
     resetLegacyHomeWarningForTests();
   });
 
@@ -1088,7 +1088,7 @@ nodes:
       ]);
     });
 
-    it('should warn when on_timeout is declared on a non-exec node', async () => {
+    it('rejects on_timeout on a non-exec node', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -1105,9 +1105,9 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows[0].parseWarnings).toContain(
-        "Node 'prompt': 'on_timeout' is only supported on bash and script nodes — it is ignored here"
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors[0]?.error).toContain(
+        "Node 'prompt': 'on_timeout' 'on_timeout' is only supported on bash or script nodes, not on prompt node 'prompt'."
       );
     });
 
@@ -4497,7 +4497,7 @@ nodes:
       );
       const err = result.errors.find(e => e.filename === 'fan-wrong-node.yaml');
       expect(err).toBeDefined();
-      expect(err?.error).toContain("'fan_out' is only supported on workflow");
+      expect(err?.error).toContain("'fan_out' is only supported on include or workflow nodes");
     });
 
     it("rejects 'fan_out.join: first_success' as REJECTED, not deferred", async () => {
@@ -5865,24 +5865,38 @@ nodes:
     });
 
     it('should hint when a workflow-level key is misplaced on a node', async () => {
-      // 'interactive' is valid at workflow level but not on individual nodes
       const yaml = [
         'name: test',
         'description: test',
         'nodes:',
         '  - id: plan',
         '    command: my-command',
-        '    interactive: true',
+        '    tags: [review]',
       ].join('\n');
       await writeWorkflowFile(testDir, 'test.yaml', yaml);
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.workflows.length).toBe(1);
       const pw = result.workflows[0].parseWarnings ?? [];
       expect(pw.length).toBe(1);
-      expect(pw[0]).toContain("'interactive'");
-      // The hint names the attention wait, never a deprecated channel.
-      expect(pw[0]).toContain('wait: { attention: <message> }');
-      expect(pw[0]).not.toContain('approval:');
+      expect(pw[0]).toContain("unknown key 'tags'");
+      expect(pw[0]).toContain("'tags' is valid at workflow level, not on individual nodes.");
+    });
+
+    it('rejects a key owned by another node mode, naming node, key and owner (#2478)', async () => {
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: plan',
+        '    prompt: plan it',
+        '    runtime: bun',
+      ].join('\n');
+      await writeWorkflowFile(testDir, 'test.yaml', yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors[0]?.error).toContain(
+        "Node 'plan': 'runtime' 'runtime' is only supported on script nodes, not on prompt node 'plan'."
+      );
     });
 
     it('should warn when the workflow itself has an unknown key', async () => {
@@ -6094,13 +6108,11 @@ nodes:
         '      nodes:',
         '        - id: check',
         '          prompt: check it',
-        '          interactive: true',
+        '          contxt: fresh',
       ]);
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("Node 'refine' → loop_group node 'check'");
-      expect(pw[0]).toContain("unknown key 'interactive'");
-      // The body node gets the same actionable guidance as a top-level node.
-      expect(pw[0]).toContain('wait: { attention: <message> }');
+      expect(pw[0]).toContain("unknown key 'contxt'");
     });
 
     it('should warn on an unknown key inside the loop_group control block', async () => {
@@ -7049,19 +7061,21 @@ nodes:
     expect(result.error?.error).toContain("both map to env var 'INPUTS_FOO_BAR'");
   });
 
-  it('warns (never errors) about with: on a node type that ignores it', () => {
-    const { workflow, warnings } = parseWorkflowYaml(`
+  it('rejects with: on a node type that cannot deliver it', () => {
+    const result = parseWorkflow(
+      `
 name: with-ignored
-description: with on bash is dropped with a visible warning
+description: with on bash never reaches the script
 nodes:
   - id: run
     bash: echo hi
     with: [ignored]
-`);
-    expect(workflow.nodes).toHaveLength(1);
-    expect(
-      warnings.some(w => w.includes("'with' is only supported on command, script, include"))
-    ).toBe(true);
+`,
+      'with-ignored.yaml'
+    );
+    expect(result.error?.error).toContain(
+      "'with' is only supported on command, script, include or workflow nodes, not on bash node 'run'"
+    );
   });
 });
 

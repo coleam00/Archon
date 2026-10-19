@@ -27,17 +27,17 @@ mock.module('@archon/paths', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-// Mock defaults and command-validation used by validator
-mock.module('./defaults/bundled-defaults', () => ({
+// Mock defaults and command-validation used by the validator modules
+mock.module('../defaults/bundled-defaults', () => ({
   BUNDLED_COMMANDS: {},
   isBinaryBuild: () => false,
 }));
 
-mock.module('./command-validation', () => ({
+mock.module('../command-validation', () => ({
   isValidCommandName: () => true,
 }));
 
-import { checkRuntimeAvailable, clearRuntimeCache } from './validator';
+import { checkRuntimeAvailable, clearRuntimeCache } from './scripts';
 
 describe('checkRuntimeAvailable', () => {
   beforeEach(() => {

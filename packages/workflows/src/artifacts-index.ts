@@ -21,7 +21,7 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Subdirectory under the artifacts dir holding per-node typed outputs + metadata. */
 const NODES_SUBDIR = 'nodes';
 /**
- * Engine-private subdirectory for per-invocation typed-artifact listings. Kept out
+ * Engine-private subdirectory for typed-artifact observation files. Kept out
  * of `nodes/` so the reader never sees its own output, and inside the run's artifact
  * dir so containers that mount that dir read the same bytes at the same path.
  */
@@ -355,13 +355,13 @@ async function classifyContainedFile(
 }
 
 /**
- * Write a per-invocation listing of the current run's readable typed artifacts.
+ * Write an observation of the current run's readable typed artifacts.
  *
- * Each call writes a unique file: a consumer invocation observes the artifacts
- * published before it, and a later invocation must not overwrite an earlier one's
- * observation. Returns the absolute path to hand to the invocation. A write failure
- * propagates — an invocation that cannot see its listing is a provisioning error,
- * never an empty listing.
+ * Each call writes a unique file so later observations cannot overwrite earlier
+ * ones. Agent attempts receive an observation before they start; until_bash checks
+ * receive a separate observation after iteration work. Returns the absolute path
+ * for the consumer. A write failure propagates as a provisioning error, never an
+ * empty listing.
  */
 export async function writeNodeArtifactsListing(
   artifactsDir: string,
