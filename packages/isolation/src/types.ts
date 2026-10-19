@@ -10,6 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type {
+  ArtifactExchange,
   OverlayMode,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
@@ -588,6 +589,7 @@ export interface BackendPrepareRequest {
  * Phase B); in-place runs create no row and leave it undefined.
  */
 export interface PreparedEnv {
+  artifactExchange?: ArtifactExchange;
   cwd: string;
   execContext: ExecutionContext;
   envId?: string;

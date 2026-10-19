@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
+import { NODES_SUBDIR } from './artifact-exchange';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
   nodeArtifactSchema,
@@ -18,8 +19,6 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Subdirectory under the artifacts dir holding per-node typed outputs + metadata. */
-const NODES_SUBDIR = 'nodes';
 /**
  * Engine-private subdirectory for typed-artifact observation files. Kept out
  * of `nodes/` so the reader never sees its own output, and inside the run's artifact
