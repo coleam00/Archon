@@ -52,7 +52,7 @@ When findings keep expanding across correction rounds, do not reveal one nearby 
 - **Adversarially verify before accepting**: for each blocking finding, check its cited `file:line` evidence yourself and run the smallest falsifying command when practical. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against — and treat an environment-dependent failure as suspect until you reproduce it that documented way. Record a disproved finding with the reason rather than silently dropping it.
 - Assign stable IDs (`R1`, `R2`, …).
 - Label every finding by the severity rule below, whichever lens raised it and whatever the lens said about it.
-- Judge findings against scope.md's accepted contract. A defect that touches the change — on its path, made reachable or visible by it, or a claim it makes false — is a finding, labelled by the severity rule below, even when the contract never named it; work unrelated to the change is a discovery, as is a fix an operator-stated boundary stops (see Severity). If the requested outcome cannot be correct without crossing an explicit boundary or materially redefining the accepted work, keep the blocker and classify the action as `needs_human`.
+- Judge findings against scope.md's accepted contract. A defect that touches the change — on its path, made reachable or visible by it, or a claim it makes false — is a finding, labelled by the severity rule below, even when the contract never named it; work unrelated to the change is a discovery, as is an unneeded or doubly owned fix an operator-stated boundary stops (see Severity); any other blocker a boundary stops stays open. If the requested outcome cannot be correct without crossing an explicit boundary or materially redefining the accepted work, keep the blocker and classify the action as `needs_human`.
 
 ## Severity
 
@@ -105,7 +105,7 @@ A plan-authored literal check whose result conflicts with its evident intent is 
 
 ## Consolidate discoveries
 
-Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record describing work the part assignment gives to a later part is planned work, not a discovery: reject it, and let its coverage row say `deferred`. A record that touches the change is not a discovery: raise it as a finding instead. Two kinds of record touch the change and still stay discoveries: a fix an operator-stated boundary stopped, and a note the change leaves unfixed, as below.
+Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record describing work the part assignment gives to a later part is planned work, not a discovery: reject it, and let its coverage row say `deferred`. A record that touches the change is not a discovery: raise it as a finding instead. Two kinds of record touch the change and still stay discoveries: an unneeded or doubly owned fix an operator-stated boundary stopped, and a note the change leaves unfixed, as below.
 
 When your verdict is `none` or `replan`, the change is final. Preserve every note it leaves unfixed, open or declined, that describes behavior or structure as a discovery with `relation` `note`, citing the finding's ID and evidence. A wording, naming, or test-tidying note stays in the report only. Which kind a note is, is your judgment of what it describes. Group genuine duplicates through your own judgment, preserving the source nodes and evidence.
 
