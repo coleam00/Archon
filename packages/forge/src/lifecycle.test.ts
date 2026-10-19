@@ -474,3 +474,56 @@ test('draft conversion accepts unchanged evidence and rejects a non-open read-ba
     mutation: { outcome: 'outcome_unknown' },
   });
 });
+
+describe('review threads and issue bodies', () => {
+  const reply = {
+    operationId: 'reply-1',
+    op: 'pr.thread.reply',
+    ref,
+    thread: 'thread-1',
+    body: 'Fixed in abc123.',
+  } satisfies ForgeRequest;
+  const resolve = {
+    operationId: 'resolve-1',
+    op: 'pr.thread.resolve',
+    ref,
+    thread: 'thread-1',
+  } satisfies ForgeRequest;
+  const editIssue = {
+    operationId: 'issue-body-1',
+    op: 'workitem.edit-body',
+    ref,
+    body: 'The contract.\n\n## Current scope\n\nA ruling.',
+  } satisfies ForgeRequest;
+
+  test('thread comment bodies reach callers and only their digests reach the audit', async () => {
+    const result = await dispatch({ operationId: 'threads', op: 'pr.threads', ref });
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op: 'pr.threads', value: { threads: [{ id: 'thread-1', resolved: false }] } },
+    });
+    expect(JSON.stringify(result.response)).toContain('private thread body');
+    expect(JSON.stringify(result.audit)).not.toContain('private thread body');
+    expect(JSON.stringify(result.audit)).toContain(contentDigest('private thread body'));
+  });
+
+  test.each([reply, resolve, editIssue])(
+    'an applied $op that answers the request is accepted',
+    async request => {
+      expect((await dispatch(request)).response).toMatchObject({
+        ok: true,
+        result: { op: request.op, value: { outcome: 'applied' } },
+      });
+    }
+  );
+
+  test.each([reply, resolve, editIssue])(
+    'an applied $op that does not answer the request becomes outcome_unknown',
+    async request => {
+      expect((await dispatch(request, 'mismatch')).response).toMatchObject({
+        ok: false,
+        mutation: { op: request.op, outcome: 'outcome_unknown' },
+      });
+    }
+  );
+});
