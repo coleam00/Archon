@@ -48,8 +48,9 @@ const threadNodeSchema = z.object({
 const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} body url}`;
 
 /**
- * One GraphQL call. GitHub answers 200 with an `errors` document for a query it
- * rejects, so the errors are read here rather than trusted away by the status.
+ * One GraphQL call. GitHub answers 200 with an `errors` document for a query or
+ * mutation it rejects, so the errors are read here rather than trusted away by
+ * the status, and a write is acknowledged only once the document carries none.
  */
 async function githubGraphql(
   fetchImpl: Fetch,
@@ -60,13 +61,10 @@ async function githubGraphql(
   acknowledge?: () => void
 ): Promise<unknown> {
   const { root } = location(repo);
-  const raw = await githubRequest(
-    fetchImpl,
-    token,
-    graphqlEndpoint(root),
-    { method: 'POST', body: JSON.stringify({ query, variables }) },
-    acknowledge
-  );
+  const raw = await githubRequest(fetchImpl, token, graphqlEndpoint(root), {
+    method: 'POST',
+    body: JSON.stringify({ query, variables }),
+  });
   const parsed = z
     .object({
       data: z.unknown().optional(),
@@ -74,15 +72,20 @@ async function githubGraphql(
     })
     .parse(raw);
   if (parsed.errors && parsed.errors.length > 0) {
-    const notFound = parsed.errors.some(error => error.type === 'NOT_FOUND');
+    const types = new Set(parsed.errors.map(error => error.type));
     throw new GitHubError(
       {
-        kind: notFound ? 'not_found' : 'forge_error',
+        kind: types.has('NOT_FOUND')
+          ? 'not_found'
+          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
+            ? 'authorization'
+            : 'forge_error',
         message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
       },
       true
     );
   }
+  acknowledge?.();
   return parsed.data;
 }
 
@@ -210,7 +213,10 @@ export async function handleGithubPrThreads(
   };
 }
 
-/** The thread's resolution, when it belongs to the pull request `ref`; null otherwise. */
+/**
+ * The thread's resolution, when the id names a review thread of the pull request
+ * `ref`; null otherwise. An id of another node type answers `node: {}`.
+ */
 async function readThread(
   fetchImpl: Fetch,
   token: string,
@@ -221,11 +227,13 @@ async function readThread(
     .object({
       node: z
         .object({
-          isResolved: z.boolean(),
-          pullRequest: z.object({
-            number: z.number().int(),
-            repository: z.object({ nameWithOwner: z.string() }),
-          }),
+          isResolved: z.boolean().optional(),
+          pullRequest: z
+            .object({
+              number: z.number().int(),
+              repository: z.object({ nameWithOwner: z.string() }),
+            })
+            .optional(),
         })
         .nullable(),
     })
@@ -240,7 +248,8 @@ async function readThread(
     );
   const node = data.node;
   if (
-    !node ||
+    node?.isResolved === undefined ||
+    !node.pullRequest ||
     node.pullRequest.number !== ref.number ||
     node.pullRequest.repository.nameWithOwner.toLowerCase() !== ref.repo.path.toLowerCase()
   )
@@ -251,7 +260,7 @@ async function readThread(
 function notThisPullRequest(request: ForgeMutationRequest & { thread: string }): ForgeResponse {
   return refused(request, {
     kind: 'invalid_request',
-    message: `Review thread ${request.thread} does not belong to this pull request`,
+    message: `${request.thread} is not a review thread on this pull request`,
   });
 }
 
