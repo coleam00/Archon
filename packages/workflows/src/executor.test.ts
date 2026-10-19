@@ -5728,6 +5728,35 @@ describe('credential preflight lifecycle', () => {
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('checks native authentication in the run checkout and container before DAG entry', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+    const checkCredential = mock(async () => ({ state: 'not_connected', source: 'native' }));
+    deps.getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential,
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    mockExecuteDagWorkflow.mockClear();
+    const execContext = { kind: 'container', containerId: 'cid' } as const;
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv',
+      '/tmp/run-checkout',
+      makeWorkflow(),
+      'start',
+      { conversationId: 'db' },
+      { execContext }
+    );
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toStartWith("Credential preflight failed for provider 'claude'");
+    expect(checkCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/tmp/run-checkout', execContext })
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', result.error, expect.anything());
+  });
+
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
     const store = makeStore();
     const deps = makeDeps(store);

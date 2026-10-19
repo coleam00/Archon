@@ -473,7 +473,8 @@ export async function assertRunCredentials(
         },
         signal: AbortSignal.timeout(20_000),
       });
-    } catch {
+    } catch (error) {
+      log.warn({ err: error as Error, provider }, 'workflow.native_credential_check_failed');
       throw new WorkflowCredentialPreflightError(
         requirement,
         'could not verify native authentication'
