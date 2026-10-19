@@ -766,7 +766,7 @@ export async function validateWorkflowResources(
           }
 
           if (!found) {
-            // Mirror the declaring provider's rule (e.g. claude/provider.ts): a
+            // Mirror the declaring provider's rule (e.g. claude/node-config.ts): a
             // skill that exists under some other root is installed but
             // unreachable, so it is an error. A name that exists nowhere on disk
             // may be a built-in or `plugin:skill` entry the provider resolves
