@@ -3,6 +3,8 @@ import { describe, expect, it, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as git from '@archon/git';
+import { bashInvocation } from './bash-invocation';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   buildSubprocessDockerArgs,
@@ -17,7 +19,9 @@ const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
 
 function runHostBash(script: string, timeout?: number): ReturnType<typeof runSubprocess> {
-  return runSubprocess({ kind: 'host' }, '/bin/bash', ['-c', script], {
+  const invocation = bashInvocation(script);
+  return runSubprocess({ kind: 'host' }, git.resolveBashPath(), invocation.args, {
+    input: invocation.input,
     cwd: import.meta.dir,
     timeout,
     env: {},
@@ -223,6 +227,7 @@ async function expectTimeoutEndsGrandchild(): Promise<void> {
     "setTimeout(() => require('fs').writeFileSync(process.env.MARKER, 'leaked'), 2500);";
   const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
   const error = await runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
+    input: '',
     cwd: dir,
     timeout: 1500,
     env: { STARTED: started, MARKER: marker },
@@ -269,6 +274,7 @@ async function runAbortedWrapper(): Promise<{
   const wrapper = `await Bun.spawn([process.execPath, '-e', ${JSON.stringify(grandchild)}]).exited;`;
   const controller = new AbortController();
   const node = runSubprocess({ kind: 'host' }, process.execPath, ['-e', wrapper], {
+    input: '',
     cwd: dir,
     env: { STARTED: started, MARKER: marker },
     endTreeOnTimeout: true,
@@ -404,6 +410,93 @@ describe('containerCommandName', () => {
   it('strips a Windows path + .exe (container is always Linux)', () => {
     expect(containerCommandName('C:\\Program Files\\Git\\bin\\bash.exe')).toBe('bash');
   });
+});
+
+describe('subprocess input delivery', () => {
+  it.each([false, true])('delivers Unicode and EOF with recording=%s', async recorded => {
+    const trees = recorded ? recordNodeProcessTrees() : undefined;
+    try {
+      for (const input of ["€\nquote' \\ $()`\n\n", '']) {
+        expect(
+          await runSubprocess(
+            { kind: 'host' },
+            process.execPath,
+            ['-e', 'process.stdout.write(require("node:fs").readFileSync(0))'],
+            {
+              cwd: import.meta.dir,
+              env: {},
+              retention: { standalone: true },
+              input,
+            }
+          )
+        ).toMatchObject({ stdout: input, stderr: '' });
+      }
+    } finally {
+      trees?.release();
+    }
+  });
+
+  it('keeps command failure primary and rejects unsuccessful delivery in recorded nodes', async () => {
+    const trees = recordNodeProcessTrees();
+    const run = (code: number) =>
+      runSubprocess(
+        { kind: 'host' },
+        process.execPath,
+        ['-e', `process.stderr.write('evidence'); process.exit(${code})`],
+        {
+          cwd: import.meta.dir,
+          env: {},
+          retention: { standalone: true },
+          input: 'x'.repeat(8_000_000),
+        }
+      );
+    try {
+      await expect(run(7)).rejects.toMatchObject({ code: 7, stderr: 'evidence' });
+      await expect(run(0)).rejects.toMatchObject({ code: expect.any(String), stderr: 'evidence' });
+    } finally {
+      trees.release();
+    }
+  });
+
+  it.each([undefined, '', '€\nexact\n'])(
+    'forwards input %j through Docker without putting it in argv',
+    async input => {
+      const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok', stderr: '' });
+      try {
+        const invocation = bashInvocation(input ?? '');
+        await runSubprocess(
+          { kind: 'container', containerId: 'payload-container', execUser: '1000' },
+          git.resolveBashPath(),
+          invocation.args,
+          {
+            cwd: '/workspace',
+            env: { KEEP: 'yes', HOME: '/denied' },
+            retention: { standalone: true },
+            input,
+          }
+        );
+        expect(execSpy).toHaveBeenCalledWith(
+          'docker',
+          [
+            'exec',
+            '-w',
+            '/workspace',
+            ...(input !== undefined ? ['-i'] : []),
+            '-u',
+            '1000',
+            '-e',
+            'KEEP=yes',
+            'payload-container',
+            'bash',
+            ...invocation.args,
+          ],
+          { input, timeout: undefined }
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+    }
+  );
 });
 
 describe('buildSubprocessDockerArgs — bash/script env isolation', () => {

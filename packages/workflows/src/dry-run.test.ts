@@ -1610,6 +1610,29 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('executable bash dry runs deliver large inline values and stdin EOF', async () => {
+    const value = '€'.repeat(32_000);
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'large-bash',
+        nodes: [
+          { id: 'producer', prompt: 'produce' },
+          {
+            id: 'consumer',
+            depends_on: ['producer'],
+            bash: 'a=$producer.output; b=$producer.output; if IFS= read -r line; then exit 8; fi; printf \'%s%s\' "$a" "$b"',
+          },
+        ],
+      }),
+      cwd: process.cwd(),
+      userMessage: '',
+      execCode: true,
+      stubs: { producer: value },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.summary).toBe(value + value);
+  });
+
   test('an executed code node is held to its output_format like a real run', async () => {
     const okSchema = {
       type: 'object',

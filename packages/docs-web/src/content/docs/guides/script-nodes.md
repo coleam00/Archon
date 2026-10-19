@@ -473,8 +473,8 @@ Then reference it by name from any repo's workflow:
 - **JSON repair and reasks** — a certified script's stdout must be exactly right
   the first time. There is no fence stripping and no second attempt: stdout that
   does not match the declared schema is a bug in the script.
-- **Interactive prompts** — the script runs headlessly; any `stdin` read will
-  see EOF immediately.
+- **Interactive prompts** — the script runs headlessly and receives no user input.
+  A `stdin` read may block rather than immediately see EOF.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
 - **Cancelling mid-execution** — there is no cooperative cancellation signal.
   Cancelling the run ends a running script's process tree instead; see

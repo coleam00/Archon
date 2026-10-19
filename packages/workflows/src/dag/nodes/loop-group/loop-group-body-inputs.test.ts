@@ -517,8 +517,8 @@ describe('loop_group body inputs: included blocks, command files and loop variab
     let outerGatesRun = 0;
     const exitCodeErr = (code: number) =>
       Object.assign(new Error(`exit ${String(code)}`), { code });
-    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, args) => {
-      const script = String(args?.[1] ?? '');
+    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
+      const script = options?.input ?? '';
       observedScripts.push(script);
       if (script === `echo "inner's ready"`) return { stdout: "inner's ready\n", stderr: '' };
       if (script === seedScript) {
