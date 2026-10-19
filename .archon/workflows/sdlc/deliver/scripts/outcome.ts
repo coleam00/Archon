@@ -21,9 +21,7 @@ const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   ready: boolean;
   reason: string;
   pr_url: string;
-  ci_rerun: string;
   contract_left: string[] | null;
-  threads_checked: boolean;
   summary: string;
 };
 const unchecked =
@@ -40,7 +38,5 @@ emit({
   ready: rounds.ready,
   reason: rounds.reason,
   pr_url: rounds.pr_url,
-  ci_rerun: rounds.ci_rerun,
-  threads_checked: rounds.threads_checked,
   summary: `${rounds.ready ? 'Ready' : 'Not ready'}: ${rounds.summary}${where}${left}${unchecked}${notes}`,
 });

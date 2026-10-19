@@ -9,11 +9,10 @@ import { executeDagWorkflow } from '../dag-executor';
 import { OutputRefError } from '../output-ref';
 import {
   type ShellInputContext,
-  type LoopBodyScope,
   resolveNodeBindings,
-  substituteLoopBodyText,
   substituteNodeOutputRefs as substituteNodeOutputRefsInScopes,
 } from './references';
+import { type LoopBodyScope, substituteLoopBodyText } from './loop-scope';
 import {
   makeOutput,
   substituteNodeOutputRefs,

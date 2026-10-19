@@ -9,7 +9,6 @@ facts:
   record: null
   brief: "continue: fix the open review finding"
   rounds: []
-  recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
@@ -79,7 +78,6 @@ apply:
   options: []
   class: ""
   asked: null
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

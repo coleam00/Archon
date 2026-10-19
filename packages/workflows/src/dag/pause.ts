@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import { getWorkflowEventEmitter } from '../event-emitter';
-import { safeSendMessage } from '../executor-shared';
+import { safeSendMessage } from '../platform-messages';
 import type { ApprovalContext, WorkflowRunStatus } from '../schemas';
 import {
   isApprovalContext,
