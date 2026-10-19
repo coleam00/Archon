@@ -20,6 +20,7 @@ import {
   type CloneCredentials,
   githubTokenCredentials,
   findRepoRoot,
+  trustRegisteredPath,
   inspectRemoteBranches,
   validateBranchName,
   ConfiguredBaseBranchNotFoundError,
@@ -598,6 +599,8 @@ export async function registerRepository(
   options: RegistrationOptions = {}
 ): Promise<RegisterResult> {
   localPath = await canonicalizeProjectPath(localPath);
+  // An operator-registered path gets the same safe.directory grant cloneCheckout gives its destination.
+  await trustRegisteredPath(localPath);
   // Validate path exists and is a git repo
   try {
     await execFileAsync('git', ['-C', localPath, 'rev-parse', '--git-dir']);

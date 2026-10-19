@@ -4183,6 +4183,71 @@ branch refs/heads/feature/auth
     );
   });
 
+  describe('trustRegisteredPath', () => {
+    const grants = async (): Promise<string[]> => {
+      try {
+        const { stdout } = await git.execFileAsync('git', [
+          'config',
+          '--global',
+          '--get-all',
+          'safe.directory',
+        ]);
+        return stdout.trim().split('\n');
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 1) return [];
+        throw error;
+      }
+    };
+
+    const withScratchConfig = async (
+      body: (root: string) => Promise<void>,
+      differentOwner: boolean
+    ): Promise<void> => {
+      const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'archon-trust-'))));
+      const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+      const previousOwner = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      process.env.GIT_CONFIG_GLOBAL = join(root, 'gitconfig');
+      try {
+        await git.execFileAsync('git', ['init', '-q', join(root, 'repo')]);
+        await realMkdir(join(root, 'plain'));
+        if (differentOwner) process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+        await body(root);
+      } finally {
+        if (previousConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previousConfig;
+        if (previousOwner === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+        else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwner;
+      }
+    };
+
+    test('grants exactly a repo git refuses only for its owner', async () => {
+      await withScratchConfig(async root => {
+        const repoPath = join(root, 'repo');
+        const probe = (): Promise<unknown> =>
+          git.execFileAsync('git', ['-C', repoPath, 'rev-parse', '--git-dir']);
+        await expect(probe()).rejects.toThrow();
+        await git.trustRegisteredPath(repoPath);
+        await probe();
+        expect(await grants()).toEqual([repoPath]);
+      }, true);
+    });
+
+    test('never grants a path that is not a repository', async () => {
+      await withScratchConfig(async root => {
+        await git.trustRegisteredPath(join(root, 'plain'));
+        await git.trustRegisteredPath(join(root, 'missing'));
+        expect(await grants()).toEqual([]);
+      }, true);
+    });
+
+    test('writes nothing for a repo git already accepts', async () => {
+      await withScratchConfig(async root => {
+        await git.trustRegisteredPath(join(root, 'repo'));
+        expect(await grants()).toEqual([]);
+      }, false);
+    });
+  });
+
   describe('findRepoRoot', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
