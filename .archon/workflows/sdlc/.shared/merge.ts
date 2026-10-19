@@ -336,9 +336,9 @@ const BEHIND_QUERY = `query($owner: String!, $name: String!, $head: String!) { r
 } }`;
 
 /**
- * The default branch's head and how many of its commits `head` lacks. The gate merges
- * only a head that contains the default branch, so the CI and review at that head
- * judged the composed result, not the change alone.
+ * The default branch's head and how many of its commits `head` lacks. A head that
+ * lacks some still merges when the forge reports it merges cleanly; one that conflicts,
+ * or whose mergeability the forge has not computed, is synced first.
  */
 function readBehind(repo: QualifiedPr['repo'], head: string): { default_head: string; behind: number } {
   const [owner, name] = repo.path.split('/');
@@ -402,8 +402,10 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
  * queue's contract names are the verdict and CI, each at the head. Whether an open review
  * thread holds the merge is the sweep's judgment, from the thread facts it reads. The
  * rest keep the merge on an open, non-draft pull request into the default branch at
- * exactly the commit that was judged, and that commit containing the default branch's
- * head, so what was judged is what the merge produces.
+ * exactly the commit that was judged, and that commit either containing the default
+ * branch's head or merging into it with no conflict. A clean merge of a head that is
+ * behind is checked by the default branch's CI after the batch; whether a pull request
+ * should be synced first anyway is the sweep's judgment.
  */
 export function gateRefusals(facts: PrFacts, head: string): string[] {
   const refusals: string[] = [];
@@ -413,8 +415,10 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
     refusals.push(`it targets ${facts.base}, not the default branch ${facts.default_branch}`);
   }
   if (facts.head_revision !== head) refusals.push(`its head is ${facts.head_revision}, not ${head}`);
-  if (facts.behind > 0) {
-    refusals.push(`it lacks ${String(facts.behind)} commits of ${facts.default_branch} at ${facts.default_head}`);
+  if (facts.behind > 0 && facts.mergeable !== 'clean') {
+    refusals.push(
+      `it lacks ${String(facts.behind)} commits of ${facts.default_branch} at ${facts.default_head} and its merge is ${facts.mergeable}`
+    );
   }
   const { verdict } = facts;
   // Which commit the verdict is for is the sweep's call: it sends a moved head to delta

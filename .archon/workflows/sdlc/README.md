@@ -602,10 +602,14 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
   review.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
-  It merges the default branch into any whose head lacks commits of it, resolving each
-  conflict and regenerating generated files with their owning script, and pushes
-  without force. Each merge moves the default branch, so the pull requests after it
-  need a sync and CI at the synced head before they merge, usually in a later sweep. A
+  A Ready pull request with green CI that the forge reports merges cleanly into the
+  default branch merges directly, even when it is behind; the default branch's CI
+  after the batch judges the combined result. The agent syncs first only a pull
+  request that conflicts, or one whose diff moves, renames or reshapes code across a
+  package (a refactor or file split) or that its review calls cross-cutting: it merges
+  the default branch in, resolving each conflict and regenerating generated files with
+  their owning script, pushes without force, and the pull request merges once CI at the
+  synced head is green, usually in a later sweep. A
   sync with no conflict keeps the Ready verdict; CI judges the composed result. A
   conflict resolution, a push by anyone else, or a comment published before verdicts
   were stamped makes the verdict stale: one such pull request gets a delta review in
@@ -621,12 +625,15 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   refuses unless the verdict says Ready and CI is green at the head (which commit the
   verdict is for, across a clean sync, and open review threads are the sweep's judgment), and the pull request is open, not a draft, into the default
   branch, at the head the sweep named, and that head contains the default branch's
-  head, so CI judged the composed result before the merge. It merges with `--match-head-commit`
+  head or the forge reports it merges cleanly. A clean merge of a head that is behind
+  is checked by the default branch's CI after the batch. It merges with `--match-head-commit`
   and reads the merge back. A pull request that reads back unmerged, as when the forge
   queues merges, fails the gate.
 - **The default branch.** While its CI is red, the sweep merges nothing. After a
   batch it waits for CI on the default branch, rerunning a red in code the batch did
-  not touch once; red after that is raised to a maintainer.
+  not touch once; red after that is raised to a maintainer, naming the pull requests
+  merged without a sync since it was last green, with a revert or fix-forward
+  recommendation.
 - **Record.** The `record` script refuses a sweep that decided a pull request this
   run did not claim, because that item belongs to another run. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
