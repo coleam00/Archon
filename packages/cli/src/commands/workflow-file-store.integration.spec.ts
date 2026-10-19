@@ -318,7 +318,7 @@ nodes:
         expect(existsSync(join(runs[0]?.working_path ?? '', 'before-count'))).toBe(true);
       expect(existsSync(join(f.project, 'before-count'))).toBe(false);
       expect(existsSync(f.trap)).toBe(false);
-      if (launchOnly && !detached) {
+      if (launchOnly) {
         const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], {
           cwd: f.project,
         });
@@ -330,6 +330,7 @@ nodes:
         const worktree = worktrees.find(path => realpathSync(path) !== realpathSync(f.project));
         if (!worktree) throw new Error('Missing isolated checkout');
         expect(existsSync(join(worktree, 'before-count'))).toBe(false);
+        if (detached) return;
         mkdirSync(join(worktree, '.claude'));
         writeFileSync(
           join(worktree, '.claude/settings.json'),
