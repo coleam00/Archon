@@ -19,7 +19,7 @@ import {
   readTranscript,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
-import { substituteLoopBodyText, type LoopBodyScope } from '../../references';
+import { substituteLoopBodyText, type LoopBodyScope } from '../../loop-scope';
 import type { DagNode, NodeOutput } from '../../../schemas';
 import { dagNodeSchema, workflowDefinitionSchema } from '../../../schemas';
 import { OutputRefError } from '../../../output-ref';

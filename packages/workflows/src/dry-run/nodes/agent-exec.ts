@@ -1,5 +1,6 @@
 import { readComposedBindings } from '../../compiled-command';
-import { inputEnvVars, resolveNodeBindings, substituteLoopBodyText } from '../../dag/references';
+import { inputEnvVars, resolveNodeBindings } from '../../dag/references';
+import { substituteLoopBodyText } from '../../dag/loop-scope';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import {
   isAgentNode,

@@ -18,7 +18,7 @@ import {
   type SessionCheckpoint,
   type SessionResumeIntent,
 } from '../../run-context';
-import { substituteLoopBodyText } from '../../references';
+import { substituteLoopBodyText } from '../../loop-scope';
 import { rejectedArtifactPointer } from '../../node-output';
 import { lastNodeCancelCheck, lastNodeActivityUpdate } from '../../run-control';
 import { formatWatchdogResetDiagnostic, unsettledTurnError, NodeFailure } from '../../ai-turn';

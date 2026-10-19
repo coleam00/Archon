@@ -2,10 +2,10 @@
 import { join } from 'node:path';
 import {
   nodeTemplateReferences,
-  type LoopBodyScope,
   type ShellInputContext,
   type TextSurface,
 } from '../dag/references';
+import { type LoopBodyScope } from '../dag/loop-scope';
 import { resolveIncludeOutputAliases } from '../compiled-command';
 import type { JsonValue } from '../output-ref';
 import { loadCommandPrompt } from '../load-command-prompt';

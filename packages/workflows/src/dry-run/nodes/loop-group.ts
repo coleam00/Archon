@@ -1,6 +1,6 @@
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion } from '../../executor-shared';
-import { loopBodyScope } from '../../dag/references';
+import { loopBodyScope } from '../../dag/loop-scope';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import type { LoopGroupNode, NodeOutput } from '../../schemas';
 import { recordFailed, withResolution, type DryRunContext } from '../context';
