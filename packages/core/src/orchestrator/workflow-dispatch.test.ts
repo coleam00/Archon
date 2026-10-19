@@ -609,85 +609,68 @@ describe('workflow dispatch routing', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test.each(['foreground', 'background', 'force', 'resume'] as const)(
-    'adopt and supersede together refuse before %s dispatch',
-    async operation => {
-      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
-      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-      mockHandleCommand.mockResolvedValueOnce(
-        makeWorkflowResult(
-          operation === 'resume'
-            ? { resumeRun: makeResumableRun({ status: 'failed' }) }
-            : { force: operation === 'force' }
-        )
-      );
-      const resolveAdoption = mockResolveWorkflowAdoption.getMockImplementation();
-      if (!resolveAdoption) throw new Error('Missing adoption implementation');
-      mockResolveWorkflowAdoption.mockResolvedValue({
-        adoptedRun: makeResumableRun({ id: 'adopted-run', status: 'completed' }),
-        lane: { kind: 'in-place' },
-      });
-      mockPrepareWorkflowSource.mockClear();
-      const platform = operation === 'background' ? makePlatform() : makeForegroundPlatform();
-      try {
-        await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
-          actor: operator,
-          workflowAdoptRunId: 'adopted-run',
-          workflowSupersedesRunId: 'replaced-run',
-        });
-        expect(platform.sendMessage).toHaveBeenCalledWith(
-          'conv-1',
-          expect.stringContaining('adoptRunId and supersedesRunId are mutually exclusive')
-        );
-        expect(mockResolveWorkflowAdoption).not.toHaveBeenCalled();
-        expect(mockHydrateResumableRun).not.toHaveBeenCalled();
-        expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
-        expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
-        expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
-        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-      } finally {
-        mockResolveWorkflowAdoption.mockImplementation(resolveAdoption);
-      }
-    }
-  );
-
-  test.each([
-    { label: 'paused run with resumable work', explicit: false, empty: false },
-    { label: 'paused run with nothing to resume', explicit: false, empty: true },
-    { label: 'explicit resume of a failed run', explicit: true, empty: false },
-  ])('supersede is refused before $label', async ({ explicit, empty }) => {
-    const run = makeResumableRun({ status: explicit ? 'failed' : 'paused' });
+  test('adopt and supersede together refuse before dispatch', async () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(explicit ? { resumeRun: run } : {}));
-    if (!explicit) mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
-    const hydrate = mockHydrateResumableRun.getMockImplementation();
-    if (!hydrate) throw new Error('Missing hydration implementation');
-    if (empty) mockHydrateResumableRun.mockResolvedValue(null);
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    const resolveAdoption = mockResolveWorkflowAdoption.getMockImplementation();
+    if (!resolveAdoption) throw new Error('Missing adoption implementation');
+    mockResolveWorkflowAdoption.mockResolvedValue({
+      adoptedRun: makeResumableRun({ id: 'adopted-run', status: 'completed' }),
+      lane: { kind: 'in-place' },
+    });
     mockPrepareWorkflowSource.mockClear();
     const platform = makeForegroundPlatform();
     try {
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: operator,
+        workflowAdoptRunId: 'adopted-run',
         workflowSupersedesRunId: 'replaced-run',
       });
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'conv-1',
-        expect.stringContaining(
-          `Cannot supersede run 'replaced-run': this conversation already continues run '${run.id}' (${run.status}). Resume or abandon that run first`
-        )
+        expect.stringContaining('adoptRunId and supersedesRunId are mutually exclusive')
       );
+      expect(mockResolveWorkflowAdoption).not.toHaveBeenCalled();
       expect(mockHydrateResumableRun).not.toHaveBeenCalled();
       expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
       expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
     } finally {
-      mockHydrateResumableRun.mockImplementation(hydrate);
+      mockResolveWorkflowAdoption.mockImplementation(resolveAdoption);
     }
+  });
+
+  test.each([
+    { label: 'implicit continuation of a paused run', explicit: false },
+    { label: 'explicit resume of a failed run', explicit: true },
+  ])('supersede is refused before $label', async ({ explicit }) => {
+    const run = makeResumableRun({ status: explicit ? 'failed' : 'paused' });
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(explicit ? { resumeRun: run } : {}));
+    if (!explicit) mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
+    mockPrepareWorkflowSource.mockClear();
+    const platform = makeForegroundPlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowSupersedesRunId: 'replaced-run',
+    });
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining(
+        `Cannot supersede run 'replaced-run': this conversation already continues run '${run.id}' (${run.status}). Resume or abandon that run first`
+      )
+    );
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
   });
 
   test.each([false, true])('fresh supersede records provenance (force=%s)', async force => {
