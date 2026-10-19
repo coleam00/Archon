@@ -437,7 +437,7 @@ async function dispatchBackgroundWorkflowOwned(
           : {}),
       }
     );
-    await assertRunCredentials(workflowDeps, preparedAiConfiguration);
+    await assertRunCredentials(workflowDeps, preparedAiConfiguration, 'pending-isolation');
 
     return { workflow, preparedSource, preparedAiConfiguration };
   };

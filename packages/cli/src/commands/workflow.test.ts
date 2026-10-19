@@ -4549,48 +4549,67 @@ describe('workflow run credential launch refusal', () => {
   });
 });
 
-it('container credential refusal checks the runner and destroys a fresh container before execution', async () => {
-  const codebases = await import('@archon/core/db/codebases');
-  (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue({
-    id: 'folder-cb',
-    name: 'folder',
-    default_cwd: '/test/path',
-    kind: 'folder',
-    default_branch: null,
+for (const selection of ['flag', 'workflow', 'config'] as const) {
+  it(`container credential check (${selection} selection) uses the runner and destroys a refused fresh container`, async () => {
+    const codebases = await import('@archon/core/db/codebases');
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue({
+      id: 'folder-cb',
+      name: 'folder',
+      default_cwd: '/test/path',
+      kind: 'folder',
+      default_branch: null,
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'container-auth',
+          provider: 'claude',
+          nodes: [{ id: 'ai', prompt: 'hello' }],
+          ...(selection === 'workflow' ? { container: { enabled: true } } : {}),
+        }),
+      ],
+      errors: [],
+    });
+    mockFolderBackendPrepare.mockImplementationOnce(async () => ({
+      cwd: '/runner',
+      execContext: { kind: 'container', containerId: 'runner-id' },
+      envId: 'container-env-auth',
+      overlayMode: 'fuse',
+    }));
+    if (selection === 'config') {
+      const core = await import('@archon/core');
+      (core.loadConfig as ReturnType<typeof mock>).mockResolvedValue({
+        defaults: {},
+        assistant: 'claude',
+        assistants: { claude: {} },
+        commands: {},
+        container: { enabled: true },
+      });
+    }
+    const host = createTestWorkflowHost();
+    const original = host.deps.getAgentProvider;
+    const check = mock(
+      async (_request: Parameters<ReturnType<typeof original>['checkCredential']>[0]) => ({
+        state: 'not_connected' as const,
+        source: 'native' as const,
+      })
+    );
+    host.deps.getAgentProvider = id => ({ ...original(id), checkCredential: check });
+    mockFolderBackendDestroy.mockClear();
+    await expect(
+      workflowRunCommand(
+        host,
+        '/test/path',
+        'container-auth',
+        'go',
+        selection === 'flag' ? { container: true } : { noWorktree: true }
+      )
+    ).rejects.toThrow('no usable login');
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check.mock.calls[0]?.[0]).toMatchObject({
+      cwd: '/runner',
+      execContext: { kind: 'container', containerId: 'runner-id' },
+    });
+    expect(mockFolderBackendDestroy).toHaveBeenCalledWith('container-env-auth');
   });
-  mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-    workflows: [
-      makeTestWorkflowWithSource({
-        name: 'container-auth',
-        provider: 'claude',
-        nodes: [{ id: 'ai', prompt: 'hello' }],
-      }),
-    ],
-    errors: [],
-  });
-  mockFolderBackendPrepare.mockImplementationOnce(async () => ({
-    cwd: '/runner',
-    execContext: { kind: 'container', containerId: 'runner-id' },
-    envId: 'container-env-auth',
-    overlayMode: 'fuse',
-  }));
-  const host = createTestWorkflowHost();
-  const original = host.deps.getAgentProvider;
-  const check = mock(
-    async (_request: Parameters<ReturnType<typeof original>['checkCredential']>[0]) => ({
-      state: 'not_connected' as const,
-      source: 'native' as const,
-    })
-  );
-  host.deps.getAgentProvider = id => ({ ...original(id), checkCredential: check });
-  mockFolderBackendDestroy.mockClear();
-  await expect(
-    workflowRunCommand(host, '/test/path', 'container-auth', 'go', { container: true })
-  ).rejects.toThrow('no usable login');
-  expect(check).toHaveBeenCalledTimes(1);
-  expect(check.mock.calls[0]?.[0]).toMatchObject({
-    cwd: '/runner',
-    execContext: { kind: 'container', containerId: 'runner-id' },
-  });
-  expect(mockFolderBackendDestroy).toHaveBeenCalledWith('container-env-auth');
-});
+}

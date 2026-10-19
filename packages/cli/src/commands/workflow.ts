@@ -182,6 +182,7 @@ import {
   assertWorkflowNotWorktreePinnedForFolder,
   resolveRunCodebase,
   assertResumeWorkingPathExists,
+  folderRunsInContainer,
   prepareFolderExecution,
   warnOnReusedWorktree,
   readUnresolvedWriteback,
@@ -775,7 +776,10 @@ async function runWorkflowWithOwnedSource(
   let aiConfigurationRun: typeof continuationRun;
   const prepareCredentialPreflight = async (
     configCwd: string,
-    codebaseId?: string
+    codebaseId: string | undefined,
+    // Only a run already known to execute in configCwd on the host checks native
+    // authentication here; every other run checks it once isolation has resolved.
+    nativeContext: 'launch-checkout' | 'pending-isolation' = 'pending-isolation'
   ): Promise<PreparedRunAiConfiguration> => {
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
     const prepared = await prepareRunAiConfiguration(host.deps, workflow, configCwd, {
@@ -795,9 +799,7 @@ async function runWorkflowWithOwnedSource(
     await assertRunCredentials(
       host.deps,
       prepared,
-      !options.container && (options.noWorktree || !wantsIsolation)
-        ? { cwd: configCwd }
-        : 'pending-isolation'
+      nativeContext === 'launch-checkout' ? { cwd: configCwd } : 'pending-isolation'
     );
     return prepared;
   };
@@ -875,7 +877,22 @@ async function runWorkflowWithOwnedSource(
           : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
-      detachedPrepared = await prepareCredentialPreflight(configCwd, detachCodebase?.id);
+      // A detached run that will execute in place refuses a missing login before it
+      // forks. A worktree or container is created by the child, which checks there.
+      const runsInPlace = detachIsFolder
+        ? detachCodebase != null &&
+          !folderRunsInContainer(
+            options,
+            workflow,
+            await host.deps.loadConfig(detachCodebase.default_cwd),
+            continuationRun
+          )
+        : options.noWorktree || !wantsIsolation;
+      detachedPrepared = await prepareCredentialPreflight(
+        configCwd,
+        detachCodebase?.id,
+        runsInPlace ? 'launch-checkout' : 'pending-isolation'
+      );
     }
 
     await launchDetachedRun({

@@ -255,7 +255,6 @@ async function prepareAiConfiguration(
   );
   return {
     aiConfigurationSnapshot,
-    cwd,
     config,
     dbEnvVars,
     baseAiProfile,
@@ -276,7 +275,6 @@ async function prepareAiConfiguration(
 }
 
 export interface PreparedRunAiConfiguration {
-  cwd: string;
   aiConfigurationSnapshot: RunAiConfigurationSnapshot;
   requirements: readonly RunCredentialRequirement[];
   connectedVendors: Set<string>;
@@ -386,9 +384,10 @@ export async function assertRunCredentials(
     | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration,
-  context: { cwd: string; execContext?: ExecutionContext } | 'pending-isolation' = {
-    cwd: prepared.cwd,
-  }
+  // Native authentication depends on where the provider runs. Before isolation picks the
+  // execution checkout or container, check stored credentials only; executeWorkflow checks
+  // native authentication in the resolved context before any node runs.
+  context: { cwd: string; execContext?: ExecutionContext } | 'pending-isolation'
 ): Promise<void> {
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
