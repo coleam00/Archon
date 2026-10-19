@@ -209,7 +209,6 @@ async function probeLegacyStatePath(
 /** Legacy cwd storage has ambiguous ownership; never migrate it or read it as a fallback. */
 export async function maybeWarnLegacyCwdStoragePath(cwd: string, newRoot: string): Promise<void> {
   const legacyPath = getProjectRoot('_cwd', sanitizeScopeSegment(basename(cwd)));
-  if (legacyPath === newRoot) return;
   try {
     await access(legacyPath);
   } catch (error) {
