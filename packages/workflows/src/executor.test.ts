@@ -1,5 +1,5 @@
-import * as workflowSource from './workflow-source';
 // @archon-test-isolated
+import * as workflowSource from './workflow-source';
 import * as checkout from './checkout-observation';
 import type { WorkflowEmitterEvent } from './event-emitter';
 import type { ExecuteWorkflowOptions } from './executor';
