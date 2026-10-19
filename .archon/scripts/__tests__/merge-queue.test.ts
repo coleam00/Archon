@@ -685,6 +685,17 @@ describe('the merge queue scripts', () => {
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
 
+  test("an answer on an own pull request writes no issue body and still applies its effect", () => {
+    const at = install();
+    const own = { repo: PR.repo, number: PR.number };
+    seed(at, { ...item(undefined, merge('asking'), CLAIMED), subject: own });
+    const asked = JSON.stringify({ by: 'pr', item: own, pr: PR, head: HEAD, brief: '', attention: withOther(ATTENTION, 'park') });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'I will fix R1 on the branch.' });
+    expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
+    expect(ruled.bodies).toEqual([]);
+    expect(stored(at, PR.number).value?.facts.merge?.decisions.at(-1)?.answer?.text).toBe('I will fix R1 on the branch.');
+  }, 60_000);
+
   test("an 'other' answer returns the pull request with its text as the ruling", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
