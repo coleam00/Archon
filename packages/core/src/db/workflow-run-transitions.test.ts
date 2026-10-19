@@ -492,8 +492,8 @@ describe('workflow run transitions', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       // Must not re-cancel / re-stamp completed_at on an already-finished run.
-      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
-      expect(params).toEqual(['workflow-run-123']);
+      expect(query).toContain('status NOT IN ($2, $3)');
+      expect(params).toEqual(['workflow-run-123', 'completed', 'cancelled']);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams.slice(1, 5)).toEqual([
@@ -539,10 +539,12 @@ describe('workflow run transitions', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       expect(query).toContain('metadata =');
-      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
+      expect(query).toContain('status NOT IN ($3, $4)');
       expect(params).toEqual([
         'workflow-run-123',
         JSON.stringify({ cancelled_reason: 'fan_out_orphan' }),
+        'completed',
+        'cancelled',
       ]);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');

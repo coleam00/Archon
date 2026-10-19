@@ -1,4 +1,5 @@
 import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   CAPACITY_WAIT_METADATA_KEY,
   SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -579,9 +580,18 @@ export function createTransactionView(
         ).slice(0, options?.limit ?? 50)
       ),
     listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
+      const parents =
+        options?.parentRunIds === undefined ? undefined : new Set(options.parentRunIds);
+      const excludedLeafStatuses = new Set(options?.excludeLeafStatuses);
+      const nonLeaves = new Set(
+        excludedLeafStatuses.size > 0 ? [...runs.values()].map(run => run.parent_run_id) : []
+      );
       const scoped = [...runs.values()].filter(
         run =>
           (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
+          (parents === undefined ||
+            (run.parent_run_id !== null && parents.has(run.parent_run_id))) &&
+          (!excludedLeafStatuses.has(run.status) || nonLeaves.has(run.id)) &&
           (!options?.search ||
             run.workflow_name.includes(options.search) ||
             run.user_message.includes(options.search)) &&
@@ -700,7 +710,7 @@ export function createTransactionView(
     },
     cancelWorkflowRun: async (id, details) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
       await terminal(run, {
@@ -716,7 +726,7 @@ export function createTransactionView(
     },
     cancelFanOutRun: async (id, reason) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;
