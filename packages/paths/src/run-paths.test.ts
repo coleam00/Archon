@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { homedir } from 'os';
-import { join, sep } from 'path';
+import { join, resolve, sep } from 'path';
+import { createHash } from 'node:crypto';
 import { getProjectArtifactsPath, getStoragePathsForRoot } from './project-paths';
 import {
   getRunArtifactsPath,
@@ -14,6 +15,8 @@ import {
   getFolderRunArtifactsPath,
 } from './run-paths';
 import { usePathEnvSnapshot } from './test-utils';
+
+const cwdDigest = (cwd: string): string => createHash('sha256').update(resolve(cwd)).digest('hex');
 
 describe('run-paths', () => {
   usePathEnvSnapshot();
@@ -68,9 +71,17 @@ describe('run-paths', () => {
       );
     });
 
-    test('resolves a cwd key under _cwd, separated by run id', () => {
+    test('resolves a cwd key under @cwd, separated by run id', () => {
       expect(getRunArtifactsDirForKey({ kind: 'cwd', cwd: '/home/u/scratch' }, 'run-1')).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', 'scratch', 'artifacts', 'runs', 'run-1')
+        join(
+          '/custom/archon',
+          'workspaces',
+          '@cwd',
+          `scratch-${cwdDigest('/home/u/scratch')}`,
+          'artifacts',
+          'runs',
+          'run-1'
+        )
       );
     });
   });

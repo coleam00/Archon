@@ -7,7 +7,7 @@
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
  * │   │                                  #   _folder/<slug>     folder project (runs in place)
- * │   │                                  #   _cwd/<basename>    unregistered working dir
+ * │   │                                  #   @cwd/<basename>-<digest>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)

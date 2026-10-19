@@ -4,6 +4,7 @@
  */
 
 import { join, normalize, basename, resolve, relative } from 'path';
+import { createHash } from 'node:crypto';
 import { mkdir, symlink, lstat, readdir, readlink, realpath, rm } from 'fs/promises';
 import { createLogger } from './logger';
 import { expandTilde, getArchonWorkspacesPath, isPathInside } from './home-paths';
@@ -164,7 +165,7 @@ export function sanitizeScopeSegment(value: string): string {
  * resolve. This is the *one* key the whole codebase derives output paths from:
  * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
  * folder project (`_folder/<slug>`), or an unregistered working directory
- * (`_cwd/<basename>`).
+ * (`@cwd/<basename>-<digest>`).
  *
  * It exists because the identity → storage rule was previously implemented
  * three times at three different levels of correctness (the executor handled
@@ -238,20 +239,16 @@ export function resolveProjectStorageKey(
 
 /**
  * Compose the output roots for a storage key. Every kind resolves UNDER
- * `ARCHON_HOME` — including `'cwd'`, which maps to the `_cwd` pseudo-owner.
+ * `ARCHON_HOME` — including `'cwd'`, which maps to the `@cwd` namespace.
  *
- * The `'cwd'` mapping is deliberately external: the engine used to write an
- * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
- * user's repository, where a worktree teardown destroyed them and `git status`
- * showed them. Relocating it is a breaking change accepted in #2200 so that
- * EVERY run's output is retrievable from one tree.
+ * The `'cwd'` mapping is deliberately external: the engine used to write an unregistered
+ * run's artifacts and logs to `<cwd>/.archon/`, i.e. into the user's repository, where a
+ * worktree teardown destroyed them and `git status` showed them. Relocating it is a breaking
+ * change accepted in #2200 so that EVERY run's output is retrievable from one tree.
  *
- * COLLISIONS: registration gives every registered project its own root (a new
- * project whose root is taken registers under a suffixed name). The `'cwd'` key is
- * not registered, so unregistered working directories sharing a basename share
- * `_cwd/<basename>`. For `artifacts/` and `logs/` that is benign — both are keyed
- * by run id. `stateRoot` is NOT: `$STATE_DIR` is per project by design and has no
- * run-id segment, so those runs share one `state/` and every file in it.
+ * An unregistered directory keys on a lexical SHA-256 of `resolve(cwd)`: pass a
+ * {@link canonicalizeProjectPath} path to match the CLI's key. `@` starts no repo
+ * owner, and 190 basename bytes + '-' + 64 hex digits fit a 255-byte name.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -262,16 +259,19 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
     case 'folder':
       root = getFolderProjectRoot(key.slug);
       break;
-    case 'cwd':
-      root = getProjectRoot('_cwd', sanitizeScopeSegment(basename(key.cwd)));
+    case 'cwd': {
+      const cwd = resolve(key.cwd);
+      const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
+      root = getProjectRoot('@cwd', `${name}-${createHash('sha256').update(cwd).digest('hex')}`);
       break;
+    }
   }
   return getStoragePathsForRoot(root);
 }
 
 /**
  * The project key a storage root is filed under: its path below the workspaces
- * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/<name>`).
+ * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `@cwd/<basename>-<digest>`).
  * Project-scoped state documents use it as their identity, so every surface that
  * names a project derives it here. A root outside the workspaces directory has
  * no key and throws rather than yielding a `..` path.

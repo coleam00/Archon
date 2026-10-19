@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
+- Runs in an unregistered working directory now store their output under `@cwd/<basename>-<digest>`, where the digest comes from the directory's full path, so two directories with the same folder name no longer share `$STATE_DIR`. Moving a directory gives it a new root. Existing `_cwd/<basename>` trees are left in place and are no longer read; when one exists, a run logs its location and the new root so you can move state that belongs to that directory. Resumed runs keep their recorded root. (#4387)
 
 ## [0.12.1] - 2026-10-17
 

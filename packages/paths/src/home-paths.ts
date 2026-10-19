@@ -296,7 +296,7 @@ export function getWebDistDir(version: string): string {
 /**
  * True when `candidate` resolves inside `ARCHON_HOME`.
  *
- * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
+ * Every storage key kind composes under `ARCHON_HOME` — including the `@cwd`
  * pseudo-project since #2200 — so this is the trust boundary for any path that
  * did NOT come straight from {@link getProjectStoragePaths}. In practice that
  * means a persisted `workflow_runs.output_root`: the engine only ever writes an
