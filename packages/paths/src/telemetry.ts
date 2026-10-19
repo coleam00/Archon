@@ -44,7 +44,7 @@ import { createHash, randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PostHog } from 'posthog-node';
-import { getArchonHome, isDocker } from './archon-paths';
+import { getArchonHome, isDocker } from './home-paths';
 import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { readSourceCommit } from './source-commit';
 import { createLogger } from './logger';

@@ -1,7 +1,6 @@
-// Archon path resolution utilities
+// Home and workspace paths
 export {
   expandTilde,
-  canonicalizeProjectPath,
   isDocker,
   isWSL,
   getWSLDistroName,
@@ -21,12 +20,14 @@ export {
   getHomeCommandsPath,
   getHomeScriptsPath,
   getLegacyHomeWorkflowsPath,
-  getCommandFolderSearchPaths,
-  getWorkflowFolderSearchPaths,
-  getAppArchonBasePath,
-  getBundledWorkflowsPath,
   logArchonPaths,
-  validateAppDefaultsPaths,
+  isInsideArchonHome,
+  getWebDistDir,
+  getServerDistDir,
+} from './home-paths';
+// Project and codebase paths
+export {
+  canonicalizeProjectPath,
   parseOwnerRepo,
   toSafeNameSegment,
   resolveRepoProjectIdentity,
@@ -35,14 +36,27 @@ export {
   getProjectWorktreesPath,
   getProjectArtifactsPath,
   getProjectLogsPath,
-  getRunArtifactsPath,
-  getRunLogPath,
   sanitizeScopeSegment,
-  getScopeArtifactsPath,
   resolveProjectStorageKey,
   getProjectStoragePaths,
   getStoragePathsForRoot,
-  isInsideArchonHome,
+  slugifyFolderName,
+  getFolderProjectRoot,
+  getFolderProjectArtifactsPath,
+  getFolderProjectLogsPath,
+  ensureFolderProjectStructure,
+  ensureProjectStructure,
+  createProjectSourceSymlink,
+  ProjectSourceOccupiedError,
+  projectKeyForStorageRoot,
+  projectKeyForCodebase,
+} from './project-paths';
+export type { ProjectStorageKey, ProjectStoragePaths } from './project-paths';
+// Run and artifact paths
+export {
+  getRunArtifactsPath,
+  getRunLogPath,
+  getScopeArtifactsPath,
   resolveRunStorageRoot,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
@@ -50,26 +64,24 @@ export {
   isRunArtifactsEngineEntry,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
-  slugifyFolderName,
-  getFolderProjectRoot,
-  getFolderProjectArtifactsPath,
-  getFolderProjectLogsPath,
   getFolderRunArtifactsPath,
-  ensureFolderProjectStructure,
-  ensureProjectStructure,
-  createProjectSourceSymlink,
-  ProjectSourceOccupiedError,
-  findMarkdownFilesRecursive,
-  findCommandFiles,
-  getWebDistDir,
+} from './run-paths';
+// Source checkout paths
+export {
+  getAppArchonBasePath,
+  getBundledWorkflowsPath,
+  validateAppDefaultsPaths,
   getSourceWebDistDir,
   getSourceServerEntry,
   getSourceProviderEntry,
-  getServerDistDir,
-  projectKeyForStorageRoot,
-  projectKeyForCodebase,
-} from './archon-paths';
-export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
+} from './source-tree-paths';
+// Command and workflow markdown discovery
+export {
+  getCommandFolderSearchPaths,
+  getWorkflowFolderSearchPaths,
+  findMarkdownFilesRecursive,
+  findCommandFiles,
+} from './markdown-discovery';
 
 // Detached workflow install identity
 export {
