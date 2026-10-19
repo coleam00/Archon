@@ -106,7 +106,6 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
     const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
-    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
 
     if (layerHadFailure) {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
@@ -571,7 +570,10 @@ async function aggregateLayerResults(
             { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
             'artifacts.write_failed'
           );
-          if (ctx.artifactExchange) artifactErrors.push(err);
+          if (ctx.artifactExchange) {
+            artifactErrors.push(err);
+            ctx.onRequiredArtifactFailure?.(err);
+          }
         }
         // Scope mirror (#1846): persistence-participating nodes also write their
         // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
@@ -612,6 +614,7 @@ async function aggregateLayerResults(
       if (output.state === 'failed') layerHadFailure = true;
     }
   }
+  settledValuesOrThrow(layerResults, ctx.workflowRun.id);
   if (artifactErrors.length === 1) throw artifactErrors[0];
   if (artifactErrors.length > 1)
     throw new AggregateError(artifactErrors, 'Layer artifact persistence failed');

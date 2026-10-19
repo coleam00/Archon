@@ -1,12 +1,17 @@
 // @archon-test-isolated
 import type { ArtifactExchange } from '../container-context';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { executeDagWorkflow } from '../dag-executor';
+import * as dispatch from './dispatch';
+import { TerminalStatusWriteError } from '../terminal-status-write';
+import { NodeEventWriteError } from '../node-event-write';
+import { RunBudgetRefusedError } from '../run-budget';
+import { RunSourceUnreadableError } from './node-source';
 import { NodeFailure } from './ai-turn';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { writeNodeArtifact } from '../artifacts-index';
@@ -210,14 +215,86 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     }
   );
 
-  it.each(['loop-group', 'compose'] as const)(
+  it.each([
+    new TerminalStatusWriteError(new Error('terminal unavailable')),
+    new NodeEventWriteError(
+      { workflow_run_id: 'mixed', step_name: 'recovery', event_type: 'node_started', data: {} },
+      new Error('events unavailable')
+    ),
+    new RunBudgetRefusedError({
+      reason: 'work_units_exhausted',
+      path: 'recovery',
+      limit: 1,
+      consumed: 1,
+    }),
+    new RunSourceUnreadableError('recovery', new Error('source unavailable')),
+  ])(
+    'preserves mixed-layer recovery rejection %s alongside artifact refusal',
+    async recoveryError => {
+      mockLogFn.mockClear();
+      const artifactsDir = join(root, 'canonical');
+      const outside = join(root, 'outside');
+      await mkdir(artifactsDir);
+      await mkdir(outside);
+      await symlink(outside, join(artifactsDir, 'nodes'));
+      const store = createMockStore();
+      const originalDispatch = dispatch.dispatchNode;
+      const dispatchSpy = spyOn(dispatch, 'dispatchNode').mockImplementation(
+        async (ctx, node, parallel) => {
+          if (node.id === 'recovery') throw recoveryError;
+          return originalDispatch(ctx, node, parallel);
+        }
+      );
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'paid work' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+      });
+      try {
+        const execution = executeDagWorkflow(
+          exchangeOptions({
+            deps: createMockDeps(store),
+            cwd: root,
+            artifactsDir,
+            workflowRun: makeWorkflowRun('mixed', { output_root: root }),
+            artifactExchange: { async publish() {}, async collect() {} },
+            workflow: {
+              name: 'mixed',
+              nodes: [
+                dagNodeSchema.parse({ id: 'produce', prompt: 'work', output_type: 'text' }),
+                dagNodeSchema.parse({ id: 'recovery', prompt: 'work' }),
+              ],
+            },
+          })
+        );
+        if (recoveryError instanceof RunSourceUnreadableError) {
+          await execution;
+          expect(store.releaseRunForUnreadableSource).toHaveBeenCalled();
+        } else await expect(execution).rejects.toBe(recoveryError);
+        expect(mockLogFn.mock.calls).toContainEqual([
+          expect.objectContaining({
+            nodeId: 'produce',
+            err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
+          }),
+          'artifacts.write_failed',
+        ]);
+        expect(await readdir(outside)).toEqual([]);
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        dispatchSpy.mockRestore();
+      }
+    }
+  );
+
+  it.each(['loop-group', 'compose', 'compose-all-done', 'compose-loop-group'] as const)(
     'preserves paid nested %s usage and closes its failure record',
     async kind => {
       const artifactsDir = join(root, 'canonical');
       await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
       await writeFile(
         join(root, '.archon', 'workflows', 'block.yaml'),
-        'name: block\ndescription: Nested usage\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
+        kind === 'compose-loop-group'
+          ? 'name: block\ndescription: Nested usage\nnodes:\n  - id: group\n    loop_group:\n      max_iterations: 1\n      until: DONE\n      nodes:\n        - id: work\n          prompt: work\n          output_type: text\n'
+          : 'name: block\ndescription: Nested usage\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
       );
       const store = createMockStore();
       mockSendQueryDag.mockImplementation(async function* () {
@@ -240,11 +317,16 @@ describe('artifact exchange at workflow invocation boundaries', () => {
             name: 'nested-failure',
             nodes: [
               dagNodeSchema.parse(
-                kind === 'compose'
+                kind !== 'loop-group'
                   ? {
                       id: 'outer',
                       include: 'block',
-                      fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+                      fan_out: {
+                        items: '[1]',
+                        as: 'item',
+                        max_parallel: 1,
+                        join: kind === 'compose' ? 'all_success' : 'all_done',
+                      },
                     }
                   : {
                       id: 'outer',
@@ -284,7 +366,7 @@ describe('artifact exchange at workflow invocation boundaries', () => {
       const failedOwner = records.find(
         record =>
           record.metadata?.node.kind ===
-            (kind === 'compose' ? 'compose_fan_out_instance' : 'loop_group') &&
+            (kind !== 'loop-group' ? 'compose_fan_out_instance' : 'loop_group') &&
           record.metadata.lifecycle.status === 'failed'
       );
       expect(failedOwner?.metadata?.spend).toMatchObject({
@@ -294,6 +376,146 @@ describe('artifact exchange at workflow invocation boundaries', () => {
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  for (const joinRule of ['all_success', 'all_done'] as const) {
+    it.each(['collision', 'linked-parent', 'io'] as const)(
+      `fails composed ${joinRule} after a required %s sidecar failure`,
+      async failure => {
+        mockLogFn.mockClear();
+        const artifactsDir = join(root, 'canonical');
+        const outside = join(root, 'outside');
+        await mkdir(outside);
+        await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+        await writeFile(
+          join(root, '.archon', 'workflows', 'block.yaml'),
+          'name: block\ndescription: Artifact failure\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
+        );
+        const store = createMockStore();
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: 'paid work' };
+          yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+        });
+        await executeDagWorkflow(
+          exchangeOptions({
+            deps: createMockDeps(store),
+            cwd: root,
+            artifactsDir,
+            workflowRun: makeWorkflowRun('compose-sidecar', { output_root: root }),
+            artifactExchange: {
+              async publish() {},
+              async collect() {
+                const record = store.createWorkflowEvent.mock.calls
+                  .map(([event]) => readNodeRecordEvent({ ...event, data: event.data }))
+                  .find(record => record?.metadata?.node.kind === 'agent');
+                const nodeId = record?.metadata?.node.id;
+                expect(nodeId).toBeDefined();
+                if (!nodeId) throw new Error('missing started body');
+                if (failure === 'collision') {
+                  await writeNodeArtifact(
+                    artifactsDir,
+                    {
+                      nodeId: nodeId.replace('_', '.'),
+                      outputType: 'text',
+                      runId: 'compose-sidecar',
+                      producedAt: new Date().toISOString(),
+                    },
+                    'original owner'
+                  );
+                } else if (failure === 'linked-parent')
+                  await symlink(outside, join(artifactsDir, 'nodes'));
+                else await mkdir(join(artifactsDir, 'nodes', `${nodeId}.md`), { recursive: true });
+              },
+            },
+            workflow: {
+              name: 'compose-sidecar',
+              nodes: [
+                dagNodeSchema.parse({
+                  id: 'outer',
+                  include: 'block',
+                  fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: joinRule },
+                }),
+              ],
+            },
+          })
+        );
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).toHaveBeenCalled();
+        expect(store.createWorkflowEvent.mock.calls).toContainEqual([
+          expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
+        ]);
+        expect(mockLogFn.mock.calls).toContainEqual([
+          expect.objectContaining({ workflowRunId: 'compose-sidecar' }),
+          'artifacts.write_failed',
+        ]);
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_cost_usd: 0.1,
+          total_tokens_in: 10,
+          total_tokens_out: 1,
+        });
+        expect(await readdir(outside)).toEqual([]);
+      }
+    );
+
+    for (const kind of ['agent', 'bash', 'script'] as const) {
+      it.each(['publish', 'collect'] as const)(
+        `fails composed ${joinRule} after required %s for a ${kind} body`,
+        async operation => {
+          await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+          const body =
+            kind === 'agent'
+              ? 'prompt: work'
+              : kind === 'bash'
+                ? 'bash: echo work'
+                : 'runtime: bun\n    script: console.log("work")';
+          await writeFile(
+            join(root, '.archon', 'workflows', 'block.yaml'),
+            `name: block\ndescription: Exchange failure\nnodes:\n  - id: work\n    ${body}\n`
+          );
+          const store = createMockStore();
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'work' };
+            yield { type: 'result' };
+          });
+          const exec = spyOnNodeExec().mockResolvedValue({ stdout: 'work', stderr: '' });
+          const refused = new Error('exchange refused');
+          try {
+            await executeDagWorkflow(
+              exchangeOptions({
+                deps: createMockDeps(store),
+                cwd: root,
+                workflowRun: makeWorkflowRun('compose-exchange', { output_root: root }),
+                artifactExchange: {
+                  async publish() {
+                    if (operation === 'publish') throw refused;
+                  },
+                  async collect() {
+                    if (operation === 'collect') throw refused;
+                  },
+                },
+                workflow: {
+                  name: 'compose-exchange',
+                  nodes: [
+                    dagNodeSchema.parse({
+                      id: 'outer',
+                      include: 'block',
+                      fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: joinRule },
+                    }),
+                  ],
+                },
+              })
+            );
+            expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+            expect(store.failWorkflowRun).toHaveBeenCalled();
+            expect(store.createWorkflowEvent.mock.calls).toContainEqual([
+              expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
+            ]);
+          } finally {
+            exec.mockRestore();
+          }
+        }
+      );
+    }
+  }
 
   it.each(['collision', 'linked-parent', 'io'] as const)(
     'persists later settled sibling artifacts after a %s refusal',

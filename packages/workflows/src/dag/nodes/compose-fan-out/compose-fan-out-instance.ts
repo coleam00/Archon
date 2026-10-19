@@ -1,3 +1,4 @@
+import { ArtifactExchangeError } from '../../../artifact-exchange';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import {
@@ -31,7 +32,7 @@ import { expandComposeInstance } from './compose-fan-out-expansion';
 
 /** One settled composed fan-out instance, reduced into the aggregate (#2512). */
 export interface ComposeInstanceOutcome {
-  status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
+  status: 'completed' | 'failed' | 'cancelled' | 'ambiguous' | 'error';
   output: string;
   structuredOutput?: unknown;
   error?: string;
@@ -333,7 +334,7 @@ async function settleInstance(
       Date.now()
     );
     const outcome: ComposeInstanceOutcome = {
-      status: 'failed',
+      status: bodyError === undefined ? 'failed' : 'error',
       output: '',
       error: bodyError ?? failed[0]?.error ?? 'composed instance node failed',
       ...(providerFailure !== undefined ? { providerFailure } : {}),
@@ -428,6 +429,28 @@ export async function runComposeInstance(
   if (notStarted !== undefined) return notStarted;
 
   const instanceCtx = instanceRunContext(instance, expanded.nodes, threaded);
+  // Node executors can turn exchange exceptions into failed outputs; all_done must
+  // still distinguish these required engine operations from authored child failures.
+  const exchange = instanceCtx.artifactExchange;
+  let artifactFailure: string | undefined;
+  instanceCtx.onRequiredArtifactFailure = error => {
+    artifactFailure ??= error instanceof Error ? error.message : String(error);
+    scope.ctx.onRequiredArtifactFailure?.(error);
+  };
+  if (exchange) {
+    const observeExchange = async (operation: 'publish' | 'collect'): Promise<void> => {
+      try {
+        await exchange[operation]();
+      } catch (cause) {
+        instanceCtx.onRequiredArtifactFailure?.(new ArtifactExchangeError(operation, cause));
+        throw cause;
+      }
+    };
+    instanceCtx.artifactExchange = {
+      publish: () => observeExchange('publish'),
+      collect: () => observeExchange('collect'),
+    };
+  }
   try {
     await runLayers(instanceCtx);
   } catch (error) {
@@ -443,5 +466,5 @@ export async function runComposeInstance(
       error instanceof Error ? error.message : String(error)
     );
   }
-  return settleInstance(instance, instanceCtx, expanded.primarySink);
+  return settleInstance(instance, instanceCtx, expanded.primarySink, artifactFailure);
 }
