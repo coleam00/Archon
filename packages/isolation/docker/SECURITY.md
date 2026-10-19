@@ -71,7 +71,9 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
 
   The output volume and version 1 exchange metadata survive pause/recreation.
   Missing storage refuses resume. Destruction removes the producer, collects, then
-  deletes volumes; collection failure preserves volumes and the environment record.
+  checkpoints final collection before deleting volumes. Collection failure preserves
+  volumes and the environment record; teardown retries after the checkpoint do not
+  require deleted output storage, and resume is refused.
   An interrupted helper or unexplained paused producer requires explicit ownership
   inspection using the identifiers in the error, before removing the helper or
   unpausing. Ambiguous helper completion never authorizes unfreezing the producer.

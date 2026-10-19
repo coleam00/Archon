@@ -480,14 +480,18 @@ container:
   write_back: approve # 'approve' (default) pauses at a write-back gate; 'auto' applies without pausing
 ```
 
-**Prerequisites:** Docker, and the runner image built with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Rebuild existing and custom runner images after upgrading Archon: native fallback requires the current entrypoint's dedicated FUSE mount failure status (78). Docker startup failures, including a missing `/dev/fuse`, and older images returning a generic failure status stop preparation without native fallback. Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` is bound read-write at its host path; `$STATE_DIR` is not mounted — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
+**Prerequisites:** Docker, and the runner image built with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Rebuild existing and custom runner images after upgrading Archon: native fallback requires the current entrypoint's dedicated FUSE mount failure status (78). Docker startup failures, including a missing `/dev/fuse`, and older images returning a generic failure status stop preparation without native fallback. Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` uses a separate writable output volume at its logical host path; output reaches the host after each invocation; `$STATE_DIR` is not mounted — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
 
 ### Container runs and run output
 
-Standard CLI container runs bind `$ARTIFACTS_DIR` read-write at the same absolute path
-inside the container and on the host. Write screenshots, reports, and other run output
-there: they are available in the host run's artifacts directory without project write-back
-and survive container teardown.
+New CLI container runs mount a writable output volume at `$ARTIFACTS_DIR`, using the
+same absolute path as the host run's canonical artifacts directory. The container cannot
+write to canonical storage. Write screenshots, reports, and other run output there:
+Archon collects creations, updates, and deletions after each invocation, before downstream
+consumers run. Output is not live on the host. Collected output survives container teardown
+without project write-back. Engine-owned typed artifacts, listings, spills, and managed
+credentials are published as copies before invocation; container changes to those copies
+never become authoritative host state.
 
 The project root is mounted read-only at `/mnt/lower`, and the per-run overlay volume at
 `/mnt/upper` holds project changes until write-back. The run's frozen workflow source is
@@ -498,11 +502,18 @@ layer and disappear when the container is removed. Use `$ARTIFACTS_DIR` for host
 run output; use the project working directory for changes that should pass through the
 overlay diff and write-back gate.
 
-On rootful Linux daemons, artifact files are initially owned by the container's root user.
-Archon attempts to restore host ownership when suspending or destroying the container.
-This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed`
-and do not stop suspension or destruction. Older resumed runs whose metadata predates the
-artifacts bind retain container-local artifact output;
+Collection creates regular host files owned by the canonical root's owner. Linked parents
+are refused; engine writes replace leaf links without truncating their targets. A refused
+write or transfer fails the run. Final collection is checkpointed in the existing exchange
+metadata before volume removal, so failed teardown can retry without recollecting deleted
+output. Once checkpointed, the environment can only finish destruction.
+
+Legacy environments without exchange metadata keep their read-write host artifacts bind
+until they end, including live output and its symlink exposure. No live migration occurs.
+On rootful Linux daemons, these legacy files are initially owned by container root; Archon
+attempts best-effort ownership restoration on suspend or destroy. Failures are logged as
+`isolation.container_artifacts_chown_failed` and do not stop those operations. Even older
+resumed runs whose metadata predates the artifacts bind retain container-local output;
 Archon logs `isolation.container_resume_without_artifacts_mount` when recreating them.
 
 ## Environment Variables
