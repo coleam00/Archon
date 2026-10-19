@@ -371,6 +371,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
   // one that was answered, so the stored answer must not complete the wait.
   it('asks again instead of applying an answer when a dependency re-ran on resume', async () => {
     const store = createMockStore();
+    const platform = createMockPlatform();
     const persisted: WorkflowWaitContext = {
       owner: 'node',
       nodeId: 'ask',
@@ -388,6 +389,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
+        platform,
         conversationId: 'conv-attention-stale',
         cwd: testDir,
         workflow: {
@@ -432,6 +434,11 @@ describe('executeDagWorkflow -- durable wait node', () => {
     const pausedWith = store.pauseWorkflowRunForWait.mock.calls[0]?.[1] as WorkflowWaitContext;
     expect(pausedWith.kind === 'attention' && pausedWith.answer).toBeFalsy();
     expect(pausedWith.kind === 'attention' && pausedWith.pauseId).not.toBe('ask-1');
+    expect(pausedWith.kind === 'attention' && pausedWith.reaskedFrom).toBe('ask-1');
+    const notices = platform.sendMessage.mock.calls.map(([, text]) => String(text));
+    expect(
+      notices.some(text => text.includes('earlier answer was discarded because prior changed'))
+    ).toBe(true);
     const afterRan = store.persistWorkflowEvent.mock.calls
       .map(([event]) => event)
       .some(event => event.step_name === 'after' && event.event_type === 'node_completed');
@@ -486,6 +493,102 @@ describe('executeDagWorkflow -- durable wait node', () => {
       persisted,
       expect.objectContaining({ answer: { decision: 'use-dev', text: 'dev is ahead' } })
     );
+  });
+
+  // An always_run producer re-executes on every resume, so its output can differ each
+  // pass. When the question the wait renders is unchanged, the answer still applies.
+  it('applies an answer when an always_run dependency changed but the question did not', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Which base?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'use-main' }, { id: 'use-dev' }],
+      answer: { decision: 'use-dev', text: 'dev is ahead' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-always-run',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-always-run-test',
+          nodes: [
+            { id: 'stamp', kind: 'exec', runtime: 'sh', script: 'date +%s%N', always_run: true },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['stamp'],
+              wait: {
+                attention: 'Which base?',
+                form: 'select',
+                options: [{ id: 'use-main' }, { id: 'use-dev' }],
+              },
+            },
+          ],
+        },
+        priorCompletedNodes: new Map([['stamp', { output: '1' }]]),
+        workflowRun: makeWorkflowRun('attention-always-run', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalledWith(
+      'attention-always-run',
+      persisted,
+      expect.objectContaining({ answer: { decision: 'use-dev', text: 'dev is ahead' } })
+    );
+  });
+
+  // A question built from a value that changes on every resume would otherwise be asked
+  // forever. An answer to a question already re-asked once applies.
+  it('applies the answer to a re-asked question even when the question changed again', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Approve at stamp 1?',
+      pauseId: 'ask-2',
+      reaskedFrom: 'ask-1',
+      form: 'approval',
+      answer: { decision: 'approve', text: '' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-reasked',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-reasked-test',
+          nodes: [
+            { id: 'stamp', kind: 'exec', runtime: 'sh', script: 'printf 2', always_run: true },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['stamp'],
+              wait: { attention: 'Approve at stamp $stamp.output?', form: 'approval' },
+            },
+          ],
+        },
+        priorCompletedNodes: new Map([['stamp', { output: '1' }]]),
+        workflowRun: makeWorkflowRun('attention-reasked', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalled();
   });
 
   it('pauses an unanswered select wait again on a bare resume', async () => {
