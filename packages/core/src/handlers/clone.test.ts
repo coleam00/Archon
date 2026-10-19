@@ -10,6 +10,7 @@
  */
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { join, resolve } from 'path';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { captureStubLogOutput, removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
@@ -96,6 +97,7 @@ mock.module('../db/codebases', () => ({
 
 // ── @archon/paths mock ──────────────────────────────────────────────────────
 const mockLogger = createMockLogger();
+let managedSourceOverride: string | undefined;
 
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
@@ -114,7 +116,8 @@ mock.module('@archon/paths', () => ({
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   ensureProjectStructure: mockEnsureProjectStructure,
   getProjectSourcePath: mock(
-    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
+    (owner: string, repo: string) =>
+      managedSourceOverride ?? `/home/test/.archon/workspaces/${owner}/${repo}/source`
   ),
   createProjectSourceSymlink: mockCreateProjectSourceSymlink,
   ProjectSourceOccupiedError: class extends Error {},
@@ -653,7 +656,7 @@ describe('cloneRepository', () => {
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
   describe('HTTPS URL cloning', () => {
-    test.each(['', '/', '/./'])(
+    test.each(['', '/', '/./', '/../missing/../source'])(
       'reclones a missing managed checkout with suffix %j',
       async suffix => {
         const savedPath = `/home/test/.archon/workspaces/owner/repo/source${suffix}`;
@@ -665,7 +668,7 @@ describe('cloneRepository', () => {
         expect(mockEnsureProjectStructure).toHaveBeenCalledWith('owner', 'repo');
         expect(getGitCloneCall()?.slice(0, 2)).toEqual([
           'https://github.com/owner/repo',
-          gitUtils.toRepoPath(savedPath),
+          gitUtils.toRepoPath(resolve(savedPath)),
         ]);
         expect(result).toMatchObject({
           codebaseId: existing.id,
@@ -687,6 +690,56 @@ describe('cloneRepository', () => {
       expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
       expect(spyCloneGitRepository).not.toHaveBeenCalled();
     });
+
+    test('refuses to reclone through a symlink alias of the managed source', async () => {
+      const source = '/home/test/.archon/workspaces/owner/repo/source';
+      const alias = '/some/local/alias';
+      spyFsRealpath.mockImplementation(async (path: string) => (path === alias ? source : path));
+      mockListCodebaseClaims.mockResolvedValueOnce([makeCodebase({ default_cwd: alias })]);
+
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+        'checkout is missing'
+      );
+      expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
+    });
+
+    test.each(['/../missing/../source', '/../alias/../source'])(
+      'clones into the managed directory on disk for saved suffix %s',
+      async suffix => {
+        const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-retry-'));
+        const source = join(root, 'managed', 'source');
+        const origin = join(root, 'origin');
+        managedSourceOverride = source;
+        try {
+          await fsPromises.mkdir(source, { recursive: true });
+          await fsPromises.mkdir(join(root, 'foreign', 'inner'), { recursive: true });
+          await fsPromises.mkdir(join(root, 'foreign', 'source'));
+          await fsPromises.symlink(
+            join(root, 'foreign', 'inner'),
+            join(root, 'managed', 'alias'),
+            'junction'
+          );
+          execFileSync('git', ['init', '--bare', '-q', origin]);
+          const saved = source + suffix;
+          mockListCodebaseClaims.mockResolvedValueOnce([makeCodebase({ default_cwd: saved })]);
+          spyCloneGitRepository.mockImplementation(async (_url: string, target: string) => {
+            execFileSync('git', ['clone', '-q', origin, target], { stdio: 'pipe' });
+            return { ok: true, value: undefined };
+          });
+
+          const result = await cloneRepository('https://github.com/owner/repo');
+
+          expect(await fsPromises.readdir(source)).toContain('.git');
+          expect(await fsPromises.readdir(join(root, 'foreign', 'source'))).toEqual([]);
+          expect(result.defaultCwd).toBe(saved);
+        } finally {
+          managedSourceOverride = undefined;
+          spyFsRm.mockRestore();
+          await removeTempTree(root);
+        }
+      }
+    );
 
     test('clones a standard HTTPS GitHub URL', async () => {
       mockCreateCodebase.mockResolvedValueOnce(

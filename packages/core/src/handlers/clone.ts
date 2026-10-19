@@ -484,6 +484,7 @@ export async function cloneRepository(
   const existing = await findRegisteredRemote(codebases, workingUrl);
   if (existing) {
     rejectExistingChoice(options);
+    let checkoutPath = existing.default_cwd;
     let missing = false;
     try {
       await access(join(existing.default_cwd, '.git'));
@@ -503,14 +504,15 @@ export async function cloneRepository(
         );
       const credentials = await repositoryCredentials(workingUrl, options);
       await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
-      await cloneCheckout(workingUrl, existing.default_cwd, credentials);
+      checkoutPath = resolve(existing.default_cwd);
+      await cloneCheckout(workingUrl, checkoutPath, credentials);
     } else if (existing.repository_url) {
       await assertCheckoutRemote(
         existing.default_cwd,
         resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
       );
     }
-    if (appSource) await setupAppRepository(existing.default_cwd);
+    if (appSource) await setupAppRepository(checkoutPath);
     return loadRepositoryCommands(
       codebases,
       existing,
