@@ -60,3 +60,21 @@ test('the detail header displays live tool attention', () => {
   expect(html).toContain('bun test [REDACTED]');
   expect(html).toContain('no progress');
 });
+
+test('the detail header names an unreachable owner and stops the live dot', () => {
+  const run = toRun({
+    ...detailFixture.run,
+    status: 'running',
+    terminal_record: null,
+    owner_observation: 'unreachable',
+  });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
+    </MemoryRouter>
+  );
+  expect(html).toContain('Running · owner not answering');
+  expect(html).toContain('abandon it to release the record');
+  expect(html).toContain('since launch');
+  expect(html).not.toContain('animate-ping');
+});

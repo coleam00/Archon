@@ -6,6 +6,7 @@ import {
   mockListWorkflowEvents,
   mockListProviderEvents,
   mockGetConversationById,
+  mockObserveRunOwner,
   type MockWorkflowRun,
   type MockWorkflowEvent,
   NOW_DATE,
@@ -39,6 +40,7 @@ import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { ProviderEventRecord } from '@archon/workflows/schemas/provider-event';
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
+  workflowRunDetailSchema,
   workflowRunSchema as apiWorkflowRunSchema,
 } from './schemas/workflow.schemas';
 import { makeDashboardRunsResult } from '../test/workflow-mock-factories';
@@ -683,6 +685,36 @@ describe('GET /api/dashboard/runs', () => {
       .parse(await response.json());
     expect(body.runs[0]?.metadata.approval?.decisions).toEqual(getApprovalDecisions({}));
     expect(approval).not.toHaveProperty('decisions');
+  });
+
+  test("serves each run's owner observation on the dashboard list and the run detail", async () => {
+    mockObserveRunOwner.mockImplementation(async (_store, run) =>
+      run.status === 'running' ? 'unreachable' : null
+    );
+    try {
+      mockListDashboardRuns.mockImplementationOnce(async () =>
+        makeDashboardRunsResult({
+          runs: [
+            makeDashboardWorkflowRun(MOCK_RUNNING_RUN),
+            makeDashboardWorkflowRun(MOCK_COMPLETED_RUN),
+          ],
+        })
+      );
+      mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+      mockListWorkflowEvents.mockImplementationOnce(async () => []);
+      const { app } = makeApp();
+
+      const list = z
+        .object({ runs: z.array(apiDashboardWorkflowRunSchema) })
+        .parse(await (await app.request('/api/dashboard/runs')).json());
+      expect(list.runs.map(run => run.owner_observation)).toEqual(['unreachable', null]);
+      const detail = workflowRunDetailSchema.parse(
+        await (await app.request(`/api/workflows/runs/${MOCK_RUNNING_RUN.id}`)).json()
+      );
+      expect(detail.run).toMatchObject({ status: 'running', owner_observation: 'unreachable' });
+    } finally {
+      mockObserveRunOwner.mockImplementation(async () => null);
+    }
   });
 
   test('returns paginated runs with total and counts', async () => {

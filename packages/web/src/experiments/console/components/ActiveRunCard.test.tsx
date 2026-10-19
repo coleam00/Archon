@@ -104,3 +104,33 @@ test('promoting an attention wait replaces its inline actions with the banner po
   expect(inline).toContain('Rotate the key');
   expect(inline).toContain('Resume');
 });
+
+test.each(['unreachable', 'unknown'] as const)(
+  'a running card whose owner is %s keeps its status but stops looking live',
+  observation => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ActiveRunCard run={{ ...parallelRun, ownerObservation: observation, lastTool: 'bash' }} />
+      </MemoryRouter>
+    );
+
+    expect(html).toContain(
+      observation === 'unreachable' ? 'Running · owner not answering' : 'Running · owner unknown'
+    );
+    expect(html).toContain('since launch');
+    expect(html).toContain('last recorded nodes');
+    expect(html).not.toContain('animate-ping');
+    expect(html).not.toContain('animate-pulse');
+  }
+);
+
+test('a running card whose owner answers stays live', () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={{ ...parallelRun, ownerObservation: 'reachable' }} />
+    </MemoryRouter>
+  );
+
+  expect(html).toContain('animate-ping');
+  expect(html).not.toContain('since launch');
+});

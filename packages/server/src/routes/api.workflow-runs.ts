@@ -2,6 +2,7 @@ import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
+import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
@@ -133,9 +134,14 @@ export function registerDashboardRunsRoute(app: OpenAPIHono): void {
         limit,
         offset,
       });
+      const store = createWorkflowStore();
       return c.json({
         ...result,
-        runs: result.runs.map(toApiDashboardWorkflowRun),
+        runs: await Promise.all(
+          result.runs.map(async run =>
+            toApiDashboardWorkflowRun(run, await observeRunOwner(store, run))
+          )
+        ),
       });
     } catch (error) {
       getLog().error({ err: error }, 'list_dashboard_runs_failed');
@@ -248,6 +254,7 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          owner_observation: await observeRunOwner(createWorkflowStore(), run),
           terminal_record: terminalRecord,
           // The console reads node state from here and keeps no fold of its own.
           nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),

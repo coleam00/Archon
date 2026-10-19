@@ -1,12 +1,13 @@
 import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useEffect, useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
-import { LiveDot } from './LiveDot';
+import { RunningDot } from './LiveDot';
+import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import { runStatusLabel, statusTextClass } from '../lib/run-status';
+import { isRunLive, runElapsedLabel, runStatusLabel, statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface RunDetailHeaderProps {
@@ -15,17 +16,17 @@ interface RunDetailHeaderProps {
   projectId: string | undefined;
 }
 
-function useLiveElapsed(run: Run): string {
+function useLiveElapsed(run: Run, live: boolean): string {
   const [, tick] = useState(0);
   useEffect(() => {
-    if (run.status !== 'running') return;
+    if (!live) return;
     const handle = setInterval(() => {
       tick(n => n + 1);
     }, 1000);
     return (): void => {
       clearInterval(handle);
     };
-  }, [run.status]);
+  }, [live]);
   return formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
 }
 
@@ -34,7 +35,8 @@ export function RunDetailHeader({
   projectName,
   projectId,
 }: RunDetailHeaderProps): ReactElement {
-  const elapsed = useLiveElapsed(run);
+  const isLive = isRunLive(run);
+  const elapsed = useLiveElapsed(run, isLive);
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
   const isDocker = useIsDocker();
@@ -86,7 +88,7 @@ export function RunDetailHeader({
       {/* Status pill */}
       <div className="flex items-center gap-2">
         {isRunning ? (
-          <LiveDot />
+          <RunningDot live={isLive} />
         ) : isPaused ? (
           <span aria-hidden className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />
         ) : (
@@ -127,7 +129,9 @@ export function RunDetailHeader({
             {formatCost(run.costUsd)}
           </span>
         ) : null}
-        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
+        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">
+          {runElapsedLabel(run, elapsed)}
+        </span>
         {canOpenIde && run.workingPath !== null ? (
           <button
             type="button"
@@ -144,6 +148,8 @@ export function RunDetailHeader({
           </button>
         ) : null}
       </div>
+
+      <OwnerObservationHint run={run} className="w-full" />
 
       {/* Provenance sub-row: the input that started this run. `w-full` forces its
           own line in the flex-wrap header.

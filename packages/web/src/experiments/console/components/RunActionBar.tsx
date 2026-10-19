@@ -11,10 +11,15 @@ interface RunActionBarProps {
   run: Run;
 }
 
+function offersRunningAbandon(run: Run, cancelRefused: boolean): boolean {
+  return run.status === 'running' && (cancelRefused || run.ownerObservation === 'unreachable');
+}
+
 /**
  * Sticky bottom action bar. Contents are state-sensitive:
- *   running   → Cancel; Abandon too once cancel was refused (409: no live owner
- *               answered, or it could not be stopped). Abandon is then how the
+ *   running   → Cancel; Abandon too when the server reports the owner unreachable or
+ *               once cancel was refused (409: no live owner answered, or it could not
+ *               be stopped). Abandon is then how the
  *               operator releases a run whose process is gone.
  *   paused    → Abandon for attention and provider-limit waits; Resume too for a
  *               provider-limit wait (it continues by itself, Resume tries sooner) and for
@@ -97,7 +102,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : null}
 
-        {run.status === 'running' && cancelRefused ? (
+        {offersRunningAbandon(run, cancelRefused) ? (
           <button
             type="button"
             onClick={() => void call('abandon')}

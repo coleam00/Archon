@@ -16,6 +16,8 @@ interface RunGraphPanelProps {
   projectCwd: string;
   /** The engine's node states (`run.nodes`). */
   nodes: readonly RunNodeState[];
+  /** False once the run's owner is not observed live: running nodes stop pulsing. */
+  live: boolean;
   /** The node the main stream should scroll to when a graph node is clicked. */
   onNodeSelect?: (nodeId: string) => void;
 }
@@ -186,6 +188,7 @@ export function RunGraphPanel({
   workflowName,
   projectCwd,
   nodes: nodeStates,
+  live,
   onNodeSelect,
 }: RunGraphPanelProps): ReactElement {
   const { data: rawNodes, error } = useEntity<WorkflowGraphNode[]>(
@@ -247,6 +250,7 @@ export function RunGraphPanel({
           <GraphNode
             key={n.id}
             node={n}
+            live={live}
             onClick={() => {
               onNodeSelect?.(n.id);
             }}
@@ -259,10 +263,11 @@ export function RunGraphPanel({
 
 interface GraphNodeProps {
   node: LaidOutNode;
+  live: boolean;
   onClick: () => void;
 }
 
-function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
+function GraphNode({ node, live, onClick }: GraphNodeProps): ReactElement {
   const running = node.status === 'running';
   const failed = node.status === 'failed';
   const dimmed = node.status === 'pending' || node.status === 'skipped';
@@ -282,7 +287,7 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
       onClick={onClick}
       title={`${node.id} · ${node.kind} · ${node.status}`}
       className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
-        running ? 'animate-pulse' : ''
+        running && live ? 'animate-pulse' : ''
       } ${dimmed ? 'opacity-60' : ''}`}
       style={style}
     >
