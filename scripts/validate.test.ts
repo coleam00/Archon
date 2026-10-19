@@ -91,13 +91,17 @@ describe('validate check selection', () => {
     const { test: testJob } = readWorkflow().jobs;
     const legs = testJob.strategy?.matrix.include ?? [];
     const workspaceChecks = ['cli-tests', 'core-tests', 'package-tests'];
-    for (const os of ['ubuntu-latest', 'windows-latest']) {
+    const oses = ['ubuntu-latest', 'windows-latest'];
+    for (const os of oses) {
       for (const check of workspaceChecks) {
         const parts = legs.filter(leg => leg.os === os && leg.check === check).map(leg => leg.part);
-        const count = Number(parts[0]?.split('/')[1]);
-        expect({ os, check, parts: parts.sort() }).toEqual({
+        // One part count per shard, so an empty list (the shard dropped from this OS) fails too.
+        const counts = [...new Set(parts.map(part => Number(part.split('/')[1])))];
+        const count = counts[0] ?? 0;
+        expect({ os, check, counts, parts: parts.sort() }).toEqual({
           os,
           check,
+          counts: [Math.max(count, 1)],
           parts: Array.from(
             { length: count },
             (_, index) => `${String(index + 1)}/${String(count)}`
@@ -105,7 +109,9 @@ describe('validate check selection', () => {
         });
       }
     }
-    expect(legs.filter(leg => !workspaceChecks.includes(leg.check))).toEqual([]);
+    expect(
+      legs.filter(leg => !oses.includes(leg.os) || !workspaceChecks.includes(leg.check))
+    ).toEqual([]);
 
     // One validate step per OS, each running the leg's own check and part.
     const validateSteps = (testJob.steps ?? []).filter(step =>
