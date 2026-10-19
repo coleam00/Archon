@@ -23,7 +23,7 @@ export interface PushTarget {
 /** Push HEAD to `head` on the head repository; returns the pushed commit. */
 export function pushHead(target: PushTarget): string {
   const head = gitOrThrow('rev-parse', 'HEAD');
-  const destination = headDestination(target);
+  const destination = headDestination(target, 'push');
   const ref = `refs/heads/${target.head}`;
   let pushed = git('push', destination, `HEAD:${ref}`);
   if (pushed.code !== 0) {

@@ -247,10 +247,13 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so `.shared/remote.ts` reads remote URLs only to normalize them to `host` and
-`owner/repo`, and only the remote's name and that identity reach a command line or
-a message. Failure messages are the same
-surface: interpolating the raw value into one leaks it just as effectively.
+— so `.shared/remote.ts` normalizes configured URLs to `host` and `owner/repo`
+for repository selection. Before PR-head checkout or publication, it also checks
+transport without printing the URLs. Selected head remotes must avoid plain HTTP,
+including Git's effective fetch and push URLs after `insteadOf`, `pushInsteadOf`
+and `pushurl` configuration. Publication checks every push URL and the fetch URL
+used for readback. Use HTTPS or SSH for network transport. Failure messages are
+the same surface: interpolating a raw URL into one leaks it just as effectively.
 
 That retention is also why a node does not need its own log. The ready flip once
 wrote one by hand — every command it ran, echoed into an artifact — which is what
@@ -487,7 +490,10 @@ Build-queue continuations fetch the qualified PR head and fast-forward to that
 exact commit before ship starts. Standalone ship resolves the continuation repository
 from the target, triage and remotes, then prepares the same exact start before delivery.
 Both preserve the local branch and refuse local history that cannot fast-forward to
-the PR head. Editable forks can use their HTTPS URL without a configured remote.
+the PR head. Head remotes used for checkout or publication must use encrypted
+network transport (HTTPS or SSH); the selector checks their configured and effective
+URLs without printing them. Editable forks can use their HTTPS URL without a
+configured remote, subject to the same effective-transport check.
 Publication still uses a normal push and refuses a subsequently advanced remote head.
 
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged

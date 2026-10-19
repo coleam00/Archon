@@ -9,7 +9,7 @@ export function checkoutPr(ref: QualifiedPr, source: ForgeSource, allowFork = fa
     throw new Error(`${pr.url} must be open with a head repository`);
   if (!sameRepo(pr.head_repo, ref.repo) && (!allowFork || pr.maintainer_can_modify !== true))
     throw new Error(`${pr.url} requires an allowed head repository and maintainer edits for a fork`);
-  const destination = headDestination({ repo: pr.repo, head_repo: pr.head_repo });
+  const destination = headDestination({ repo: pr.repo, head_repo: pr.head_repo }, 'fetch');
   gitOrThrow('fetch', '--no-tags', destination, `refs/heads/${pr.head}`);
   const head = gitOrThrow('rev-parse', 'FETCH_HEAD');
   if (git('merge-base', '--is-ancestor', 'HEAD', head).code !== 0)

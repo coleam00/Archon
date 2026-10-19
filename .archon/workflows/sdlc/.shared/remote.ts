@@ -91,18 +91,43 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
   return remote;
 }
 
-export function headDestination(target: {
-  readonly repo: Repo;
-  readonly head_repo: Repo;
-}): string {
+export function headDestination(
+  target: { readonly repo: Repo; readonly head_repo: Repo },
+  operation: 'fetch' | 'push'
+): string {
   const headRepo = target.head_repo;
   const remote = sameRepo(headRepo, target.repo) ? remoteFor(headRepo) : findRemote(headRepo);
-  if (remote === undefined) return `https://${headRepo.host}/${headRepo.path}.git`;
-  const urls = gitOrThrow('config', '--get-all', `remote.${remote}.url`).split('\n');
-  if (urls.some(url => /^http:\/\//i.test(url.trim()))) {
-    throw new Error(`head remote ${remote} requires encrypted transport; use HTTPS or SSH`);
+  const destination = remote ?? `https://${headRepo.host}/${headRepo.path}.git`;
+  const urls = [destination];
+  if (remote !== undefined) {
+    const configured = git('config', '--get-all', `remote.${remote}.url`);
+    if (configured.code !== 0) throw new Error('cannot read head remote configuration');
+    urls.push(...configured.stdout.split('\n'));
   }
-  return remote;
+  if (remote === undefined) {
+    // get-url requires a persisted remote; the tab-separated verbose listing
+    // also resolves command-local remotes, including a fork's pushInsteadOf.
+    const name = `archon-head-${crypto.randomUUID()}`;
+    const resolved = git('-c', `remote.${name}.url=${destination}`, 'remote', '-v');
+    if (resolved.code !== 0) throw new Error('cannot resolve head remote transport');
+    for (const line of resolved.stdout.split('\n')) {
+      if (!line.startsWith(`${name}\t`)) continue;
+      const suffix = line.endsWith(' (fetch)') ? ' (fetch)' : ' (push)';
+      if (operation === 'push' || suffix === ' (fetch)') {
+        urls.push(line.slice(name.length + 1, -suffix.length));
+      }
+    }
+  } else {
+    for (const flags of operation === 'push' ? [[], ['--push']] : [[]]) {
+      const resolved = git('remote', 'get-url', '--all', ...flags, remote);
+      if (resolved.code !== 0) throw new Error('cannot resolve head remote transport');
+      urls.push(...resolved.stdout.split('\n'));
+    }
+  }
+  if (urls.some(url => /^http:\/\//i.test(url.trim()))) {
+    throw new Error('head destination requires encrypted transport; use HTTPS or SSH');
+  }
+  return destination;
 }
 
 /**

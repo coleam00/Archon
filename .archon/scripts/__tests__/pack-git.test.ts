@@ -178,6 +178,57 @@ describe('head operation transport', () => {
     expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
     expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(before);
   });
+
+  const cases = [
+    ...['build-queue/scripts/checkout', 'ship/scripts/checkout', '../../scripts/__tests__/push-pr-head'].map(script => ({ script, mode: 'insteadOf' })),
+    ...['pushurl', 'second pushurl', 'pushInsteadOf', 'readback', 'fork insteadOf', 'fork pushInsteadOf'].map(mode => ({ script: '../../scripts/__tests__/push-pr-head', mode })),
+    { script: 'ship/scripts/checkout', mode: 'fork insteadOf' },
+  ];
+  it.each(cases)('refuses effective HTTP for $script via $mode', ({ script, mode }) => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    const bare = git(cwd, 'remote', 'get-url', 'upstream');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const identity = `https://${PR.repo.host}/${PR.repo.path}.git`;
+    const insecure = `http://user:secret@${PR.repo.host}/${PR.repo.path}.git`;
+    const fork = mode.startsWith('fork ');
+    if (fork) git(cwd, 'remote', 'remove', 'upstream');
+    git(cwd, 'config', '--unset-all', `url.${bare}.insteadOf`);
+    if (mode === 'pushurl' || mode === 'second pushurl') {
+      if (mode === 'second pushurl') git(cwd, 'config', '--add', 'remote.upstream.pushurl', bare);
+      git(cwd, 'config', '--add', 'remote.upstream.pushurl', insecure);
+      git(cwd, 'config', `url.${bare}.insteadOf`, identity);
+    } else {
+      if (mode === 'readback') git(cwd, 'config', 'remote.upstream.pushurl', bare);
+      git(cwd, 'config', `url.${insecure}.${mode.endsWith('pushInsteadOf') ? 'pushInsteadOf' : 'insteadOf'}`, identity);
+    }
+    const repo = fork ? { host: PR.repo.host, path: 'canonical/repo' } : PR.repo;
+    const ref = { repo, number: PR.number };
+    const pr = forgePrRecord({ repo, maintainer_can_modify: true });
+    const run = runPackScript(script, {
+      cwd, source: 'forge',
+      inputs: {
+        INPUTS_ITEM: JSON.stringify(ref), INPUTS_CONTINUES: String(PR.number),
+        INPUTS_REF: JSON.stringify(ref), INPUTS_PULL_REQUEST: String(PR.number),
+        INPUTS_PR: JSON.stringify(pr),
+      },
+      forge: { kind: 'fake', response: forgeOperation('pr.view', { pr, title: '', body: '' }) },
+      preload: `
+        const originalGit = Bun.spawnSync;
+        Bun.spawnSync = (argv, options) => {
+          if (argv[0] === 'git' && ['fetch', 'push', 'ls-remote'].includes(argv[1])) {
+            throw new Error('unexpected network operation');
+          }
+          return originalGit(argv, options);
+        };
+      `,
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('requires encrypted transport');
+    expect(run.stderr).not.toContain('secret');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(cwd, '--git-dir', bare, 'rev-parse', 'refs/heads/feature')).toBe(before);
+  });
 });
 
 describe('standalone continuation identity', () => {
