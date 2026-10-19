@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -396,7 +397,13 @@ describe('executeDagWorkflow -- persisted node output', () => {
     );
     expect(
       await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'producer.nodeoutput'),
+        join(
+          artifactsDir,
+          '.archon',
+          'node-output-spills',
+          createHash('sha256').update(producerOutput, 'utf8').digest('hex'),
+          'producer.nodeoutput'
+        ),
         'utf-8'
       )
     ).toBe(producerOutput);

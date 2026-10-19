@@ -1,4 +1,6 @@
 // @archon-test-isolated
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -483,6 +485,76 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(consumeRows[1].node_output).toContain('prev=[draft-1] now=[DONE]');
   });
 
+  it.each(['', '.data'])(
+    'keeps large current and previous output%s distinct in a body bash node',
+    async field => {
+      const previous = 'P'.repeat(33_000);
+      const current = 'C'.repeat(33_000);
+      let iteration = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'agent_message_chunk',
+          text: JSON.stringify({ data: iteration++ === 0 ? previous : current }),
+        };
+        yield { type: 'result', sessionId: `spill-${iteration}` };
+      });
+      const currentFile = join(testDir, 'current.txt');
+      const previousFile = join(testDir, 'previous.txt');
+      const logDir = join(testDir, 'logs');
+      const result = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('lg-distinct-spills'),
+          logDir,
+          workflow: {
+            name: 'lg-distinct-spills',
+            nodes: [
+              {
+                id: 'group',
+                kind: 'loop_group',
+                loop_group: {
+                  until_bash:
+                    `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                    'test $compare.output = done && test "$current" != "$previous"',
+                  max_iterations: 2,
+                  fresh_context: false,
+                  nodes: [
+                    {
+                      id: 'work',
+                      kind: 'agent',
+                      source: { kind: 'inline', prompt: 'produce output' },
+                    },
+                    {
+                      id: 'compare',
+                      kind: 'exec',
+                      runtime: 'sh',
+                      depends_on: ['work'],
+                      script:
+                        `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                        `printf '%s' "$current" > ${JSON.stringify(currentFile)}; ` +
+                        `printf '%s' "$previous" > ${JSON.stringify(previousFile)}; ` +
+                        'if [ -n "$previous" ]; then printf done; else printf again; fi',
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        })
+      );
+      expect(result).toBe('done');
+      expect(iteration).toBe(2);
+      expect(existsSync(join(logDir, '.archon', 'node-output-spills'))).toBe(false);
+      expect(await readFile(currentFile, 'utf8')).toBe(
+        field ? current : JSON.stringify({ data: current })
+      );
+      expect(await readFile(previousFile, 'utf8')).toBe(
+        field ? previous : JSON.stringify({ data: previous })
+      );
+    }
+  );
+
   it('reads oversized $LOOP_PREV output from the run-owned spill directory', async () => {
     const artifactsDir = join(testDir, 'loop-prev-artifacts');
     const logDir = join(testDir, 'loop-prev-logs');
@@ -533,7 +605,13 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toContain('33000');
     expect(
       await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'work.nodeoutput'),
+        join(
+          artifactsDir,
+          '.archon',
+          'node-output-spills',
+          createHash('sha256').update(largeOutput, 'utf8').digest('hex'),
+          'work.nodeoutput'
+        ),
         'utf-8'
       )
     ).toBe(largeOutput);
@@ -592,7 +670,13 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toBe(largeOutput);
     expect(
       await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'bump.nodeoutput'),
+        join(
+          artifactsDir,
+          '.archon',
+          'node-output-spills',
+          createHash('sha256').update(largeOutput, 'utf8').digest('hex'),
+          'bump.nodeoutput'
+        ),
         'utf-8'
       )
     ).toBe(largeOutput);
