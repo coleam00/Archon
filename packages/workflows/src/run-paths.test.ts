@@ -1,13 +1,18 @@
 // @archon-test-isolated
 import { afterAll, describe, expect, it, mock } from 'bun:test';
-import { join } from 'path';
+import { basename, join, sep } from 'path';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
+import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowDeps } from './deps';
 import { resolveProjectPaths, resolveScopeArtifactsDir } from './run-paths';
 import type { WorkflowDefinition } from './schemas';
 
 const originalHome = process.env.ARCHON_HOME;
-process.env.ARCHON_HOME = join('/tmp', 'run-paths-home');
-afterAll(() => {
+const testHome = await mkdtemp(join(tmpdir(), 'run-paths-home-'));
+process.env.ARCHON_HOME = testHome;
+afterAll(async () => {
+  await removeTempTree(testHome);
   if (originalHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalHome;
 });
@@ -19,9 +24,16 @@ function wsPath(...segments: string[]): string {
 
 const actualPaths = await import('@archon/paths');
 const resolveProjectStorageKey = mock(actualPaths.resolveProjectStorageKey);
+const warn = mock((_payload: Record<string, unknown>, _event: string) => {});
+function cwdPath(cwd: string, ...segments: string[]): string {
+  return join(
+    actualPaths.getProjectStoragePaths(actualPaths.resolveProjectStorageKey(null, cwd)).root,
+    ...segments
+  );
+}
 mock.module('@archon/paths', () => ({
   ...actualPaths,
-  createLogger: () => ({ warn: mock(() => {}), error: mock(() => {}) }),
+  createLogger: () => ({ warn, error: mock(() => {}) }),
   resolveProjectStorageKey,
   getProjectStoragePaths: mock(actualPaths.getProjectStoragePaths),
   getStoragePathsForRoot: mock(actualPaths.getStoragePathsForRoot),
@@ -63,7 +75,7 @@ describe('resolveProjectPaths', () => {
     expect(paths.outputRoot).toBe(wsPath('_folder', 'my-platform'));
   });
 
-  // #2304: a transient lookup fault used to drop the run onto `_cwd/<basename>` and,
+  // #2304: a transient lookup fault used to drop the run onto `@cwd/<basename>-<digest>` and,
   // because `output_root` is write-once, pin it there for the run's whole life —
   // including its `$STATE_DIR`, so a stateful workflow silently read an empty state
   // directory. Asserting the RESOLVED PATH rather than the call count: the failure is
@@ -109,7 +121,7 @@ describe('resolveProjectPaths', () => {
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
     expect(calls).toBe(2);
-    expect(result.artifactsDir).toBe(wsPath('_cwd', 'widget', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.artifactsDir).toBe(cwdPath('/repos/widget', 'artifacts', 'runs', 'run-xyz'));
   });
 
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
@@ -155,31 +167,31 @@ describe('resolveProjectPaths', () => {
     expect(result.stateDir).toBe(wsPath('_local', 'workspace', 'state'));
   });
 
-  it('routes an unregistered cwd to _cwd/<basename> UNDER ARCHON_HOME, never into the repo', async () => {
+  it('routes an unregistered cwd to @cwd/<basename>-<digest> UNDER ARCHON_HOME, never into the repo', async () => {
     const store = makeStore({ getCodebase: mock(async () => null) });
     const deps = makeDeps(store);
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
 
     // Breaking change (#2200 A4): this used to be <cwd>/.archon/artifacts/...
-    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
-    expect(result.logDir).toBe(wsPath('_cwd', 'cwd', 'logs'));
-    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
+    expect(result.artifactsDir).toBe(cwdPath('/some/cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(cwdPath('/some/cwd', 'logs'));
+    expect(result.stateDir).toBe(cwdPath('/some/cwd', 'state'));
     // Positive form: asserting only `!startsWith('/some/cwd')` passes trivially
     // on win32 (where the result is backslash-separated), so assert the path is
     // actually rooted in the workspace tree.
-    expect(result.artifactsDir.startsWith(wsPath('_cwd'))).toBe(true);
+    expect(result.artifactsDir.startsWith(wsPath('@cwd'))).toBe(true);
   });
 
-  it('routes to _cwd/<basename> when no codebaseId is provided', async () => {
+  it('routes to @cwd/<basename>-<digest> when no codebaseId is provided', async () => {
     const deps = makeDeps();
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
 
-    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
-    expect(result.logDir).toBe(wsPath('_cwd', 'cwd', 'logs'));
-    expect(result.artifactsRoot).toBe(wsPath('_cwd', 'cwd', 'artifacts'));
-    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
+    expect(result.artifactsDir).toBe(cwdPath('/some/cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(cwdPath('/some/cwd', 'logs'));
+    expect(result.artifactsRoot).toBe(cwdPath('/some/cwd', 'artifacts'));
+    expect(result.stateDir).toBe(cwdPath('/some/cwd', 'state'));
   });
 
   it('still returns all five paths when the codebase lookup throws', async () => {
@@ -190,9 +202,122 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'cb-boom');
 
-    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
-    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
-    expect(result.outputRoot).toBe(wsPath('_cwd', 'cwd'));
+    expect(result.artifactsDir).toBe(cwdPath('/some/cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.stateDir).toBe(cwdPath('/some/cwd', 'state'));
+    expect(result.outputRoot).toBe(cwdPath('/some/cwd'));
+  });
+
+  it('isolates state for same-named directories and leaves legacy shared state untouched', async () => {
+    const legacyRoot = wsPath('_cwd', 'notes');
+    await mkdir(join(legacyRoot, 'state'), { recursive: true });
+    await writeFile(join(legacyRoot, 'state', 'memory.txt'), 'ambiguous memory');
+    warn.mockClear();
+
+    const firstCwd = join(testHome, 'a', 'notes');
+    const secondCwd = join(testHome, 'b', 'notes');
+    await mkdir(firstCwd, { recursive: true });
+    await mkdir(secondCwd, { recursive: true });
+    const first = await resolveProjectPaths(makeDeps(), firstCwd, 'run-a');
+    const second = await resolveProjectPaths(makeDeps(), secondCwd, 'run-b');
+    expect(first.stateDir).not.toBe(second.stateDir);
+    for (const paths of [first, second]) {
+      await mkdir(paths.stateDir, { recursive: true });
+      expect(await readdir(paths.stateDir)).toEqual([]);
+    }
+    await writeFile(join(first.stateDir, 'memory.txt'), 'first directory');
+    expect(await readdir(second.stateDir)).toEqual([]);
+    expect(await readdir(firstCwd)).toEqual([]);
+    expect(await readdir(secondCwd)).toEqual([]);
+    expect(await readFile(join(legacyRoot, 'state', 'memory.txt'), 'utf8')).toBe(
+      'ambiguous memory'
+    );
+    const notices = warn.mock.calls.filter(
+      ([, event]) => event === 'workflow.legacy_cwd_storage_detected'
+    );
+    expect(notices).toHaveLength(2);
+    expect(notices[0][0]).toMatchObject({ legacyPath: legacyRoot, newPath: first.outputRoot });
+    expect(notices[0][0].message).toContain('manually move only state');
+    expect(notices[1][0]).toMatchObject({ legacyPath: legacyRoot, newPath: second.outputRoot });
+
+    warn.mockClear();
+    const resumed = await resolveProjectPaths(
+      makeDeps(),
+      join(testHome, 'a', 'notes'),
+      'old-run',
+      undefined,
+      {
+        persistedOutputRoot: legacyRoot,
+      }
+    );
+    expect(resumed.stateDir).toBe(join(legacyRoot, 'state'));
+    expect(warn).not.toHaveBeenCalled();
+    await resolveProjectPaths(makeDeps(), join(testHome, 'a', 'fresh'), 'fresh-run');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('creates no legacy v2 notice from fresh output', async () => {
+    await resolveProjectPaths(makeDeps(), join(testHome, 'ordinary'), 'ordinary-run');
+    for (const name of ['v2', 'V2']) {
+      warn.mockClear();
+      await resolveProjectPaths(makeDeps(), join(testHome, name), `fresh-${name}`);
+      expect(
+        warn.mock.calls.filter(([, event]) => event === 'workflow.legacy_cwd_storage_detected')
+      ).toHaveLength(0);
+    }
+  });
+
+  it('keeps fresh output outside preserved legacy v2 and V2 trees', async () => {
+    for (const name of ['v2', 'V2']) {
+      const legacyRoot = wsPath('_cwd', name);
+      await mkdir(join(legacyRoot, 'state'), { recursive: true });
+      await writeFile(join(legacyRoot, 'state', 'memory.txt'), 'legacy memory');
+      const before = await readdir(legacyRoot);
+      warn.mockClear();
+      const fresh = await resolveProjectPaths(makeDeps(), join(testHome, name), `upgrade-${name}`);
+      expect(fresh.outputRoot.toLowerCase().startsWith(`${legacyRoot.toLowerCase()}${sep}`)).toBe(
+        false
+      );
+      await mkdir(fresh.stateDir, { recursive: true });
+      await writeFile(join(fresh.stateDir, 'memory.txt'), 'fresh memory');
+      expect(await readdir(legacyRoot)).toEqual(before);
+      expect(await readFile(join(legacyRoot, 'state', 'memory.txt'), 'utf8')).toBe('legacy memory');
+      const notices = warn.mock.calls.filter(
+        ([, event]) => event === 'workflow.legacy_cwd_storage_detected'
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0][0]).toMatchObject({ legacyPath: legacyRoot, newPath: fresh.outputRoot });
+    }
+  });
+
+  it('does not adopt legacy state whose basename matches a new storage segment', async () => {
+    const freshCwd = join(testHome, 'fresh', 'collision-notes');
+    const newSegment = basename(cwdPath(freshCwd));
+    const legacyCwd = join(testHome, 'legacy', newSegment);
+    const legacyRoot = wsPath('_cwd', newSegment);
+    await mkdir(freshCwd, { recursive: true });
+    await mkdir(legacyCwd, { recursive: true });
+    await mkdir(join(legacyRoot, 'state'), { recursive: true });
+    await writeFile(join(legacyRoot, 'state', 'memory.txt'), 'belongs to legacy directory');
+
+    const fresh = await resolveProjectPaths(makeDeps(), freshCwd, 'fresh-collision-run');
+    const resumed = await resolveProjectPaths(
+      makeDeps(),
+      legacyCwd,
+      'legacy-collision-run',
+      undefined,
+      {
+        persistedOutputRoot: legacyRoot,
+      }
+    );
+
+    expect(fresh.stateDir).not.toBe(resumed.stateDir);
+    await mkdir(fresh.stateDir, { recursive: true });
+    expect(await readdir(fresh.stateDir)).toEqual([]);
+    await writeFile(join(fresh.stateDir, 'memory.txt'), 'fresh directory');
+    expect(await readFile(join(resumed.stateDir, 'memory.txt'), 'utf8')).toBe(
+      'belongs to legacy directory'
+    );
+    expect(resumed.outputRoot).toBe(legacyRoot);
   });
 
   it('a persisted output_root short-circuits identity resolution entirely', async () => {
