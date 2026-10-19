@@ -30,7 +30,7 @@ interface Fixture {
   trap: string;
   env: NodeJS.ProcessEnv;
 }
-function fixture(config = 'store: files\n'): Fixture {
+function fixture(config = 'store: files\n', nativeStatus?: 'usable' | 'not_connected'): Fixture {
   const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
   const project = join(root, 'project'),
     home = join(root, 'home'),
@@ -68,6 +68,14 @@ import {appendFileSync} from 'node:fs';
 const fail=() => {appendFileSync(${JSON.stringify(trap)},'open\\n');throw new Error('SQL open trap');};
 const connection=await import(${src('packages/core/src/db/connection.ts')});
 mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,getDatabase:fail,getDialect:fail,pool:{query:fail,connect:fail}}));
+${
+  nativeStatus
+    ? `const {ClaudeProvider}=await import(${src('packages/providers/src/claude/provider.ts')});
+ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});
+const {registerBuiltinProviders}=await import(${src('packages/providers/src/in-process.ts')});
+mock.module(${src('packages/core/src/providers/register-host-providers.ts')},()=>({registerHostProviders:async()=>registerBuiltinProviders()}));`
+    : ''
+}
 await import(${src('packages/cli/src/cli.ts')});`
   );
   const env = {
@@ -110,7 +118,7 @@ async function cli(
   return { output, error, code };
 }
 test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
-  const f = fixture('store: files\ndefaultAssistant: claude\n');
+  const f = fixture('store: files\ndefaultAssistant: claude\n', 'usable');
   writeFileSync(
     join(f.project, '.archon/workflows/native.yaml'),
     `name: native
@@ -140,6 +148,42 @@ nodes:
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 30000);
+for (const flags of [[], ['--detach']] as const) {
+  test(`file-store CLI refuses missing native login before launch (${flags.join(' ') || 'foreground'})`, async () => {
+    const f = fixture('store: files\ndefaultAssistant: claude\n', 'not_connected');
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: refuse before launch
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: ai
+    depends_on: [before]
+    prompt: Say hello
+`
+    );
+    const refused = await cli(f, [
+      'workflow',
+      'run',
+      'native',
+      '--folder',
+      '--no-worktree',
+      ...flags,
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.output + refused.error).toContain('no usable login');
+    expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toEqual([]);
+    expect(existsSync(f.trap)).toBe(false);
+    expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+  }, 30000);
+}
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();
   f.env.GITHUB_APP_ID = '123';
