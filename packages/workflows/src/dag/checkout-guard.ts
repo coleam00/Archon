@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { lstat, readlink } from 'node:fs/promises';
 import { resolve as resolvePath } from 'path';
 import { isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
@@ -26,40 +29,69 @@ export function isInsideAny(absPath: string, dirs: readonly string[]): boolean {
   return dirs.some(d => isPathInside(d, absPath, { includeRoot: true, lexical: true }));
 }
 
-/** Path operands of one `git status --porcelain` line (`XY path` or `XY old -> new`). */
-export function porcelainPaths(line: string): string[] {
-  const body = line.slice(3);
-  const unquote = (p: string): string =>
-    p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p;
-  return (body.includes(' -> ') ? body.split(' -> ') : [body]).map(unquote);
+type CheckoutContent =
+  | { kind: 'file'; value: string }
+  | { kind: 'symlink'; value: string }
+  | { kind: 'missing' | 'other'; value: number };
+
+type CheckoutSnapshot = ReadonlyMap<string, { status: string; content: CheckoutContent }>;
+
+async function fingerprint(path: string): Promise<CheckoutContent> {
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return { kind: 'missing', value: 0 };
+    }
+    throw error;
+  }
+  if (stat.isSymbolicLink()) return { kind: 'symlink', value: await readlink(path) };
+  if (!stat.isFile()) return { kind: 'other', value: stat.mode };
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return { kind: 'file', value: hash.digest('hex') };
 }
 
 /**
- * Snapshot the working tree's dirty state (`git status --porcelain`) for a node's
- * `mutates_checkout: false` assertion (#2771), dropping entries under `excludeDirs`.
- * Returns `undefined` when the check cannot run — cwd outside a repo, or git failing
- * — so a broken assertion degrades to no check rather than breaking unrelated runs.
+ * Observe Git-visible dirty paths, excluding engine-owned roots. Unavailable Git
+ * or filesystem observations skip the assertion rather than compare partial data.
  */
 export async function snapshotCheckout(
   cwd: string,
   excludeDirs: readonly string[]
-): Promise<string | undefined> {
+): Promise<CheckoutSnapshot | undefined> {
   try {
     const { stdout } = await execFileAsync(
       'git',
-      // core.quotePath=false keeps non-ASCII paths literal instead of C-escaped, so
-      // exclusion matching against real directory names cannot miss them.
-      ['-c', 'core.quotePath=false', 'status', '--porcelain', '--untracked-files=normal'],
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
       { cwd, timeout: 10_000 }
     );
-    const relevant = stdout
-      .split('\n')
-      .filter(line => line.length > 3)
-      .filter(
-        line => !porcelainPaths(line).some(p => isInsideAny(resolvePath(cwd, p), excludeDirs))
-      );
-    return relevant.join('\n');
+    const snapshot = new Map<string, { status: string; content: CheckoutContent }>();
+    if (stdout === '') return snapshot;
+    // Keep cwd's lexical spelling: Git's absolute root may resolve aliases such as
+    // macOS /var, while the engine's excluded roots retain that alias.
+    const { stdout: root } = await execFileAsync('git', ['rev-parse', '--show-cdup'], {
+      cwd,
+      timeout: 10_000,
+    });
+    const repositoryRoot = resolvePath(cwd, root.replace(/\r?\n$/, ''));
+    const records = stdout.split('\0');
+    for (let i = 0; i < records.length - 1; i++) {
+      const record = records[i];
+      const status = record.slice(0, 2);
+      const paths = [record.slice(3)];
+      // Porcelain -z places the destination first and the rename/copy source next.
+      if (status.includes('R') || status.includes('C')) paths.push(records[++i]);
+      for (const path of paths) {
+        const absolute = resolvePath(repositoryRoot, path);
+        if (isInsideAny(absolute, excludeDirs) || snapshot.has(path)) continue;
+        snapshot.set(path, { status, content: await fingerprint(absolute) });
+      }
+    }
+    return snapshot;
   } catch {
+    // A partial observation cannot establish that the checkout stayed unchanged.
     return undefined;
   }
 }
@@ -73,7 +105,7 @@ export async function snapshotGuardedNode(
   ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
   node: DagNode,
   excludeDirs: readonly string[]
-): Promise<string | undefined> {
+): Promise<CheckoutSnapshot | undefined> {
   if (node.mutates_checkout !== false) return undefined;
   ctx.guardedLayerSnapshots?.add(node.id);
   return snapshotCheckout(ctx.cwd, excludeDirs);
@@ -100,7 +132,7 @@ export async function assertCheckoutUntouched(
   node: DagNode,
   cwd: string,
   excludeDirs: readonly string[],
-  before: string | undefined,
+  before: CheckoutSnapshot | undefined,
   result: NodeExecutionResult,
   deps: WorkflowDeps,
   logDir: string,
@@ -110,15 +142,20 @@ export async function assertCheckoutUntouched(
     return result;
   }
   const after = await snapshotCheckout(cwd, excludeDirs);
-  if (after === undefined || after === before) {
-    return result;
-  }
-  const changedPaths = after
-    .split('\n')
-    .filter(Boolean)
-    .flatMap(porcelainPaths)
-    .slice(0, 10)
-    .join(', ');
+  if (after === undefined) return result;
+  const changed = [...new Set([...before.keys(), ...after.keys()])].filter(path => {
+    const a = before.get(path);
+    const b = after.get(path);
+    return (
+      a === undefined ||
+      b === undefined ||
+      a.status !== b.status ||
+      a.content.kind !== b.content.kind ||
+      a.content.value !== b.content.value
+    );
+  });
+  if (changed.length === 0) return result;
+  const changedPaths = changed.sort().slice(0, 10).join(', ');
   const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
   const error =
     concurrentGuardedSiblings.length === 0
