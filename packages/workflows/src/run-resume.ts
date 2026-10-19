@@ -100,11 +100,7 @@ export async function inspectResumableRun(
   return {
     priorCompletedNodes,
     priorFailedNodes: snapshot.failedNodes,
-    priorUsage: {
-      ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
-      ...(snapshot.tokensUnknown ? { tokensUnknown: true } : {}),
-      costUsd: snapshot.costUsd,
-    },
+    priorUsage: snapshot,
   };
 }
 

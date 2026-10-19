@@ -39,16 +39,14 @@ export function sumTokenUsage(
 }
 
 /**
- * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
+ * Sum finite reported costs, preserving absence when no contribution reported cost.
  *
- * This is Σ of every child, not only the completed ones: a child persists its usage at
+ * Fan-out callers include every child, not only completed ones: a child persists its usage at
  * its run tail whatever its outcome (#2469), so a failed or cancelled child still
  * contributes what it burned. That matters most here — `all_done` is the default join,
  * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
  */
-export function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
+export function sumReportedCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
@@ -63,7 +61,7 @@ export function sumFanOutCost(outcomes: readonly { costUsd?: number }[]): number
 /**
  * Σ of defined child token usage; unavailable if any child explicitly cannot count
  * its tokens, or if no child reported tokens. Like
- * {@link sumFanOutCost}, this covers every child regardless of outcome.
+ * {@link sumReportedCost}, this covers every child regardless of outcome.
  */
 export function sumFanOutTokens(
   outcomes: readonly { tokens?: TokenUsage; tokensUnknown?: boolean }[]

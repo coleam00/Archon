@@ -13,6 +13,7 @@ mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => m
 
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
+import type { DagResumeSnapshot } from './store';
 
 type ResumeStore = ResumeStoreDeps['store'];
 
@@ -62,16 +63,17 @@ describe('hydrateResumableRun', () => {
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const snapshot: DagResumeSnapshot = {
+      completedNodeOutputs: priorNodes,
+      fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      tokens: { input: 4, output: 1 },
+      costUsd: 0.1,
+    };
     const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: priorNodes,
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 4, output: 1 },
-        costUsd: 0.1,
-      })),
+      getDagResumeSnapshot: mock(async () => snapshot),
     });
 
     const result = await inspectResumableRun(makeDeps(store), candidate);
@@ -79,8 +81,9 @@ describe('hydrateResumableRun', () => {
     expect(result).toEqual({
       priorCompletedNodes: priorNodes,
       priorFailedNodes: new Map(),
-      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1 },
+      priorUsage: snapshot,
     });
+    expect(result?.priorUsage).toBe(snapshot);
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
   });
@@ -227,16 +230,17 @@ describe('hydrateResumableRun', () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const resumed = makeRun({ id: 'prior-failed', status: 'running' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const snapshot: DagResumeSnapshot = {
+      completedNodeOutputs: priorNodes,
+      fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      tokens: { input: 40, output: 4 },
+      costUsd: 0.75,
+    };
     const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: priorNodes,
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 40, output: 4 },
-        costUsd: 0.75,
-      })),
+      getDagResumeSnapshot: mock(async () => snapshot),
       listWorkflowRunNodeSessions: mock(async () => [
         {
           workflow_run_id: 'prior-failed',
@@ -262,7 +266,7 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.preCreatedRun).toBe(resumed);
     expect(result?.priorCompletedNodes).toBe(priorNodes);
-    expect(result?.priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.75 });
+    expect(result?.priorUsage).toBe(snapshot);
     expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');

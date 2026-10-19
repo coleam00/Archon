@@ -185,7 +185,7 @@ import {
   workflowDefinitionSchema,
 } from './schemas';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
-import type { IWorkflowStore } from './store';
+import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -3808,16 +3808,17 @@ describe('executeWorkflow', () => {
       const completedNodeOutputs = new Map([['node-a', { output: 'first output' }]]);
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
+      const snapshot: DagResumeSnapshot = {
+        completedNodeOutputs,
+        fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
+        tokens,
+        costUsd,
+      };
       const store = makeStore({
-        getDagResumeSnapshot: mock(async () => ({
-          completedNodeOutputs,
-          fanOutSnapshots: new Map(),
-          failedNodes: new Map(),
-          unresolvedNodeStarts: new Set<string>(),
-          budget: { workUnits: 0, spendUsd: 0 },
-          tokens,
-          costUsd,
-        })),
+        getDagResumeSnapshot: mock(async () => snapshot),
         listWorkflowRunNodeSessions: mock(async () => [
           {
             workflow_run_id: 'failed-run',
@@ -3849,9 +3850,7 @@ describe('executeWorkflow', () => {
 
       const dagCall = mockExecuteDagWorkflow.mock.calls[0];
       expect(dagCall?.[0].priorCompletedNodes).toBe(completedNodeOutputs);
-      // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
-      // across resume exactly like tokens, so a resumed run's total never regresses.
-      expect(dagCall?.[0].priorUsage).toEqual({ tokens, costUsd });
+      expect(dagCall?.[0].priorUsage).toBe(snapshot);
       expect(dagCall?.[0].priorNodeSessions).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
