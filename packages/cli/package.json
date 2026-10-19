@@ -220,6 +220,10 @@
       "src/commands/user.test.ts"
     ],
     [
+      "src/commands/project.test.ts",
+      "src/commands/workflow-artifacts.test.ts"
+    ],
+    [
       "src/commands/auth.test.ts"
     ],
     [

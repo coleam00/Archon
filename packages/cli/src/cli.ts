@@ -397,6 +397,7 @@ async function main(): Promise<number> {
     'auth',
     'user',
     'ai',
+    'project',
   ];
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
   // directory's project, which need not be registered or a git repository.
@@ -953,6 +954,14 @@ async function main(): Promise<number> {
             );
           }
 
+          case 'artifacts': {
+            const { workflowArtifactsCommand } = await import('./commands/workflow-artifacts');
+            return await workflowArtifactsCommand(workflowHost, positionals.slice(2), {
+              json: jsonFlag,
+              cwd: effectiveCwd,
+            });
+          }
+
           case 'logs': {
             const logsRunId = positionals[2];
             if (!logsRunId || positionals[3] !== undefined) {
@@ -1293,11 +1302,19 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+              `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
             );
           }
         }
         break;
+      }
+
+      case 'project': {
+        const { projectCommand } = await loadRoute(() => import('./commands/project'), {
+          providers: false,
+          database: await usesDatabaseStore(),
+        });
+        return await projectCommand(positionals.slice(1), jsonFlag);
       }
 
       case 'user': {
