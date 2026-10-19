@@ -11,7 +11,7 @@
  *
  * Archon never moves the legacy directory: it detects, warns exactly once with a
  * copy-pasteable `mv`, and leaves the files alone. Mirrors
- * `maybeWarnLegacyHomePath()` in `workflow-discovery.ts`.
+ * `maybeWarnLegacyHomePath()` in `workflow-discovery/scopes.ts`.
  */
 import { access } from 'fs/promises';
 import { join } from 'path';
@@ -36,7 +36,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * a worktree is being destroyed on every run.
  *
  * (The pattern was adapted from `maybeWarnLegacyHomePath` in
- * `workflow-discovery.ts`, where a process-wide latch IS correct because that
+ * `workflow-discovery/scopes.ts`, where a process-wide latch IS correct because that
  * function probes one fixed, cwd-independent path.)
  *
  * Exported reset so tests can observe more than the first case per cwd.
