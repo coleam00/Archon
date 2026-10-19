@@ -84,6 +84,18 @@ function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: st
   return claimed;
 }
 
+/**
+ * Enrollment only adds work items, so a failed listing must not stop the sweep merging
+ * the ones that already exist. Items enrolled before the failure are kept.
+ */
+function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): void {
+  try {
+    enrollOwnPrs(repo, authors, new Date().toISOString());
+  } catch (error) {
+    note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -96,13 +108,7 @@ function main(): void {
   requireGh();
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
-  // Enrollment only adds work items; a failed listing must not stop the sweep merging
-  // the ones that already exist. Items enrolled before the failure are kept.
-  try {
-    enrollOwnPrs(repo, list.ownPrs, new Date().toISOString());
-  } catch (error) {
-    note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  enrollOrNote(repo, list.ownPrs);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
   for (const doc of claimAll(limit, order, runId)) {
