@@ -588,6 +588,82 @@ describe('loop node completion channels', () => {
     );
   });
 
+  it.each(['reask', 'transient retry'] as const)(
+    'refreshes the artifact observation for a %s while keeping the first attempt frozen',
+    async mode => {
+      const artifactsDir = join(testDir, 'attempt-artifacts');
+      const workflowRun = makeWorkflowRun('loop-attempt-artifacts');
+      const listingPaths: string[] = [];
+      mockSendQueryDag.mockImplementation(async function* (prompt) {
+        listingPaths.push(prompt.split('\n')[0]);
+        if (listingPaths.length === 1) {
+          await writeNodeArtifact(
+            artifactsDir,
+            {
+              nodeId: 'judge',
+              outputType: 'verdict',
+              runId: workflowRun.id,
+              producedAt: new Date().toISOString(),
+            },
+            'approved'
+          );
+          if (mode === 'transient retry') {
+            yield {
+              type: 'result',
+              isError: true,
+              failure: { class: 'transient', evidence: 'temporary provider failure' },
+            };
+          } else {
+            yield { type: 'result', structuredOutput: { note: 'missing done' } };
+          }
+          return;
+        }
+        yield { type: 'result', structuredOutput: { done: true } };
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          artifactsDir,
+          workflowRun,
+          workflowProvider: 'pi',
+          config: { ...minimalConfig, assistant: 'pi' },
+          workflow: {
+            name: 'loop-attempt-artifacts',
+            nodes: [
+              {
+                id: 'judge',
+                kind: 'loop',
+                provider: 'pi',
+                output_format: untilFieldSchema,
+                retry: { max_attempts: 1, delay_ms: 0 },
+                loop: {
+                  prompt: '$TYPED_ARTIFACTS_FILE',
+                  max_iterations: 1,
+                  fresh_context: false,
+                  until_field: 'done',
+                },
+              },
+            ],
+          },
+        })
+      );
+
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(listingPaths).toHaveLength(2);
+      const listings = await Promise.all(
+        listingPaths.map(async path =>
+          nodeArtifactsListingSchema.parse(JSON.parse(await readFile(path, 'utf8')))
+        )
+      );
+      expect(listings[0].artifactsByType.verdict).toBeUndefined();
+      expect(listings[1].artifactsByType.verdict?.map(entry => entry.nodeId)).toEqual(['judge']);
+      expect(listingPaths[1]).not.toBe(listingPaths[0]);
+    }
+  );
+
   it('re-asks a best-effort provider within the iteration, then completes', async () => {
     // Attempt 1 violates the schema; attempt 2 satisfies it with done: true.
     // The reask must not consume a loop iteration — one iteration, two attempts.

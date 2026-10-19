@@ -53,14 +53,13 @@ export async function runLoopIteration(
   const { ctx, node } = run;
   const loop = node.loop;
   const iterationStart = Date.now();
-  const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
 
   const stopped = await stopBeforeIteration(run, state, i);
   if (stopped !== undefined) return stopped;
   state.lastStartedIteration = i;
   recordIterationStarted(run, i);
 
-  const reply = await runIterationAttempts(run, state, i, iterationStart, typedArtifactsFile);
+  const reply = await runIterationAttempts(run, state, i, iterationStart);
   if (reply.kind === 'failed') return reply.result;
   const accepted = await acceptIterationReply(run, state, i, reply);
   if (accepted.kind === 'failed') return accepted.result;
