@@ -528,55 +528,62 @@ async function installProjectSkill(
   return { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath };
 }
 
+/**
+ * Return `existing` config text with `docs.path` set, or null when a real `docs` key
+ * already exists. Comments and other content are preserved.
+ */
+function withDocsPath(existing: string, docsPath: string): string | null {
+  // Use the runtime loader's parser to resolve aliases, merges and complex keys.
+  const parsed: unknown = Bun.YAML.parse(existing);
+  if (parsed !== null && typeof parsed === 'object' && Object.hasOwn(parsed, 'docs')) return null;
+
+  const document: Document = parseDocument(existing, { uniqueKeys: false });
+  if (document.errors.length > 0) throw document.errors[0];
+  if (isScalar(document.contents) && document.contents.value === null) {
+    const root = new YAMLMap(document.schema);
+    root.commentBefore = document.contents.commentBefore;
+    root.comment = document.contents.comment;
+    root.spaceBefore = document.contents.spaceBefore;
+    document.contents = root;
+  }
+  const path = new Scalar(docsPath);
+  path.type = Scalar.QUOTE_DOUBLE;
+  const docs = new YAMLMap(document.schema);
+  docs.set('path', path);
+  document.set('docs', docs);
+  return document.toString();
+}
+
 /** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
 export async function configureDocsPath(repoPath: string): Promise<void> {
   const wantsDocsPath = await confirm({
     message: 'Configure a non-default docs directory? (default: docs/)',
     initialValue: false,
   });
+  if (isCancel(wantsDocsPath) || !wantsDocsPath) return;
 
-  if (!isCancel(wantsDocsPath) && wantsDocsPath) {
-    const docsPath = await text({
-      message: 'Where are your project docs? (relative to repo root)',
-      placeholder: 'docs/',
-    });
+  const docsPath = await text({
+    message: 'Where are your project docs? (relative to repo root)',
+    placeholder: 'docs/',
+  });
+  if (isCancel(docsPath) || typeof docsPath !== 'string' || !docsPath.trim()) return;
 
-    if (!isCancel(docsPath) && typeof docsPath === 'string' && docsPath.trim()) {
-      try {
-        const archonDir = join(repoPath, '.archon');
-        mkdirSync(archonDir, { recursive: true });
-        const configPath = join(archonDir, 'config.yaml');
-        const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        // Use the runtime loader's parser to resolve aliases, merges and complex keys.
-        const parsed: unknown = Bun.YAML.parse(existing);
-        const hasDocs =
-          parsed !== null && typeof parsed === 'object' && Object.hasOwn(parsed, 'docs');
-        if (!hasDocs) {
-          const document: Document = parseDocument(existing, { uniqueKeys: false });
-          if (document.errors.length > 0) throw document.errors[0];
-          if (isScalar(document.contents) && document.contents.value === null) {
-            const root = new YAMLMap(document.schema);
-            root.commentBefore = document.contents.commentBefore;
-            root.comment = document.contents.comment;
-            root.spaceBefore = document.contents.spaceBefore;
-            document.contents = root;
-          }
-          const path = new Scalar(docsPath.trim());
-          path.type = Scalar.QUOTE_DOUBLE;
-          const docs = new YAMLMap(document.schema);
-          docs.set('path', path);
-          document.set('docs', docs);
-          writeFileSync(configPath, document.toString());
-        } else {
-          note(
-            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
-            'Docs path not written'
-          );
-        }
-      } catch (err) {
-        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
-        exitSetup(1);
-      }
+  try {
+    const archonDir = join(repoPath, '.archon');
+    mkdirSync(archonDir, { recursive: true });
+    const configPath = join(archonDir, 'config.yaml');
+    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+    const updated = withDocsPath(existing, docsPath.trim());
+    if (updated !== null) {
+      writeFileSync(configPath, updated);
+    } else {
+      note(
+        `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
+        'Docs path not written'
+      );
     }
+  } catch (err) {
+    cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
+    exitSetup(1);
   }
 }
