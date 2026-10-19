@@ -207,16 +207,19 @@ describe('checkAssistantLogin', () => {
     });
   }
 
-  it('checks only the configured Claude assistant and reports not checked', async () => {
+  it('checks only the configured Claude assistant', async () => {
     const { ClaudeProvider } = await import('@archon/providers/in-process');
-    const check = spyOn(ClaudeProvider.prototype, 'checkCredential');
+    const check = spyOn(ClaudeProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'usable',
+      source: 'native',
+    });
     try {
       const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
         assistant: 'claude',
         connectedVendors: [],
         provider: new ClaudeProvider(),
       }));
-      expect(result).toMatchObject({ status: 'skip', message: 'claude: not checked' });
+      expect(result).toMatchObject({ status: 'pass', message: 'claude: usable' });
       expect(check).toHaveBeenCalledTimes(1);
     } finally {
       check.mockRestore();
@@ -225,23 +228,28 @@ describe('checkAssistantLogin', () => {
 
   it('loads the merged default assistant without consulting the Pi login', async () => {
     const core = await import('@archon/core');
-    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } = await import(
-      '@archon/providers/in-process'
-    );
+    const { ClaudeProvider, PiProvider, registerBuiltinProviders, registerCommunityProviders } =
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
     const pi = spyOn(PiProvider.prototype, 'checkCredential');
+    const claude = spyOn(ClaudeProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'usable',
+      source: 'native',
+    });
     try {
       expect(await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' })).toMatchObject({
-        status: 'skip',
-        message: 'claude: not checked',
+        status: 'pass',
+        message: 'claude: usable',
       });
       expect(load).toHaveBeenCalledWith(process.cwd());
       expect(pi).not.toHaveBeenCalled();
+      expect(claude).toHaveBeenCalledTimes(1);
     } finally {
       load.mockRestore();
       pi.mockRestore();
+      claude.mockRestore();
     }
   });
 

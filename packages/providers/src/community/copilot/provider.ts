@@ -8,11 +8,15 @@
  * streaming bridge off to `bridgeSession` in `event-bridge.ts`.
  *
  * Module-scope invariant: type-only imports from @github/copilot-sdk. All
- * value imports (`CopilotClient`, `approveAll`) happen inside `sendQuery()`
+ * value imports (`CopilotClient`, `approveAll`) happen inside provider methods
  * via dynamic `await import(...)`. `provider-lazy-load.test.ts` asserts this
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import type { CredentialStatus } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { sessionPreview } from '@archon/provider-contract';
@@ -104,6 +108,45 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
     if (value) return value;
   }
   return undefined;
+}
+
+async function copilotClientOptions(
+  copilotConfig: CopilotProviderDefaults,
+  mergedEnv: Record<string, string>,
+  cwd?: string
+) {
+  const copilotToken = resolveCopilotToken(mergedEnv);
+  const genericGithubToken = resolveGenericGitHubToken(mergedEnv);
+  const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
+  const clientOpts: CopilotClientOptions = {
+    workingDirectory: cwd,
+    env: mergedEnv,
+  };
+  // copilot-sdk 1.0: a custom CLI binary rides a stdio runtime connection
+  // (replaces the removed `cliPath` option).
+  if (cliPath) clientOpts.connection = { kind: 'stdio', path: cliPath };
+  // configDir override → baseDirectory (sets COPILOT_HOME on the runtime).
+  if (copilotConfig.configDir) clientOpts.baseDirectory = copilotConfig.configDir;
+  // Auth precedence: see COPILOT_TOKEN_ENV_KEY / GENERIC_GITHUB_TOKEN_ENV_KEYS docs.
+  let tokenSource: 'copilot-token' | 'generic-token' | 'logged-in-user';
+  if (copilotToken) {
+    clientOpts.gitHubToken = copilotToken;
+    clientOpts.useLoggedInUser = false;
+    tokenSource = 'copilot-token';
+  } else if (copilotConfig.useLoggedInUser === false) {
+    if (genericGithubToken) {
+      clientOpts.gitHubToken = genericGithubToken;
+      tokenSource = 'generic-token';
+    } else {
+      tokenSource = 'logged-in-user';
+    }
+    clientOpts.useLoggedInUser = false;
+  } else {
+    clientOpts.useLoggedInUser = true;
+    tokenSource = 'logged-in-user';
+  }
+  if (copilotConfig.logLevel) clientOpts.logLevel = copilotConfig.logLevel;
+  return { clientOpts, tokenSource };
 }
 
 // ─── Reasoning ──────────────────────────────────────────────────────────────
@@ -399,8 +442,40 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * per-request env vars are honored.
  */
 export class CopilotProvider implements IAgentProvider {
-  async checkCredential(): Promise<CredentialStatus> {
-    return { state: 'not_checked', source: 'native' };
+  async checkCredential(
+    request: Parameters<IAgentProvider['checkCredential']>[0]
+  ): Promise<CredentialStatus> {
+    let client: import('@github/copilot-sdk').CopilotClient | undefined;
+    const abort = () => {
+      void client?.forceStop();
+    };
+    try {
+      request.signal.throwIfAborted();
+      const config = parseCopilotConfig(request.assistantConfig ?? {});
+      const { clientOpts } = await copilotClientOptions(config, buildCopilotEnv(request.env));
+      const { CopilotClient } = await import('@github/copilot-sdk');
+      client = new CopilotClient(clientOpts);
+      request.signal.addEventListener('abort', abort, { once: true });
+      request.signal.throwIfAborted();
+      await client.start();
+      const status = await client.getAuthStatus();
+      request.signal.throwIfAborted();
+      return { state: status.isAuthenticated ? 'usable' : 'not_connected', source: 'native' };
+    } catch (error) {
+      request.signal.throwIfAborted();
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence:
+          redactCredentialValues(
+            error instanceof Error ? error.message : String(error),
+            collectCredentialValues({ ...process.env, ...request.env })
+          ) || 'Copilot account check failed',
+      };
+    } finally {
+      request.signal.removeEventListener('abort', abort);
+      await client?.forceStop();
+    }
   }
 
   getType(): string {
@@ -461,9 +536,6 @@ export class CopilotProvider implements IAgentProvider {
     const copilotConfig = parseCopilotConfig(assistantConfig);
 
     const mergedEnv = buildCopilotEnv(requestOptions?.env);
-    const copilotToken = resolveCopilotToken(mergedEnv);
-    const genericGithubToken = resolveGenericGitHubToken(mergedEnv);
-    const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
 
     const sdk = await import('@github/copilot-sdk');
     const { CopilotClient: copilotClientCtor, approveAll } = sdk;
@@ -493,34 +565,7 @@ export class CopilotProvider implements IAgentProvider {
       ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
       : prompt;
 
-    const clientOpts: CopilotClientOptions = {
-      workingDirectory: cwd,
-      env: mergedEnv,
-    };
-    // copilot-sdk 1.0: a custom CLI binary rides a stdio runtime connection
-    // (replaces the removed `cliPath` option).
-    if (cliPath) clientOpts.connection = { kind: 'stdio', path: cliPath };
-    // configDir override → baseDirectory (sets COPILOT_HOME on the runtime).
-    if (copilotConfig.configDir) clientOpts.baseDirectory = copilotConfig.configDir;
-    // Auth precedence: see COPILOT_TOKEN_ENV_KEY / GENERIC_GITHUB_TOKEN_ENV_KEYS docs.
-    let tokenSource: 'copilot-token' | 'generic-token' | 'logged-in-user';
-    if (copilotToken) {
-      clientOpts.gitHubToken = copilotToken;
-      clientOpts.useLoggedInUser = false;
-      tokenSource = 'copilot-token';
-    } else if (copilotConfig.useLoggedInUser === false) {
-      if (genericGithubToken) {
-        clientOpts.gitHubToken = genericGithubToken;
-        tokenSource = 'generic-token';
-      } else {
-        tokenSource = 'logged-in-user';
-      }
-      clientOpts.useLoggedInUser = false;
-    } else {
-      clientOpts.useLoggedInUser = true;
-      tokenSource = 'logged-in-user';
-    }
-    if (copilotConfig.logLevel) clientOpts.logLevel = copilotConfig.logLevel;
+    const { clientOpts, tokenSource } = await copilotClientOptions(copilotConfig, mergedEnv, cwd);
     const client = new copilotClientCtor(clientOpts);
 
     let session: CopilotSession;

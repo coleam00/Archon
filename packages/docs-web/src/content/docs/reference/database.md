@@ -95,10 +95,10 @@ The server refuses file storage because its routes read SQL. Provider concurrenc
 Per-user GitHub identity (`GITHUB_APP_ID` with `TOKEN_ENCRYPTION_KEY`) fails at startup under
 file storage, because files hold no user tokens and a run would otherwise use the shared
 token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential
-mode does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
-before creating a worktree. Environment credentials and the provider's own login work
-normally. State documents (`archon state`) use the selected store. Files keep immutable
-JSON revisions under `state/<document-hash>/<revision>.json`, with a `name.json` record
+mode does not prevent selecting file storage. File-store runs never read or deliver stored
+per-user provider credentials. Preflight checks environment credentials and the provider's
+own login, including when the CLI supplies a user identity. State documents (`archon state`)
+use the selected store. Files keep immutable JSON revisions under `state/<document-hash>/<revision>.json`, with a `name.json` record
 containing the scope and name. Writes publish through the store-wide lock and recovery
 intent. `workflow cleanup` removes old revisions while keeping each document's latest
 revision, including tombstones. User and stored credential management still require

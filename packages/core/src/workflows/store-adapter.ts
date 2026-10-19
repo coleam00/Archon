@@ -419,7 +419,7 @@ export function createWorkflowDeps(
             }
           },
         }
-      : // Files hold no stored credentials; preflight refuses a run that would need them.
+      : // Files hold no stored credentials; providers authenticate through native configuration.
         { isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled() }),
   };
 }
