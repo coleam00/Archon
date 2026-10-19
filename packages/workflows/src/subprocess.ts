@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
@@ -200,6 +200,26 @@ function armNodeLifeline(pgid: number, onError: (error: Error) => void): () => v
   return () => {
     watcher.stdin?.end('\n');
   };
+}
+
+function recordNodeProcess(
+  child: ChildProcess,
+  recorder: NodeProcessRecorder | undefined,
+  onError: (error: Error) => void
+): void {
+  const rootPid = child.pid;
+  if (!recorder || rootPid === undefined) return;
+  const disarm =
+    process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
+  recorder.roots.set(rootPid, disarm);
+  // The node is in flight until `close`: a root that exits while a background job still
+  // holds its output has not settled. `stop` does not signal that group, but the owner's
+  // interrupt (`end()`) still can: the kernel does not reuse the root PID while its group
+  // exists.
+  child.once('close', () => {
+    recorder.roots.delete(rootPid);
+    disarm();
+  });
 }
 
 interface SubprocessRetention {
@@ -446,24 +466,11 @@ export async function execOwnedProcessGroup(
     endTree(child.pid, node ? 'SIGTERM' : 'SIGKILL');
   };
   const rootPid = child.pid;
-  if (recorder && rootPid !== undefined) {
-    const disarm = posix
-      ? armNodeLifeline(rootPid, error => {
-          error.message = `could not start the node's owner-death watcher: ${error.message}`;
-          failure ??= error;
-          stop(false);
-        })
-      : (): void => undefined;
-    recorder.roots.set(rootPid, disarm);
-    // The node is in flight until `close`: a root that exits while a background job still
-    // holds its output has not settled. `stop` does not signal that group, but the owner's
-    // interrupt (`end()`) still can: the kernel does not reuse the root PID while its group
-    // exists.
-    child.once('close', () => {
-      recorder.roots.delete(rootPid);
-      disarm();
-    });
-  }
+  recordNodeProcess(child, recorder, error => {
+    error.message = `could not start the node's owner-death watcher: ${error.message}`;
+    failure ??= error;
+    stop(false);
+  });
   const timer =
     options.timeout === undefined
       ? undefined

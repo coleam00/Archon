@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
-import { GitFailure } from './errors';
+import { GitFailure, type GitFailureKind } from './errors';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir as fsMkdir } from 'fs/promises';
@@ -115,6 +115,50 @@ async function hasRepositoryMarker(path: string, env: NodeJS.ProcessEnv): Promis
   }
 }
 
+async function classifyGitFailure(
+  cause: unknown,
+  args: string[],
+  options: Parameters<typeof execFileAsync>[2]
+): Promise<GitFailureKind> {
+  let kind: GitFailureKind = 'unclassified';
+  if (
+    cause instanceof Error &&
+    'killed' in cause &&
+    cause.killed === true &&
+    'code' in cause &&
+    cause.code === null &&
+    options?.timeout
+  )
+    kind = 'timeout';
+  const path = args[0] === '-C' ? args[1] : options?.cwd;
+  const env = options?.env ?? process.env;
+  if (
+    path &&
+    cause instanceof Error &&
+    'code' in cause &&
+    (cause.code === 128 || cause.code === 'ENOENT') &&
+    !env.GIT_DIR
+  ) {
+    try {
+      // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
+      // ENOENT; either way no repository is there.
+      if (await isMissingPath(path)) kind = 'not_repository';
+      else if (cause.code === 128 && !(await hasRepositoryMarker(path, env))) {
+        // Repository discovery also exits 128 for invalid configuration. Verify
+        // Git can load its configuration before treating absence as the cause.
+        await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {
+          windowsHide: true,
+          ...options,
+        });
+        kind = 'not_repository';
+      }
+    } catch {
+      // Failed inspection leaves the original Git evidence unclassified.
+    }
+  }
+  return kind;
+}
+
 /**
  * Wrapper around child_process.execFile for test mockability.
  *
@@ -162,42 +206,7 @@ export async function execFileAsync(
     if (cause instanceof TypeError || cause instanceof RangeError) throw cause;
     if (cmd !== 'git') throw cause;
     const detail = cause instanceof Error ? cause.message : String(cause);
-    let kind: 'unclassified' | 'not_repository' | 'timeout' = 'unclassified';
-    if (
-      cause instanceof Error &&
-      'killed' in cause &&
-      cause.killed === true &&
-      'code' in cause &&
-      cause.code === null &&
-      options?.timeout
-    )
-      kind = 'timeout';
-    const path = args[0] === '-C' ? args[1] : options?.cwd;
-    const env = options?.env ?? process.env;
-    if (
-      path &&
-      cause instanceof Error &&
-      'code' in cause &&
-      (cause.code === 128 || cause.code === 'ENOENT') &&
-      !env.GIT_DIR
-    ) {
-      try {
-        // A vanished start path fails `-C` with exit 128 and `cwd` with a spawn
-        // ENOENT; either way no repository is there.
-        if (await isMissingPath(path)) kind = 'not_repository';
-        else if (cause.code === 128 && !(await hasRepositoryMarker(path, env))) {
-          // Repository discovery also exits 128 for invalid configuration. Verify
-          // Git can load its configuration before treating absence as the cause.
-          await promisifiedExecFile('git', ['-C', path, 'config', '--list', '--name-only'], {
-            windowsHide: true,
-            ...execOptions,
-          });
-          kind = 'not_repository';
-        }
-      } catch {
-        // Failed inspection leaves the original Git evidence unclassified.
-      }
-    }
+    const kind = await classifyGitFailure(cause, args, execOptions);
     throw new GitFailure(kind, detail, cause);
   });
   if (inputError) throw Object.assign(inputError, { stdout: result.stdout, stderr: result.stderr });
