@@ -1058,6 +1058,8 @@ export class WorktreeProvider implements IIsolationProvider {
           setupLockReason,
           remote
         ));
+        // Current config cannot establish the original base of a reused branch.
+        if (cutFromCommit === undefined) resolvedBaseBranch = undefined;
       }
     }
 

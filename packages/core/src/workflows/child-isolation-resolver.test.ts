@@ -361,7 +361,7 @@ describe('child worktree resolver', () => {
       parent_run_id: PARENT_RUN_ID,
       child_index: 0,
     });
-    expect(result.baseBranch).toEqual({ kind: 'fallback', value: 'main' });
+    expect(result.baseBranch).toEqual({ kind: 'unavailable' });
     expect(result.ownedWorktree).toBeUndefined();
   });
 

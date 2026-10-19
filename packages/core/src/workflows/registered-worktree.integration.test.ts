@@ -141,60 +141,85 @@ test('non-child reuse warns once and persists adoption over caller metadata', as
   });
 });
 
-test('child reuse has one registration and one provider adoption warning', async () => {
-  const store = isolation.createIsolationStore();
-  const create = mock(store.create);
-  const resolver = createCodebaseChildResolver(
-    { ...store, create },
-    { id: codebaseId, name: 'test/repo', default_cwd: repo, kind: 'repo' },
-    { baseBranch: 'dev', createdByPlatform: 'cli', createdByUserId: undefined },
-    { store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} } }
-  );
-  if (!resolver) throw new Error('Expected repo resolver');
-  const parentRun: WorkflowRun = {
-    id: randomUUID(),
-    workflow_name: 'test',
-    conversation_id: 'conversation',
-    parent_conversation_id: null,
-    codebase_id: codebaseId,
-    status: 'running',
-    outcome: null,
-    user_message: '',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: repo,
-    user_id: null,
-    parent_run_id: null,
-    adopted_from_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    origin: null,
-  };
-  const request = { parentRun, nodeId: 'build', childIndex: 2, codebaseId, setupEnvironment: {} };
-  const first = await resolver.resolve(request);
-  expect(create).toHaveBeenCalledTimes(1);
-  create.mockClear();
-  events.length = 0;
-  const reused = await resolver.resolve(request);
-  expect(create).toHaveBeenCalledTimes(1);
-  expect(first.baseBranch).toEqual({ kind: 'resolved', value: 'dev' });
-  expect(reused.baseBranch).toEqual({ kind: 'fallback', value: 'dev' });
-  expect(reused.cwd).toBe(first.cwd);
-  expect(reused.envId).toBe(first.envId);
-  expect(reused.ownedWorktree).toBeUndefined();
-  const row = await isolation.getById(reused.envId);
-  expect(row?.metadata).toMatchObject({
-    adopted: true,
-    worktree_creation_id: null,
-    parent_run_id: parentRun.id,
-    child_index: 2,
-  });
-  expect(await isolation.countActiveByCodebase(codebaseId)).toBe(1);
-  expectAdoptionWarning(reused.branchName, reused.cwd, create.mock.calls[0][0].workflow_id);
-  expect(events.filter(event => event.msg === 'workflow.child_worktree_adopted')).toHaveLength(0);
-});
+test.each(['checkout', 'local branch', 'remote branch'])(
+  'child reuse leaves the historical base unavailable after config changes: %s',
+  async reuse => {
+    const store = isolation.createIsolationStore();
+    const create = mock(store.create);
+    const surface = { baseBranch: 'dev', createdByPlatform: 'cli', createdByUserId: undefined };
+    const resolver = createCodebaseChildResolver(
+      { ...store, create },
+      { id: codebaseId, name: 'test/repo', default_cwd: repo, kind: 'repo' },
+      surface,
+      { store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} } }
+    );
+    if (!resolver) throw new Error('Expected repo resolver');
+    const parentRun: WorkflowRun = {
+      id: randomUUID(),
+      workflow_name: 'test',
+      conversation_id: 'conversation',
+      parent_conversation_id: null,
+      codebase_id: codebaseId,
+      status: 'running',
+      outcome: null,
+      user_message: '',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: repo,
+      user_id: null,
+      parent_run_id: null,
+      adopted_from_run_id: null,
+      output_root: null,
+      checkout_baseline: null,
+      origin: null,
+    };
+    const request = { parentRun, nodeId: 'build', childIndex: 2, codebaseId, setupEnvironment: {} };
+    const first = await resolver.resolve(request);
+    expect(create).toHaveBeenCalledTimes(1);
+    create.mockClear();
+    events.length = 0;
+    surface.baseBranch = 'main';
+    git('branch', 'main');
+    git('push', '-q', 'origin', 'main');
+    configureIsolation(async () => ({ path: '.worktrees', baseBranch: toBranchName('main') }));
+    await writeFile(
+      join(repo, '.archon/config.yaml'),
+      'worktree:\n  path: .worktrees\n  baseBranch: main\n'
+    );
+    if (reuse !== 'checkout') {
+      git('worktree', 'remove', first.cwd);
+      if (reuse === 'remote branch') {
+        git('push', '-q', 'origin', first.branchName);
+        git('branch', '-D', first.branchName);
+      }
+    }
+    const reused = await resolver.resolve(request);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(reused.cutFromCommit).toBeUndefined();
+    expect(
+      execFileSync('git', ['-C', reused.cwd, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    ).toBe(git('rev-parse', 'dev'));
+    expect(first.baseBranch).toEqual({ kind: 'resolved', value: 'dev' });
+    expect(reused.baseBranch).toEqual({ kind: 'unavailable' });
+    expect(reused.cwd).toBe(first.cwd);
+    expect(reused.envId).toBe(first.envId);
+    if (reuse === 'checkout') expect(reused.ownedWorktree).toBeUndefined();
+    const row = await isolation.getById(reused.envId);
+    expect(row?.metadata).toMatchObject({
+      adopted: reuse === 'checkout',
+      parent_run_id: parentRun.id,
+      child_index: 2,
+    });
+    expect(await isolation.countActiveByCodebase(codebaseId)).toBe(1);
+    if (reuse === 'checkout') {
+      expect(row?.metadata.worktree_creation_id).toBeNull();
+      expectAdoptionWarning(reused.branchName, reused.cwd, create.mock.calls[0][0].workflow_id);
+    }
+    expect(events.filter(event => event.msg === 'workflow.child_worktree_adopted')).toHaveLength(0);
+  }
+);
 
 for (const reuse of ['existing', 'workflow', 'linked'] as const) {
   test(`registered resolver ${reuse} reuse warns and persists adoption`, async () => {

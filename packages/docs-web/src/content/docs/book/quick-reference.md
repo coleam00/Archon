@@ -80,7 +80,7 @@ Variables are substituted at runtime in command bodies and workflow `prompt:` fi
 | `$ARGUMENTS` / `$USER_MESSAGE` | Commands, prompts | The user's whole trigger message (positional `$1`/`$2`/`$3` are not supported) |
 | `$ARTIFACTS_DIR` | Commands, prompts | Absolute path to the workflow run's artifact directory |
 | `$WORKFLOW_ID` | Commands, prompts | The current workflow run ID |
-| `$BASE_BRANCH` | Commands, prompts | Base git branch -- `--base <branch>` (per dispatch), else `worktree.baseBranch`, else the codebase default, else auto-detected ([precedence](/reference/cli/#base-branch-precedence)) |
+| `$BASE_BRANCH` | Commands, prompts | Top-level base: `--base <branch>`, else `worktree.baseBranch`, else the codebase default, else detection. Fresh shared children inherit the parent value including `--base`; new isolated branches use config, codebase default, then detection independently. Reused isolated branches without a child record leave the base unresolved. Resumed children keep their recorded base ([precedence](/reference/cli/#base-branch-precedence)) |
 | `$DOCS_DIR` | Commands, prompts | Documentation directory path (default: `docs/`) |
 | `$<nodeId>.output` | DAG `when:` conditions, downstream `prompt:` fields | The text output from a completed node |
 

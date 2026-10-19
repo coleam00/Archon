@@ -244,20 +244,21 @@ ${isolation ? '    isolation: inherit' : ''}
   }
 
   for (const configured of [undefined, 'child-config']) {
-    it(`adopted checkout uses the codebase fallback below config: ${String(configured)}`, async () => {
-      await writeWorkflow(
-        'child-adopt',
-        `
+    for (const referencesBase of [false, true]) {
+      it(`adopted checkout leaves its unknown base unresolved despite config: ${String(configured)}, references base: ${referencesBase}`, async () => {
+        await writeWorkflow(
+          'child-adopt',
+          `
 name: child-adopt
 description: reports base on adoption
 nodes:
   - id: work
-    bash: 'printf "%s" "$BASE_BRANCH"'
+    bash: '${referencesBase ? 'printf "%s" "$BASE_BRANCH"' : 'printf done'}'
 `
-      );
-      await writeWorkflow(
-        'parent-adopt',
-        `
+        );
+        await writeWorkflow(
+          'parent-adopt',
+          `
 name: parent-adopt
 description: adopts checkout
 nodes:
@@ -265,35 +266,34 @@ nodes:
     workflow: child-adopt
     isolation: worktree
 `
-      );
-      const store = new InMemoryStore();
-      const deps = makeDeps(store);
-      const loadConfig = deps.loadConfig;
-      deps.loadConfig = async path => ({ ...(await loadConfig(path)), baseBranch: configured });
-      const fake = makeFakeResolver(join(cwd, 'adopted-child'));
-      const resolver: ChildIsolationResolver = {
-        resolve: async req => ({
-          ...(await fake.resolver.resolve(req)),
-          baseBranch: { kind: 'fallback', value: 'codebase-default' },
-        }),
-      };
-      const result = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        await discover('parent-adopt'),
-        'goal',
-        { conversationId: 'conv-db' },
-        { baseOverride: 'parent-only', resolveChildIsolation: resolver }
-      );
-      expect(result.success).toBe(true);
-      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-adopt');
-      expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe(
-        configured ?? 'codebase-default'
-      );
-      expect(child?.metadata.summary).toBe(configured ?? 'codebase-default');
-    });
+        );
+        const store = new InMemoryStore();
+        const deps = makeDeps(store);
+        const loadConfig = deps.loadConfig;
+        deps.loadConfig = async path => ({ ...(await loadConfig(path)), baseBranch: configured });
+        const fake = makeFakeResolver(join(cwd, 'adopted-child'));
+        const resolver: ChildIsolationResolver = {
+          resolve: async req => ({
+            ...(await fake.resolver.resolve(req)),
+            baseBranch: { kind: 'unavailable' },
+          }),
+        };
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('parent-adopt'),
+          'goal',
+          { conversationId: 'conv-db' },
+          { baseOverride: 'parent-only', resolveChildIsolation: resolver }
+        );
+        expect(result.success).toBe(!referencesBase);
+        const child = [...store.runs.values()].find(r => r.workflow_name === 'child-adopt');
+        expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe('');
+        if (!referencesBase) expect(child?.metadata.summary).toBe('done');
+      });
+    }
   }
 
   for (const completedWork of [false, true]) {

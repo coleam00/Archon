@@ -121,8 +121,8 @@ export function createCodebaseChildResolver(
      * of the canonical repo no matter what the parent run was dispatched with. Which
      * also means a child sees neither the parent's uncommitted work nor its commits —
      * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
-     * The provider returns its selected reporting base; adoption without a new
-     * resolution returns this codebase fallback instead.
+     * The provider returns the selected base for a new branch. A reused branch
+     * without a surviving child run record leaves its original base unavailable.
      */
     baseBranch: string | undefined;
     /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
@@ -195,7 +195,7 @@ export function createCodebaseChildResolver(
           baseBranch:
             env.resolvedBaseBranch !== undefined
               ? { kind: 'resolved', value: env.resolvedBaseBranch }
-              : { kind: 'fallback', value: surface.baseBranch },
+              : { kind: 'unavailable' },
           cwd: env.workingPath,
           envId: created.envId,
           ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),

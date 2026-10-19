@@ -447,7 +447,7 @@ export async function runChildWorkflow(
           ...(childIsolationEnv
             ? childIsolationEnv.baseBranch.kind === 'resolved'
               ? { resolvedBaseBranch: childIsolationEnv.baseBranch.value }
-              : { baseBranch: childIsolationEnv.baseBranch.value }
+              : { resolvedBaseBranch: '' }
             : { resolvedBaseBranch: parentBaseBranch }),
           ...(childIsolationEnv?.cutFromCommit !== undefined
             ? { cutFromCommit: childIsolationEnv.cutFromCommit }

@@ -184,7 +184,7 @@ export type IsolatedEnvironment = WorktreeEnvironment;
 export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
 > & {
-  /** Transient base selected during provisioning; absent if no base was resolved. */
+  /** Transient reporting base; absent when the original base of a reused branch is unknown. */
   resolvedBaseBranch?: string;
 };
 

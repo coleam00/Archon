@@ -2358,7 +2358,9 @@ for it:
   auto-detection. Level 1 is missing on purpose — **the per-dispatch `--base` / `--from`
   overrides do not change an isolated child's cut-from**, so
   `archon workflow run parent --base release/2.0` still cuts every isolated child from the
-  repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. Fresh shared-checkout children (`inherit` or omitted) instead inherit the parent's
+  repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. If the branch
+  is reused without a surviving child run record, its original base is unavailable and
+  `$BASE_BRANCH` stays unresolved. Fresh shared-checkout children (`inherit` or omitted) instead inherit the parent's
   resolved `$BASE_BRANCH`, including `--base`. Existing child runs retain their recorded
   base on resume. An isolated child therefore sees neither the parent's uncommitted edits
   **nor the commits the parent made on its own branch**.
