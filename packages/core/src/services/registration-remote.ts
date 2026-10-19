@@ -66,15 +66,37 @@ export async function assertCheckoutRemote(
       const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--show-prefix']);
       if (stdout.trim()) throw new Error(`${path} is not the root of a Git checkout.`);
     }
-    const expected = await remoteIdentity(remoteUrl);
+    const expected = await remoteIdentity(remoteUrl, path);
     const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
-    for (const name of stdout.split(/\r?\n/).map(name => name.trim())) {
+    const names = stdout.split(/\r?\n/).map(name => name.trim());
+    const observed = new Set<string>();
+    for (const name of names) {
       if (!name) continue;
       const url = (
         await execFileAsync('git', ['-C', path, 'remote', 'get-url', name])
       ).stdout.trim();
-      if (url && (await remoteIdentity(resolveRegistrationUrl(url, path), path)) === expected)
-        return;
+      if (!url) continue;
+      const identity = await remoteIdentity(resolveRegistrationUrl(url, path), path);
+      if (identity === expected) return;
+      observed.add(identity);
+    }
+    if (observed.size) {
+      // Registrations save either requested or already-expanded URLs. Keep direct
+      // matches above. A command-local remote preserves rewrite spelling without
+      // letting Git interpret a relative URL as an existing remote's name.
+      let expansionRemote = 'archon-ownership';
+      while (names.includes(expansionRemote)) expansionRemote += '-';
+      const { stdout: expanded } = await execFileAsync('git', [
+        '-C',
+        path,
+        '-c',
+        `remote.${expansionRemote}.url=${remoteUrl.trim()}`,
+        'ls-remote',
+        '--get-url',
+        '--',
+        expansionRemote,
+      ]);
+      if (expanded.trim() && observed.has(await remoteIdentity(expanded.trim(), path))) return;
     }
     throw new Error('No checkout remote matches the registered repository.');
   } catch (error) {
