@@ -114,9 +114,15 @@ describe('project storage collisions', () => {
     }
   );
 
-  test.each(['sql', 'file'] as const)(
-    'clone reuse preserves the requested URL across Git rewrites (%s)',
-    async backend => {
+  test.each(
+    (['sql', 'file'] as const).flatMap(backend =>
+      (['https', 'file'] as const).flatMap(scheme =>
+        (['url', 'path'] as const).map(entry => ({ backend, scheme, entry }))
+      )
+    )
+  )(
+    '$entry reuse preserves the requested $scheme URL across Git rewrites ($backend)',
+    async ({ backend, scheme, entry }) => {
       const root = await makeHome();
       const store =
         backend === 'sql'
@@ -124,7 +130,10 @@ describe('project storage collisions', () => {
           : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
       const upstream = join(root, 'bare upstream.git');
       const config = join(root, 'gitconfig');
-      const requestedUrl = 'https://rewrite.invalid/owner/repo.git';
+      const requestedUrl =
+        scheme === 'https'
+          ? 'https://rewrite.invalid/owner/repo.git'
+          : pathToFileURL(join(root, 'requested', 'repo.git')).href;
       const destination = pathToFileURL(upstream).href;
       const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
       const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
@@ -150,13 +159,14 @@ describe('project storage collisions', () => {
             encoding: 'utf8',
           }).trim()
         ).toBe(destination);
-        const reused = await cloneRepository(store, requestedUrl);
-        expect(reused).toMatchObject({ ...saved, alreadyExisted: true });
+        const reuse = () =>
+          entry === 'url' ? cloneRepository(store, requestedUrl) : registerInStore(store, path);
+        expect(await reuse()).toMatchObject({ ...saved, alreadyExisted: true });
         expect(await store.listCodebases()).toMatchObject([
           { id: saved.codebaseId, default_cwd: path, repository_url: requestedUrl },
         ]);
         execFileSync('git', ['config', '--global', '--unset', rewriteKey]);
-        expect(await cloneRepository(store, requestedUrl)).toMatchObject({
+        expect(await reuse()).toMatchObject({
           codebaseId: saved.codebaseId,
           alreadyExisted: true,
         });
@@ -169,7 +179,7 @@ describe('project storage collisions', () => {
           'origin',
           'https://foreign.invalid/other/repo.git',
         ]);
-        await expect(cloneRepository(store, requestedUrl)).rejects.toThrow('/update-project');
+        await expect(reuse()).rejects.toThrow('/update-project');
         expect(await store.listCodebases()).toHaveLength(1);
         expect(await store.listCodebases()).toMatchObject([
           { id: saved.codebaseId, default_cwd: path, repository_url: requestedUrl },

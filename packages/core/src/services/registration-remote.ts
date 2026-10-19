@@ -66,7 +66,7 @@ export async function assertCheckoutRemote(
       const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--show-prefix']);
       if (stdout.trim()) throw new Error(`${path} is not the root of a Git checkout.`);
     }
-    const expected = await remoteIdentity(remoteUrl);
+    const expected = await remoteIdentity(remoteUrl, path);
     const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
     const observed = new Set<string>();
     for (const name of stdout.split(/\r?\n/).map(name => name.trim())) {
@@ -81,14 +81,14 @@ export async function assertCheckoutRemote(
     }
     if (observed.size) {
       // Registrations save either requested or already-expanded URLs. Keep direct
-      // matches above, then let Git equate requested URLs in this checkout's config.
+      // matches above; preserve URL spelling so Git can apply scheme-specific rewrites.
       const { stdout: expanded } = await execFileAsync('git', [
         '-C',
         path,
         'ls-remote',
         '--get-url',
         '--',
-        resolveRegistrationUrl(remoteUrl, path),
+        remoteUrl.trim(),
       ]);
       if (expanded.trim() && observed.has(await remoteIdentity(expanded.trim(), path))) return;
     }
