@@ -378,10 +378,12 @@ async function runSetup(options: SetupOptions): Promise<void> {
     log.info(`Backup written to ${writeResult.backupPath}`);
   }
 
-  const { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath } =
-    await installProjectSkill(options.repoPath, s);
+  const { skillInstalledPath, projectPath, projectConfigCreatedPath } = await installProjectSkill(
+    options.repoPath,
+    s
+  );
 
-  await configureDocsPath(skillInstalledBase ?? options.repoPath);
+  await configureDocsPath(projectPath);
 
   // Summary
   const configuredPlatforms: string[] = [];
@@ -423,8 +425,8 @@ async function runSetup(options: SetupOptions): Promise<void> {
     );
   }
 
-  if (skillInstalledPath && skillInstalledBase) {
-    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon-cli');
+  if (skillInstalledPath) {
+    const codexInstalledPath = join(projectPath, '.agents', 'skills', 'archon-cli');
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
     summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);
@@ -472,14 +474,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
 /**
  * Offer to install the Archon skill, and bootstrap `.archon/config.yaml`, in
- * a project the operator names.
+ * a project the operator names. `projectPath` is that project, or `repoPath`
+ * when the operator declines the install.
  */
 async function installProjectSkill(
   repoPath: string,
   s: ReturnType<typeof spinner>
 ): Promise<{
   skillInstalledPath: string | null;
-  skillInstalledBase: string | null;
+  projectPath: string;
   projectConfigCreatedPath: string | null;
 }> {
   const shouldCopySkill = await confirm({
@@ -490,7 +493,7 @@ async function installProjectSkill(
   if (isCancel(shouldCopySkill)) cancelSetup();
 
   let skillInstalledPath: string | null = null;
-  let skillInstalledBase: string | null = null;
+  let projectPath = repoPath;
   let projectConfigCreatedPath: string | null = null;
 
   if (shouldCopySkill) {
@@ -511,7 +514,7 @@ async function installProjectSkill(
       exitSetup(1);
     }
     s.stop('Archon skill installed');
-    skillInstalledBase = skillTargetRaw;
+    projectPath = skillTargetRaw;
     skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
 
     const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
@@ -525,7 +528,7 @@ async function installProjectSkill(
     }
   }
 
-  return { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath };
+  return { skillInstalledPath, projectPath, projectConfigCreatedPath };
 }
 
 /**
