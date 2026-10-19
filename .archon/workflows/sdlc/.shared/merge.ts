@@ -92,10 +92,12 @@ const KEPT_TEXT = 1500;
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  if (build?.status !== 'ready') return false;
+  // A maintainer's own pull request is ready for the queue from its enrollment on.
+  const readyAt = build?.status === 'ready' ? build.at : doc.facts.own_pr?.at;
+  if (readyAt === undefined) return false;
   const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
-  return build.at > merge.at;
+  return readyAt > merge.at;
 }
 
 /**
@@ -117,9 +119,10 @@ export interface MergeSettled {
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
-/** The pull request the build queue's last round delivered on the item, or null. */
+/** The pull request the build queue's last round delivered on the item, or the enrolled own pull request, or null. */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
-  const url = [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url;
+  const url =
+    [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url ?? doc.facts.own_pr?.url;
   return url === undefined ? null : prFromUrl(url);
 }
 

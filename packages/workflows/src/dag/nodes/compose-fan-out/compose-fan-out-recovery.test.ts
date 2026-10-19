@@ -117,6 +117,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
         [composeInnerStep(snapshot.identity, 'first'), { output: 'persisted-first' }],
       ]),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
@@ -168,6 +169,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     (store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>).mockResolvedValue({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), snapshots]]),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
@@ -220,6 +222,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     (store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>).mockResolvedValue({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot!]]]),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
@@ -270,6 +273,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     (store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>).mockResolvedValue({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map([[composeScope(), [snapshot]]]),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set([`${composeScope()}__${snapshot.identity}`]),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
@@ -743,6 +747,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     }
     (store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>).mockResolvedValue({
       completedNodeOutputs,
+      failedNodes: new Map(),
       fanOutSnapshots,
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
@@ -981,6 +986,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     ).mockImplementation(async _id => ({
       completedNodeOutputs,
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,
@@ -1053,6 +1059,7 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     ).mockImplementation(async _id => ({
       completedNodeOutputs: stale,
       fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
       unresolvedNodeStarts: new Set(),
       budget: { workUnits: 0, spendUsd: 0 },
       costUsd: 0,

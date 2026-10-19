@@ -63,6 +63,7 @@ function triageResult(): TriageResult | null {
     complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
     importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
     urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
+    related: (nullableJson(process.env.INPUTS_RELATED) as TriageResult['related']) ?? [],
     closure,
     labels: nullableJson(process.env.INPUTS_LABELS) as string[],
     summary: text(process.env.INPUTS_SUMMARY),
