@@ -1,4 +1,4 @@
-import { bashScriptArgs } from '../../bash-script';
+import { bashScriptCommand } from '../../bash-script';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -109,14 +109,16 @@ export async function executeBashNode(
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
   try {
+    const command = bashScriptCommand(finalScript);
     const { stdout, stderr, credentialValues } = await runSubprocessUntilRunStops(
       deps.store,
       workflowRun.id,
       node.id,
       execContext,
       bashPath,
-      bashScriptArgs(finalScript, artifactsDir),
+      command.args,
       {
+        input: command.input,
         cwd,
         timeout: node.timeout,
         endTreeOnTimeout: true,

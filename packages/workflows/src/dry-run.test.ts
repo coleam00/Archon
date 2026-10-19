@@ -1610,8 +1610,22 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test('exec-code rejects NUL source before it can succeed', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'invalid-source',
+        nodes: [{ id: 'code', bash: 'exit 0\0exit 1' }],
+      }),
+      userMessage: '',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('NUL');
+  });
+
   test.each(['literal', 'reference', 'newline reference'])(
-    'exec-code executes oversized Bash %s through run artifacts',
+    'exec-code executes oversized Bash %s through stdin',
     async kind => {
       const value =
         kind === 'newline reference'

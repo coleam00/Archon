@@ -575,7 +575,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
                 kind: 'loop_group',
                 loop_group: {
                   until_bash:
-                    `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                    `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
                     `test $compare.output = done && test "$current" ${current === previous ? '=' : '!='} "$previous"`,
                   max_iterations: 2,
                   fresh_context: false,
@@ -591,7 +591,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
                       runtime: 'sh',
                       depends_on: ['work'],
                       script:
-                        `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
+                        `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
                         `printf '%s' "$current" > ${JSON.stringify(currentFile)}; ` +
                         `printf '%s' "$previous" > ${JSON.stringify(previousFile)}; ` +
                         'if [ -n "$previous" ]; then printf done; else printf again; fi',

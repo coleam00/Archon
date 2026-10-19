@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,14 +10,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { bashScriptArgs } from './bash-script';
 import { formatPersistedNodeOutput } from './node-output';
 import { shellQuoteOrFile, writeSpillFile } from './shell-quote';
 
 const trackTempRoot = trackTempRoots();
-const script = `printf '%s' '${'x'.repeat(40_000)}'`;
 const value = 'x'.repeat(40_000);
-const hash = createHash('sha256').update(script).digest('hex');
 
 test.skipIf(process.platform === 'win32')(
   'persisted output rejects a symlink at the inner persisted directory',
@@ -43,7 +39,7 @@ test.skipIf(process.platform === 'win32')(
   }
 );
 
-for (const writer of ['script', 'whole', 'field', 'persisted'] as const) {
+for (const writer of ['whole', 'field', 'persisted'] as const) {
   for (const component of ['root', 'engine', 'parent', 'leaf'] as const) {
     test.skipIf(process.platform === 'win32')(
       `${writer} does not follow an artifact ${component} symlink`,
@@ -54,10 +50,7 @@ for (const writer of ['script', 'whole', 'field', 'persisted'] as const) {
         mkdirSync(other);
         const external = join(other, 'target');
         writeFileSync(external, 'before');
-        const relative =
-          writer === 'script'
-            ? join('bash-scripts', `${hash}.sh`)
-            : join('node-output-spills', 'persisted', 'a.nodeoutput');
+        const relative = join('node-output-spills', 'persisted', 'a.nodeoutput');
         const leaf = join(artifacts, '.archon', relative);
         const link =
           component === 'root'
@@ -69,10 +62,7 @@ for (const writer of ['script', 'whole', 'field', 'persisted'] as const) {
                 : leaf;
         mkdirSync(dirname(link), { recursive: true });
         symlinkSync(component === 'leaf' ? external : other, link);
-        if (writer === 'script') {
-          if (component === 'leaf') expect(bashScriptArgs(script, artifacts)).toEqual([leaf]);
-          else expect(() => bashScriptArgs(script, artifacts)).toThrow('not a directory');
-        } else if (writer === 'persisted') {
+        if (writer === 'persisted') {
           const output = formatPersistedNodeOutput(value, artifacts, 'a');
           if (component === 'leaf') expect(output.spillPath).toBe(leaf);
           else expect(output.spillPath).toBeUndefined();

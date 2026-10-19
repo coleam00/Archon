@@ -5,6 +5,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
+import { bashScriptCommand } from '../../bash-script';
 import {
   createMockStore,
   mockClaudeCapabilities,
@@ -241,6 +242,56 @@ describe('executeDagWorkflow -- bash nodes', () => {
       },
     ],
   ];
+  const nulSource = 'exit 0\0exit 1';
+  const invalidSourceNodes: [string, DagNode][] = [
+    ['bash body', { id: 'shell', kind: 'exec', runtime: 'sh', script: nulSource }],
+    [
+      'loop completion',
+      {
+        id: 'shell',
+        kind: 'loop',
+        loop: {
+          prompt: 'Work.',
+          until_bash: nulSource,
+          max_iterations: 2,
+          fresh_context: false,
+        },
+      },
+    ],
+    [
+      'group completion',
+      {
+        id: 'shell',
+        kind: 'loop_group',
+        loop_group: {
+          until_bash: nulSource,
+          max_iterations: 2,
+          fresh_context: false,
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+        },
+      },
+    ],
+  ];
+  it.each(invalidSourceNodes)(
+    '%s rejects invalid source without re-iterating',
+    async (_label, node) => {
+      const mockDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          cwd: testDir,
+          workflow: { name: 'invalid-source', nodes: [node] },
+          workflowRun: makeWorkflowRun('invalid-source'),
+        })
+      );
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'shell'
+      );
+      expect(failed?.data?.error).toContain('NUL');
+      expect(mockSendQueryDag.mock.calls.length).toBeLessThanOrEqual(1);
+    }
+  );
+
   it.each(
     containerBashNodes.flatMap(([label, node]) =>
       (['ENOENT', 'EACCES'] as const).map(code => [label, code, node] as const)
@@ -361,9 +412,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       git.resolveBashPath(),
-      ['-c', 'echo ok'],
+      bashScriptCommand('echo ok').args,
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        input: 'echo ok',
       })
     );
     execSpy.mockRestore();
@@ -448,9 +500,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
       expect(execSpy).toHaveBeenCalledTimes(1);
       const firstCall = execSpy.mock.calls[0];
 
-      // The script passed to bash -c must contain literal $USER_MESSAGE (not substituted)
-      const bashArgs = firstCall?.[1] as string[];
-      expect(bashArgs[1]).toBe('echo $USER_MESSAGE');
+      expect(firstCall?.[2]?.input).toBe('echo $USER_MESSAGE');
 
       // The env must contain the user message
       const envArg = (firstCall?.[2] as { env: NodeJS.ProcessEnv }).env;

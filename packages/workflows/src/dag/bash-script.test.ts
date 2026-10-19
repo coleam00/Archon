@@ -1,24 +1,39 @@
 import { expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { bashScriptArgs } from './bash-script';
+import { bashScriptCommand } from './bash-script';
 
-const trackTempRoot = trackTempRoots();
+for (const size of [0, 32_768, 200_000]) {
+  test(`preserves Bash identity and output with ${size} padding bytes`, async () => {
+    const script = `#${'x'.repeat(size)}\nprintf '%s|%s|%s' "$0" "\${BASH_SOURCE[0]}" "$#"`;
+    const command = bashScriptCommand(script);
+    expect(Buffer.byteLength(command.args.join(''))).toBeLessThan(200);
+    const { stdout } = await execFileAsync(resolveBashPath(), command.args, {
+      input: command.input,
+    });
+    const baseline = await execFileAsync(resolveBashPath(), ['-c', script.slice(size + 2)]);
+    expect(stdout).toBe(baseline.stdout);
+  });
+}
 
-test('executes large scripts from the engine directory under run artifacts', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'archon-bash-script-'));
-  trackTempRoot(root);
-  const artifacts = join(root, 'artifacts');
-  const other = join(root, 'other');
-  await mkdir(other);
-  const script = `value='${'é'.repeat(100_000)}'; printf '%s' "$value"`;
-  const args = bashScriptArgs(script, artifacts);
-  expect(args).toHaveLength(1);
-  expect(dirname(args[0])).toBe(join(artifacts, '.archon', 'bash-scripts'));
-  expect(await readFile(args[0], 'utf8')).toBe(script);
-  const { stdout } = await execFileAsync(resolveBashPath(), args, { cwd: other });
-  expect(stdout).toBe('é'.repeat(100_000));
+test('delivers large multibyte source without artifact files', async () => {
+  const value = 'é'.repeat(100_000);
+  const command = bashScriptCommand(`value='${value}'; printf '%s' "$value"`);
+  const { stdout } = await execFileAsync(resolveBashPath(), command.args, { input: command.input });
+  expect(stdout).toBe(value);
+});
+
+test('preserves authored completion exit codes', async () => {
+  for (const code of [1, 7]) {
+    const command = bashScriptCommand(`exit ${code}`);
+    try {
+      await execFileAsync(resolveBashPath(), command.args, { input: command.input });
+      expect.unreachable('expected a failed predicate');
+    } catch (error) {
+      expect(error).toMatchObject({ code });
+    }
+  }
+});
+
+test('rejects NUL source before a completion predicate can run', () => {
+  expect(() => bashScriptCommand('exit 0\0exit 1')).toThrow('NUL');
 });

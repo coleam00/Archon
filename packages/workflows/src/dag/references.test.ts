@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { bashScriptArgs } from './bash-script';
+import { bashScriptCommand } from './bash-script';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
@@ -548,9 +548,12 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
       true,
       tempDir
     );
-    const args = bashScriptArgs(script, tempDir);
+    const { args, input } = bashScriptCommand(script);
     expect(Buffer.byteLength(args.join(''), 'utf8')).toBeLessThan(100_000);
-    const { stdout } = await execFileAsync(resolveBashPath(), args, { maxBuffer: 4_000_000 });
+    const { stdout } = await execFileAsync(resolveBashPath(), args, {
+      maxBuffer: 4_000_000,
+      input,
+    });
     expect(stdout).toBe([value, value, value, value].join('|'));
   });
 
@@ -572,7 +575,8 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
       );
       expect(files).toHaveLength(2);
       expect(files[0]).not.toBe(files[1]);
-      const { stdout } = await execFileAsync(resolveBashPath(), bashScriptArgs(script, tempDir));
+      const { args, input } = bashScriptCommand(script);
+      const { stdout } = await execFileAsync(resolveBashPath(), args, { input });
       expect(stdout).toBe(`${value}|${value}`);
     }
   );

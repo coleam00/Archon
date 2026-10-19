@@ -201,7 +201,7 @@ describe('loop node completion channels', () => {
                   fresh_context: false,
                   prompt: 'Keep working.',
                   max_iterations: 2,
-                  until_bash: `value=$producer.output; test "\${#value}" -eq ${33_000 + suffixLength}`,
+                  until_bash: `test -z "\${BASH_SOURCE[0]}" && test "$#" -eq 0 && test ! -d "$ARTIFACTS_DIR/.archon/bash-scripts" || exit 3; value=$producer.output; test "\${#value}" -eq ${33_000 + suffixLength}`,
                 },
                 depends_on: ['producer'],
               },

@@ -1,4 +1,4 @@
-import { bashScriptArgs } from '../../bash-script';
+import { bashScriptCommand } from '../../bash-script';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
@@ -25,14 +25,16 @@ export async function runGroupUntilBash(
   const { ctx, node } = run;
   const { workflowRun, artifactsDir, stateDir, logDir, baseBranch, config } = ctx;
   try {
+    const command = bashScriptCommand(bash.script());
     await runSubprocessUntilRunStops(
       ctx.deps.store,
       workflowRun.id,
       node.id,
       ctx.execContext,
       bash.path,
-      bashScriptArgs(bash.script(), artifactsDir),
+      command.args,
       {
+        input: command.input,
         cwd: ctx.cwd,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,

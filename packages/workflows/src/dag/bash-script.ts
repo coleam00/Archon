@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto';
-import { join } from 'node:path';
-import { writeEngineFile } from './engine-file';
-
-export function bashScriptArgs(script: string, artifactsDir: string): string[] {
-  // Stay below per-argument OS limits even when substitutions contain large newline suffixes.
-  if (Buffer.byteLength(script, 'utf8') <= 32_768) return ['-c', script];
-
-  const hash = createHash('sha256').update(script, 'utf8').digest('hex');
-  const path = writeEngineFile(artifactsDir, join('bash-scripts', `${hash}.sh`), script);
-  return [path];
+export function bashScriptCommand(script: string): { args: string[]; input: string } {
+  if (script.includes('\0')) throw new Error('Bash source cannot contain NUL bytes');
+  // Read the whole source before evaluation so authored reads cannot consume source lines.
+  return {
+    args: [
+      '-c',
+      'IFS= read -r -d "" __archon_bash_source || :; eval -- "unset __archon_bash_source; $__archon_bash_source"',
+    ],
+    input: script,
+  };
 }
