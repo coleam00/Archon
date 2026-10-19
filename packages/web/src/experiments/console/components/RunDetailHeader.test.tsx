@@ -78,3 +78,17 @@ test('the detail header names an unreachable owner and stops the live dot', () =
   expect(html).toContain('since launch');
   expect(html).not.toContain('animate-ping');
 });
+
+test.each([0, undefined])('the detail header distinguishes reported cost %s', cost => {
+  const run = toRun({ ...detailFixture.run, metadata: { total_cost_usd: cost } });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
+    </MemoryRouter>
+  );
+  if (cost === 0) {
+    expect(html).toContain('$0.0000');
+  } else {
+    expect(html).not.toContain('$');
+  }
+});
