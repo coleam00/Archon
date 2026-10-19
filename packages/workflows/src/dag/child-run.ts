@@ -1,3 +1,5 @@
+import { createLogger } from '@archon/paths';
+import { isTerminalRunStatus } from '../schemas/workflow-run';
 import { isSourceExecutionStopped, type WorkflowExecutionResult } from '../schemas/workflow';
 import type { IWorkflowStore } from '../store';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
@@ -157,6 +159,16 @@ export async function readChildOutcomeAfterExecution(
   result: WorkflowExecutionResult
 ): Promise<ChildWorkflowOutcome> {
   if (isSourceExecutionStopped(result)) {
+    let child: WorkflowRun | null = null;
+    try {
+      child = await store.getWorkflowRun(childRunId);
+    } catch (error) {
+      createLogger('child-run').warn(
+        { err: error, childRunId },
+        'workflow.child_source_stopped_read_failed'
+      );
+    }
+    if (child && isTerminalRunStatus(child.status)) return childOutcomeFromRun(child);
     return {
       status: 'unsettled',
       childRunId,

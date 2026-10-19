@@ -169,7 +169,7 @@ nodes:
         expect(child.metadata.execution_claim).toBe('new-owner');
         expect(cancel).not.toHaveBeenCalled();
         expect(fail).toHaveBeenCalledTimes(1);
-        expect(childReads).toBe(mode === 'follow-up-read' ? 1 : 0);
+        expect(childReads).toBe(mode === 'follow-up-read' ? 2 : 1);
         expect(parent.status).toBe('paused');
         expect(parent.metadata.approval).toMatchObject({
           type: 'child_workflow',

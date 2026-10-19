@@ -268,7 +268,7 @@ function presentSourceStoppedResult(
   detachedProcessOwner: RunResultPresentation['detachedProcessOwner']
 ): undefined {
   console.log(
-    `\nSource execution stopped for run ${result.workflowRunId}. Inspect it with archon workflow inspect ${result.workflowRunId}.`
+    `\nSource execution stopped for run ${result.workflowRunId}. Inspect it with archon workflow get ${result.workflowRunId}.`
   );
   if (!result.success) throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   return undefined;

@@ -11,6 +11,10 @@ import {
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
+import {
+  isSourceExecutionStopped,
+  type WorkflowExecutionResult,
+} from '@archon/workflows/schemas/workflow';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
@@ -105,20 +109,36 @@ async function admit(
 
 type SettledOutcome = { runId: string; deferError?: string } & (
   | { kind: 'accepted'; status: 'paused' | 'completed' | 'failed'; error?: string }
+  | { kind: 'accepted'; executionDisposition: 'source_stopped'; message: string; error?: string }
   | Exclude<ContinuationAdmission, { kind: 'accepted' }>
   | { kind: 'failed'; error: string }
 );
+
+function settledExecution(
+  runId: string,
+  result: WorkflowExecutionResult
+): Extract<SettledOutcome, { kind: 'accepted' }> {
+  if (isSourceExecutionStopped(result)) {
+    return {
+      runId,
+      kind: 'accepted',
+      executionDisposition: result.executionDisposition,
+      message: `Source execution stopped. Inspect its state and ownership with archon workflow get ${runId}.`,
+      ...(result.success ? {} : { error: result.error }),
+    };
+  }
+  if ('paused' in result) return { runId, kind: 'accepted', status: 'paused' };
+  return result.success
+    ? { runId, kind: 'accepted', status: 'completed' }
+    : { runId, kind: 'accepted', status: 'failed', error: result.error };
+}
 
 async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome> {
   const { runId, deferError } = outcome;
   const deferral = deferError === undefined ? {} : { deferError: errorMessage(deferError) };
   if (outcome.kind === 'accepted') {
     try {
-      const result = await outcome.settled;
-      if ('paused' in result) return { runId, kind: outcome.kind, status: 'paused', ...deferral };
-      return result.success
-        ? { runId, kind: outcome.kind, status: 'completed', ...deferral }
-        : { runId, kind: outcome.kind, status: 'failed', error: result.error, ...deferral };
+      return { ...settledExecution(runId, await outcome.settled), ...deferral };
     } catch (error) {
       return {
         runId,
@@ -146,8 +166,16 @@ function successful(outcome: SettledOutcome): boolean {
     (outcome.kind === 'not-accepted' ||
       outcome.kind === 'waiting_for_capacity' ||
       outcome.kind === 'resource_busy' ||
-      (outcome.kind === 'accepted' && outcome.status !== 'failed'))
+      (outcome.kind === 'accepted' &&
+        (!('status' in outcome) || outcome.status !== 'failed') &&
+        outcome.error === undefined))
   );
+}
+
+function executionDiagnostic(outcome: SettledOutcome): string {
+  const stopped = 'executionDisposition' in outcome ? `: ${outcome.message}` : '';
+  const error = 'error' in outcome ? `: ${outcome.error}` : '';
+  return `${stopped}${error}`;
 }
 
 async function report(
@@ -177,7 +205,7 @@ async function report(
     );
     for (const outcome of outcomes) {
       console.log(
-        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
+        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${executionDiagnostic(outcome)}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
       );
     }
     if (signaled && !ok)

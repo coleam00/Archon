@@ -334,6 +334,61 @@ describe('workflow continuation scanner', () => {
     });
   });
 
+  test.each([false, true])(
+    'surfaces a stopped source continuation with success=%s without a result card',
+    async success => {
+      const paused = run('source-run', 'paused', {});
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
+        ok: true,
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+      });
+      mockHydrateResumableRun.mockResolvedValueOnce({
+        preCreatedRun: { ...paused, status: 'running' },
+        priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
+        priorUsage: { costUsd: 0 },
+        priorNodeSessions: [],
+      });
+      mockExecuteWorkflow.mockResolvedValueOnce(
+        success
+          ? {
+              success: true,
+              paused: true,
+              workflowRunId: paused.id,
+              executionDisposition: 'source_stopped',
+            }
+          : {
+              success: false,
+              error: 'ownership read rejected',
+              workflowRunId: paused.id,
+              executionDisposition: 'source_stopped',
+            }
+      );
+      const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => undefined);
+      const platform = {
+        sendMessage,
+        getStreamingMode: () => 'batch' as const,
+        getPlatformType: () => 'web',
+      } satisfies IWorkflowPlatform;
+      await resumeWorkflowRunFromServer(host, paused, undefined, {
+        kind: 'platform',
+        destination: { platform, conversationId: 'worker', resultConversationId: 'parent' },
+      });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(sendMessage).toHaveBeenCalledWith(
+        'parent',
+        expect.stringContaining('Source execution stopped for run source-run')
+      );
+      const message = sendMessage.mock.calls.map(call => call[1]).join('\n');
+      expect(message).toContain('workflow get source-run');
+      if (!success) expect(message).toContain('ownership read rejected');
+      expect(message).not.toContain('**deliver** failed');
+      expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   test('routes background web execution through its worker and results through the parent', async () => {
     const background = {
       ...run('wait-web', 'paused', {}),

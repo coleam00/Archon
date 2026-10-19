@@ -318,3 +318,48 @@ test('a stale occurrence with an equal deadline never signals or resumes', async
   expect(signal).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
 });
+
+test.each([false, true])(
+  'reports a stopped source segment with success=%s without a run status',
+  async success => {
+    scan.mockResolvedValueOnce([
+      {
+        runId: 'source-run',
+        kind: 'accepted',
+        run: makeTestWorkflowRun(),
+        settled: Promise.resolve(
+          success
+            ? {
+                success: true,
+                paused: true,
+                workflowRunId: 'source-run',
+                executionDisposition: 'source_stopped',
+              }
+            : {
+                success: false,
+                error: 'ownership read rejected',
+                workflowRunId: 'source-run',
+                executionDisposition: 'source_stopped',
+              }
+        ),
+      },
+    ]);
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(
+      success ? 0 : 1
+    );
+    expect(output[0]).toEqual({
+      ok: success,
+      action: 'wake',
+      accepted: 1,
+      outcomes: [
+        {
+          runId: 'source-run',
+          kind: 'accepted',
+          executionDisposition: 'source_stopped',
+          message: expect.stringContaining('archon workflow get source-run'),
+          ...(success ? {} : { error: 'ownership read rejected' }),
+        },
+      ],
+    });
+  }
+);

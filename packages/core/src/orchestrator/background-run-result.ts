@@ -16,7 +16,7 @@ export async function surfaceBackgroundRunResult(
     if (isSourceExecutionStopped(result)) {
       await platform.sendMessage(
         conversationId,
-        `Source execution stopped for run ${result.workflowRunId}. Inspect its state and ownership with \`${spellWorkflowCommand(platform, `inspect ${result.workflowRunId}`)}\`.`
+        `Source execution stopped for run ${result.workflowRunId}${result.success ? '' : `: ${result.error}`}. Inspect its state and ownership with \`${spellWorkflowCommand(platform, `get ${result.workflowRunId}`)}\`.`
       );
       return;
     }

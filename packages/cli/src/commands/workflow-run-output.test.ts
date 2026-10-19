@@ -583,7 +583,7 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
     const text = consoleSpy.mock.calls.map((args: unknown[]) => String(args[0])).join('\n');
     expect(text).toContain('Source execution stopped for run');
-    expect(text).toContain('archon workflow inspect');
+    expect(text).toContain('archon workflow get');
     expect(text).not.toContain('Status: failed');
     expect(text).not.toContain('waiting for approval');
   });

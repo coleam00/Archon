@@ -225,7 +225,7 @@ export async function executeWorkflowNode(
       : `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     const childAction = (surface: WorkflowCommandSurface): string =>
       diagnostic
-        ? `${blocked}Inspect it: \`${spellWorkflowCommand(surface, `inspect ${childRunId}`)}\``
+        ? `${blocked}Inspect it: \`${spellWorkflowCommand(surface, `get ${childRunId}`)}\``
         : `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
       execution,
