@@ -401,14 +401,23 @@ export type LoadCommandResult =
  * Result of workflow execution - allows callers to detect success/failure
  */
 export type WorkflowExecutionResult =
-  | { success: true; workflowRunId: string; summary?: string }
-  | { success: false; workflowRunId?: string; error: string }
+  | { success: true; workflowRunId: string; summary?: string; executionDisposition?: never }
+  | { success: false; workflowRunId?: string; error: string; executionDisposition?: never }
+  | { success: false; workflowRunId: string; error: string; executionDisposition: 'source_stopped' }
   | {
       success: true;
       paused: true;
       workflowRunId: string;
+      executionDisposition?: 'source_stopped';
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
     };
+
+/** This execution segment stopped without authority to settle or clean up the run. */
+export function isSourceExecutionStopped(
+  result: WorkflowExecutionResult
+): result is WorkflowExecutionResult & { executionDisposition: 'source_stopped' } {
+  return 'executionDisposition' in result && result.executionDisposition === 'source_stopped';
+}
 
 // ---------------------------------------------------------------------------
 // WorkflowLoadError / WorkflowLoadResult — workflow discovery results

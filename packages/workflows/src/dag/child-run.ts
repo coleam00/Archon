@@ -1,11 +1,18 @@
+import { isSourceExecutionStopped, type WorkflowExecutionResult } from '../schemas/workflow';
+import type { IWorkflowStore } from '../store';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
-/** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
+/** Terminal, paused, or locally unsettled outcome of a child sub-run, as consumed by a `workflow:` node. */
+export type ChildWorkflowOutcome = ChildWorkflowResult &
+  (
+    | { status: Exclude<WorkflowRun['status'], 'running' | 'pending'> }
+    | { status: 'unsettled'; error: string }
+  );
+
+interface ChildWorkflowResult {
   childRunId: string;
-  status: 'completed' | 'paused' | 'failed' | 'cancelled';
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
   output?: string;
   /**
@@ -142,4 +149,22 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
+}
+
+export async function readChildOutcomeAfterExecution(
+  store: Pick<IWorkflowStore, 'getWorkflowRun'>,
+  childRunId: string,
+  result: WorkflowExecutionResult
+): Promise<ChildWorkflowOutcome> {
+  if (isSourceExecutionStopped(result)) {
+    return {
+      status: 'unsettled',
+      childRunId,
+      error: result.success ? 'Source execution stopped; inspect the child run.' : result.error,
+    };
+  }
+  const child = await store.getWorkflowRun(childRunId);
+  if (!child)
+    return { status: 'failed', childRunId, error: 'Child run row disappeared after execution.' };
+  return childOutcomeFromRun(child);
 }

@@ -120,6 +120,26 @@ describe('workflowRunCommand — progress rendering', () => {
     stderrSpy.mockRestore();
   });
 
+  it('presents a source-release pause without an approval or automatic wait', async () => {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      paused: true,
+      workflowRunId: 'run-source',
+      executionDisposition: 'source_stopped',
+    });
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Source execution stopped for run run-source')
+    );
+    expect(
+      consoleSpy.mock.calls.some((args: unknown[]) =>
+        String(args[0]).includes('waiting for approval')
+      )
+    ).toBe(false);
+  });
+
   it('renders aligned completed execution and succeeded authored outcome', async () => {
     await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
 
@@ -452,7 +472,12 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
-  type ContainerRunEnd = 'paused' | 'settled' | 'unresolved-writeback' | 'lookup-fails';
+  type ContainerRunEnd =
+    | 'paused'
+    | 'settled'
+    | 'unresolved-writeback'
+    | 'lookup-fails'
+    | 'source-stopped';
 
   /**
    * A container run that receives SIGTERM during its final progress drain, or with
@@ -480,6 +505,13 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
+      if (end === 'source-stopped')
+        return {
+          success: false,
+          workflowRunId: OWNED_RUN,
+          error: 'source store rejected',
+          executionDisposition: 'source_stopped',
+        };
       return end === 'paused'
         ? { success: true, workflowRunId: OWNED_RUN, paused: true }
         : { success: true, workflowRunId: OWNED_RUN };
@@ -491,9 +523,11 @@ describe('workflowRunCommand — progress rendering', () => {
     let destroyedAtSignal = -1;
     const signalOnce = async (): Promise<void> => {
       if (!runSettled || destroyedAtSignal !== -1) return;
-      for (const listener of process.listeners('SIGTERM')) {
-        if (!sigtermBefore.includes(listener)) (listener as () => void)();
-      }
+      const listeners = process
+        .listeners('SIGTERM')
+        .filter(listener => !sigtermBefore.includes(listener));
+      if (end === 'source-stopped') expect(listeners).toHaveLength(0);
+      for (const listener of listeners) (listener as () => void)();
       for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
       destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
     };
@@ -531,12 +565,28 @@ describe('workflowRunCommand — progress rendering', () => {
     };
 
     try {
-      await workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      if (end === 'source-stopped') {
+        await expect(
+          workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true })
+        ).rejects.toThrow('source store rejected');
+      } else {
+        await workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      }
     } finally {
       exitSpy.mockRestore();
     }
     return destroyedAtSignal;
   }
+
+  it('source-stopped failure preserves its container through the final drain and reports no invented status', async () => {
+    expect(await signalDuringContainerDrain('source-stopped')).toBe(0);
+    expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
+    const text = consoleSpy.mock.calls.map((args: unknown[]) => String(args[0])).join('\n');
+    expect(text).toContain('Source execution stopped for run');
+    expect(text).toContain('archon workflow inspect');
+    expect(text).not.toContain('Status: failed');
+    expect(text).not.toContain('waiting for approval');
+  });
 
   it('a signal during the final drain keeps a paused run its container', async () => {
     expect(await signalDuringContainerDrain('paused')).toBe(0);

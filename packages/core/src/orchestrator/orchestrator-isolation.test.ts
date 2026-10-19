@@ -984,6 +984,27 @@ describe('dispatchBackgroundWorkflow', () => {
     });
   });
 
+  test('source-stopped execution is surfaced without a terminal failure card', async () => {
+    mockExecuteWorkflow.mockResolvedValueOnce({
+      success: false,
+      workflowRunId: 'source-run',
+      error: 'ownership read rejected',
+      executionDisposition: 'source_stopped',
+    });
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), makeWorkflow());
+    await flushBackgroundExecution();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'parent-conv',
+      expect.stringContaining('Source execution stopped for run source-run')
+    );
+    expect(
+      platform.sendMessage.mock.calls.some(call =>
+        String(call[1]).includes('failed: ownership read rejected')
+      )
+    ).toBe(false);
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+  });
+
   test('default policy still resolves isolation for the worker', async () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(

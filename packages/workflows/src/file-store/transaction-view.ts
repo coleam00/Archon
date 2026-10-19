@@ -356,6 +356,15 @@ export function createTransactionView(
       });
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
+      const expected = options?.expectedExecutionClaim;
+      const current = runs.get(id);
+      if (
+        expected !== undefined &&
+        (!current ||
+          current.status !== 'running' ||
+          executionClaim(current.metadata) !== expected.claimId)
+      )
+        return { failed: false };
       const run = structuredClone(row(id));
       if (isTerminalRunStatus(run.status)) return { failed: false };
       if (run.status !== 'running' && run.status !== 'pending')

@@ -1,3 +1,4 @@
+import { executionClaim } from '../store';
 import { providerRegistry } from '@archon/providers';
 import type { InMemoryStoreEvent } from '../test-utils';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -485,8 +486,14 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  failWorkflowRun = (id: string, error: string): Promise<{ failed: boolean }> => {
+  failWorkflowRun: IWorkflowStore['failWorkflowRun'] = (id, error, options) => {
     const r = this.runs.get(id);
+    const expected = options?.expectedExecutionClaim;
+    if (
+      expected !== undefined &&
+      (!r || r.status !== 'running' || executionClaim(r.metadata) !== expected.claimId)
+    )
+      return Promise.resolve({ failed: false });
     if (r) {
       r.status = 'failed';
       r.completed_at = new Date();

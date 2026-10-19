@@ -1,3 +1,4 @@
+import { surfaceBackgroundRunResult } from './background-run-result';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -705,47 +706,7 @@ async function dispatchBackgroundWorkflowOwned(
             },
           });
           await closeRunLiveOwner();
-          // Surface workflow output to parent conversation as a result card
-          if ('paused' in result) {
-            // Paused workflows (approval gates) — no result card yet
-          } else if (result.success && result.summary) {
-            try {
-              await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
-                category: 'workflow_result',
-                segment: 'new',
-                workflowResult: {
-                  workflowName: workflow.name,
-                  runId: result.workflowRunId,
-                },
-              });
-            } catch (surfaceError) {
-              getLog().warn(
-                { err: toError(surfaceError), conversationId: ctx.conversationId },
-                'workflow_output_surface_failed'
-              );
-            }
-          } else if (!result.success && result.workflowRunId) {
-            // Surface failure as a result card so the chat shows status + "View full logs"
-            try {
-              await ctx.platform.sendMessage(
-                ctx.conversationId,
-                `Workflow **${workflow.name}** failed: ${result.error}`,
-                {
-                  category: 'workflow_result',
-                  segment: 'new',
-                  workflowResult: {
-                    workflowName: workflow.name,
-                    runId: result.workflowRunId,
-                  },
-                }
-              );
-            } catch (surfaceError) {
-              getLog().warn(
-                { err: toError(surfaceError), conversationId: ctx.conversationId },
-                'workflow_output_surface_failed'
-              );
-            }
-          }
+          await surfaceBackgroundRunResult(ctx.platform, ctx.conversationId, workflow.name, result);
         } catch (error) {
           const err = toError(error);
           const terminalWriteFailed = error instanceof TerminalStatusWriteError;

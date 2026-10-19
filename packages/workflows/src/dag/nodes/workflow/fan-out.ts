@@ -154,7 +154,7 @@ async function driveChildWindow(
       waiting,
       maxParallel - state.heldByIndex.size,
       spawn,
-      outcome => outcome.status === 'paused'
+      outcome => outcome.status === 'paused' || outcome.status === 'unsettled'
     );
     const claimed = settled.flatMap((result, k) =>
       result === undefined ? [] : [{ index: waiting[k], result }]
@@ -165,7 +165,8 @@ async function driveChildWindow(
     );
     claimed.forEach(({ index }, k) => {
       const outcome = outcomes[k];
-      if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
+      if (outcome.status === 'paused' || outcome.status === 'unsettled')
+        state.heldByIndex.set(index, outcome.childRunId);
       else state.settledByIndex.set(index, outcome);
     });
 
@@ -202,7 +203,7 @@ async function suspendOnHeldChildren(
     `fan_out node '${node.id}' is waiting on ${String(held.length)} unfinished sub-run(s) of ` +
     `'${node.workflow}': ${held.map(([i, id]) => `item ${String(i)}: run ${id}`).join(', ')}` +
     (unspawnedItems > 0 ? `; ${String(unspawnedItems)} item(s) not started yet` : '') +
-    '. Answer each paused sub-run by its own run id; this run continues when they finish.';
+    '. Inspect the unfinished sub-runs by run id; this run continues when they finish.';
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'fan_out' },

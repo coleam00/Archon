@@ -1,3 +1,4 @@
+import * as workflowSource from './workflow-source';
 // @archon-test-isolated
 import * as checkout from './checkout-observation';
 import type { WorkflowEmitterEvent } from './event-emitter';
@@ -185,7 +186,7 @@ import {
   workflowDefinitionSchema,
 } from './schemas';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
-import type { DagResumeSnapshot, IWorkflowStore } from './store';
+import { sourceReleaseMetadata, type DagResumeSnapshot, type IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -5066,27 +5067,30 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
-  it('source release exits without checking or failing a newly resumed owner', async () => {
-    mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
-    const store = makeStore({
-      getWorkflowRunStatus: mock(async () => 'running' as const),
-      getWorkflowRun: mock(async () => {
-        throw new Error('old owner must not read after release');
-      }),
-    });
-    const result = await executeWorkflow(
-      makeDeps(store),
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      { conversationId: 'db-conv-1' }
-    );
-    expect(result).toMatchObject({ success: true, paused: true });
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.getWorkflowRun).not.toHaveBeenCalled();
-  });
+  it.each([true, false])(
+    'DAG source release exits without checking or failing a newly resumed owner (released: %s)',
+    async released => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released });
+      const store = makeStore({
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+        getWorkflowRun: mock(async () => {
+          throw new Error('old owner must not read after release');
+        }),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' }
+      );
+      expect(result).toMatchObject({ success: released, executionDisposition: 'source_stopped' });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   it('calls failWorkflowRun when run is still running at finally', async () => {
     const failSpy = mock(async () => ({ failed: true }));
@@ -5813,4 +5817,257 @@ describe('credential preflight lifecycle', () => {
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
+});
+
+describe('source establishment after admission', () => {
+  afterEach(() => mock.restore());
+
+  function fixture() {
+    const run = makeRun({
+      metadata: {
+        execution_claim: 'owner',
+        workflow_source: {
+          version: 1,
+          root: '/capture',
+          origin: '/author',
+          captured_at: new Date().toISOString(),
+          digest: 'digest',
+          file_count: 0,
+          byte_count: 0,
+        },
+      },
+    });
+    const row = structuredClone(run);
+    const fail = mock<IWorkflowStore['failWorkflowRun']>(async (_id, error, options) => {
+      if (
+        row.status !== 'running' ||
+        row.metadata.execution_claim !== options?.expectedExecutionClaim?.claimId
+      )
+        return { failed: false };
+      row.status = 'failed';
+      row.metadata.error = error;
+      return { failed: true };
+    });
+    const store = makeStore({
+      failWorkflowRun: fail,
+      getWorkflowRun: mock(async () => row),
+      getWorkflowRunStatus: mock(async () => row.status),
+    });
+    const execute = (extra: Partial<ExecuteWorkflowOptions> = {}) =>
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        { preCreatedRun: run, priorCompletedNodes: new Map(), ...extra }
+      );
+    return { run, row, store, fail, execute };
+  }
+
+  function unreadable() {
+    spyOn(workflowSource, 'resolveRunSourceCapture').mockRejectedValue(
+      new workflowSource.WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+    );
+  }
+
+  it('accounts for a rejected source release after admission', async () => {
+    unreadable();
+    const f = fixture();
+    f.store.releaseRunForUnreadableSource = mock(async () => {
+      throw new Error('release rejected');
+    });
+    const result = await f.execute();
+    expect(result).toMatchObject({ success: false, error: 'release rejected' });
+    expect(f.row.status).toBe('failed');
+    expect(f.fail).toHaveBeenCalledTimes(1);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('accounts for a rejected follow-up source ownership read', async () => {
+    unreadable();
+    const f = fixture();
+    f.store.releaseRunForUnreadableSource = mock(async () => {
+      f.row.status = 'paused';
+      return { released: false };
+    });
+    f.store.getWorkflowRun = mock(async () => {
+      throw new Error('ownership read rejected');
+    });
+    const result = await f.execute();
+    expect(result).toMatchObject({ success: false, error: 'ownership read rejected' });
+    expect(f.row.status).toBe('paused');
+    expect(f.fail).toHaveBeenCalledTimes(1);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it.each(['new-owner', 'released-then-rejected', 'refused-release', 'failed-read'] as const)(
+    'preserves ownership when source establishment stops: %s',
+    async mode => {
+      unreadable();
+      const f = fixture();
+      f.store.releaseRunForUnreadableSource = mock(async () => {
+        if (mode === 'released-then-rejected') f.row.status = 'paused';
+        else f.row.metadata.execution_claim = 'new-owner';
+        if (mode === 'new-owner' || mode === 'released-then-rejected')
+          throw new Error('release rejected');
+        return { released: false };
+      });
+      if (mode === 'failed-read')
+        f.store.getWorkflowRun = mock(async () => {
+          throw new Error('read rejected');
+        });
+      const result = await f.execute();
+      expect(result).toMatchObject({
+        success: false,
+        executionDisposition: 'source_stopped',
+        workflowRunId: f.run.id,
+      });
+      expect(f.row.status).toBe(mode === 'released-then-rejected' ? 'paused' : 'running');
+      expect(f.row.metadata.error).toBeUndefined();
+      expect(f.fail).toHaveBeenCalledTimes(mode === 'refused-release' ? 0 : 1);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not retry a rejected source terminal write', async () => {
+    unreadable();
+    const f = fixture();
+    const sourceError = new Error('release rejected');
+    const writeError = new Error('terminal store unavailable');
+    f.store.releaseRunForUnreadableSource = mock(async () => {
+      throw sourceError;
+    });
+    f.store.failWorkflowRun = mock(async () => {
+      throw writeError;
+    });
+    await expect(f.execute()).rejects.toMatchObject({
+      name: 'TerminalStatusWriteError',
+      cause: writeError,
+    });
+    expect(f.store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockLogFn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: sourceError }),
+      'workflow.source_establishment_failed'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('guards source integrity failures against a newer owner', async () => {
+    const f = fixture();
+    f.row.metadata.execution_claim = 'new-owner';
+    spyOn(workflowSource, 'resolveRunSourceCapture').mockRejectedValue(
+      new workflowSource.WorkflowSourceIntegrityError('altered capture', '/capture')
+    );
+    const result = await f.execute();
+    expect(result).toMatchObject({
+      success: false,
+      executionDisposition: 'source_stopped',
+      error: expect.stringContaining('altered capture'),
+    });
+    expect(f.row.status).toBe('running');
+    expect(f.fail).toHaveBeenCalledWith(f.run.id, expect.any(String), {
+      exitReason: 'source_unavailable',
+      expectedExecutionClaim: { claimId: 'owner' },
+    });
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it.each(['paused', 'suspend-error', 'status-error', 'resumed', 'refused'] as const)(
+    'suspends only a won source release that is still paused: %s',
+    async mode => {
+      unreadable();
+      const f = fixture();
+      const suspend = mock(async () => {
+        if (mode === 'suspend-error') throw new Error('suspend rejected');
+      });
+      f.store.releaseRunForUnreadableSource = mock(async (_id, release) => {
+        Object.assign(f.row.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
+        f.row.status = mode === 'resumed' ? 'running' : 'paused';
+        if (mode === 'resumed') f.row.metadata.execution_claim = 'new-owner';
+        return { released: mode !== 'refused' };
+      });
+      if (mode === 'status-error')
+        f.store.getWorkflowRunStatus = mock(async () => {
+          throw new Error('status rejected');
+        });
+      const result = await f.execute({
+        execContext: { kind: 'container', containerId: 'cid' },
+        container: {
+          envId: 'env',
+          writeBack: 'approve',
+          backend: {
+            suspend,
+            finalize: async () => ({ requiresApproval: false }),
+            applyChanges: async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] }),
+            discardChanges: async () => {},
+          },
+        },
+      });
+      expect(result).toMatchObject({
+        success: true,
+        paused: true,
+        executionDisposition: 'source_stopped',
+      });
+      expect(suspend).toHaveBeenCalledTimes(mode === 'paused' || mode === 'suspend-error' ? 1 : 0);
+      expect(f.row.status).toBe(mode === 'resumed' ? 'running' : 'paused');
+      expect(f.row.metadata.continuation_retry_at).toEqual(expect.any(String));
+      expect(f.row.metadata.source_release).toMatchObject({
+        nodeId: 'workflow-source',
+        path: '/capture',
+      });
+      expect(f.fail).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      if (mode === 'status-error')
+        expect(mockLogFn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: expect.any(Error) }),
+          'workflow.source_release_container_cleanup_failed'
+        );
+      if (mode === 'suspend-error')
+        expect(mockLogFn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: expect.any(Error) }),
+          'dag.container_suspend_on_pause_failed'
+        );
+    }
+  );
+
+  it.each([false, true])(
+    'accounts for a rejected legacy source_config pin after admission (ownership changed: %s)',
+    async changed => {
+      const root = await mkdtemp(join(tmpdir(), 'source-pin-'));
+      try {
+        await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+        const capture = await workflowSource.captureWorkflowSource({
+          sourceRoot: root,
+          captureRoot: join(root, 'capture'),
+        });
+        const f = fixture();
+        f.run.metadata.workflow_source = {
+          version: 1,
+          root: capture.anchor.root,
+          origin: root,
+          captured_at: capture.manifest.captured_at,
+          digest: capture.manifest.digest,
+          file_count: capture.manifest.file_count,
+          byte_count: capture.manifest.byte_count,
+        };
+        f.store.updateWorkflowRun = mock(async (_id, update) => {
+          if (update.metadata?.workflow_source) {
+            if (changed) f.row.metadata.execution_claim = 'new-owner';
+            throw new Error('pin rejected');
+          }
+        });
+        const result = await f.execute();
+        expect(result).toMatchObject({ success: false, error: 'pin rejected' });
+        expect(f.row.status).toBe(changed ? 'running' : 'failed');
+        if (changed) expect(result).toMatchObject({ executionDisposition: 'source_stopped' });
+        expect(f.fail).toHaveBeenCalledTimes(1);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
 });
