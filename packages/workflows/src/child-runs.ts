@@ -237,24 +237,18 @@ export async function runChildWorkflow(
     }
 
     let childPrepared: PreparedRunAiConfiguration;
+    const configCwd = resumeChild?.run.working_path ?? cwd;
     try {
-      childPrepared = await prepareRunAiConfiguration(
-        deps,
-        childWorkflow,
-        resumeChild?.run.working_path ?? cwd,
-        {
-          codebaseId,
-          userId,
-          ...(resumeChild
-            ? { continuationRun: resumeChild.run }
-            : { aiConfigurationRun: parentRun, inheritAiConfiguration: true }),
-          modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
-          ...(runConfig ? { runConfig } : {}),
-        }
-      );
-      await assertRunCredentials(deps, childPrepared, {
-        cwd: resumeChild?.run.working_path ?? cwd,
+      childPrepared = await prepareRunAiConfiguration(deps, childWorkflow, configCwd, {
+        codebaseId,
+        userId,
+        ...(resumeChild
+          ? { continuationRun: resumeChild.run }
+          : { aiConfigurationRun: parentRun, inheritAiConfiguration: true }),
+        modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
+        ...(runConfig ? { runConfig } : {}),
       });
+      await assertRunCredentials(deps, childPrepared, { cwd: configCwd });
     } catch (error) {
       return failOutcome((error as Error).message, resumeChild?.run.id);
     }
