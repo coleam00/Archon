@@ -59,6 +59,7 @@ export async function runLoopIteration(
 
   const stopped = await stopBeforeIteration(run, state, i);
   if (stopped !== undefined) return stopped;
+  state.lastStartedIteration = i;
   recordIterationStarted(run, i);
 
   const reply = await runIterationAttempts(run, state, i, iterationStart, typedArtifactsFile);

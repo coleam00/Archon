@@ -157,6 +157,7 @@ export async function executeLoopNode(
   const resume = readLoopResume(workflowRun, node);
   const state: LoopState = {
     execution: resumedExecution,
+    lastStartedIteration: resume.startIteration - 1,
     sessionId: resume.gate?.sessionId ?? undefined,
     stopReason:
       resumedExecution.spend.stopReason.source === 'provider'
@@ -327,6 +328,7 @@ export async function executeLoopNode(
       const failed = await failLoopNode(ctx, node.id, state, err.message, {
         failureKind: 'unknown',
         ...loopSpend(state),
+        loopIterations: state.lastStartedIteration,
         data: { iteration: i },
       });
       await safeSendMessage(

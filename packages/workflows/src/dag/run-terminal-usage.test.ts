@@ -29,6 +29,7 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  failedLoopIterations,
   minimalConfig,
   type TestWorkflowDefinition,
   type DagOptionsOverrides,
@@ -247,20 +248,26 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     { kind: 'loop', fault: 'shell', retry: false },
     { kind: 'loop', fault: 'shell', retry: true },
     { kind: 'loop', fault: 'listing', retry: false },
+    { kind: 'loop', fault: 'spawn', retry: false },
     { kind: 'loop_group', fault: 'shell', retry: false },
     { kind: 'loop_group', fault: 'listing', retry: false },
+    { kind: 'loop_group', fault: 'spawn', retry: false },
   ] as const)('$kind retains paid usage after $fault throws (retry: $retry)', async test => {
     const store = createMockStore();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
     const tokens = { input: 100, output: 20, cacheRead: 40, cacheWrite: 5 };
-    const invalidShell = join(testDir, 'missing-bash');
+    const invalidShell = join(
+      testDir,
+      test.fault === 'spawn' ? 'nonexecutable-bash' : 'missing-bash'
+    );
+    if (test.fault === 'spawn') await writeFile(invalidShell, '', { mode: 0o600 });
     const listingDir = join(testDir, 'artifacts', '.archon', 'typed-artifacts');
     const savedBashPath = process.env.ARCHON_BASH_PATH;
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Paid work.' };
       yield { type: 'result', sessionId: 'paid-session', cost: 0.25, tokens };
-      if (test.fault === 'shell') process.env.ARCHON_BASH_PATH = invalidShell;
+      if (test.fault !== 'listing') process.env.ARCHON_BASH_PATH = invalidShell;
       else {
         await removeTempTree(listingDir);
         await writeFile(listingDir, 'blocks directory creation');
@@ -290,16 +297,19 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
             },
           };
     try {
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform,
-          cwd: testDir,
-          logDir: join(testDir, 'logs'),
-          workflowRun,
-          workflow: { name: 'loop-thrown-usage', nodes: [node] },
-        })
+      const iterations = await failedLoopIterations('work', () =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            logDir: join(testDir, 'logs'),
+            workflowRun,
+            workflow: { name: 'loop-thrown-usage', nodes: [node] },
+          })
+        )
       );
+      if (test.kind === 'loop') expect(iterations).toBe(1);
     } finally {
       if (savedBashPath === undefined) delete process.env.ARCHON_BASH_PATH;
       else process.env.ARCHON_BASH_PATH = savedBashPath;
@@ -313,8 +323,12 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const failed = failures[0];
     expect(failed.step_name).toBe('work');
     expect(failed.data?.failure_kind).toBe('unknown');
-    expect(failed.data?.error).toContain(test.fault === 'shell' ? invalidShell : listingDir);
+    expect(failed.data?.error).toContain(test.fault === 'listing' ? listingDir : invalidShell);
     if (test.fault === 'listing') expect(failed.data?.error).toContain('EEXIST');
+    if (test.fault === 'spawn') {
+      expect(failed.data?.error).toContain('cannot execute bash');
+      expect(failed.data?.error).toContain('EACCES');
+    }
     expect(failed.data?.cost_usd).toBe(0.25);
     expect(failed.data?.spend).toMatchObject({
       costUsd: { source: 'provider', value: 0.25 },
