@@ -15,6 +15,8 @@ facts:
   pull_request: null
   continues: null
   branch: "build/7-stub-fixture"
+  blocked: []
+  blocked_count: 0
 route:
   decision: launch
   brief: "stub-brief: deliver https://github.com/example/repo/issues/7; the issue body is the contract"

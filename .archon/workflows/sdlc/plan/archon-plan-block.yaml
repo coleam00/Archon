@@ -10,7 +10,7 @@ description: |
   stage and owns what follows its ending. It never pauses for a person: run
   archon-plan, which adds that pause, by hand.
 
-model: large
+model: ['@planner', large]
 
 inputs:
   work:

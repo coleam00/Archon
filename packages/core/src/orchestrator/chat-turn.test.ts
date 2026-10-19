@@ -152,7 +152,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     // success" surfaced via classifyAndFormatError.
     mockSendQuery.mockImplementationOnce(async function* () {
       yield { type: 'agent_message_chunk', text: 'classified' };
-      // Post-fix shape from claude/provider.ts: isError absent; stop_sequence maps to end_turn.
+      // Post-fix shape from claude/result.ts: isError absent; stop_sequence maps to end_turn.
       yield {
         type: 'result',
         sessionId: 'sid-ok',

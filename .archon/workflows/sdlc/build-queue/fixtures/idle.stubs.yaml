@@ -13,6 +13,8 @@ facts:
   pull_request: null
   continues: null
   branch: ""
+  blocked: []
+  blocked_count: 0
 apply:
   decision: idle
   summary: "stub: No item waits for the build queue."

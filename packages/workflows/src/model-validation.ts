@@ -28,6 +28,7 @@ import {
   runModelBindingsMetadataSchema,
   TIER_NAMES,
   type ModelAliasPreset,
+  type WorkflowModelRef,
   type RawAliasEntry,
   type RawAliasesConfig,
   type RawTiersConfig,
@@ -40,6 +41,7 @@ import {
 export { TIER_NAMES };
 export type {
   ModelAliasPreset,
+  WorkflowModelRef,
   RawAliasEntry,
   RawAliasesConfig,
   RawTiersConfig,
@@ -325,7 +327,11 @@ function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): Mode
   assertNotReserved(name);
   assertCustomAliasPrefix(name);
   const preset = profile.aliases[name];
-  if (!preset) throw new Error(`Cannot rebind unknown alias '${name}'.`);
+  if (!preset) {
+    throw new Error(
+      `Alias '${name}' is not configured, so a bare model id has no provider to keep. Use <provider>/<model>, a tier, or another @alias.`
+    );
+  }
   return preset;
 }
 
@@ -418,8 +424,12 @@ export function resolveRunModelOverrides(
   }
 
   const aliases: RawAliasesConfig = {};
+  // An alias nobody configured can still be bound for one run: a workflow's model
+  // preference list may name it (#3266). Only a bare model id needs an existing binding,
+  // for its provider, and resolveRunOverrideSpec asks for one then.
   for (const [name, spec] of Object.entries(overrides.aliases ?? {})) {
-    presetForOverrideTarget(profile, name);
+    assertNotReserved(name);
+    assertCustomAliasPrefix(name);
     aliases[name] = resolveRunOverrideSpec(providers, profile, name, spec);
   }
 
@@ -627,6 +637,47 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
   }
 
   return { literal: ref };
+}
+
+/**
+ * The one ref a `model:` value selects. A string is itself. A preference list selects its
+ * first `@alias` that `profile` defines, else its final entry (a tier or model id, which
+ * the schema guarantees). Without a profile there is no config to consult, so a list
+ * selects its final entry.
+ */
+export function selectModelRef(ref: WorkflowModelRef, profile?: ResolvedAiProfile): string;
+export function selectModelRef(
+  ref: WorkflowModelRef | undefined,
+  profile?: ResolvedAiProfile
+): string | undefined;
+export function selectModelRef(
+  ref: WorkflowModelRef | undefined,
+  profile?: ResolvedAiProfile
+): string | undefined {
+  if (ref === undefined || typeof ref === 'string') return ref;
+  const fallback = ref[ref.length - 1] as string;
+  if (!profile) return fallback;
+  return (
+    ref.find(entry => entry.startsWith('@') && profile.aliases[entry] !== undefined) ?? fallback
+  );
+}
+
+/** True for a single `@alias` ref, which fails on an install that does not define it. */
+export function isAliasRef(ref: WorkflowModelRef | undefined): boolean {
+  return typeof ref === 'string' && ref.startsWith('@');
+}
+
+/**
+ * Resolve a `model:` value the way validation must: the ref it selects against `profile`,
+ * and for a preference list also its final entry, which an install that defines none of
+ * the list's aliases uses. Throws as resolveModelSpec does; returns the selected ref's spec.
+ */
+export function resolveModelRef(
+  profile: ResolvedAiProfile,
+  ref: WorkflowModelRef
+): ResolvedModelSpec {
+  if (typeof ref !== 'string') resolveModelSpec(profile, selectModelRef(ref));
+  return resolveModelSpec(profile, selectModelRef(ref, profile));
 }
 
 /** Type guard — narrows ResolvedModelSpec to its `{ literal }` variant. */

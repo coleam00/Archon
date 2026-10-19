@@ -232,7 +232,7 @@ nodes:
 | `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | — | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
 | `idle_timeout` | number | — | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Reported live background work suspends the timer |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
-| `mutates_checkout` | boolean | — | `false` asserts this node leaves the git checkout untouched. The engine compares `git status` before and after the node and fails it, naming the changed paths, if anything outside the run's artifacts, state, and log directories changed. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
+| `mutates_checkout` | boolean | — | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
 | `always_run` | boolean | `false` | Not a scheduling field: it does not change whether the node runs in a normal pass (use `when:` and `trigger_rule` for that). It opts the node out of the resume cache, so on resume it is evaluated again instead of replaying a prior completion, and still runs only if its `when:` and `trigger_rule` allow it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
 | `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes (best-effort). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
 
@@ -3097,11 +3097,22 @@ model: medium        # Tier, alias, or literal model override
 
 ### Portable Model References
 
-`model:` accepts three shapes:
+`model:` accepts four shapes:
 
 - `small`, `medium`, or `large` - portable tier refs resolved from `tiers:` in `~/.archon/config.yaml` and `.archon/config.yaml`, with built-in defaults for claude and codex only
-- `@name` - custom aliases from `aliases:`; use these for project workflows, not bundled or global workflows, because aliases are project-specific
+- `@name` - custom aliases from `aliases:`. A bare alias fails on an install that doesn't define it, so bundled and global workflows can't use one on its own
 - Any other string - a literal model id passed through to the resolved provider's SDK
+- A preference list of `@name` aliases ending in a tier or literal model id, such as `['@reviewer', medium]`. The first alias the run's config defines wins. When none is defined, the final entry is used, so the list is portable. Validation checks the final entry too, so the list works on an install that defines none of its aliases
+
+```yaml
+nodes:
+  - id: seams
+    command: review-seams
+    # The lens's own alias, then the reviewer concern, then the tier used today.
+    model: ['@review-seams', '@reviewer', medium]
+```
+
+A list is how a bundled workflow names the concern each node serves without requiring the user to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model, and optional `effort`. If a workflow or node sets both `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
@@ -3184,7 +3195,7 @@ To validate that all referenced command files, MCP config files, and skill direc
 archon validate workflows <name>
 ```
 
-This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject `@custom` model aliases because those refs are not portable across projects. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
+This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject a bare `@custom` model alias, because it isn't portable across projects; a preference list that ends in a tier or model id is. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
 
 ### Unknown Keys Are Reported, Not Rejected
 
