@@ -324,6 +324,9 @@ test('a repo owned by another user registers as a repo; a plain directory gets n
   process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
   // CI runner images trust every path in the system config (safe.directory = *).
   process.env.GIT_CONFIG_NOSYSTEM = '1';
+  // Earlier tests' worktrees already granted safe.directory entries in the shared global config on Windows.
+  const sharedGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = join(root, 'foreign-owned.gitconfig');
   try {
     // The Settings → Projects route classifies the path, then registers it.
     expect(await detectProjectKind(checkout)).toBe('repo');
@@ -334,5 +337,6 @@ test('a repo owned by another user registers as a repo; a plain directory gets n
   } finally {
     delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
     delete process.env.GIT_CONFIG_NOSYSTEM;
+    process.env.GIT_CONFIG_GLOBAL = sharedGlobalConfig;
   }
 });
