@@ -1,4 +1,5 @@
 import { createLogger } from '@archon/paths';
+import { GitFailure } from './errors';
 import { execFileAsync } from './exec';
 import { addSafeDirectory } from './repo';
 import { toRepoPath } from './types';
@@ -25,8 +26,10 @@ export async function trustRegisteredPath(path: string): Promise<void> {
   try {
     await probe([]);
     return;
-  } catch {
-    // Git refused the path; the trusted probe below tells whether ownership is why.
+  } catch (error) {
+    // Git refuses ownership with its fatal exit 128. Anything else (a timeout, a
+    // signal, a missing git) is not a refusal the grant could answer.
+    if (!(error instanceof GitFailure && error.code === 128)) return;
   }
   try {
     await probe(['-c', `safe.directory=${path}`]);
