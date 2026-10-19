@@ -362,14 +362,14 @@ async function resolveWorkflowProvider(
         workflowName: workflow.name,
         configuredProvider: workflow.provider,
         resolvedProvider: workflowPreset.provider,
-        modelRef: workflow.model,
+        modelRef: workflowRef,
       },
       'workflow.model_provider_conflict'
     );
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflowRef ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
     );
     if (!delivered) {
       getLog().error(

@@ -8,6 +8,11 @@ import type { ChangeEvent, ReactElement, ReactNode } from 'react';
 const INPUT_CLASS =
   'w-full rounded-[8px] border border-border bg-surface px-2 py-1.5 text-[12.5px] text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-bright/60';
 
+/** A node's `model:` as one line: a preference list reads in the order it is tried. */
+export function modelRefLabel(model: string | readonly string[]): string {
+  return typeof model === 'string' ? model : model.join(' → ');
+}
+
 export function Field({ label, children }: { label: string; children: ReactNode }): ReactElement {
   return (
     <label className="flex flex-col gap-1">

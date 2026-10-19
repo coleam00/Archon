@@ -412,21 +412,28 @@ export function resolveEffort(
 }
 
 /**
- * fallbackModel: non-empty trimmed string. Inline trim rather than
- * `safeParse` so a stray surrounding space is normalised rather than rejected.
- */
-/**
  * Workflow-level `model:`: one ref or a model preference list. A malformed value rejects the
  * workflow; dropping it would run every node on the config default without saying so.
  */
 export function parseWorkflowModel(raw: unknown): ParsedField<WorkflowModelRef> {
-  if (raw === undefined) return { value: undefined };
+  // A bare `model:` key parses as null and has always meant "no model".
+  if (raw === undefined || raw === null) return { value: undefined };
   const parsed = modelRefSchema.safeParse(raw);
   if (parsed.success) return { value: parsed.data };
-  const reason = parsed.error.issues[0]?.message ?? 'expected a model ref or a preference list';
+  // An array matches the list branch, whose issue names the broken entry. Anything else
+  // fails both branches as a bare "Invalid input", so name the shapes that are accepted.
+  const issue = parsed.error.issues[0];
+  const reason =
+    issue !== undefined && issue.code !== 'invalid_union'
+      ? issue.message
+      : 'expected a model ref string or a preference list of @aliases ending in a tier or model id';
   return { error: `Invalid workflow-level model: ${reason}.` };
 }
 
+/**
+ * fallbackModel: non-empty trimmed string. Inline trim rather than
+ * `safeParse` so a stray surrounding space is normalised rather than rejected.
+ */
 export function parseFallbackModel(raw: unknown, filename: string): string | undefined {
   const fallbackModelTrimmed = typeof raw === 'string' ? raw.trim() : '';
   const fallbackModel = fallbackModelTrimmed.length > 0 ? fallbackModelTrimmed : undefined;

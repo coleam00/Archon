@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement } fr
 import { NODE_ID_PATTERN } from '@/lib/node-ref';
 import { nodeCapabilities, nodeLabel } from '../variants';
 import type { BaseFields, BuilderNode } from '../types';
-import { CheckboxField, Field, SelectField, TextField } from './inspector/fields';
+import { CheckboxField, Field, SelectField, TextField, modelRefLabel } from './inspector/fields';
 import { PromptFields } from './inspector/PromptFields';
 import { CommandFields } from './inspector/CommandFields';
 import { BashFields } from './inspector/BashFields';
@@ -308,7 +308,7 @@ function ModelField({
   if (Array.isArray(model)) {
     return (
       <Field label="Model">
-        <span className="font-mono text-[12.5px] text-text-secondary">{model.join(' → ')}</span>
+        <span className="font-mono text-[12.5px] text-text-secondary">{modelRefLabel(model)}</span>
       </Field>
     );
   }
