@@ -4,9 +4,9 @@
  */
 
 import { dirname } from 'node:path';
-import { archonCommand } from './forge.ts';
+import { archonCommand, type QualifiedPr } from './forge.ts';
 import { gitOrThrow } from './git.ts';
-import { nullableJson } from './io.ts';
+import { note, nullableJson } from './io.ts';
 
 export interface LaunchOptions {
   /** Start with the run config this run was started with (`--config-from-run`). */
@@ -25,4 +25,22 @@ export function launchDetached(workflow: string, inputs: Record<string, string>,
   const runId = (nullableJson(result.stdout.toString()) as { runId?: unknown } | null)?.runId;
   if (typeof runId !== 'string' || runId === '') throw new Error(`${workflow} acknowledged no run id`);
   return runId;
+}
+
+/**
+ * Start an item's next build-queue round now, on the run config this run started with.
+ * A failed launch is noted, and the released item waits for the next queue run.
+ */
+export function launchNextRound(item: QualifiedPr, runId: string): string {
+  try {
+    const next = launchDetached(
+      'archon-build-queue',
+      { repo_host: item.repo.host, repo_path: item.repo.path, number: String(item.number) },
+      { configFromRun: runId }
+    );
+    return `its next round started at once (run ${next})`;
+  } catch (error) {
+    note(`issue ${String(item.number)}: the next round did not start, so the next queue run picks it up: ${error instanceof Error ? error.message : String(error)}`);
+    return 'the next queue run picks it up';
+  }
 }

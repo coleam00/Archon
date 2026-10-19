@@ -420,11 +420,16 @@ describe('the build queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', rounds: [] } } });
   }, 60_000);
 
-  test('a continue records the round and the brief the next launch starts from, and releases the claim', () => {
+  test('a continue records the round and the brief, releases the claim, and starts the next round at once', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
-    const applied = run(at, 'apply', applyInputs(CONTINUE));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const applied = run(at, 'apply', { ...applyInputs(CONTINUE), ARCHON_CALL_LOG: calls });
     expect(ok(applied)).toMatchObject({ decision: 'continue', attention: '', options: [], asked: null });
+    // The next round runs on the run config this run started with.
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
+    expect(ok(applied).summary).toContain('next round started at once (run launched-archon-build-queue)');
     const doc = stored(at).value;
     expect(doc).toMatchObject({
       claim: null,
@@ -438,6 +443,19 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
+  }, 60_000);
+
+  test('a continue whose next round fails to start leaves the item waiting for the next queue run', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const applied = run(at, 'apply', {
+      ...applyInputs(CONTINUE),
+      ARCHON_RUN_REFUSES: '1',
+    });
+    expect(applied.code).toBe(0);
+    expect(applied.stderr).toContain('the next round did not start');
+    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('the next queue run picks it up');
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'next', brief: 'continue PR 42 on R1' } } });
   }, 60_000);
 
   test('an ask keeps the claim and raises one attention item carrying every field and the declared choices', () => {
