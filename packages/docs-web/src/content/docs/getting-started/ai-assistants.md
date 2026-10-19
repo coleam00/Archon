@@ -278,7 +278,15 @@ assistants:
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
       - /absolute/path/to/other/repo
+    toolFreeStructuredOutputModels:  # routes that reject tools and a strict schema together
+      - glm-5.3
 ```
+
+Some model routes reject a request that carries tools and a strict output schema at the same time. List those models in `toolFreeStructuredOutputModels`. A node with `output_format` on one of them runs its tool turn without the schema, then one final turn on the same thread with the schema and no tools, so the final answer still sees the work and evidence of the tool turn. Each such node costs one extra model request.
+
+- The model must be resolved by Archon (`assistants.codex.model`, a tier, an alias or the node's `model:`). A model chosen only in Codex's own `config.toml` is never matched.
+- Codex multi-agent is off on these models' threads, because Codex fixes it when a thread starts.
+- The list is read live and is not recorded with a run, so a resumed run uses the current list.
 
 ### Set as Default (Optional)
 
