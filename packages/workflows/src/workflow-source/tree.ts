@@ -49,7 +49,7 @@ function dedupeNestedDirs(dirs: readonly string[]): string[] {
  *
  * `stat`, not `lstat`: a scope root is routinely a symlink — the dotfiles layout the
  * global-workflows guide recommends makes `~/.archon/workflows` one — and dropping it
- * here would silently omit that whole scope from the capture. This matches `copyTree`
+ * here would silently omit that whole scope from the capture. This matches `listTree`
  * below, which dereferences symlinks on purpose.
  */
 export async function isDirectory(path: string): Promise<boolean> {
