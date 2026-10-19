@@ -57,6 +57,15 @@ describe('setup command', () => {
       'docs: null\ndocs: null\n',
       '{docs: {path: existing/}}\n',
       'docs:\n  path: existing/\n...\n',
+      'key: &key docs\n*key : {path: existing/}\n',
+      '? [docs]\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      '%YAML 1.1\n---\ndefaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: [*defaults]\n',
+      '<<: {docs: {path: existing/}}\n',
+      '!!str docs: {path: existing/}\n',
+      '? >-\n  docs\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: inherited/}}\n<<: *defaults\ndocs: {path: existing/}\n',
     ])('preserves an active docs key and asks for a manual edit: %s', async docs => {
       const { path } = bootstrapProjectConfig(TEST_DIR);
       const existing = readFileSync(path, 'utf-8') + docs;
@@ -104,6 +113,9 @@ describe('setup command', () => {
       '# docs: example\nassistants:\n  claude:\n    model: opus\n...\n# after document\n',
       '# docs: example\nassistants:\n  claude:\n    model: opus\n',
       'assistants: {}\nassistants: {claude: {model: opus}}\n',
+      'key: &key other\n*key : value\n',
+      '? [other]\n: value\n',
+      '? {other: key}\n: value\n',
       '# docs: example\n',
       '',
       '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n',
