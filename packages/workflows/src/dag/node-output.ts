@@ -5,8 +5,7 @@ import type { WorkflowRun } from '../schemas';
 import { validateArtifactPointers } from '../artifact-pointer';
 import { writeSpillFile } from './references';
 
-/** Threshold (bytes) above which $nodeId.output values are written to a temp file
- *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
+/** UTF-16 code-unit threshold for shell reference spills (JavaScript string.length). */
 export const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
 
 /** Maximum UTF-8 bytes retained for a successful exec node's stdout in workflow events. */

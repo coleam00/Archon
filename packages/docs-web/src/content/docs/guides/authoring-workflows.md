@@ -696,7 +696,7 @@ allowed to run (`trigger_rule: all_done`).
 In `bash:` and `until_bash:`, Archon injects `$nodeId.output`, `$nodeId.output.field`, and `$LOOP_PREV.nodeId.output[.field]` using two forms:
 
 - Small string outputs are single-quoted inline, such as `'a b   c *'`.
-- Outputs exceeding 32 KiB in UTF-8 spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<content-hash>/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
+- Outputs exceeding 32,768 UTF-16 code units (JavaScript `string.length`) spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<content-hash>/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
 
 A bare argument such as `printf '%s' $emit.output` works with the inline form, but the unquoted command substitution in the spill form splits words and expands globs. Wrapping the reference in double quotes breaks the inline form instead: `value="$emit.output"` becomes `value="'a b   c *'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value.
 

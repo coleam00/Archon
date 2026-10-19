@@ -485,11 +485,34 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(consumeRows[1].node_output).toContain('prev=[draft-1] now=[DONE]');
   });
 
-  it.each(['', '.data'])(
-    'keeps large current and previous output%s distinct in a body bash node',
-    async field => {
-      const previous = 'P'.repeat(33_000);
-      const current = 'C'.repeat(33_000);
+  it.each([
+    {
+      label: 'whole ASCII output',
+      field: '',
+      previous: 'P'.repeat(33_000),
+      current: 'C'.repeat(33_000),
+    },
+    {
+      label: 'ASCII field',
+      field: '.data',
+      previous: 'P'.repeat(33_000),
+      current: 'C'.repeat(33_000),
+    },
+    {
+      label: 'whole multibyte output',
+      field: '',
+      previous: 'é'.repeat(20_000) + '\n',
+      current: 'é'.repeat(20_000) + '\n\n',
+    },
+    {
+      label: 'multibyte field',
+      field: '.data',
+      previous: 'é'.repeat(20_000) + '\n',
+      current: 'é'.repeat(20_000) + '\n\n',
+    },
+  ])(
+    'keeps current and previous $label distinct in a body bash node',
+    async ({ field, previous, current }) => {
       let iteration = 0;
       mockSendQueryDag.mockImplementation(async function* () {
         yield {

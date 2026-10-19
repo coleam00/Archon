@@ -5,6 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import type { NodeOutput } from '../schemas';
 import { executeDagWorkflow } from '../dag-executor';
 import { OutputRefError } from '../output-ref';
@@ -501,22 +502,25 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(written).toBe(largeOutput);
   });
 
-  it('spills multibyte output above the UTF-8 byte threshold', async () => {
-    const output = 'é'.repeat(20_000);
-    expect(output.length).toBeLessThan(32_768);
-    expect(Buffer.byteLength(output, 'utf8')).toBeGreaterThan(32_768);
-    const result = substituteNodeOutputRefs(
-      'echo $a.output',
-      new Map([['a', makeOutput('completed', output)]]),
-      true,
-      tempDir
-    );
-    expect(result).toContain('$(cat ');
-    expect(await readFile(spillPath(tempDir, 'a.nodeoutput', output), 'utf8')).toBe(output);
-  });
+  it.each(['', '\n', '\n\n'])(
+    'inlines multibyte output below the code-unit threshold with suffix %j',
+    suffix => {
+      const output = 'é'.repeat(20_000) + suffix;
+      expect(output.length).toBeLessThan(32_768);
+      expect(Buffer.byteLength(output, 'utf8')).toBeGreaterThan(32_768);
+      expect(
+        substituteNodeOutputRefs(
+          'echo $a.output',
+          new Map([['a', makeOutput('completed', output)]]),
+          true,
+          tempDir
+        )
+      ).toBe(`echo '${output}'`);
+    }
+  );
 
-  it('inlines output at the UTF-8 byte threshold', () => {
-    const output = 'é'.repeat(16_384);
+  it('inlines output at the UTF-16 code-unit threshold', () => {
+    const output = 'é'.repeat(32_768);
     expect(
       substituteNodeOutputRefs(
         'echo $a.output',
@@ -525,6 +529,26 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
         tempDir
       )
     ).toBe(`echo '${output}'`);
+  });
+
+  it.each([
+    { label: '32,001 bytes with newline', value: 'é'.repeat(16_000) + '\n' },
+    { label: '32,768 bytes with newline', value: 'é'.repeat(16_383) + 'x\n' },
+    { label: '40,000 bytes without newline', value: 'é'.repeat(20_000) },
+    { label: '40,001 bytes with newline', value: 'é'.repeat(20_000) + '\n' },
+    { label: '40,002 bytes with two newlines', value: 'é'.repeat(20_000) + '\n\n' },
+  ])('delivers $label exactly through all four shell output references', async ({ value }) => {
+    const outputs = new Map([['a', makeOutput('completed', value, { data: value })]]);
+    const script = substituteNodeOutputRefsInScopes(
+      'current=$a.output; field=$a.output.data; previous=$LOOP_PREV.a.output; prior_field=$LOOP_PREV.a.output.data; ' +
+        'printf "%s|%s|%s|%s" "$current" "$field" "$previous" "$prior_field"',
+      outputs,
+      [{ loopPrevOutputs: outputs, outputFileDir: tempDir }],
+      true,
+      tempDir
+    );
+    const { stdout } = await execFileAsync(resolveBashPath(), ['-c', script]);
+    expect(stdout).toBe([value, value, value, value].join('|'));
   });
 
   it('writes large field value to file with field name in filename', async () => {

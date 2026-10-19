@@ -411,7 +411,7 @@ export function shellQuoteOrFile(
   field: string | undefined,
   artifactsDir: string | undefined
 ): string {
-  if (artifactsDir && Buffer.byteLength(value, 'utf8') > NODE_OUTPUT_FILE_THRESHOLD) {
+  if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
     // Bash reads these files after all references resolve; distinct values must not overwrite.
     const contentHash = createHash('sha256').update(value, 'utf8').digest('hex');
     const spillDir = joinPath(
