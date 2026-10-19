@@ -58,10 +58,14 @@ describe('detectForge', () => {
     expect(info.apiBase).toBe('https://github.corp.com/api/v3');
   });
 
-  test('rejects an invalid GITHUB_URL instead of ignoring it', async () => {
+  test('an invalid GITHUB_URL does not stop detecting other forges', async () => {
     process.env.GITHUB_URL = 'https://github.corp.com/api/v3';
-    getRemoteUrlSpy.mockResolvedValue('https://github.corp.com/owner/repo.git');
-    await expect(detectForge(testRepo)).rejects.toThrow('GITHUB_URL');
+    process.env.GITLAB_URL = 'https://gitlab.corp.com';
+    getRemoteUrlSpy.mockResolvedValue('https://gitlab.corp.com/owner/repo.git');
+    expect(await detectForge(testRepo)).toEqual({
+      type: 'gitlab',
+      apiBase: 'https://gitlab.corp.com/api/v4',
+    });
   });
 
   test('detects Gitea when GITEA_URL env matches remote hostname', async () => {

@@ -41,25 +41,34 @@ export function parseGitHubHost(origin: string): GitHubHost | null {
   ) {
     return null;
   }
-  if (url.hostname === 'github.com') return GITHUB_COM_HOST;
+  if (url.hostname === GITHUB_COM_HOST.host) return GITHUB_COM_HOST;
   const host = url.host.toLowerCase();
   const webUrl = `${url.protocol}//${host}`;
   return { host, webUrl, apiBaseUrl: `${webUrl}/api/v3`, graphqlUrl: `${webUrl}/api/graphql` };
 }
 
 /**
- * Resolve the GitHub host Archon talks to from `GITHUB_URL` (GitHub Enterprise
- * Server only). Unset, empty, or github.com means github.com. A value that is
- * not a bare http(s) origin throws, so a typo fails clearly instead of
- * silently sending every call, and every token, to github.com.
+ * The GitHub host `GITHUB_URL` names (GitHub Enterprise Server only). Unset,
+ * empty, or github.com means github.com; a value that is not a bare http(s)
+ * origin returns null. Paths that also serve other forges (clone credentials,
+ * forge detection) skip a null and fall through to the other forges' rules.
+ */
+export function readGitHubHost(env: NodeJS.ProcessEnv = process.env): GitHubHost | null {
+  const raw = env.GITHUB_URL?.trim();
+  return raw ? parseGitHubHost(raw) : GITHUB_COM_HOST;
+}
+
+/**
+ * The GitHub host Archon talks to, for paths bound to GitHub. An invalid
+ * `GITHUB_URL` throws, so a typo fails clearly instead of silently sending
+ * every call, and every token, to github.com. The value is not echoed: it may
+ * carry credentials.
  */
 export function resolveGitHubHost(env: NodeJS.ProcessEnv = process.env): GitHubHost {
-  const raw = env.GITHUB_URL?.trim();
-  if (!raw) return GITHUB_COM_HOST;
-  const github = parseGitHubHost(raw);
+  const github = readGitHubHost(env);
   if (!github) {
     throw new Error(
-      `GITHUB_URL must be the base URL of a GitHub Enterprise Server, e.g. https://github.example.com (got "${raw}").`
+      'GITHUB_URL must be the base URL of a GitHub Enterprise Server, e.g. https://github.example.com, with no path, query or credentials.'
     );
   }
   return github;

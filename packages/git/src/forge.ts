@@ -1,7 +1,7 @@
 // Forge detection: identify the hosting platform (GitHub, Gitea, GitLab)
 // behind a repository's remote (default `origin`), plus its REST API base URL.
 
-import { GITHUB_COM_HOST, resolveGitHubHost } from './github-host';
+import { GITHUB_COM_HOST, readGitHubHost } from './github-host';
 import { getRemoteUrl } from './repo';
 import type { RepoPath } from './types';
 
@@ -57,7 +57,7 @@ function matchSelfHostedForge(envVar: string, hostname: string): string | null {
  * Detection order:
  * 1. `github.com` hostname → GitHub (`https://api.github.com`)
  * 2. `GITHUB_URL` env hostname match → GitHub Enterprise (`<base>/api/v3`);
- *    an invalid `GITHUB_URL` throws (see `resolveGitHubHost`)
+ *    an invalid `GITHUB_URL` is ignored, like the other `*_URL` rules
  * 3. `GITEA_URL` env hostname match → Gitea (`<base>/api/v1`)
  * 4. `gitlab.com` hostname → GitLab (`https://gitlab.com/api/v4`)
  * 5. `GITLAB_URL` env hostname match → self-hosted GitLab (`<base>/api/v4`)
@@ -80,12 +80,12 @@ export async function detectForge(repoPath: RepoPath, remote = 'origin'): Promis
     return { type: 'unknown', apiBase: '' };
   }
 
-  if (hostname === 'github.com') {
+  if (hostname === GITHUB_COM_HOST.host) {
     return { type: 'github', apiBase: GITHUB_COM_HOST.apiBaseUrl };
   }
 
-  const github = resolveGitHubHost();
-  if (hostname === new URL(github.webUrl).hostname) {
+  const github = readGitHubHost();
+  if (github && hostname === new URL(github.webUrl).hostname) {
     return { type: 'github', apiBase: github.apiBaseUrl };
   }
 

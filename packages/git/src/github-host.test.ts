@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { parseGitHubHost, resolveGitHubHost } from './github-host';
+import { parseGitHubHost, readGitHubHost, resolveGitHubHost } from './github-host';
 
 describe('resolveGitHubHost', () => {
   const githubCom = {
@@ -48,6 +48,13 @@ describe('resolveGitHubHost', () => {
     'https://github.example.com/?x=1',
   ])('rejects GITHUB_URL=%s', value => {
     expect(() => resolveGitHubHost({ GITHUB_URL: value })).toThrow('GITHUB_URL');
+    expect(readGitHubHost({ GITHUB_URL: value })).toBeNull();
+  });
+
+  test('does not echo a rejected value, which may carry credentials', () => {
+    expect(() => resolveGitHubHost({ GITHUB_URL: 'https://user:secret@ghe.example' })).not.toThrow(
+      'secret'
+    );
   });
 });
 

@@ -20,4 +20,27 @@ describe('getLinkedIssueNumbers', () => {
     expect(file).toBe('gh');
     expect(args.slice(0, 4)).toEqual(['api', 'graphql', '--hostname', 'ghe.example']);
   });
+
+  test('hands the GitHub PAT to gh as the Enterprise token for an Enterprise host', async () => {
+    const saved = {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GH_ENTERPRISE_TOKEN: process.env.GH_ENTERPRISE_TOKEN,
+    };
+    process.env.GH_TOKEN = 'ghp_pat';
+    delete process.env.GH_ENTERPRISE_TOKEN;
+    try {
+      execFile.mockClear();
+      await getLinkedIssueNumbers('owner', 'repo', 7, 'ghe.example');
+      expect(execFile.mock.calls[0][2]).toMatchObject({ env: { GH_ENTERPRISE_TOKEN: 'ghp_pat' } });
+
+      execFile.mockClear();
+      await getLinkedIssueNumbers('owner', 'repo', 7, 'github.com');
+      expect(execFile.mock.calls[0][2]).toEqual({ timeout: 10000, env: undefined });
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
 });

@@ -4,7 +4,9 @@
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { GITHUB_COM_HOST } from '@archon/git';
 import { createLogger } from '@archon/paths';
+import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -14,6 +16,16 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * gh reads GH_TOKEN/GITHUB_TOKEN only for github.com; an Enterprise host takes
+ * GH_ENTERPRISE_TOKEN. Hand it the same PAT, unless the operator set one.
+ */
+function ghEnv(hostname: string): NodeJS.ProcessEnv | undefined {
+  const token = resolveGitHubTokenFromEnv();
+  if (hostname === GITHUB_COM_HOST.host || !token) return undefined;
+  return { GH_ENTERPRISE_TOKEN: token, ...process.env };
+}
 
 /**
  * Get issue numbers that will be closed when a PR is merged
@@ -58,7 +70,7 @@ export async function getLinkedIssueNumbers(
         '--jq',
         '.data.repository.pullRequest.closingIssuesReferences.nodes[].number',
       ],
-      { timeout: 10000 }
+      { timeout: 10000, env: ghEnv(hostname) }
     );
 
     // Parse output: each line is an issue number

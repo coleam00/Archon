@@ -1,7 +1,12 @@
 /**
  * Clone credentials for a forge URL, resolved from environment tokens.
  */
-import { githubTokenCredentials, resolveGitHubHost, type CloneCredentials } from '@archon/git';
+import {
+  GITHUB_COM_HOST,
+  githubTokenCredentials,
+  readGitHubHost,
+  type CloneCredentials,
+} from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
@@ -41,7 +46,7 @@ interface ForgeAuthEntry {
 /** Known exact-hostname → credential source + clone credential mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
   {
-    hostPattern: 'github.com',
+    hostPattern: GITHUB_COM_HOST.host,
     resolveToken: resolveGitHubTokenFromEnv,
     buildCredentials: githubTokenCredentials,
   },
@@ -103,7 +108,7 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
     buildCredentials: BuildForgeCredentials;
   }[] = [
     {
-      resolveUrl: () => resolveGitHubHost().webUrl,
+      resolveUrl: () => readGitHubHost()?.webUrl,
       resolveToken: resolveGitHubTokenFromEnv,
       buildCredentials: githubTokenCredentials,
     },

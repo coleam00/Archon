@@ -1323,6 +1323,20 @@ describe('cloneRepository', () => {
       delete process.env.GH_TOKEN;
     });
 
+    test("a malformed GITHUB_URL does not withhold other forges' credentials", () => {
+      process.env.GITHUB_URL = 'https://github.example.com/api/v3';
+      process.env.GITLAB_URL = 'https://gitlab.corp.example';
+      process.env.GITLAB_TOKEN = 'glpat-corp';
+      expect(resolveForgeAuth('https://gitlab.corp.example/o/r')).toEqual({
+        username: 'oauth2',
+        password: 'glpat-corp',
+      });
+
+      delete process.env.GITHUB_URL;
+      delete process.env.GITLAB_URL;
+      delete process.env.GITLAB_TOKEN;
+    });
+
     test('does not match forge name in URL path (security)', () => {
       process.env.GITLAB_TOKEN = 'glpat-leaked';
       const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
