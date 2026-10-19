@@ -1,9 +1,11 @@
 // @archon-test-isolated
+import { createHash } from 'node:crypto';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import type { NodeOutput } from '../schemas';
 import { executeDagWorkflow } from '../dag-executor';
 import { OutputRefError } from '../output-ref';
@@ -463,8 +465,14 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
 describe('substituteNodeOutputRefs -- large output file substitution', () => {
   let tempDir: string;
 
-  const spillPath = (artifactsDir: string, filename: string): string =>
-    join(artifactsDir, '.archon', 'node-output-spills', filename);
+  const spillPath = (artifactsDir: string, filename: string, value: string): string =>
+    join(
+      artifactsDir,
+      '.archon',
+      'node-output-spills',
+      createHash('sha256').update(value, 'utf8').digest('hex'),
+      filename
+    );
 
   beforeEach(async () => {
     tempDir = join(tmpdir(), `archon-test-large-output-${Date.now()}`);
@@ -481,7 +489,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toBe("echo 'small'");
   });
 
-  it('writes large output (>=32KB) to file and returns $(cat ...) reference', async () => {
+  it('writes output above 32KB to file and returns $(cat ...) reference', async () => {
     const largeOutput = 'x'.repeat(33_000);
     const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
     const result = substituteNodeOutputRefs('echo $a.output', outputs, true, tempDir);
@@ -489,8 +497,57 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toContain('a.nodeoutput');
     // Verify file was written with correct content
     const { readFile: readFileAsync } = await import('fs/promises');
-    const written = await readFileAsync(spillPath(tempDir, 'a.nodeoutput'), 'utf-8');
+    const written = await readFileAsync(spillPath(tempDir, 'a.nodeoutput', largeOutput), 'utf-8');
     expect(written).toBe(largeOutput);
+  });
+
+  it.each(['', '\n', '\n\n'])(
+    'inlines multibyte output below the code-unit threshold with suffix %j',
+    suffix => {
+      const output = 'é'.repeat(20_000) + suffix;
+      expect(output.length).toBeLessThan(32_768);
+      expect(Buffer.byteLength(output, 'utf8')).toBeGreaterThan(32_768);
+      expect(
+        substituteNodeOutputRefs(
+          'echo $a.output',
+          new Map([['a', makeOutput('completed', output)]]),
+          true,
+          tempDir
+        )
+      ).toBe(`echo '${output}'`);
+    }
+  );
+
+  it('inlines output at the UTF-16 code-unit threshold', () => {
+    const output = 'é'.repeat(32_768);
+    expect(
+      substituteNodeOutputRefs(
+        'echo $a.output',
+        new Map([['a', makeOutput('completed', output)]]),
+        true,
+        tempDir
+      )
+    ).toBe(`echo '${output}'`);
+  });
+
+  it.each([
+    { label: '32,001 bytes with newline', value: 'é'.repeat(16_000) + '\n' },
+    { label: '32,768 bytes with newline', value: 'é'.repeat(16_383) + 'x\n' },
+    { label: '40,000 bytes without newline', value: 'é'.repeat(20_000) },
+    { label: '40,001 bytes with newline', value: 'é'.repeat(20_000) + '\n' },
+    { label: '40,002 bytes with two newlines', value: 'é'.repeat(20_000) + '\n\n' },
+  ])('delivers $label exactly through all four shell output references', async ({ value }) => {
+    const outputs = new Map([['a', makeOutput('completed', value, { data: value })]]);
+    const script = substituteNodeOutputRefsInScopes(
+      'current=$a.output; field=$a.output.data; previous=$LOOP_PREV.a.output; prior_field=$LOOP_PREV.a.output.data; ' +
+        'printf "%s|%s|%s|%s" "$current" "$field" "$previous" "$prior_field"',
+      outputs,
+      [{ loopPrevOutputs: outputs, outputFileDir: tempDir }],
+      true,
+      tempDir
+    );
+    const { stdout } = await execFileAsync(resolveBashPath(), ['-c', script]);
+    expect(stdout).toBe([value, value, value, value].join('|'));
   });
 
   it('writes large field value to file with field name in filename', async () => {
@@ -500,7 +557,10 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toContain('$(cat ');
     expect(result).toContain('a.data.nodeoutput');
     const { readFile: readFileAsync } = await import('fs/promises');
-    const written = await readFileAsync(spillPath(tempDir, 'a.data.nodeoutput'), 'utf-8');
+    const written = await readFileAsync(
+      spillPath(tempDir, 'a.data.nodeoutput', largeValue),
+      'utf-8'
+    );
     expect(written).toBe(largeValue);
   });
 
@@ -517,7 +577,9 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     );
 
     expect(await readFile(workflowArtifact, 'utf-8')).toBe('workflow-owned');
-    expect(await readFile(spillPath(tempDir, 'a.nodeoutput'), 'utf-8')).toBe(largeOutput);
+    expect(await readFile(spillPath(tempDir, 'a.nodeoutput', largeOutput), 'utf-8')).toBe(
+      largeOutput
+    );
   });
 
   it('keeps same-node spills isolated in separate run artifact directories', async () => {
@@ -544,10 +606,14 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     );
 
     expect(runACommand).not.toBe(runBCommand);
-    expect(runACommand).toContain(spillPath(runAArtifacts, 'build.nodeoutput'));
-    expect(runBCommand).toContain(spillPath(runBArtifacts, 'build.nodeoutput'));
-    expect(await readFile(spillPath(runAArtifacts, 'build.nodeoutput'), 'utf-8')).toBe(runAOutput);
-    expect(await readFile(spillPath(runBArtifacts, 'build.nodeoutput'), 'utf-8')).toBe(runBOutput);
+    expect(runACommand).toContain(spillPath(runAArtifacts, 'build.nodeoutput', runAOutput));
+    expect(runBCommand).toContain(spillPath(runBArtifacts, 'build.nodeoutput', runBOutput));
+    expect(await readFile(spillPath(runAArtifacts, 'build.nodeoutput', runAOutput), 'utf-8')).toBe(
+      runAOutput
+    );
+    expect(await readFile(spillPath(runBArtifacts, 'build.nodeoutput', runBOutput), 'utf-8')).toBe(
+      runBOutput
+    );
   });
 
   it('does not write to file when escapedForBash=false even for large output', () => {

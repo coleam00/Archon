@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join as joinPath } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
@@ -26,7 +27,7 @@ export function writeSpillFile(dir: string, filename: string, value: string): st
   } catch (fileErr) {
     const err = fileErr as Error;
     getLog().error(
-      { err, dir, filename, valueSize: value.length, filePath },
+      { err, dir, filename, valueSize: Buffer.byteLength(value, 'utf8'), filePath },
       'dag.spill_file_write_failed'
     );
     return undefined;
@@ -45,7 +46,14 @@ export function shellQuoteOrFile(
   artifactsDir: string | undefined
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
-    const spillDir = joinPath(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'node-output-spills');
+    // Bash reads these files after all references resolve; distinct values must not overwrite.
+    const contentHash = createHash('sha256').update(value, 'utf8').digest('hex');
+    const spillDir = joinPath(
+      artifactsDir,
+      RUN_ARTIFACTS_ENGINE_SUBDIR,
+      'node-output-spills',
+      contentHash
+    );
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
     const filePath = writeSpillFile(spillDir, filename, value);
     if (filePath) return `$(cat ${shellQuote(filePath)})`;
