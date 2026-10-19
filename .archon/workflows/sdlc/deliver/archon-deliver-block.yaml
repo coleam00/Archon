@@ -260,15 +260,12 @@ nodes:
             required: [state, rerun, summary]
 
         # Posts and resolves settle-threads' answers, then reads what is still open,
-        # after CI so threads posted during the round count. gh alone: the forge
-        # contract has no review-thread operations, so the forge source skips it
-        # and the report records the threads as not checked.
+        # after CI so threads posted during the round count.
         - id: threads
           script: threads
           runtime: bun
           depends_on: [pr, review, rereview, ci, settle-threads]
           trigger_rule: none_failed_min_one_success
-          when: "$forge.output.source == 'gh'"
           with:
             pr: "$pr.output"
             answers: { from: "$settle-threads.output.answers", if_skipped: null }

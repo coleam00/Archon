@@ -35,10 +35,15 @@ export const REQUIRED_FORGE_OPERATIONS = [
   'workitem.view',
   'repo.labels.list',
   'repo.label.ensure',
-  'workitem.labels.set',
   'workitem.comment.upsert',
   'workitem.close',
   'workitem.create',
+  'workitem.edit-body',
+  'workitem.label.add',
+  'workitem.label.remove',
+  'pr.threads',
+  'pr.thread.reply',
+  'pr.thread.resolve',
 ] as const;
 
 export interface ForgeProbe {
