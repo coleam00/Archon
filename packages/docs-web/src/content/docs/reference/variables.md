@@ -42,11 +42,11 @@ If issue context is present but no context variable appears in the prompt, the c
 
 ### `$BASE_BRANCH` Fail-Fast
 
-Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immediately** if:
-- The variable is referenced in a prompt, AND
-- `worktree.baseBranch` is not set in `.archon/config.yaml`, AND
-- The registered codebase has no stored default branch, AND
-- Auto-detection from git fails
+Referencing `$BASE_BRANCH` in a prompt, `bash:`, or `script:` body **fails the node** when the run has no resolved base. This can happen when no explicit base, configured base, or codebase default is available and git detection fails, or when a folder project has no git base. A shared-checkout child can inherit an unresolved base from its parent.
+
+It also happens when an isolated child reuses an existing branch without its original child run record. The historical base is unknown even if current defaults are configured. Changing config or passing parent `--base` or `--from` cannot recover it. Start a new parent run so the child creates a new isolated branch with a known base.
+
+For a new top-level git run, pass `--base`, configure `worktree.baseBranch`, set the codebase default, or repair git detection. Resuming a run retains its recorded base, including an unresolved value, unless that run is explicitly retargeted with `--base`. Folder workflows that do not have a base should avoid referencing the variable.
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 

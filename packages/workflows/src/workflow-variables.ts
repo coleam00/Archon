@@ -166,8 +166,8 @@ export function substituteWorkflowVariables(
     variable('BASE_BRANCH', () => {
       if (!baseBranch) {
         throw new Error(
-          'No base branch could be resolved. Auto-detection failed and `worktree.baseBranch` is not set in .archon/config.yaml. ' +
-            'Set the config value or use the --from flag to select a branch (e.g., --from dev).'
+          'No base branch could be resolved for this run, but $BASE_BRANCH is referenced. ' +
+            'A reused isolated branch without its original child run record has no known base, even when defaults are configured.'
         );
       }
       return baseBranch;

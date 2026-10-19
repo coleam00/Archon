@@ -363,7 +363,7 @@ defaults:
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | Use a git repo for worktree isolation, or register a [folder project](/getting-started/concepts/#folder-projects) with `archon workflow run <name> --folder`. Folder projects run in place without managed git operations |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
-| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Pass `--base` for this run, set `worktree.baseBranch` in `.archon/config.yaml`, or repair the selected remote's symbolic HEAD |
+| `No base branch could be resolved for this run` | No resolved base, or an isolated child reused a branch without its original child run record | For a new top-level git run, pass `--base`, configure a default, or repair git detection. For unknown isolated reuse, start a new parent run that creates a new child branch; config and parent flags cannot recover the old base. Folder workflows without a base must avoid the variable. See [fail-fast behavior](/reference/variables/#base_branch-fail-fast) |
 | Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques

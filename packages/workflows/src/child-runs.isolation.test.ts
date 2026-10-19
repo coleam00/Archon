@@ -291,6 +291,18 @@ nodes:
         expect(result.success).toBe(!referencesBase);
         const child = [...store.runs.values()].find(r => r.workflow_name === 'child-adopt');
         expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe('');
+        if (referencesBase) {
+          const failed = store.events.find(
+            e =>
+              e.workflow_run_id === child?.id &&
+              e.event_type === 'node_failed' &&
+              e.step_name === 'work'
+          );
+          expect(failed?.data?.error).toBe(
+            'No base branch could be resolved for this run, but $BASE_BRANCH is referenced. ' +
+              'A reused isolated branch without its original child run record has no known base, even when defaults are configured.'
+          );
+        }
         if (!referencesBase) expect(child?.metadata.summary).toBe('done');
       });
     }
