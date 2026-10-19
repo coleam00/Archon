@@ -35,6 +35,7 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { type Document, isScalar, parseDocument, Scalar, YAMLMap } from 'yaml';
 import { copyArchonSkill } from './skill';
 import {
   SetupExit,
@@ -528,7 +529,7 @@ async function installProjectSkill(
 }
 
 /** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
-async function configureDocsPath(repoPath: string): Promise<void> {
+export async function configureDocsPath(repoPath: string): Promise<void> {
   const wantsDocsPath = await confirm({
     message: 'Configure a non-default docs directory? (default: docs/)',
     initialValue: false,
@@ -546,9 +547,26 @@ async function configureDocsPath(repoPath: string): Promise<void> {
         mkdirSync(archonDir, { recursive: true });
         const configPath = join(archonDir, 'config.yaml');
         const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        if (!existing.includes('docs:')) {
-          const escaped = docsPath.trim().replace(/"/g, '\\"');
-          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
+        // Use the runtime loader's parser to resolve aliases, merges and complex keys.
+        const parsed: unknown = Bun.YAML.parse(existing);
+        const hasDocs =
+          parsed !== null && typeof parsed === 'object' && Object.hasOwn(parsed, 'docs');
+        if (!hasDocs) {
+          const document: Document = parseDocument(existing, { uniqueKeys: false });
+          if (document.errors.length > 0) throw document.errors[0];
+          if (isScalar(document.contents) && document.contents.value === null) {
+            const root = new YAMLMap(document.schema);
+            root.commentBefore = document.contents.commentBefore;
+            root.comment = document.contents.comment;
+            root.spaceBefore = document.contents.spaceBefore;
+            document.contents = root;
+          }
+          const path = new Scalar(docsPath.trim());
+          path.type = Scalar.QUOTE_DOUBLE;
+          const docs = new YAMLMap(document.schema);
+          docs.set('path', path);
+          document.set('docs', docs);
+          writeFileSync(configPath, document.toString());
         } else {
           note(
             `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
