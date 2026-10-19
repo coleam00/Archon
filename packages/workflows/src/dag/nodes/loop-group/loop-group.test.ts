@@ -503,18 +503,15 @@ describe('executeDagWorkflow -- loop_group node', () => {
       previous: 'S'.repeat(33_000),
       current: 'S'.repeat(33_000),
     })),
-    {
-      label: 'whole multibyte output',
-      field: '',
-      previous: 'é'.repeat(20_000) + '\n',
-      current: 'é'.repeat(20_000) + '\n\n',
-    },
-    {
-      label: 'multibyte field',
-      field: '.data',
-      previous: 'é'.repeat(20_000) + '\n',
-      current: 'é'.repeat(20_000) + '\n\n',
-    },
+    // Over the threshold in UTF-8 bytes but not in code units, so both values stay inline.
+    // Three-byte characters keep the two inline values together under Windows' 32,767-character
+    // command-line limit, which `bash -c` must fit within.
+    ...['', '.data'].map(field => ({
+      label: `multibyte ${field || 'whole'} output`,
+      field,
+      previous: '€'.repeat(11_000) + '\n',
+      current: '€'.repeat(11_000) + '\n\n',
+    })),
   ])(
     'keeps current and previous $label distinct in a body bash node',
     async ({ field, previous, current }) => {
@@ -585,8 +582,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(existsSync(join(stateDir, '.archon', 'node-output-spills'))).toBe(false);
       expect(await readFile(currentFile, 'utf8')).toBe(current);
       expect(await readFile(previousFile, 'utf8')).toBe(previous);
+      const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
       if (previous.length > 32_768) {
-        const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
         const files = await readdir(spillDir, { recursive: true });
         const contents = await Promise.all(
           files
@@ -597,6 +594,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
         if (current === previous) {
           expect(contents.filter(content => content === previous).length).toBeGreaterThan(1);
         }
+      } else {
+        expect(existsSync(spillDir)).toBe(false);
       }
     }
   );
