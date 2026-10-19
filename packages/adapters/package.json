@@ -50,7 +50,11 @@
       "src/chat/slack/blocks.test.ts",
       "src/chat/telegram/",
       "src/community/chat/",
+      "src/community/forge/gitea/comment-delivery.test.ts",
+      "src/community/forge/gitea/webhook-intake.test.ts",
       "src/community/forge/gitlab/auth.test.ts",
+      "src/community/forge/gitlab/comment-delivery.test.ts",
+      "src/community/forge/gitlab/webhook-intake.test.ts",
       "src/forge/github/auth.test.ts",
       "src/forge/github/comment-delivery.test.ts",
       "src/forge/github/webhook-intake.test.ts",
@@ -79,7 +83,16 @@
       "src/community/forge/gitea/adapter.test.ts"
     ],
     [
+      "src/community/forge/gitea/registration.test.ts"
+    ],
+    [
+      "src/community/forge/gitea/repository-readiness.test.ts"
+    ],
+    [
       "src/community/forge/gitlab/adapter.test.ts"
+    ],
+    [
+      "src/community/forge/gitlab/registration.test.ts"
     ],
     [
       "src/community/forge/gitlab/clone-security.integration.test.ts"

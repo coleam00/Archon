@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { Mock } from 'bun:test';
 import { fetchCommentHistory, hasMention, stripMention } from './webhook-intake';
 import type { GitHubApi } from './types';
@@ -6,9 +6,12 @@ import * as log from './log';
 
 // Failure paths log at error level; keep them out of the test output.
 const silentLog = { debug: mock(), info: mock(), warn: mock(), error: mock() };
-const getLogSpy = spyOn(log, 'getLog').mockReturnValue(
-  silentLog as unknown as ReturnType<typeof log.getLog>
-);
+let getLogSpy: ReturnType<typeof spyOn<typeof log, 'getLog'>>;
+beforeAll(() => {
+  getLogSpy = spyOn(log, 'getLog').mockReturnValue(
+    silentLog as unknown as ReturnType<typeof log.getLog>
+  );
+});
 afterAll(() => {
   getLogSpy.mockRestore();
 });
