@@ -15,8 +15,7 @@
  */
 import { access } from 'fs/promises';
 import { basename, join } from 'path';
-import { getProjectRoot, sanitizeScopeSegment } from '@archon/paths/archon-paths';
-import { createLogger } from '@archon/paths';
+import { createLogger, getProjectRoot, sanitizeScopeSegment } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
