@@ -20,3 +20,12 @@ export function LiveDot({ size = 10 }: { size?: number }): ReactElement {
     </span>
   );
 }
+
+/** The dot for a running run: live while its owner answers, a still dot once it does not. */
+export function RunningDot({ live }: { live: boolean }): ReactElement {
+  return live ? (
+    <LiveDot />
+  ) : (
+    <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--running)]" />
+  );
+}

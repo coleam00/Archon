@@ -82,8 +82,15 @@ projects can derive the same one — two no-remote local repos both called `api`
 projects whose display names slugify identically. Registration keeps them apart: a new project
 whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
 `my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
-parallel checkouts. Unregistered working directories (`_cwd/<basename>`) are not registered, so
-two of them with the same folder name still share `$STATE_DIR`.
+parallel checkouts. Unregistered working directories use `@cwd/<basename>-<digest>`, where the digest is
+SHA-256 of the resolved absolute directory path. Distinct directory paths have separate
+`$STATE_DIR` roots, even when their folder names match. Moving a directory changes its root.
+
+Legacy `_cwd/<basename>` trees remain untouched. When legacy output exists, a run logs
+its location and the new root. Inspect the legacy `state/` directory and manually move
+only state belonging to this directory into the new `$STATE_DIR`; legacy state may have
+been shared by unrelated directories. New runs do not read or copy legacy state.
+Runs with an already recorded output root keep using it when resumed.
 
 ## Positional Arguments (not supported)
 

@@ -153,7 +153,7 @@ describe('Workflow Loader', () => {
     await mkdir(testDir, { recursive: true });
     process.env.ARCHON_HOME = join(testDir, 'home');
     delete process.env.ARCHON_DOCKER;
-    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery/scopes');
     resetLegacyHomeWarningForTests();
   });
 

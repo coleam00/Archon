@@ -90,3 +90,25 @@ test('a provider-limit wait in the banner shows its reset, Resume and Abandon, a
   expect(html).toContain('Resume');
   expect(html).not.toContain('Continue');
 });
+
+test.each([
+  ['unreachable', true],
+  ['unknown', false],
+  ['reachable', false],
+] as const)('a running run whose owner is %s offers Abandon: %s', (observation, offered) => {
+  const run = toRun({
+    id: 'orphan',
+    workflow_name: 'implement',
+    codebase_id: null,
+    status: 'running',
+    started_at: '2026-10-12T00:00:00.000Z',
+    owner_observation: observation,
+  });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunActionBar run={run} />
+    </MemoryRouter>
+  );
+  expect(html.includes('Abandon')).toBe(offered);
+  expect(html).toContain('Cancel');
+});

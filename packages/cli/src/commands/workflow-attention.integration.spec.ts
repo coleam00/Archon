@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { getProjectStoragePaths, resolveProjectStorageKey } from '@archon/paths/archon-paths';
+import {
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
+  projectKeyForCodebase,
+} from '@archon/paths/archon-paths';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
@@ -177,14 +181,15 @@ test('the queue scopes by project the way archon state names it, across a rename
 
   const scratch = await list(scratchDir);
   expect(scratch.map(item => item.runId)).toEqual([unregistered]);
+  const scratchKey = await stateKey(scratchDir);
   expect(scratch[0]?.project).toEqual({
-    key: await stateKey(scratchDir),
+    key: scratchKey,
     codebaseId: null,
-    name: 'scratch',
+    name: scratchKey.slice(scratchKey.lastIndexOf('/') + 1),
   });
-  expect((await list(registeredDir, { project: '_cwd/scratch' })).map(item => item.runId)).toEqual([
-    unregistered,
-  ]);
+  expect(
+    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.runId)
+  ).toEqual([unregistered]);
 
   expect((await list(registeredDir, { all: true })).map(item => item.runId).sort()).toEqual(
     [current, renamed, unregistered].sort()
@@ -346,7 +351,8 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
   };
   const alphaDir = projectDir('alpha');
   const alpha = await pausedIn(alphaDir);
-  const beta = await pausedIn(projectDir('beta'));
+  const betaDir = projectDir('beta');
+  const beta = await pausedIn(betaDir);
   const watch = (opts: Partial<Parameters<typeof workflowAttentionCommand>[3]> = {}) =>
     streamed(
       () =>
@@ -362,14 +368,24 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
     lines.flatMap(line =>
       line.type === 'attention' ? [[(line.item as AttentionQueueItem).runId, line.project]] : []
     );
-  const alphaProject = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
-  const betaProject = { key: '_cwd/beta', codebaseId: null, name: 'beta' };
+  const alphaKey = projectKeyForCodebase(null, alphaDir);
+  const alphaProject = {
+    key: alphaKey,
+    codebaseId: null,
+    name: alphaKey.slice(alphaKey.lastIndexOf('/') + 1),
+  };
+  const betaKey = projectKeyForCodebase(null, betaDir);
+  const betaProject = {
+    key: betaKey,
+    codebaseId: null,
+    name: betaKey.slice(betaKey.lastIndexOf('/') + 1),
+  };
 
   const own = await watch();
   expect(own.code).toBe(0);
   expect(runsOf(own.lines)).toEqual([[alpha, alphaProject]]);
   expect(
-    (await watch({ project: '_cwd/beta' })).lines.filter(line => line.type === 'attention')
+    (await watch({ project: betaKey })).lines.filter(line => line.type === 'attention')
   ).toMatchObject([{ project: betaProject, item: { runId: beta } }]);
   expect(runsOf((await watch({ all: true })).lines)).toEqual(
     expect.arrayContaining([

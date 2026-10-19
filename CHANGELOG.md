@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A workflow node that carries a key belonging to another node type, or a loop setting outside `loop:`/`loop_group:`, now fails the workflow load instead of being ignored or only warned about. For example, `runtime: bun` on a `prompt:` node or a top-level `interactive: true` on a `command:` node is now a load error naming the node, the key and the node types that support it. Move the key to a node that honours it, or delete it. (#2478)
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
+- Runs in an unregistered working directory now store their output under `@cwd/<basename>-<digest>`, where the digest comes from the directory's full path, so two directories with the same folder name no longer share `$STATE_DIR`. Moving a directory gives it a new root. Existing `_cwd/<basename>` trees are left in place and are no longer read; when one exists, a run logs its location and the new root so you can move state that belongs to that directory. Resumed runs keep their recorded root. (#4387)
 
 ## [0.12.1] - 2026-10-17
 

@@ -907,6 +907,10 @@ cannot tell whether the owner is alive. It says so on its `waiting` line and kee
 watching the run's stored state until it changes or `--timeout` passes. `abandon` prints
 the host the run recorded and says when it is not this one.
 
+The console applies the same rule from the server's host and user: a running run whose
+owner is gone shows "Running · owner not answering", and one the server cannot observe
+shows "Running · owner unknown". Neither is shown as live progress.
+
 `--json` emits one document. On a wake it carries the attention value:
 
 ```json
@@ -984,7 +988,8 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 - **Scope.** The default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
-  project key such as `_cwd/scratch`; `--all` covers the install. A run is in scope when
+  project key such as `@cwd/scratch-<digest>`; copy the exact key from
+  `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when
   its codebase id matches, when both sides have one, and otherwise when its project key
   matches, so a run paused before its codebase was renamed is still listed under the new
   name.

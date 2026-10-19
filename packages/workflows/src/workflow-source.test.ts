@@ -307,7 +307,7 @@ describe('captureWorkflowSource', () => {
     // The global-workflows guide tells people to symlink a scope root out of a dotfiles
     // repo (`ln -sf ~/dotfiles/archon/workflows ~/.archon/workflows`). An `lstat` guard
     // reports such a root as "not a directory" and drops the whole scope from the
-    // capture — silently, since a missing scope is a legitimate state. `copyTree` already
+    // capture — silently, since a missing scope is a legitimate state. `listTree` already
     // dereferences symlinks, so the entry guard has to as well.
     const { root, runArtifacts } = await createSandbox();
     const sourceRoot = join(root, 'linked-source');

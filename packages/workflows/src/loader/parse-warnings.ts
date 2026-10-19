@@ -250,7 +250,7 @@ export function collectConditionalJoinWarnings(
  * body entry, and before expansion it is an opaque target name no sink check can
  * classify, so a composed terminal sink is invisible at parse time. This therefore
  * runs once per workflow AFTER `expandWorkflowIncludes`, from the discovery site
- * that pairs warnings with the expanded definition (`workflow-discovery.ts`) — a
+ * that pairs warnings with the expanded definition (`workflow-discovery/expand-scope.ts`) — a
  * directly-authored sink keeps its id and its verdict through expansion, so it
  * still warns exactly once.
  */
