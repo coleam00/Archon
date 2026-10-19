@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import { runUsageMismatch } from './usage';
 
 // Each case is the shape of a historical aggregation defect, or a difference the
@@ -36,13 +37,32 @@ describe('runUsageMismatch', () => {
     expect(runUsageMismatch({ tokensUnknown: true }, { tokensUnknown: true })).toEqual([]);
   });
 
-  it('reports a differing cache axis', () => {
+  it.each(
+    tokenUsageSchema
+      .keyof()
+      .options.filter(
+        axis =>
+          axis !== 'total' && axis !== 'cost' && tokenUsageSchema.shape[axis].safeParse(0).success
+      )
+  )('reports a difference in schema counter %s', axis => {
+    const a = { tokens: { input: 10, output: 1 } };
+    const b = { tokens: { ...a.tokens, [axis]: 0 } };
+    expect(runUsageMismatch(a, b)).toEqual(['tokens']);
+    expect(runUsageMismatch(b, a)).toEqual(['tokens']);
+    expect(runUsageMismatch(b, { tokens: { ...b.tokens, [axis]: 1 } })).toEqual(['tokens']);
+    expect(runUsageMismatch(b, { tokens: { ...b.tokens } })).toEqual([]);
+    expect(runUsageMismatch({ ...a, tokensUnknown: true }, { ...b, tokensUnknown: true })).toEqual(
+      []
+    );
+  });
+
+  it('ignores the floor marker and provider-defined totals and costs', () => {
     expect(
       runUsageMismatch(
-        { tokens: { input: 10, output: 1, cacheRead: 4 } },
-        { tokens: { input: 10, output: 1, cacheRead: 5 } }
+        { tokens: { input: 10, output: 1 } },
+        { tokens: { input: 10, output: 1, cachePartial: true, total: 20, cost: 0.5 } }
       )
-    ).toEqual(['tokens']);
+    ).toEqual([]);
   });
 
   it('treats absent cost as zero and tolerates float summation order', () => {
