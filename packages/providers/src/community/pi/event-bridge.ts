@@ -445,6 +445,12 @@ export async function* bridgeSession(
   // passes through untouched.
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
+  // Fallback source for structured output. Some reasoning models (observed on
+  // Bedrock GLM-5.3, whose thinking cannot be disabled through pi-ai's Converse
+  // path) answer entirely in the thinking channel and leave the text channel
+  // empty. The text buffer stays authoritative; thoughts are only consulted
+  // when it yields no object.
+  let thoughtBuffer = '';
   // Track text streamed via text_delta for the current assistant turn.
   // Reset at each turn_start so only a run's final turn is compared against
   // the assembled text on its agent_end (see streaming-tail completion below).
@@ -524,6 +530,7 @@ export async function* bridgeSession(
           if (wantsStructured) assistantBuffer += chunk.text;
           appendPending(chunk.type, chunk.text);
         } else if (chunk.type === 'agent_thought_chunk') {
+          if (wantsStructured) thoughtBuffer += chunk.text;
           appendPending(chunk.type, chunk.text);
         } else {
           // Any other chunk is a boundary: drain buffered text first so ordering
@@ -639,10 +646,28 @@ export async function* bridgeSession(
           if (parsed !== undefined) {
             terminal.structuredOutput = parsed;
           } else {
-            getLog().warn(
-              { bufferLength: assistantBuffer.length },
-              'pi.event-bridge.structured_output_parse_failed'
-            );
+            // The text channel carried no object. Fall back to the thinking
+            // channel: a reasoning model that cannot be told to stop thinking
+            // may have emitted the requested JSON there instead.
+            const fromThought = tryParseStructuredOutput(thoughtBuffer);
+            if (fromThought !== undefined) {
+              terminal.structuredOutput = fromThought;
+              getLog().warn(
+                {
+                  bufferLength: assistantBuffer.length,
+                  thoughtLength: thoughtBuffer.length,
+                },
+                'pi.event-bridge.structured_output_from_thought'
+              );
+            } else {
+              getLog().warn(
+                {
+                  bufferLength: assistantBuffer.length,
+                  thoughtLength: thoughtBuffer.length,
+                },
+                'pi.event-bridge.structured_output_parse_failed'
+              );
+            }
           }
         }
         yield terminal;

@@ -137,7 +137,13 @@ describe('usageToTokens', () => {
       cacheRead: 20,
       cacheWrite: 5,
       totalTokens: 175,
-      cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+      cost: {
+        input: 0.001,
+        output: 0.002,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0.003,
+      },
     };
     expect(usageToTokens(usage)).toEqual({
       input: 125,
@@ -210,19 +216,34 @@ describe('buildResultChunk', () => {
         content: [],
       },
     ]);
-    expect(chunk).toMatchObject({ type: 'result', resolvedModel: { id: 'claude-opus-5' } });
+    expect(chunk).toMatchObject({
+      type: 'result',
+      resolvedModel: { id: 'claude-opus-5' },
+    });
   });
 
   test('omits resolvedModel when Pi does not report a responseModel', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', model: 'large', usage, stopReason: 'stop', content: [] },
+      {
+        role: 'assistant',
+        model: 'large',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
     ]);
     expect(chunk).not.toHaveProperty('resolvedModel');
   });
 
   test('flags isError for stopReason=error and surfaces errorMessage', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },
+      {
+        role: 'assistant',
+        usage,
+        stopReason: 'error',
+        errorMessage: 'auth',
+        content: [],
+      },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
@@ -234,7 +255,13 @@ describe('buildResultChunk', () => {
   test('falls back to the stop reason as evidence when errorMessage is absent or empty', () => {
     for (const errorMessage of [undefined, '']) {
       const chunk = buildResultChunk([
-        { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+        {
+          role: 'assistant',
+          usage,
+          stopReason: 'error',
+          errorMessage,
+          content: [],
+        },
       ]);
       expect(chunk.isError).toBe(true);
       expect(chunk.failure).toEqual({ class: 'unknown', evidence: 'error' });
@@ -251,9 +278,18 @@ describe('buildResultChunk', () => {
     ["400 invalid_request_error: You're out of extra usage"],
   ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+      {
+        role: 'assistant',
+        usage,
+        stopReason: 'error',
+        errorMessage,
+        content: [],
+      },
     ]);
-    expect(chunk.failure).toEqual({ class: 'unknown', evidence: errorMessage });
+    expect(chunk.failure).toEqual({
+      class: 'unknown',
+      evidence: errorMessage,
+    });
   });
 
   // Pi's stop reasons in ACP's names; one ACP has no name for is left off.
@@ -278,11 +314,21 @@ describe('buildResultChunk', () => {
 
   test('outcome comes from the last assistant message, usage from all of them', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: 'overloaded', content: [] },
+      {
+        role: 'assistant',
+        usage,
+        stopReason: 'error',
+        errorMessage: 'overloaded',
+        content: [],
+      },
       { role: 'user', content: [] },
       { role: 'assistant', usage, stopReason: 'stop', content: [] },
     ]);
-    expect(chunk).toMatchObject({ type: 'result', stopReason: 'end_turn', tokens: { input: 20 } });
+    expect(chunk).toMatchObject({
+      type: 'result',
+      stopReason: 'end_turn',
+      tokens: { input: 20 },
+    });
     expect(chunk).not.toHaveProperty('isError');
   });
 });
@@ -358,7 +404,12 @@ describe('mapPiEvent', () => {
       args: { path: '/foo' },
     });
     expect(chunks).toEqual([
-      { type: 'tool_call', toolCallId: 'call-123', name: 'read', rawInput: { path: '/foo' } },
+      {
+        type: 'tool_call',
+        toolCallId: 'call-123',
+        name: 'read',
+        rawInput: { path: '/foo' },
+      },
     ]);
   });
 
@@ -414,7 +465,12 @@ describe('mapPiEvent', () => {
       isError: true,
     });
     expect(chunks).toEqual([
-      { type: 'tool_call_update', toolCallId: 'call-99', status: 'failed', output: 'exit 1' },
+      {
+        type: 'tool_call_update',
+        toolCallId: 'call-99',
+        status: 'failed',
+        output: 'exit 1',
+      },
     ]);
   });
 
@@ -427,7 +483,11 @@ describe('mapPiEvent', () => {
       errorMessage: 'rate limit',
     });
     expect(chunks).toEqual([
-      { type: 'warning', code: 'pi.auto_retry', message: 'retry 1/3: rate limit' },
+      {
+        type: 'warning',
+        code: 'pi.auto_retry',
+        message: 'retry 1/3: rate limit',
+      },
     ]);
   });
 
@@ -465,11 +525,23 @@ describe('mapPiEvent', () => {
       mapPiEvent({
         type: 'compaction_end',
         reason: 'threshold',
-        result: { summary: 's', firstKeptEntryId: 'e1', tokensBefore: 120_000, details: {} },
+        result: {
+          summary: 's',
+          firstKeptEntryId: 'e1',
+          tokensBefore: 120_000,
+          details: {},
+        },
         aborted: false,
         willRetry: false,
       })
-    ).toEqual([{ type: 'compaction', phase: 'completed', trigger: 'auto', tokensBefore: 120_000 }]);
+    ).toEqual([
+      {
+        type: 'compaction',
+        phase: 'completed',
+        trigger: 'auto',
+        tokensBefore: 120_000,
+      },
+    ]);
   });
 
   test('an aborted compaction_end (no result) yields nothing', () => {
@@ -496,12 +568,17 @@ describe('tryParseStructuredOutput', () => {
   });
 
   test('parses JSON with surrounding whitespace', () => {
-    expect(tryParseStructuredOutput('  \n{"ok":true}\n  ')).toEqual({ ok: true });
+    expect(tryParseStructuredOutput('  \n{"ok":true}\n  ')).toEqual({
+      ok: true,
+    });
   });
 
   test('strips ```json fences', () => {
     const fenced = '```json\n{"area":"web","confidence":0.9}\n```';
-    expect(tryParseStructuredOutput(fenced)).toEqual({ area: 'web', confidence: 0.9 });
+    expect(tryParseStructuredOutput(fenced)).toEqual({
+      area: 'web',
+      confidence: 0.9,
+    });
   });
 
   test('strips bare ``` fences', () => {
@@ -594,13 +671,17 @@ describe('tryParseStructuredOutput', () => {
   test('tier 3 recovers a max_tokens-truncated object', () => {
     // `{"unclosed":` is a token-capped tail; jsonrepair closes it with a null value.
     // Wrong-but-object → the dag-executor's schema validation rejects it downstream.
-    expect(tryParseStructuredOutput('{"unclosed":')).toEqual({ unclosed: null });
+    expect(tryParseStructuredOutput('{"unclosed":')).toEqual({
+      unclosed: null,
+    });
   });
 
   test('preserves backticks inside JSON string values', () => {
     // Fence stripper matches only at start/end; inner backticks must survive.
     const withBackticks = '{"code":"run `npm test`"}';
-    expect(tryParseStructuredOutput(withBackticks)).toEqual({ code: 'run `npm test`' });
+    expect(tryParseStructuredOutput(withBackticks)).toEqual({
+      code: 'run `npm test`',
+    });
   });
 });
 
@@ -1072,7 +1153,116 @@ describe('streaming tail completion', () => {
     }
 
     const resultChunk = chunks.find(c => c.type === 'result');
-    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({ partial: true });
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({
+      partial: true,
+    });
+  });
+
+  function makeThinkingDeltaEvent(delta: string): AgentSessionEvent {
+    return {
+      type: 'message_update',
+      message: { role: 'assistant' },
+      assistantMessageEvent: {
+        type: 'thinking_delta',
+        contentIndex: 0,
+        delta,
+        partial: { role: 'assistant' },
+      },
+    } as unknown as AgentSessionEvent;
+  }
+
+  function makeEmptyAgentEndEvent(): AgentSessionEvent {
+    return {
+      type: 'agent_end',
+      messages: [{ role: 'assistant', usage, stopReason: 'stop', content: [] }],
+    } as unknown as AgentSessionEvent;
+  }
+
+  test('structured output falls back to the thinking channel when text is empty', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeThinkingDeltaEvent('Reasoning about the task.\n{"area":'));
+        listener?.(makeThinkingDeltaEvent('"web","confidence":0.9}'));
+        listener?.(makeEmptyAgentEndEvent());
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    const schema = { type: 'object' };
+    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find(c => c.type === 'result');
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({
+      area: 'web',
+      confidence: 0.9,
+    });
+  });
+
+  test('text channel wins over the thinking channel for structured output', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeThinkingDeltaEvent('{"draft":true}'));
+        listener?.(makeTextDeltaEvent('{"final":true}'));
+        listener?.(makeAgentEndEvent('{"final":true}'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    const schema = { type: 'object' };
+    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find(c => c.type === 'result');
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({
+      final: true,
+    });
+  });
+
+  test('thinking channel is not parsed when no schema was requested', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeThinkingDeltaEvent('{"leak":true}'));
+        listener?.(makeEmptyAgentEndEvent());
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find(c => c.type === 'result');
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toBeUndefined();
   });
 });
 
@@ -1081,7 +1271,13 @@ describe('streaming tail completion', () => {
 describe('bridgeSession usage covers every model call of the prompt', () => {
   /** Pi reports usage per assistant message: one message per model call. */
   function assistant(
-    usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
+    usage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      cost: number;
+    },
     stopReason: StopReason,
     responseModel?: string
   ): Record<string, unknown> {
@@ -1096,7 +1292,13 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
         cacheRead: usage.cacheRead,
         cacheWrite: usage.cacheWrite,
         totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: usage.cost,
+        },
       },
     };
   }
@@ -1104,7 +1306,11 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
   const toolResult = { role: 'toolResult', toolCallId: 't', content: [] };
 
   function agentEnd(messages: Record<string, unknown>[]): AgentSessionEvent {
-    return { type: 'agent_end', willRetry: false, messages } as unknown as AgentSessionEvent;
+    return {
+      type: 'agent_end',
+      willRetry: false,
+      messages,
+    } as unknown as AgentSessionEvent;
   }
 
   function makeSession(events: AgentSessionEvent[]): AgentSession {
@@ -1145,17 +1351,35 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
       agentEnd([
         { role: 'user', content: [] },
         assistant(
-          { input: 900, output: 700, cacheRead: 0, cacheWrite: 100, cost: 0.01 },
+          {
+            input: 900,
+            output: 700,
+            cacheRead: 0,
+            cacheWrite: 100,
+            cost: 0.01,
+          },
           'toolUse'
         ),
         toolResult,
         assistant(
-          { input: 150, output: 1500, cacheRead: 850, cacheWrite: 0, cost: 0.02 },
+          {
+            input: 150,
+            output: 1500,
+            cacheRead: 850,
+            cacheWrite: 0,
+            cost: 0.02,
+          },
           'toolUse'
         ),
         toolResult,
         assistant(
-          { input: 200, output: 40, cacheRead: 1000, cacheWrite: 0, cost: 0.004 },
+          {
+            input: 200,
+            output: 40,
+            cacheRead: 1000,
+            cacheWrite: 0,
+            cost: 0.004,
+          },
           'stop',
           'deepseek-v4'
         ),
@@ -1284,7 +1508,12 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
         model: 'claude-opus-5-5',
         usage: warm,
       }),
-      entryAppended({ ...base, type: 'session_info', id: 'info', name: 'not usage' }),
+      entryAppended({
+        ...base,
+        type: 'session_info',
+        id: 'info',
+        name: 'not usage',
+      }),
       agentEnd([
         assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'stop'),
       ]),
