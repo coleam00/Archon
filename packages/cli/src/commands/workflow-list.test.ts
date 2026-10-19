@@ -7,7 +7,7 @@ import {
 } from '../test-support/workflow-command-harness';
 import { providerRegistry } from '@archon/providers';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowListCommand, workflowTestCommand } from './workflow';
+import { workflowListCommand, workflowTestCommand } from './workflow-query';
 
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;

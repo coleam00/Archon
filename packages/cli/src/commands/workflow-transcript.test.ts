@@ -9,7 +9,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, truncateSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { workflowLogsCommand } from './workflow';
+import { workflowLogsCommand } from './workflow-query';
 
 describe('workflowLogsCommand', () => {
   let fixtureRoot: string;

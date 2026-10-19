@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
 import { removeTempTree } from '@archon/paths/test-utils';
 
