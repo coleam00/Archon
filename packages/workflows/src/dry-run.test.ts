@@ -2203,54 +2203,60 @@ describe('dryRunWorkflow', () => {
   ]) {
     for (const skipped of [true, false]) {
       const kind = 'approval' in pause ? 'gate' : 'attention wait';
-      test(`loop-group output reads past a ${skipped ? 'skipped' : 'completed'} ${kind}`, async () => {
-        const workflow = makeTestWorkflow({
-          name: 'loop-group-human-sink',
-          nodes: [
-            {
-              id: 'group',
-              loop_group: {
-                until: 'DONE',
-                max_iterations: 2,
-                nodes: [
-                  { id: 'work', prompt: 'work' },
-                  {
-                    id: 'end',
-                    ...pause,
-                    depends_on: ['work'],
-                    ...(skipped ? { when: "$work.output == 'never'" } : {}),
-                  },
-                ],
+      test.each([
+        ['bare', 'DONE', 'DONE'],
+        ['tagged', 'Result <promise>DONE</promise>', 'Result'],
+      ])(
+        `loop-group output reads past a ${skipped ? 'skipped' : 'completed'} ${kind} (%s)`,
+        async (_label, rawOutput, expectedOutput) => {
+          const workflow = makeTestWorkflow({
+            name: 'loop-group-human-sink',
+            nodes: [
+              {
+                id: 'group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 2,
+                  nodes: [
+                    { id: 'work', prompt: 'work' },
+                    {
+                      id: 'end',
+                      ...pause,
+                      depends_on: ['work'],
+                      ...(skipped ? { when: "$work.output == 'never'" } : {}),
+                    },
+                  ],
+                },
               },
+              { id: 'after', prompt: 'Result: $group.output', depends_on: ['group'] },
+            ],
+          });
+          const result = await dryRunWorkflow({
+            workflow,
+            userMessage: '',
+            cwd: process.cwd(),
+            stubs: {
+              work: rawOutput,
+              after: 'received',
+              ...(!skipped && 'wait' in pause ? { end: { text: 'reviewed' } } : {}),
             },
-            { id: 'after', prompt: 'Result: $group.output', depends_on: ['group'] },
-          ],
-        });
-        const result = await dryRunWorkflow({
-          workflow,
-          userMessage: '',
-          cwd: process.cwd(),
-          stubs: {
-            work: 'DONE',
-            after: 'received',
-            ...(!skipped && 'wait' in pause ? { end: { text: 'reviewed' } } : {}),
-          },
-        });
+          });
 
-        expect(result.outcome).toBe('completed');
-        expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(1);
-        expect(result.trace.find(entry => entry.nodeId === 'end')?.state).toBe(
-          skipped ? 'skipped' : 'wait' in pause ? 'stubbed' : 'completed'
-        );
-        expect(result.trace.find(entry => entry.nodeId === 'group')).toMatchObject({
-          state: 'completed',
-          output: 'DONE',
-          reason: 'completion signal after 1 iteration(s)',
-        });
-        expect(result.trace.find(entry => entry.nodeId === 'after')?.resolvedText).toBe(
-          'Result: DONE'
-        );
-      });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(1);
+          expect(result.trace.find(entry => entry.nodeId === 'end')?.state).toBe(
+            skipped ? 'skipped' : 'wait' in pause ? 'stubbed' : 'completed'
+          );
+          expect(result.trace.find(entry => entry.nodeId === 'group')).toMatchObject({
+            state: 'completed',
+            output: expectedOutput,
+            reason: 'completion signal after 1 iteration(s)',
+          });
+          expect(result.trace.find(entry => entry.nodeId === 'after')?.resolvedText).toBe(
+            `Result: ${expectedOutput}`
+          );
+        }
+      );
     }
   }
 
