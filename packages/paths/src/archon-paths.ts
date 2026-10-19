@@ -845,15 +845,14 @@ export function resolveProjectStorageKey(
  * Compose the output roots for a storage key. Every kind resolves UNDER
  * `ARCHON_HOME` — including `'cwd'`, which maps to the `@cwd` namespace.
  *
- * The `'cwd'` mapping is deliberately external: the engine used to write an
- * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
- * user's repository, where a worktree teardown destroyed them and `git status`
- * showed them. Relocating it is a breaking change accepted in #2200 so that
- * EVERY run's output is retrievable from one tree.
+ * The `'cwd'` mapping is deliberately external: the engine used to write an unregistered
+ * run's artifacts and logs to `<cwd>/.archon/`, i.e. into the user's repository, where a
+ * worktree teardown destroyed them and `git status` showed them. Relocating it is a breaking
+ * change accepted in #2200 so that EVERY run's output is retrievable from one tree.
  *
- * An unregistered directory keys on a SHA-256 of `resolve(cwd)`. The digest is
- * lexical, so pass a {@link canonicalizeProjectPath} path when it must match the
- * CLI's key; other spellings of one directory get separate roots.
+ * An unregistered directory keys on a lexical SHA-256 of `resolve(cwd)`: pass a
+ * {@link canonicalizeProjectPath} path to match the CLI's key. `@` starts no repo
+ * owner, and 190 basename bytes + '-' + 64 hex digits fit a 255-byte name.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -867,7 +866,6 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
     case 'cwd': {
       const cwd = resolve(key.cwd);
       const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
-      // `@` never starts a repo owner; 190 + '-' + 64 hex digits fits a 255-byte name.
       root = getProjectRoot('@cwd', `${name}-${createHash('sha256').update(cwd).digest('hex')}`);
       break;
     }
