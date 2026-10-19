@@ -319,6 +319,30 @@ the review eval, and `archon-ship-block` and `archon-deliver-block` themselves. 
 composer owns what follows the stage's ending and asks through its own attention item
 when it needs a person, so one decision never raises two items.
 
+## Models per stage
+
+Each stage names the concern it serves as a model preference list. The first alias
+your config defines wins. When it defines none, the node runs on the size tier it has
+always used. A user who sets nothing gets the same models as before.
+
+| Alias | Nodes | Falls back to |
+|---|---|---|
+| `@triage` | triage | `medium` |
+| `@planner` | plan | `large` |
+| `@investigator` | investigate | `medium` |
+| `@implementer` | implement, including delivery's reshape | `large` |
+| `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code`, `medium` for the rest) |
+
+Review's lens router stays on `small`, and the queue, attention and delivery judges
+keep their tiers. Moving those means rebinding the tier.
+
+Set an alias for every run with `archon ai alias set @reviewer codex gpt-5.5`, or in
+`aliases:` in `.archon/config.yaml`. Set it for one run with
+`archon workflow run ... --model @reviewer=codex/gpt-5.5`. A lens alias overrides only
+its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on
+Claude and every other lens on Codex.
+
 ## A node's streams are the operator's channel
 
 Retention is not the only reader. Anything a node writes to stderr is sent to the
