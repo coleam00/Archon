@@ -350,19 +350,6 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
-  const sourced = await establishRunSource(
-    deps,
-    platform,
-    conversationId,
-    workflowRun,
-    workflowSourceDir,
-    opts
-  );
-  if (sourced.stopped) return sourced.result;
-  const workflowSourceRoots = sourced.value;
-
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
   // Hold a Windows keep-awake request for the executing window (see
@@ -378,6 +365,22 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
+
+    const sourced = await establishRunSource(
+      deps,
+      platform,
+      conversationId,
+      workflowRun,
+      workflowSourceDir,
+      opts
+    );
+    if (sourced.stopped) {
+      sourceExecutionStopped = true;
+      return sourced.result;
+    }
+    const workflowSourceRoots = sourced.value;
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
