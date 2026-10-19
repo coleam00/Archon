@@ -1,6 +1,6 @@
 import { expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -21,9 +21,15 @@ function git(cwd: string, ...args: string[]): string {
   return run.stdout.trim();
 }
 
-it.each(['build-queue', 'ship'] as const)(
-  '%s delivery enters at the remote PR head',
-  entry => {
+it.each([
+  ['build-queue', 'deliver'],
+  ['ship', 'deliver'],
+  ['ship', 'continue'],
+  ['ship', 'investigate'],
+  ['ship', 'plan'],
+] as const)(
+  '%s %s delivery enters at the remote PR head',
+  (entry, route) => {
     const cwd = gitCheckout({}, track);
     const head = git(cwd, 'rev-parse', 'HEAD');
     git(cwd, 'push', '-q', 'upstream', 'feature');
@@ -110,6 +116,26 @@ it.each(['build-queue', 'ship'] as const)(
       };
     } else {
       stubs.continuation = PR;
+      stubs.triage__triage = {
+        ...(stubs.triage__triage as Record<string, unknown>),
+        decision: {
+          contract: 'READY',
+          route,
+          ...(route === 'continue' ? { pull_request: PR.number } : {}),
+        },
+      };
+      stubs.inv__investigate = {
+        verdict: 'rooted',
+        summary: 'cause established',
+        report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'investigation.md' },
+      };
+      stubs.intel = 'No usage data needed';
+      stubs.planned__plan = {
+        ready: true,
+        open_questions: [],
+        summary: 'ready to implement',
+        report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'plan.md' },
+      };
     }
     const stubFile = join(source, 'stubs.json');
     writeFileSync(stubFile, JSON.stringify(stubs));
@@ -145,6 +171,106 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => argv.include
       status: 0,
     });
     expect(readFileSync(observed, 'utf8').trim()).toBe(head);
+  },
+  30_000
+);
+
+it.each([
+  [
+    'no_action',
+    { contract: 'NO_ACTION', closure: { kind: 'delivered', url: 'https://example.com/pr/3' } },
+    null,
+  ],
+  ['blocked', { contract: 'BLOCKED', blocked_reason: 'missing access', blocked_by: [] }, null],
+  [
+    'needs_contract',
+    {
+      contract: 'NEEDS_CONTRACT_WORK',
+      proposed_edits: { title: 'Work', body: 'Acceptance needed' },
+    },
+    null,
+  ],
+  ['refuted', { contract: 'READY', route: 'investigate' }, 'refuted'],
+  ['not_rooted', { contract: 'READY', route: 'investigate' }, 'inconclusive'],
+  ['ask', { contract: 'READY', route: 'plan' }, null],
+] as const)(
+  'standalone ship preserves %s with and without a caller PR',
+  (reason, decision, verdict) => {
+    const root = track(mkdtempSync(join(tmpdir(), 'archon-stop-continuation-')));
+    cpSync(PACK, join(root, '.archon/workflows/sdlc'), { recursive: true });
+    const fixture = Bun.YAML.parse(
+      readFileSync(join(PACK, 'ship/fixtures/plan-blocked.stubs.yaml'), 'utf8')
+    ) as Record<string, unknown>;
+    delete fixture.fixture;
+    delete fixture['exec-code'];
+    const stubs = {
+      ...fixture,
+      triage__triage: {
+        ...(fixture.triage__triage as Record<string, unknown>),
+        decision,
+      },
+      continuation: PR,
+      inv__investigate: {
+        verdict,
+        summary: 'No implementation admitted',
+        report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'investigation.md' },
+      },
+    };
+    const stubFile = join(root, 'stubs.json');
+    writeFileSync(stubFile, JSON.stringify(stubs));
+    const observed = join(root, 'pr-read');
+    const preload = join(root, 'forge.ts');
+    writeFileSync(
+      preload,
+      `import { writeFileSync } from 'node:fs';
+const original = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
+  if (!argv.includes('pr.view')) return original(argv, options);
+  writeFileSync(${JSON.stringify(observed)}, 'read');
+  return { exitCode: 0, stdout: Buffer.from(${JSON.stringify(
+    forgeOperation('pr.view', {
+      pr: forgePrRecord({
+        head_repo: { host: PR.repo.host, path: 'fork/repo' },
+        maintainer_can_modify: false,
+      }),
+      title: '',
+      body: '',
+    })
+  )}), stderr: Buffer.alloc(0) };
+} });`
+    );
+    for (const caller of ['', String(PR.number)]) {
+      const run = spawnSync(
+        hostCli()[0],
+        [
+          ...hostCli().slice(1),
+          'workflow',
+          'run',
+          'archon-ship-block',
+          '--cwd',
+          root,
+          '--dry-run',
+          '--exec-code',
+          '--stubs',
+          stubFile,
+          '--json',
+          '--input',
+          `pull_request=${caller}`,
+        ],
+        {
+          cwd: root,
+          encoding: 'utf8',
+          env: { ...process.env, ARCHON_SDLC_FORGE: 'forge', BUN_OPTIONS: `--preload=${preload}` },
+        }
+      );
+      expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toMatchObject({
+        status: 0,
+      });
+      const result = JSON.parse(run.stdout) as { outcome: string; summary: string };
+      expect(result.outcome).toBe('completed');
+      expect(JSON.parse(result.summary)).toMatchObject({ delivered: false, reason, pr_url: '' });
+      expect(existsSync(observed)).toBe(false);
+    }
   },
   30_000
 );

@@ -251,8 +251,11 @@ URL is the common one — `https://<token>@host/repo` is a perfectly ordinary or
 for repository selection. Before PR-head checkout or publication, it also checks
 transport without printing the URLs. Selected head remotes must use HTTPS or SSH
 for network transport, including Git's effective fetch and push URLs after
-`insteadOf`, `pushInsteadOf` and `pushurl` configuration. Local paths and `file://`
-URLs are also supported; explicit remote-helper syntax (`<transport>::<address>`)
+`insteadOf`, `pushInsteadOf` and `pushurl` configuration. To use a local path or
+`file://` transport, configure the remote with the forge repository's HTTPS or SSH
+URL and use Git `url.<local-path-or-file-url>.insteadOf` to rewrite its effective
+URL. A directly configured local URL cannot identify the forge repository to the
+selector. Explicit remote-helper syntax (`<transport>::<address>`)
 and configured `remote.<name>.vcs` helpers are refused because helpers control
 their own transport. Publication checks every push URL and the fetch URL used
 for readback. Failure messages are the same surface: interpolating a raw URL into one leaks it just as effectively.
@@ -489,13 +492,17 @@ read failures ask for a setup remedy. An initial facts read failure stops the ru
 with its error before route starts. Neither path falls back to another source.
 
 Build-queue continuations fetch the qualified PR head and fast-forward to that
-exact commit before ship starts. Standalone ship resolves the continuation repository
-from the target, triage and remotes, then prepares the same exact start before delivery.
+exact commit before ship starts. Once triage and any investigation or plan admit
+delivery, standalone ship resolves the continuation repository from the target,
+triage and remotes, then prepares the same exact start before delivery.
 Both preserve the local branch and refuse local history that cannot fast-forward to
 the PR head. Head remotes used for checkout or publication must use encrypted
 network transport (HTTPS or SSH); the selector checks their configured and effective
-URLs without printing them. Local paths and `file://` URLs remain supported;
-explicit remote-helper syntax and configured `remote.<name>.vcs` helpers are refused.
+URLs without printing them. Local paths and `file://` transports require a
+configured remote with the forge repository's HTTPS or SSH URL and a Git
+`url.<local-path-or-file-url>.insteadOf` rewrite to the local destination. A directly
+configured local URL cannot identify the forge repository to the selector.
+Explicit remote-helper syntax and configured `remote.<name>.vcs` helpers are refused.
 Editable forks can use their HTTPS URL without a configured remote, subject to
 the same effective-transport check.
 Publication still uses a normal push and refuses a subsequently advanced remote head.

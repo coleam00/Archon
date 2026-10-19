@@ -114,7 +114,10 @@ nodes:
   - id: continues
     script: continues
     runtime: bun
-    depends_on: [triage]
+    depends_on: [triage, inv, planned]
+    trigger_rule: none_failed_min_one_success
+    # Skipped advisory branches have no output; the predicate short-circuits.
+    when: &delivery_admitted "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
     with:
       caller: "$INPUTS.pull_request"
       triage: { from: "$triage.output.pull_request" }
@@ -151,6 +154,7 @@ nodes:
     runtime: bun
     depends_on: [continues, continuation]
     trigger_rule: none_failed_min_one_success
+    when: *delivery_admitted
     with:
       pull_request: "$continues.output.pull_request"
       ref: { from: "$continuation.output", if_skipped: null }
@@ -180,8 +184,7 @@ nodes:
     # the run.
     depends_on: [triage, continues, continuation, checkout, inv, planned]
     trigger_rule: none_failed_min_one_success
-    # `&&` short-circuits, so a skipped producer's output is never read.
-    when: "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
+    when: *delivery_admitted
 
   # The result of every legitimate ending, relayed by `report`. Negative advisory verdicts
   # complete with the report that explains them; a delivery is reported from the
