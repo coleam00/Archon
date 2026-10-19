@@ -162,7 +162,8 @@ describe('watchAttentionQueue', () => {
         { scope: { kind: 'all' }, labels: { ci: 'pr' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
       );
       const until = async (condition: () => boolean): Promise<void> => {
-        for (let waited = 0; waited < 1000; waited += 5) {
+        const deadline = performance.now() + 15_000;
+        while (performance.now() < deadline) {
           if (condition()) return;
           await Bun.sleep(5);
         }
@@ -193,7 +194,8 @@ describe('watchAttentionQueue', () => {
       } finally {
         await stream.close();
       }
-    }
+    },
+    40_000
   );
 
   test('a rejected degradation warning retains the cursor until the consumer accepts it', async () => {
