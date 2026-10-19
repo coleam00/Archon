@@ -121,8 +121,8 @@ export function createCodebaseChildResolver(
      * of the canonical repo no matter what the parent run was dispatched with. Which
      * also means a child sees neither the parent's uncommitted work nor its commits —
      * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
-     * Threading `--base` down is a real design question (stacked-from-parent vs
-     * cut-from-base) rather than an oversight; documented in the authoring guide.
+     * The provider returns its selected reporting base; adoption without a new
+     * resolution returns this codebase fallback instead.
      */
     baseBranch: string | undefined;
     /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
@@ -192,6 +192,10 @@ export function createCodebaseChildResolver(
         );
 
         return {
+          baseBranch:
+            env.resolvedBaseBranch !== undefined
+              ? { kind: 'resolved', value: env.resolvedBaseBranch }
+              : { kind: 'fallback', value: surface.baseBranch },
           cwd: env.workingPath,
           envId: created.envId,
           ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),

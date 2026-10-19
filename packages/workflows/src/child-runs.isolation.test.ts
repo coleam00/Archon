@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   telemetryInvocations,
+  detectDefaultBranch,
   InMemoryStore,
   makeDeps,
   makePlatform,
@@ -166,58 +167,207 @@ nodes:
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
   });
 
-  it("isolation: 'inherit' (and default) shares the parent's checkout — resolver untouched", async () => {
-    await writeWorkflow(
-      'child-share',
-      `
+  for (const isolation of ['inherit', undefined]) {
+    for (const base of ['fallback', 'override', 'empty']) {
+      it(`shared child inherits ${base} base with isolation ${String(isolation)}`, async () => {
+        await writeWorkflow(
+          'child-share',
+          `
 name: child-share
-description: child sharing the parent checkout
+description: reports shared checkout base
 nodes:
   - id: work
-    prompt: "do work for $ARGUMENTS"
+    bash: |
+      ${base === 'empty' ? 'printf done' : `printf '%s' "$BASE_BRANCH"`}
 `
-    );
-    await writeWorkflow(
-      'parent-inherit',
-      `
+        );
+        await writeWorkflow(
+          'parent-inherit',
+          `
 name: parent-inherit
-description: parent whose child inherits the checkout
+description: shares checkout
 nodes:
   - id: sub
     workflow: child-share
-    input: "x"
-    isolation: inherit
+${isolation ? '    isolation: inherit' : ''}
 `
-    );
+        );
+        const store = new InMemoryStore();
+        const deps = makeDeps(store);
+        const loadConfig = deps.loadConfig;
+        let loads = 0;
+        deps.loadConfig = async path => ({
+          ...(await loadConfig(path)),
+          ...(loads++ > 0 ? { baseBranch: 'child-config' } : {}),
+        });
+        if (base === 'empty') {
+          deps.store.getCodebase = async () => ({
+            id: 'folder',
+            name: 'folder',
+            repository_url: null,
+            default_cwd: cwd,
+            kind: 'folder',
+          });
+        }
+        const { resolver, calls } = makeFakeResolver(join(cwd, 'unused'));
+        detectDefaultBranch.mockClear();
+        const expected =
+          base === 'empty' ? '' : base === 'override' ? 'parent-override' : 'parent-default';
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('parent-inherit'),
+          'goal',
+          { conversationId: 'conv-db' },
+          {
+            resolveChildIsolation: resolver,
+            ...(base === 'empty' ? { codebaseId: 'folder' } : { baseBranch: 'parent-default' }),
+            ...(base === 'override' ? { baseOverride: expected } : {}),
+            ownedWorktree: {
+              envId: 'env-parent',
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
+          }
+        );
+        expect(result.success).toBe(true);
+        expect(calls).toHaveLength(0);
+        expect(detectDefaultBranch).not.toHaveBeenCalled();
+        const child = [...store.runs.values()].find(r => r.workflow_name === 'child-share');
+        expect(child?.working_path).toBe(cwd);
+        expect(child?.metadata.owned_worktree).toBeUndefined();
+        expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe(expected);
+        expect(child?.metadata.summary).toBe(base === 'empty' ? 'done' : expected);
+      });
+    }
+  }
 
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('parent-inherit');
-    const { resolver, calls } = makeFakeResolver(join(cwd, 'should-not-be-used'));
+  for (const configured of [undefined, 'child-config']) {
+    it(`adopted checkout uses the codebase fallback below config: ${String(configured)}`, async () => {
+      await writeWorkflow(
+        'child-adopt',
+        `
+name: child-adopt
+description: reports base on adoption
+nodes:
+  - id: work
+    bash: 'printf "%s" "$BASE_BRANCH"'
+`
+      );
+      await writeWorkflow(
+        'parent-adopt',
+        `
+name: parent-adopt
+description: adopts checkout
+nodes:
+  - id: sub
+    workflow: child-adopt
+    isolation: worktree
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const loadConfig = deps.loadConfig;
+      deps.loadConfig = async path => ({ ...(await loadConfig(path)), baseBranch: configured });
+      const fake = makeFakeResolver(join(cwd, 'adopted-child'));
+      const resolver: ChildIsolationResolver = {
+        resolve: async req => ({
+          ...(await fake.resolver.resolve(req)),
+          baseBranch: { kind: 'fallback', value: 'codebase-default' },
+        }),
+      };
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-adopt'),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseOverride: 'parent-only', resolveChildIsolation: resolver }
+      );
+      expect(result.success).toBe(true);
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-adopt');
+      expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe(
+        configured ?? 'codebase-default'
+      );
+      expect(child?.metadata.summary).toBe(configured ?? 'codebase-default');
+    });
+  }
 
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      { conversationId: 'conv-db' },
-      {
-        resolveChildIsolation: resolver,
-        ownedWorktree: { envId: 'env-parent', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
-      }
-    );
-
-    expect(result.success).toBe(true);
-    // Even with a resolver available, `inherit` must NOT call it.
-    expect(calls).toHaveLength(0);
-    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-share');
-    expect(child?.status).toBe('completed');
-    // The child shares the parent's checkout.
-    expect(child?.working_path).toBe(cwd);
-    expect(child?.metadata.owned_worktree).toBeUndefined();
-  });
+  for (const completedWork of [false, true]) {
+    it(`failed isolated child retains its recorded base with completed work: ${completedWork}`, async () => {
+      await writeWorkflow(
+        'child-retry',
+        `
+name: child-retry
+description: fails once
+nodes:
+${completedWork ? '  - id: before\n    bash: "printf before"' : ''}
+  - id: work
+${completedWork ? '    depends_on: [before]' : ''}
+    bash: |
+      test -f marker || { touch marker; exit 3; }
+      printf '%s' "$BASE_BRANCH"
+`
+      );
+      await writeWorkflow(
+        'parent-retry',
+        `
+name: parent-retry
+description: retries child
+nodes:
+  - id: sub
+    workflow: child-retry
+    isolation: worktree
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const parent = await discover('parent-retry');
+      const { resolver, calls } = makeFakeResolver(join(cwd, 'child-retry'));
+      const first = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        { resolveChildIsolation: resolver }
+      );
+      expect(first.success).toBe(false);
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-retry')!;
+      expect(readRunDispatchMetadata(child.metadata)?.base_branch).toBe('child-release');
+      const loadConfig = deps.loadConfig;
+      deps.loadConfig = async path => ({
+        ...(await loadConfig(path)),
+        baseBranch: 'changed-config',
+      });
+      const parentRun = (await store.getWorkflowRun(first.workflowRunId!))!;
+      const hydrated = await hydrateResumableRun(deps, parentRun);
+      const resumed = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        {
+          ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }),
+          baseOverride: 'changed-parent',
+          resolveChildIsolation: resolver,
+        }
+      );
+      expect(resumed.success).toBe(true);
+      expect(calls).toHaveLength(1);
+      const completed = await store.getWorkflowRun(child.id);
+      expect(readRunDispatchMetadata(completed?.metadata)?.base_branch).toBe('child-release');
+      expect(completed?.metadata.summary).toBe('child-release');
+    });
+  }
 
   it('threads the resolver into a nested child so a grandchild also isolates (I1)', async () => {
     // parent → child-mid → grandchild-iso, all `isolation: worktree`. Without the
@@ -279,6 +429,7 @@ nodes:
             envId: `env-${String(calls.length)}`,
             creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
           },
+          baseBranch: { kind: 'resolved', value: 'child-release' },
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-0`,
         };
       },
@@ -595,6 +746,7 @@ nodes:
         return {
           cwd: dir,
           envId: `env-${req.nodeId}`,
+          baseBranch: { kind: 'resolved', value: 'child-release' },
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-${req.nodeId}-child-0`,
         };
       },
@@ -671,7 +823,7 @@ description: child that pauses at its own gate
 nodes:
   - id: work
     bash: |
-      printf 'child-work'
+      printf '%s' "$BASE_BRANCH"
   - id: gate
     approval:
       message: "approve the sub-run"
@@ -738,6 +890,15 @@ nodes:
     const child = [...store.runs.values()].find(r => r.workflow_name === 'identity-child');
     expect(parentRun?.status).toBe('paused');
     expect(child?.status).toBe('paused');
+    expect(readRunDispatchMetadata(child?.metadata)?.base_branch).toBe('release-2026');
+    expect(
+      store.events.find(
+        e =>
+          e.workflow_run_id === child?.id &&
+          e.step_name === 'work' &&
+          e.event_type === 'node_completed'
+      )?.data?.node_output
+    ).toBe('release-2026');
 
     const preGateBase = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'before'
@@ -769,6 +930,9 @@ nodes:
     );
 
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
+    expect(
+      readRunDispatchMetadata((await store.getWorkflowRun(child!.id))?.metadata)?.base_branch
+    ).toBe('release-2026');
     const postGateBase = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'after'
     )?.data?.node_output;

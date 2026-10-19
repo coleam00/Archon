@@ -497,11 +497,14 @@ local checkout. See [Troubleshooting](/reference/troubleshooting/) to clear a st
 `--base` is the per-dispatch level, which is what makes parallel multi-base
 dispatch (epic slices, A/B variants) config-free.
 
-**Scope: the dispatched run only.** A `workflow:` node with `isolation: worktree`
+**Scope: isolated children resolve independently.** A `workflow:` node with `isolation: worktree`
 creates a worktree for its child run, and that worktree is cut using levels 2--4
-only -- `--base` and `--from` do **not** propagate to sub-run children. A parent
+only. Parent `--base` and `--from` do **not** change an isolated child's cut-from. A parent
 dispatched with `--base release/2.0` still branches its isolated children off the
-repo's configured base. See [Choosing the child's
+repo's configured base, and the child's `$BASE_BRANCH` reports that provisioning base.
+A fresh shared-checkout child (`isolation: inherit` or omitted) inherits the parent's
+resolved `$BASE_BRANCH`, including a parent `--base` override. Existing child runs keep
+their recorded base on resume. See [Choosing the child's
 checkout](/guides/authoring-workflows/#choosing-the-childs-checkout-with-isolation).
 
 **Driving cut-from and PR target separately.** `--from` overrides only the

@@ -47,6 +47,7 @@ export interface ChildIsolationRequest {
  * same port, returning a container `cwd`/`envId` instead of a worktree path.
  */
 export interface ChildIsolationResult {
+  baseBranch: { kind: 'resolved'; value: string } | { kind: 'fallback'; value: string | undefined };
   ownedWorktree?: OwnedWorktree;
   /** The per-child checkout path — the child run's `working_path` and execution cwd. */
   cwd: string;

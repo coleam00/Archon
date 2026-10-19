@@ -183,7 +183,10 @@ export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = Worktre
 export type IsolatedEnvironment = WorktreeEnvironment;
 export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
->;
+> & {
+  /** Transient base selected during provisioning; absent if no base was resolved. */
+  resolvedBaseBranch?: string;
+};
 
 /**
  * Isolation-record metadata carrying a worktree's creation proof (null when adopted)

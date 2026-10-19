@@ -179,6 +179,8 @@ test('child reuse has one registration and one provider adoption warning', async
   events.length = 0;
   const reused = await resolver.resolve(request);
   expect(create).toHaveBeenCalledTimes(1);
+  expect(first.baseBranch).toEqual({ kind: 'resolved', value: 'dev' });
+  expect(reused.baseBranch).toEqual({ kind: 'fallback', value: 'dev' });
   expect(reused.cwd).toBe(first.cwd);
   expect(reused.envId).toBe(first.envId);
   expect(reused.ownedWorktree).toBeUndefined();

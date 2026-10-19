@@ -16,6 +16,7 @@ let nextCreateAdopts = false;
 
 const mockProviderCreate = mock((_req: { identifier: string }) =>
   Promise.resolve({
+    ...(nextCreateAdopts ? {} : { resolvedBaseBranch: 'provider-selected' }),
     id: '/wt/path',
     provider: 'worktree' as const,
     workingPath: '/wt/path',
@@ -360,6 +361,7 @@ describe('child worktree resolver', () => {
       parent_run_id: PARENT_RUN_ID,
       child_index: 0,
     });
+    expect(result.baseBranch).toEqual({ kind: 'fallback', value: 'main' });
     expect(result.ownedWorktree).toBeUndefined();
   });
 
@@ -371,6 +373,7 @@ describe('child worktree resolver', () => {
       codebaseId: 'cb-1',
     });
 
+    expect(result.baseBranch).toEqual({ kind: 'resolved', value: 'provider-selected' });
     expect(result.ownedWorktree).toEqual({
       envId: 'env-1',
       creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',

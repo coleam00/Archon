@@ -280,7 +280,7 @@ async function resolveBaseBranch(
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<string> {
   // The per-dispatch override takes priority, then what this run
-  // recorded at its start, then repo config, then the caller-provided codebase default,
+  // recorded at its start, then an already resolved checkout base, repo config, the codebase default,
   // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the
   // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
@@ -290,6 +290,7 @@ async function resolveBaseBranch(
   const overrideBaseBranch = opts.baseOverride?.trim();
   if (overrideBaseBranch) return overrideBaseBranch;
   if (recordedDispatch) return recordedDispatch.base_branch;
+  if (opts.resolvedBaseBranch !== undefined) return opts.resolvedBaseBranch;
   if (config.baseBranch) return config.baseBranch;
   const fallbackBaseBranch = opts.baseBranch?.trim();
   if (fallbackBaseBranch) return fallbackBaseBranch;

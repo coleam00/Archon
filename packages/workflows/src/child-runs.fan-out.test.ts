@@ -10,7 +10,11 @@ import {
   fanChildCond,
 } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
-import { readSubrunMetadata } from './schemas/workflow-run';
+import {
+  readSubrunMetadata,
+  readRunDispatchMetadata,
+  RUN_DISPATCH_METADATA_KEY,
+} from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
@@ -603,7 +607,16 @@ nodes:
     // If it is not in the recoverable set it reads as a user cancel: items shrinking and
     // then growing back leaves those slots dead under all_done, and fails the node on every
     // resume under all_success with no way back.
-    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-child',
+      `
+name: fan-child
+description: reports the recovered child's base
+nodes:
+  - id: run
+    bash: 'printf "%s:%s" "$BASE_BRANCH" "$ARGUMENTS"'
+`
+    );
     await writeWorkflow(
       'fan-orphan-recover',
       `
@@ -649,7 +662,12 @@ nodes:
       user_message: 'b',
       parent_run_id: parentRun.id,
       working_path: cwd,
-      metadata: { parent_node_id: 'work', child_index: 1, cancelled_reason: 'fan_out_orphan' },
+      metadata: {
+        parent_node_id: 'work',
+        child_index: 1,
+        cancelled_reason: 'fan_out_orphan',
+        [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'orphan-recorded' },
+      },
     });
     await store.cancelWorkflowRun(orphan.id);
 
@@ -664,13 +682,17 @@ nodes:
       { conversationId: 'conv-db' },
       {
         ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }),
+        baseOverride: 'changed-parent',
         resolveChildIsolation: resolver,
       }
     );
 
     // The orphan was re-driven in place and the node completed.
     expect(r.success).toBe(true);
-    expect((await store.getWorkflowRun(orphan.id))?.status).toBe('completed');
+    const completed = await store.getWorkflowRun(orphan.id);
+    expect(completed?.status).toBe('completed');
+    expect(readRunDispatchMetadata(completed?.metadata)?.base_branch).toBe('orphan-recorded');
+    expect(completed?.metadata.summary).toBe('orphan-recorded:b');
   });
 
   it('leaves an engine-cancelled child recoverable when session loading fails', async () => {
@@ -1196,7 +1218,12 @@ nodes:
     const workflow = await discover('partial-parent');
     const resolve = mock(async (request: ChildIsolationRequest): Promise<ChildIsolationResult> => {
       if (request.childIndex !== 0) throw new Error('resource unavailable');
-      return { cwd, envId: 'test-child', branchName: 'test-child' };
+      return {
+        cwd,
+        envId: 'test-child',
+        branchName: 'test-child',
+        baseBranch: { kind: 'resolved', value: 'child-release' },
+      };
     });
     const options = { resolveChildIsolation: { resolve } };
     await executeWorkflow(

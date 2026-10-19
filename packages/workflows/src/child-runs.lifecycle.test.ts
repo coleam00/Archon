@@ -1667,7 +1667,12 @@ nodes:
           }),
         });
       }
-      const resolve = mock(async () => ({ cwd: '/never', envId: 'never', branchName: 'never' }));
+      const resolve = mock(async () => ({
+        cwd: '/never',
+        envId: 'never',
+        branchName: 'never',
+        baseBranch: { kind: 'resolved' as const, value: 'never' },
+      }));
       const result = await executeWorkflow(
         deps,
         makePlatform(),

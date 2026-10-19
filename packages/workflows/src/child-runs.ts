@@ -104,6 +104,7 @@ export async function runChildWorkflow(
   args: RunChildWorkflowArgs,
   resolvedModelOverrides: ResolvedRunModelOverrides,
   runConfig: WorkflowRunConfigInput | undefined,
+  parentBaseBranch: string,
   resolveChildIsolation?: ChildIsolationResolver
 ): Promise<ChildWorkflowOutcome> {
   const {
@@ -443,6 +444,11 @@ export async function runChildWorkflow(
           resolveChildIsolation,
           preparedSource: childSource,
           ...(runConfig ? { runConfig } : {}),
+          ...(childIsolationEnv
+            ? childIsolationEnv.baseBranch.kind === 'resolved'
+              ? { resolvedBaseBranch: childIsolationEnv.baseBranch.value }
+              : { baseBranch: childIsolationEnv.baseBranch.value }
+            : { resolvedBaseBranch: parentBaseBranch }),
           ...(childIsolationEnv?.cutFromCommit !== undefined
             ? { cutFromCommit: childIsolationEnv.cutFromCommit }
             : {}),
