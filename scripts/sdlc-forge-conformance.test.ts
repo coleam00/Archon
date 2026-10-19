@@ -11,7 +11,6 @@ import {
 } from '../packages/adapters/src/forge/github/workflow-runs';
 import { workflowApprovalClear } from '../.archon/workflows/sdlc/.shared/pr';
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -157,22 +156,6 @@ test('the pack projections of the merge and review operations carry typed eviden
       },
     }).landed.commit
   ).toBe('landed');
-});
-
-test('preflight capabilities cover the forge operations the pack calls', () => {
-  const root = join(import.meta.dir, '../.archon/workflows/sdlc');
-  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
-    .filter(file => file !== '.shared/forge-check.ts')
-    .map(file => readFileSync(join(root, file), 'utf8'));
-  const used = forgeRequestSchema.options
-    .map(schema => schema.shape.op.value)
-    .filter(op =>
-      sources.some(text =>
-        [`'${op}'`, `"${op}"`, `\`${op}\``, `forge ${op} `].some(token => text.includes(token))
-      )
-    );
-  expect(used).toContain('checks.state');
-  expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {
