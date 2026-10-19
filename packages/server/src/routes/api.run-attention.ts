@@ -11,7 +11,6 @@ import {
   assertLabelable,
   type WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
-import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
@@ -105,8 +104,10 @@ export function registerRunAttentionRoutes(
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
   const { assertRunActionAllowed, labelAttentionWait } = operations;
-  const store = createWorkflowStore();
-  const attentionQueue = attentionQueueSource(store, createWorkflowHostStore().isolation);
+  const attentionQueue = attentionQueueSource(
+    createWorkflowStore(),
+    createWorkflowHostStore().isolation
+  );
 
   // GET /api/runs/attention - The attention queue. A server has no working directory, so
   // without `project` the scope is the whole install.
@@ -141,10 +142,9 @@ export function registerRunAttentionRoutes(
       const selected = selectAttentionQueue(items, { scope, labels, order });
       const ids = new Set(selected.map(item => item.runId));
       const runs = rows.filter(run => ids.has(run.id));
+      // The queue lists only paused runs, and only a running run has an owner to observe.
       return c.json({
-        runs: await Promise.all(
-          runs.map(async run => toApiDashboardWorkflowRun(run, await observeRunOwner(store, run)))
-        ),
+        runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
         items: selected,
       });
     } catch (error) {
