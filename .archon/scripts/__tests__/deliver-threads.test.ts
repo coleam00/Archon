@@ -6,7 +6,14 @@
 import { describe, expect, it } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+import {
+  PR,
+  PR_URL,
+  forgeOperation,
+  forgePrRecord,
+  packScriptRunner,
+  type ScriptRun,
+} from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -170,5 +177,71 @@ describe("deliver's review threads", () => {
     const partial = run({ threads: [{ id: 'T1', body: 'x' }], total: 101 });
     expect(partial.code).not.toBe(0);
     expect(partial.stderr).toContain('there are 101 review threads');
+  });
+});
+
+describe("deliver's review threads on the forge source", () => {
+  const ref = PR;
+  const view = (draft: boolean) =>
+    forgeOperation('pr.view', { pr: forgePrRecord({ is_draft: draft }), title: 't', body: 'b' });
+  const threads = (resolved: boolean) =>
+    forgeOperation('pr.threads', {
+      ref,
+      threads: [
+        {
+          id: 'T1',
+          resolved,
+          outdated: false,
+          path: 'src/a.ts',
+          line: 3,
+          comments: [{ id: 'c1', author: { host: ref.repo.host, id: '7', login: 'reviewer' }, body: 'This leaks the token.', url: `${PR_URL}#c1` }],
+        },
+      ],
+    });
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
+
+  it('answers a thread with a reply then a resolve on that thread, then rereads the threads', () => {
+    const reply = 'Fixed in 1a2b3c4.';
+    const result = runPackScript('deliver/scripts/threads', {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [
+          view(true),
+          threads(false),
+          applied('pr.thread.reply'),
+          applied('pr.thread.resolve'),
+          view(true),
+          threads(true),
+        ],
+      },
+      inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply }]) },
+    });
+    expect(ok(result).open).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge.map(argv => argv.split(' ')[1])).toEqual([
+      'pr.view',
+      'pr.threads',
+      'pr.thread.reply',
+      'pr.thread.resolve',
+      'pr.view',
+      'pr.threads',
+    ]);
+    expect(JSON.parse(result.forgeRequests[2] ?? '{}')).toMatchObject({ thread: 'T1', body: reply });
+    expect(JSON.parse(result.forgeRequests[3] ?? '{}')).toMatchObject({ thread: 'T1' });
+  });
+
+  it('lists an open thread and puts a ready pull request back to draft through the forge', () => {
+    const result = runPackScript('deliver/scripts/threads', {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [view(false), threads(false), forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) })],
+      },
+      inputs: { INPUTS_ANSWERS: 'null' },
+    });
+    expect(ok(result).open).toBe(1);
+    expect(listing(result)).toContain('- id: `T1`');
+    expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
   });
 });

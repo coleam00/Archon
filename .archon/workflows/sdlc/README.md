@@ -106,18 +106,17 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The GitHub plugin passes this preflight from v0.12.1; v0.11.1 lacks eight required
-operations. Keep `gh` as the default: on `forge`, the merge queue still refuses, delivery
-doesn't read or answer review threads, and a ruling can't be written into an issue body,
-because the forge contract has no review-thread or issue-body operation yet.
+The preflight names every forge operation the pack uses, and a plugin missing any of
+them is refused before an agent spends. Keep `gh` as the default until a released
+plugin with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: its sweep judges a pull
-request's unresolved review threads, which the forge contract does not report. The gate
-itself doesn't refuse over threads; the sweep holds a merge only for a thread that
-raises a defect in code the pull request changes or makes reachable.
-Delivery reads, answers and resolves review threads through `gh` alone for the same
-reason. On the `forge` source it never calls `gh` for them: its `threads` node does
-not run, and the report says the threads were not checked.
+The merge queue reads through `gh` alone and refuses `forge`: it reads the trusted
+review comment, the default branch's head and CI, and how far a head is behind it,
+and the forge contract has no read for those yet. The gate itself doesn't refuse over
+threads; the sweep holds a merge only for a thread that raises a defect in code the
+pull request changes or makes reachable. Delivery reads, answers and resolves review
+threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
+`pr.thread.reply` and `pr.thread.resolve`.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -165,8 +164,7 @@ leaves it as its author left it. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
-another writer adds survive. On the `forge` source it still writes the whole label set back,
-although the GitHub plugin has single-label add and remove from v0.12.1. No delivery node files
+another writer adds survive, on both sources. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
 [`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
 `archon-ship-block` that is the `report` node, which also runs when a node fails, so a
