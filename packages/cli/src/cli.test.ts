@@ -634,6 +634,22 @@ describe('workflow run config argument', () => {
     expect(message).toContain('--config cannot be used when continuing');
   });
 
+  it('names --config-from-run when it is the flag passed on run --resume', () => {
+    expect(rejectConfigOnContinue(true, undefined, 'paused-run')).toBe(
+      'Error: --config-from-run cannot be used when continuing an existing workflow run. ' +
+        'The run keeps the config it started with.'
+    );
+  });
+
+  it('refuses --config-from-run on the trigger commands that take --config', () => {
+    for (const subcommand of ['fire', 'schedule']) {
+      expect(rejectConfigOutsideRun('trigger', subcommand, undefined, 'paused-run')).toBe(
+        'Error: --config-from-run can only be used with workflow run.'
+      );
+    }
+    expect(rejectConfigOutsideRun('workflow', 'run', undefined, 'paused-run')).toBeUndefined();
+  });
+
   it('rejects --config outside workflow run before dispatch', () => {
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');

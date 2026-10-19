@@ -25,7 +25,12 @@ export async function resolveLaunchRunConfig(
       ? options.configPath
       : join(cwd, options.configPath)
     : undefined;
-  if (isContinuation && (configPath || options.configFromRun || options.detachedRunConfig)) {
+  if (isContinuation && options.configFromRun) {
+    throw new Error(
+      '--resume and --config-from-run are mutually exclusive. A resumed run keeps its original run config.'
+    );
+  }
+  if (isContinuation && (configPath || options.detachedRunConfig)) {
     throw new Error(RESUME_RUN_CONFIG_CONFLICT);
   }
   if (configPath && options.configFromRun) {
