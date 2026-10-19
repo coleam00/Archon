@@ -154,11 +154,11 @@ describe("upkeep's terminal outcome", () => {
 });
 
 describe("deliver's terminal outcome", () => {
-  interface Outcome { ready: boolean; reason: string; pr_url: string; ci_rerun: string; threads_checked: boolean; summary: string }
+  interface Outcome { ready: boolean; reason: string; pr_url: string; summary: string }
   const outcome = (rounds: object, source = 'gh'): Outcome => {
     const run = runPackScript('deliver/scripts/outcome', {
       inputs: {
-        INPUTS_ROUNDS: JSON.stringify({ threads_checked: true, ...rounds }),
+        INPUTS_ROUNDS: JSON.stringify(rounds),
         INPUTS_SOURCE: source,
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
@@ -170,20 +170,19 @@ describe("deliver's terminal outcome", () => {
 
   it("reports the last round's ending with its pull request", () => {
     expect(
-      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'green', contract_left: [], summary: 'Round 1: delivered. all passed' })
+      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' })
     ).toMatchObject({ ready: true, reason: 'delivered', pr_url: PR_URL });
-    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, summary: 'Round 1: implement_blocked. x' });
+    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
       });
 
-  it('records that review threads were not checked on the forge source', () => {
+  it('says review threads were not checked on the forge source', () => {
     const forge = outcome(
-      { ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'none', contract_left: [], threads_checked: false, summary: 'Round 1: delivered. all passed' },
+      { ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' },
       'forge'
     );
-    expect(forge.threads_checked).toBe(false);
     expect(forge.summary).toContain('Review threads');
-    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, threads_checked: false, summary: 'x' }, 'forge');
+    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'x' }, 'forge');
     expect(noPr.summary).not.toContain('Review threads');
   });
 
@@ -192,7 +191,7 @@ describe("deliver's terminal outcome", () => {
       ready: true,
       reason: 'delivered',
       pr_url: PR_URL,
-      ci_rerun: 'none',
+     
       contract_left: ['acceptance: the console shows it (deferred)'],
       summary: 'Round 1: delivered. all passed',
     });
@@ -201,20 +200,20 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's report after a node failure", () => {
-  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string; threads_checked: boolean } =>
+  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
     JSON.parse(
       runPackScript('deliver/scripts/report', {
         inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
         artifacts: { 'listing.json': JSON.stringify({ runId: 'run', errors: [], ...listing }), ...artifacts },
       }).stdout
-    ) as { reason: string; pr_url: string; threads_checked: boolean };
+    ) as { reason: string; pr_url: string };
 
-  it('names the pull request a round published before the failure, so the next run continues it, and checked no threads', () => {
+  it('names the pull request a round published before the failure, so the next run continues it', () => {
     const published = failedReport(
       { artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] } },
       { 'nodes/publish.json': JSON.stringify({ number: 42, url: PR_URL }) }
     );
-    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL, threads_checked: false });
+    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
 });
@@ -238,7 +237,7 @@ describe("ship's continued pull request", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; threads_checked: boolean; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -256,7 +255,6 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_CONTRACT_LEFT: '[]',
           INPUTS_PREVIOUS_CONTRACT_LEFT: '',
           INPUTS_CI: 'green',
-          INPUTS_CI_RERUN: 'none',
           INPUTS_CI_SUMMARY: 'all passed',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
@@ -306,7 +304,7 @@ describe("deliver's round", () => {
 
   it('does not end ready while a review thread is open, and stops for a person on one no round can settle', () => {
     const open = round({ INPUTS_THREADS_OPEN: '2', INPUTS_THREADS_SUMMARY: '2 review threads are unresolved' });
-    expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open', threads_checked: true });
+    expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open' });
     expect(round({ INPUTS_PREVIOUS: '3', INPUTS_THREADS_OPEN: '1' })).toMatchObject({ done: true, ready: false, reason: 'round_cap' });
     const human = round({
       INPUTS_THREADS_OPEN: '1',

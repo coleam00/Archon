@@ -12,7 +12,6 @@ facts:
   record: null
   brief: ""
   rounds: []
-  recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: null
@@ -61,7 +60,6 @@ apply:
   options: [{ id: narrow, label: "stub: narrow it" }, { id: park, label: "stub: park it" }]
   class: stop
   asked: { attention: {}, brief: "stub: continue PR 8", by: stop }
-  evaluation: null
 ask: { decision: narrow, text: "stub: drop A4" }
 ruling:
   decision: continue
