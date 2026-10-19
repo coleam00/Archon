@@ -363,7 +363,7 @@ export async function handleMessage(
           conversationId,
           workflowName: entry.workflow.name,
           codebaseId: codebase.id,
-          inputNames: inputs ? Object.keys(inputs) : [],
+          inputNames: Object.keys(inputs),
         },
         'orchestrator.invoke_workflow_dispatching'
       );
@@ -381,7 +381,7 @@ export async function handleMessage(
         actor,
         isolationHints,
         entry.source,
-        inputs ? { inputs } : undefined
+        { inputs }
       );
     }
 

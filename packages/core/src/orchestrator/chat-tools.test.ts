@@ -73,7 +73,7 @@ describe('invoke_workflow', () => {
     expect(launches[0]?.entry.workflow.name).toBe('archon-ship');
     expect(launches[0]?.codebase.name).toBe('owner/my-app');
     expect(launches[0]?.prompt).toBe(prompt);
-    expect(launches[0]?.inputs).toBeUndefined();
+    expect(launches[0]?.inputs).toEqual({});
   });
 });
 

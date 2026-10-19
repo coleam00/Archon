@@ -28,8 +28,8 @@ export interface ChatLaunch {
   entry: WorkflowWithSource;
   codebase: Codebase;
   prompt: string;
-  /** Declared inputs resolved at the tool boundary; the dispatch gate validates them again. */
-  inputs?: Record<string, string>;
+  /** Declared inputs resolved at the tool boundary, empty when none; the dispatch gate validates them again. */
+  inputs: Record<string, string>;
 }
 
 /**
@@ -100,16 +100,24 @@ function parseInputsArgument(raw: unknown): Record<string, string> | undefined |
 }
 
 /**
- * Validate the supplied inputs with the dispatch gate's own resolver, so the tool and the
- * gate cannot disagree. Returns the refusal to hand back to the agent, or the resolved map.
+ * Parse the agent's `inputs` argument and validate it with the dispatch gate's own resolver,
+ * so the tool and the gate cannot disagree. Returns the refusal to hand back to the agent, or
+ * the resolved map.
  */
 function resolveLaunchInputs(
   entry: WorkflowWithSource,
-  supplied: Record<string, string> | undefined
-): { refusal: string } | { inputs: Record<string, string> | undefined } {
+  raw: unknown
+): { refusal: string } | { inputs: Record<string, string> } {
+  const supplied = parseInputsArgument(raw);
+  if (supplied === null) {
+    return {
+      refusal:
+        'invoke_workflow: inputs must be a JSON object mapping input names to string values. Nothing was launched.',
+    };
+  }
   const workflow = entry.workflow;
   try {
-    return { inputs: resolveTopLevelInputs(workflow, supplied) };
+    return { inputs: resolveTopLevelInputs(workflow, supplied) ?? {} };
   } catch (e: unknown) {
     if (e instanceof WorkflowMissingInputsError) {
       const missing = e.missing
@@ -127,6 +135,13 @@ function resolveLaunchInputs(
     }
     throw e;
   }
+}
+
+/** ` with inputs: a=1, b=2` for the queued result, or nothing when no inputs were supplied. */
+function describeInputs(inputs: Record<string, string>): string {
+  const names = Object.keys(inputs).sort();
+  if (names.length === 0) return '';
+  return ` with inputs: ${names.map(name => `${name}=${inputs[name]}`).join(', ')}`;
 }
 
 /**
@@ -165,15 +180,11 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
           return `No registered project matches "${projectName}". Registered projects: ${names || '(none)'}`;
         }
 
-        const supplied = parseInputsArgument(input.inputs);
-        if (supplied === null) {
-          return 'invoke_workflow: inputs must be a JSON object mapping input names to string values. Nothing was launched.';
-        }
-        const resolved = resolveLaunchInputs(entry, supplied);
+        const resolved = resolveLaunchInputs(entry, input.inputs);
         if ('refusal' in resolved) return resolved.refusal;
         const { inputs } = resolved;
 
-        const queued = ctx.onLaunch({ entry, codebase, prompt, ...(inputs ? { inputs } : {}) });
+        const queued = ctx.onLaunch({ entry, codebase, prompt, inputs });
         if (queued !== null) {
           return `Only one workflow launch per reply: ${queued.entry.workflow.name} on ${queued.codebase.name} is already queued. Nothing else was launched.`;
         }
@@ -182,17 +193,11 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
             workflowName: entry.workflow.name,
             codebaseId: codebase.id,
             // Names only, never values — a supplied value is user content.
-            inputNames: inputs ? Object.keys(inputs) : [],
+            inputNames: Object.keys(inputs),
           },
           'chat_tools.invoke_workflow_queued'
         );
-        const withInputs = inputs
-          ? ` with inputs: ${Object.keys(inputs)
-              .sort()
-              .map(name => `${name}=${inputs[name]}`)
-              .join(', ')}`
-          : '';
-        return `Queued ${entry.workflow.name} on ${codebase.name}${withInputs}. It starts when your reply ends; tell the user what you launched, and do not call invoke_workflow again this turn.`;
+        return `Queued ${entry.workflow.name} on ${codebase.name}${describeInputs(inputs)}. It starts when your reply ends; tell the user what you launched, and do not call invoke_workflow again this turn.`;
       } catch (e: unknown) {
         const err = toError(e);
         getLog().error({ err }, 'chat_tools.invoke_workflow_failed');
