@@ -18,7 +18,8 @@ packages/cli/
 ├── src/
 │   ├── cli.ts              # Entry point, argument parsing, routing
 │   ├── commands/
-│   │   ├── workflow.ts     # workflow list/runs/get (approve/reject/status/resume/abandon delegate to @archon/core/operations)
+│   │   ├── workflow.ts     # workflow route module: control commands and re-exports (approve/reject/resume/abandon delegate to @archon/core/operations)
+│   │   ├── workflow-query.ts # workflow list/test/status/get/runs/logs/wait
 │   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
 │   │   ├── setup.ts        # setup command implementation
@@ -103,7 +104,7 @@ Repository env normally overrides home env. The CLI preserves the user-scope `GH
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ workflow.ts  workflowListCommand(cwd, { name, full, json })      │
+│ workflow-query.ts  workflowListCommand(cwd, { name, full, json })│
 └──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
@@ -132,7 +133,7 @@ Repository env normally overrides home env. The CLI preserves the user-scope `GH
 └──────────────────────────┘   └───────────────────────────────────┘
 ```
 
-**Code:** `packages/cli/src/commands/workflow.ts`
+**Code:** `packages/cli/src/commands/workflow-query.ts`
 
 ---
 
