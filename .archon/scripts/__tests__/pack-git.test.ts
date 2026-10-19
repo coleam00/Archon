@@ -7,7 +7,8 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
 import { PR, forgeOperation, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
@@ -159,6 +160,64 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
 });
 
 describe('head operation transport', () => {
+  it.each(['file URL', 'relative path'])('checks out and publishes through a local %s', mode => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    const bare = git(cwd, 'remote', 'get-url', 'upstream');
+    const local = mode === 'file URL' ? pathToFileURL(bare).href : relative(cwd, bare);
+    git(cwd, 'config', '--unset-all', `url.${bare}.insteadOf`);
+    git(cwd, 'config', `url.${local}.insteadOf`, `https://${PR.repo.host}/${PR.repo.path}.git`);
+    git(cwd, 'checkout', '-q', '-b', 'archon/local-transport', 'dev');
+    const prepared = runPackScript('ship/scripts/checkout', { cwd, inputs: {
+      INPUTS_REF: JSON.stringify(PR), INPUTS_PULL_REQUEST: String(PR.number),
+    } });
+    expect({ code: prepared.code, stderr: prepared.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(head);
+    git(cwd, 'commit', '-q', '--allow-empty', '-m', 'local transport delivery');
+    const published = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: {
+      INPUTS_PR: JSON.stringify(forgePrRecord()),
+    } });
+    expect({ code: published.code, stderr: published.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(git(cwd, '--git-dir', bare, 'rev-parse', 'refs/heads/feature')).toBe(git(cwd, 'rev-parse', 'HEAD'));
+  });
+
+  it.each(['https://user@', 'ssh://git@', 'git+ssh://git@', 'ssh+git://git@', 'git@'])(
+    'permits encrypted %s destinations through Git resolution',
+    prefix => {
+      const cwd = gitCheckout({}, track);
+      const bare = git(cwd, 'remote', 'get-url', 'upstream');
+      const identity = `https://${PR.repo.host}/${PR.repo.path}.git`;
+      const url =
+        prefix === 'git@'
+          ? `${prefix}${PR.repo.host}:${PR.repo.path}.git`
+          : `${prefix}${PR.repo.host}/${PR.repo.path}.git`;
+      git(cwd, 'config', '--unset-all', `url.${bare}.insteadOf`);
+      git(cwd, 'config', `url.${url}.insteadOf`, identity);
+      for (const script of ['ship/scripts/checkout', '../../scripts/__tests__/push-pr-head']) {
+        const run = runPackScript(script, {
+          cwd,
+          inputs: {
+            INPUTS_REF: JSON.stringify(PR),
+            INPUTS_PULL_REQUEST: String(PR.number),
+            INPUTS_PR: JSON.stringify(forgePrRecord()),
+          },
+          preload: `
+          const originalGit = Bun.spawnSync;
+          Bun.spawnSync = (argv, options) => {
+            if (argv[0] === 'git' && ['fetch', 'push', 'ls-remote'].includes(argv[1])) {
+              throw new Error('validated transport reached Git operation');
+            }
+            return originalGit(argv, options);
+          };
+        `,
+        });
+        expect(run.stderr).toContain('validated transport reached Git operation');
+        expect(run.stderr).not.toContain('requires encrypted transport');
+      }
+    }
+  );
+
   it.each(['build-queue/scripts/checkout', 'ship/scripts/checkout', '../../scripts/__tests__/push-pr-head'])('refuses credentialed HTTP before %s', script => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'push', '-q', 'upstream', 'feature');
@@ -184,13 +243,16 @@ describe('head operation transport', () => {
     ...['pushurl', 'second pushurl', 'pushInsteadOf', 'readback', 'fork insteadOf', 'fork pushInsteadOf'].map(mode => ({ script: '../../scripts/__tests__/push-pr-head', mode })),
     { script: 'ship/scripts/checkout', mode: 'fork insteadOf' },
   ];
-  it.each(cases)('refuses effective HTTP for $script via $mode', ({ script, mode }) => {
+  const refusals = cases.flatMap(test =>
+    ['http://', 'http::http://', 'https::http://', 'ftp://', 'git://', 'ext::'].map(transport => ({ ...test, transport }))
+  );
+  it.each(refusals)('refuses effective $transport for $script via $mode', ({ script, mode, transport }) => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'push', '-q', 'upstream', 'feature');
     const bare = git(cwd, 'remote', 'get-url', 'upstream');
     const before = git(cwd, 'rev-parse', 'HEAD');
     const identity = `https://${PR.repo.host}/${PR.repo.path}.git`;
-    const insecure = `http://user:secret@${PR.repo.host}/${PR.repo.path}.git`;
+    const insecure = `${transport}user:secret@${PR.repo.host}/${PR.repo.path}.git`;
     const fork = mode.startsWith('fork ');
     if (fork) git(cwd, 'remote', 'remove', 'upstream');
     git(cwd, 'config', '--unset-all', `url.${bare}.insteadOf`);

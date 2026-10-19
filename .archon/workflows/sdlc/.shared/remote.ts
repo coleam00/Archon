@@ -124,7 +124,16 @@ export function headDestination(
       urls.push(...resolved.stdout.split('\n'));
     }
   }
-  if (urls.some(url => /^http:\/\//i.test(url.trim()))) {
+  if (
+    urls.some(url => {
+      const transport = /^([a-z][a-z0-9+.-]*)(::|:\/\/)/i.exec(url.trim());
+      return (
+        transport !== null &&
+        (transport[2] === '::' ||
+          !['https', 'ssh', 'git+ssh', 'ssh+git', 'file'].includes(transport[1].toLowerCase()))
+      );
+    })
+  ) {
     throw new Error('head destination requires encrypted transport; use HTTPS or SSH');
   }
   return destination;
