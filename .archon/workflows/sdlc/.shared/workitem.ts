@@ -37,9 +37,10 @@ import {
   claimDisposition,
   runStatus,
   stateAppend,
+  stateDocuments,
   stateGet,
-  stateList,
   statePut,
+  type Stored,
 } from './state.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
@@ -682,8 +683,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-export function read(name: string): Read | undefined {
-  const stored = stateGet(name);
+function parsed(name: string, stored: Stored): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
@@ -691,6 +691,17 @@ export function read(name: string): Read | undefined {
     note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
+}
+
+export function read(name: string): Read | undefined {
+  return parsed(name, stateGet(name));
+}
+
+/** Every stored work item with its revision, in one state read. */
+export function readAll(): Read[] {
+  return stateDocuments('work/')
+    .map(stored => parsed(stored.name, stored))
+    .filter((item): item is Read => item !== undefined);
 }
 
 /**
@@ -793,10 +804,7 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateList('work/')
-    .map(read)
-    .filter((item): item is Read => item !== undefined)
-    .map(item => releaseIfTerminal(item, at, runId, pickup));
+  const items = readAll().map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));
   for (const candidate of sortCandidates(waiting, order)) {
     const won = claimItem(candidate, at, runId, pickup);
