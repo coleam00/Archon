@@ -437,7 +437,7 @@ async function main(): Promise<number> {
         '@archon/core/config/run-config-handoff'
       );
       detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
-      // Fail-fast for the decode step, not a second copy of the invariant: `workflow.ts`
+      // Fail-fast for the decode step, not a second copy of the invariant: `workflow-run-admission.ts`
       // still owns this rejection for every caller. A legitimately spawned detached child
       // cannot reach it — the parent refuses to seal a config for a continuation before it
       // forks — so this only fires on a hand-built `--internal-detached-run-config`, and

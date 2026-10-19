@@ -281,7 +281,7 @@ export async function runChildWorkflow(
       // An isolated child's worktree can be pruned by `isolation cleanup`/`complete`
       // between its failure and this resume. Reusing a vanished path would surface as a
       // deep ENOENT mid-run; fail fast with the same guidance the top-level CLI resume
-      // gives (workflow.ts resume precedent).
+      // gives (`assertResumeWorkingPathExists` in the CLI's workflow-isolation.ts).
       if (priorPath && !existsSync(priorPath)) {
         return failOutcome(
           `Cannot resume sub-run '${childWorkflowName}': its working path no longer exists ` +

@@ -9,15 +9,15 @@ import {
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { workflowEventEmitCommand } from './workflow';
 import {
-  workflowRunCommand,
-  workflowGetCommand,
-  workflowResumeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
-  workflowEventEmitCommand,
-} from './workflow';
+  workflowResumeCommand,
+} from './workflow-control';
+import { workflowGetCommand } from './workflow-query';
+import { workflowRunCommand } from './workflow-run-owned';
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
   const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';

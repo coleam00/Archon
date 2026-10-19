@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { workflowRunCommand } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 
 describe('workflowRunCommand — dry-run', () => {
   let stdoutSpy: ReturnType<typeof spyOn>;

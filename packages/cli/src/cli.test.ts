@@ -1849,7 +1849,7 @@ describe('main catch --json error envelope', () => {
     //
     // `--dry-run` is not part of the contract; it is how this test avoids
     // paying for one. A real run freezes the workflow source BEFORE resolving
-    // the name (workflow.ts: prepareWorkflowSource precedes
+    // the name (workflow-run-admission.ts: selectRunWorkflow captures the source before
     // resolveWorkflowName, deliberately — discovery must read the frozen
     // bytes, #2660/#2747), so without the flag this single spawn copies and
     // digests every project, global, and bundled workflow file the run can
