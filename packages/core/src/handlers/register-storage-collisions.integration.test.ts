@@ -230,6 +230,10 @@ describe('project storage collisions', () => {
         const reuse = () =>
           entry === 'url' ? cloneRepository(store, requestedUrl) : registerInStore(store, path);
         expect(await reuse()).toMatchObject({ ...saved, alreadyExisted: true });
+        if (scheme === 'file') {
+          await mkdir(join(root, 'requested', 'repo.git'), { recursive: true });
+          expect(await reuse()).toMatchObject({ ...saved, alreadyExisted: true });
+        }
         expect(await store.listCodebases()).toMatchObject([
           { id: saved.codebaseId, default_cwd: path, repository_url: requestedUrl },
         ]);

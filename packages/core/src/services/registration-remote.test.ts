@@ -103,6 +103,35 @@ test.skipIf(!canRevokeSearch).each([
   }
 });
 
+test.skipIf(!canRevokeSearch)('refuses an inaccessible local remote target', async () => {
+  const { root, source } = await fixture();
+  const locked = join(root, 'locked');
+  const upstream = join(locked, 'upstream.git');
+  await mkdir(upstream, { recursive: true });
+  execFileSync('git', ['-C', source, 'init', '-q']);
+  execFileSync('git', ['-C', source, 'remote', 'add', 'origin', upstream]);
+  await chmod(locked, 0o000);
+  try {
+    const refusal = assertCheckoutRemote(source, upstream);
+    await expect(refusal).rejects.toThrow('Cannot verify checkout ownership');
+    await expect(refusal).rejects.toMatchObject({ cause: { code: 'EACCES' } });
+  } finally {
+    await chmod(locked, 0o755);
+  }
+});
+
+test('refuses a local remote with invalid Git configuration', async () => {
+  const { root, source } = await fixture();
+  const upstream = join(root, 'upstream.git');
+  execFileSync('git', ['init', '--bare', '-q', upstream]);
+  await writeFile(join(upstream, 'config'), '[broken');
+  execFileSync('git', ['-C', source, 'init', '-q']);
+  execFileSync('git', ['-C', source, 'remote', 'add', 'origin', upstream]);
+  const refusal = assertCheckoutRemote(source, upstream);
+  await expect(refusal).rejects.toThrow('Cannot verify checkout ownership');
+  await expect(refusal).rejects.toMatchObject({ cause: { kind: 'unclassified' } });
+});
+
 test('accepts requested and already-expanded URLs with one-pass checkout-local rewrites', async () => {
   const { root, source } = await fixture();
   const config = join(root, 'gitconfig');

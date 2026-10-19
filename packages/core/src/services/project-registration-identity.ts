@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getGitCheckoutIdentity } from '@archon/git';
+import { getGitCheckoutIdentity, GitFailure } from '@archon/git';
 import {
   createLogger,
   isPathInside,
@@ -125,17 +125,26 @@ export function resolveRegistrationUrl(url: string, cwd: string): string {
   return value;
 }
 
+async function localRemoteIdentity(path: string): Promise<string> {
+  // Local targets without a repository retain their path identity: Git may
+  // rewrite that spelling to a repository elsewhere. Access errors still surface.
+  const physicalPath = await existingPhysicalPath(path);
+  if (!physicalPath) return `file:${path}`;
+  if (!(await stat(physicalPath)).isDirectory()) return `file:${physicalPath}`;
+  try {
+    const { commonGitDir } = await getGitCheckoutIdentity(physicalPath);
+    return `file:${await realpath(commonGitDir)}`;
+  } catch (error) {
+    if (error instanceof GitFailure && error.kind === 'not_repository')
+      return `file:${physicalPath}`;
+    throw error;
+  }
+}
+
 /** Compare transport spellings without conflating hosts, ports or case-sensitive repo paths. */
 export async function remoteIdentity(url: string, cwd = process.cwd()): Promise<string> {
   url = resolveRegistrationUrl(url, cwd);
-  // Missing local targets retain their stored spelling; access errors must surface.
-  if (isAbsolute(url)) {
-    const physicalPath = await existingPhysicalPath(url);
-    if (!physicalPath) return `file:${url}`;
-    if (!(await stat(physicalPath)).isDirectory()) return `file:${physicalPath}`;
-    const { commonGitDir } = await getGitCheckoutIdentity(physicalPath);
-    return `file:${await realpath(commonGitDir)}`;
-  }
+  if (isAbsolute(url)) return localRemoteIdentity(url);
   const cleaned = url
     .trim()
     .replace(/\/+$/, '')
