@@ -10,7 +10,7 @@ description: |
   review".
   NOT for: correctness (review), fixing findings (implement), or writing code.
 
-model: medium
+model: ['@review-simplify', '@reviewer', medium]
 
 inputs:
   work_order:

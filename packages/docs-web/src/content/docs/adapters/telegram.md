@@ -15,7 +15,7 @@ New identities are created as members. The operator can designate admins with [`
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - A Telegram account
 
 ## Create Telegram Bot

@@ -36,6 +36,10 @@ const STRING_FIELD_CLASSIFICATIONS = {
   when: { kind: 'template', slots: ['when'] },
   trigger_rule: { kind: 'literal', reason: 'Trigger rule is a scheduling policy enum' },
   model: { kind: 'literal', reason: 'Model is a provider model identifier' },
+  'model.*': {
+    kind: 'literal',
+    reason: 'Model preference entries are aliases, tiers or model identifiers',
+  },
   provider: { kind: 'literal', reason: 'Provider is an integration identifier' },
   context: { kind: 'literal', reason: 'Context string selects a session policy' },
   'context.resume': { kind: 'literal', reason: 'Resume target is a node identifier' },

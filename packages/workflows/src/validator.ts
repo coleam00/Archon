@@ -66,7 +66,7 @@ import type { WorkflowDefinition, DagNode, IncludeDirective, WorkflowSource } fr
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
-import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
+import { buildAiProfile, isAliasRef, isLiteralSpec, resolveModelRef } from './model-validation';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { liveSourceRoots, packagedWorkflowDirectory } from './workflow-source';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
@@ -326,7 +326,7 @@ function resolveValidationProvider(
   if (!aiProfile || !('model' in node) || !node.model) return provider;
 
   try {
-    const modelSpec = resolveModelSpec(aiProfile, node.model);
+    const modelSpec = resolveModelRef(aiProfile, node.model);
     if (!isLiteralSpec(modelSpec)) provider = modelSpec.provider;
   } catch {
     // validateModelRef reports the actionable model error separately.
@@ -394,10 +394,10 @@ export async function validateWorkflowResources(
     });
   }
 
-  const validateModelRef = (ref: string, nodeId?: string): void => {
+  const validateModelRef = (ref: NonNullable<DagNode['model']>, nodeId?: string): void => {
     if (!aiProfile) return;
     try {
-      resolveModelSpec(aiProfile, ref);
+      resolveModelRef(aiProfile, ref);
     } catch (error) {
       issues.push({
         level: 'error',
@@ -409,12 +409,12 @@ export async function validateWorkflowResources(
     }
   };
 
-  if (requiresPortableModelRefs && workflow.model?.startsWith('@')) {
+  if (requiresPortableModelRefs && isAliasRef(workflow.model)) {
     issues.push({
       level: 'error',
       field: 'model',
       message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config.workflowSource} workflows`,
-      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      hint: "Use small, medium, large, a literal provider model string, or a preference list that ends in one, such as ['@reviewer', medium].",
     });
   }
   if (workflow.model) validateModelRef(workflow.model);
@@ -422,7 +422,7 @@ export async function validateWorkflowResources(
   let effectiveWorkflowProvider = workflow.provider ?? defaultProvider;
   if (workflow.model && aiProfile) {
     try {
-      const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+      const workflowModelSpec = resolveModelRef(aiProfile, workflow.model);
       if (!isLiteralSpec(workflowModelSpec)) {
         effectiveWorkflowProvider = workflowModelSpec.provider;
       }
@@ -552,13 +552,13 @@ export async function validateWorkflowResources(
       });
     }
 
-    if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
+    if (requiresPortableModelRefs && 'model' in node && isAliasRef(node.model)) {
       issues.push({
         level: 'error',
         nodeId: node.id,
         field: 'model',
         message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${config.workflowSource} workflows`,
-        hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+        hint: "Use small, medium, large, a literal provider model string, or a preference list that ends in one, such as ['@reviewer', medium].",
       });
     }
     if ('model' in node && node.model) validateModelRef(node.model, node.id);

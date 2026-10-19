@@ -452,6 +452,50 @@ describe('validateWorkflowResources — portable model refs', () => {
 
     expect(issues.some(i => i.field === 'model')).toBe(false);
   });
+
+  test('bundled workflow accepts a model preference list that ends in a tier', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'command', name: 'my-command' },
+          model: ['@review-seams', '@reviewer', 'medium'],
+        } as DagNode,
+      ]),
+      model: ['@implementer', 'large'],
+    } as WorkflowDefinition;
+
+    // No alias configured anywhere: the list lands on its tier, so it is portable.
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'bundled',
+      assistant: 'claude',
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+
+  test('a preference list must resolve without its aliases, even when one is configured', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        kind: 'agent',
+        source: { kind: 'command', name: 'my-command' },
+        model: ['@reviewer', 'medium'],
+      } as DagNode,
+    ]);
+
+    // '@reviewer' resolves here, but with no default assistant the final tier cannot,
+    // so an install without the alias would fail this node.
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'project',
+      aliases: { '@reviewer': { provider: 'claude', model: 'sonnet' } },
+    });
+
+    expect(issues.some(i => i.nodeId === 'step1' && i.field === 'model')).toBe(true);
+  });
 });
 
 // =============================================================================

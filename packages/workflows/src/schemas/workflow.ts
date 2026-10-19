@@ -14,6 +14,7 @@ import {
 import type { DagNode, NestedKeySpec } from './dag-node';
 import { jsonValueSchema } from '../output-ref';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
+import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -200,7 +201,7 @@ export const workflowBaseSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   provider: z.string().trim().min(1).optional(),
-  model: z.string().optional(),
+  model: modelRefSchema.optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),
   effort: effortLevelSchema.optional(),
@@ -440,7 +441,7 @@ export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
  */
 export interface DeclaredWorkflowConfig {
   readonly provider?: string;
-  readonly model?: string;
+  readonly model?: WorkflowModelRef;
   readonly effort?: EffortLevel;
 }
 

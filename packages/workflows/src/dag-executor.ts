@@ -29,7 +29,7 @@ import {
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { logWorkflowError } from './logger';
 import { safeSendMessage } from './platform-messages';
-import { isTierName } from './model-validation';
+import { isTierName, selectModelRef } from './model-validation';
 import { getLog } from './dag/log';
 import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
@@ -137,7 +137,8 @@ export async function executeDagWorkflow(
     );
   }
 
-  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
+  const workflowRef = selectModelRef(workflow.model, aiProfile);
+  const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
     fallbackModel: workflow.fallbackModel,

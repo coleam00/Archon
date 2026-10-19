@@ -1,9 +1,8 @@
 /**
  * Skill command - Install bundled Archon skill files into a project
  *
- * Writes the bundled `archon-cli` skill (router SKILL.md plus one capability
- * folder per route: running-workflows, manage-run, setup-and-config,
- * authoring-workflows, prompting-mistakes) into <targetPath>/.claude/skills/archon-cli/
+ * Writes the bundled `archon-cli` skill (core SKILL.md plus the operate, setup and
+ * authoring reference folders) into <targetPath>/.claude/skills/archon-cli/
  * (for Claude Code) and <targetPath>/.agents/skills/archon-cli/ (the canonical Codex
  * project-level skill path) so both Claude Code and Codex pick them up.
  *
