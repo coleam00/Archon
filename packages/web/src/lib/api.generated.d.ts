@@ -5249,6 +5249,7 @@ export interface components {
       persist_session?: boolean;
       output_type?: string;
       command?: string;
+      with?: unknown;
       prompt?: string;
       bash?: string;
       timeout?: number;
@@ -5316,11 +5317,11 @@ export interface components {
             };
           };
       cancel?: string;
-      include?: string;
-      workflow?: string;
-      input?: string;
+      script?: string;
       /** @enum {string} */
-      isolation?: 'inherit' | 'worktree';
+      runtime?: 'bun' | 'uv';
+      deps?: string[];
+      include?: string;
       fan_out?: {
         items: string;
         as?: string;
@@ -5332,11 +5333,10 @@ export interface components {
          */
         join: 'all_success' | 'all_done' | 'first_success';
       };
-      script?: string;
+      workflow?: string;
+      input?: string;
       /** @enum {string} */
-      runtime?: 'bun' | 'uv';
-      deps?: string[];
-      with?: unknown;
+      isolation?: 'inherit' | 'worktree';
     };
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
