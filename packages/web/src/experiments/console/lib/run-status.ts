@@ -39,6 +39,10 @@ export const statusLabel: Record<RunStatus, string> = {
  * default.
  */
 export function runStatusLabel(run: Run): string {
+  if (run.status === 'running' && run.ownerObservation === 'unreachable')
+    return 'Running · owner not answering';
+  if (run.status === 'running' && run.ownerObservation === 'unknown')
+    return 'Running · owner unknown';
   if (run.status === 'running' && run.toolCallAttention?.length)
     return 'Running · tool call needs attention';
   if (run.status === 'failed') {
@@ -53,10 +57,33 @@ export function runStatusLabel(run: Run): string {
 }
 
 /**
+ * Whether a run is presented as live progress. A running run stops looking live once the
+ * server reports its owner `unreachable` or `unknown`; its status stays `running` because
+ * only the engine or the operator changes it. Quiet output never makes a run not live.
+ */
+export function isRunLive(run: Pick<Run, 'status' | 'ownerObservation'>): boolean {
+  return (
+    run.status === 'running' &&
+    run.ownerObservation !== 'unreachable' &&
+    run.ownerObservation !== 'unknown'
+  );
+}
+
+/** Why a running run is not shown as live, for the surfaces that have room to say so. */
+export function ownerObservationHint(run: Run): string | null {
+  if (run.status !== 'running') return null;
+  if (run.ownerObservation === 'unreachable')
+    return "No process on this server's host answers for this run. If its work has stopped, abandon it to release the record.";
+  if (run.ownerObservation === 'unknown')
+    return "This server cannot observe the run's owner (another host or user, or no answer in time). Progress is not live here.";
+  return null;
+}
+
+/**
  * Status → class mappings.
  *
  * Color discipline:
- *   running   → blue  (active; pulsing strip)
+ *   running   → blue  (active; pulsing strip while live, still otherwise)
  *   paused    → amber (waiting for human; pulsing dot)
  *   failed    → red
  *   completed → green (execution reached completion; muted strip, no pulse)
@@ -76,6 +103,9 @@ export const statusStripClass: Record<RunStatus, string> = {
   completed: 'bg-success/40',
   cancelled: 'bg-text-tertiary/40',
 };
+
+/** The running strip for a run that is not live: same colour, no glow or pulse. */
+export const stillRunningStripClass = 'bg-[color-mix(in_oklch,var(--running),transparent_60%)]';
 
 export const statusTextClass: Record<RunStatus, string> = {
   running: 'text-[color:var(--running)]',

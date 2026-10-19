@@ -10,7 +10,12 @@ import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import { statusTextClass, runStatusLabel } from '../lib/run-status';
+import {
+  isRunLive,
+  ownerObservationHint,
+  statusTextClass,
+  runStatusLabel,
+} from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 import * as skill from '../skills';
 import { invalidate } from '../store/cache';
@@ -38,6 +43,9 @@ interface ActiveRunCardProps {
  *   - Status strip pulses
  *   - Shows `node` + `tool` detail rows (mono) with a blinking cursor after
  *     the last tool name to reinforce "still working"
+ *   - All of that only while live: once the server reports the owner unreachable or
+ *     unknown, the dot, strip and tint go still, the time reads as since launch, the
+ *     nodes as last recorded, and a hint says why
  *
  * Paused:
  *   - Amber pulsing dot
@@ -54,6 +62,8 @@ export function ActiveRunCard({
   const navigate = useNavigate();
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
+  const isLive = isRunLive(run);
+  const ownerHint = ownerObservationHint(run);
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
   const canOpen = !run.id.startsWith('demo-');
   const canOpenIde =
@@ -100,7 +110,7 @@ export function ActiveRunCard({
           : undefined
       }
       className={`group relative overflow-hidden rounded-[12px] border transition-colors hover:bg-surface-hover ${
-        run.status === 'running' ? 'bg-warning/[0.04]' : 'bg-surface'
+        isLive ? 'bg-warning/[0.04]' : 'bg-surface'
       } ${selected ? 'ring-2 ring-accent-bright/40' : ''} ${
         canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
       }`}
@@ -110,17 +120,19 @@ export function ActiveRunCard({
       style={{
         borderColor: selected
           ? 'color-mix(in oklch, var(--accent-bright), transparent 30%)'
-          : run.status === 'running'
+          : isLive
             ? 'color-mix(in oklch, var(--warning), transparent 70%)'
             : 'var(--border)',
       }}
     >
-      <StatusStrip status={run.status} />
+      <StatusStrip status={run.status} live={isLive} />
       <div className="pl-4 pr-4 py-3">
         {/* Header */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {run.status === 'running' ? (
+          {isLive ? (
             <LiveDot />
+          ) : run.status === 'running' ? (
+            <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--running)]" />
           ) : (
             <span
               aria-hidden
@@ -149,7 +161,9 @@ export function ActiveRunCard({
                 {formatCost(run.costUsd)}
               </span>
             ) : null}
-            <span className="font-mono text-[11px] tabular-nums text-text-tertiary">{elapsed}</span>
+            <span className="font-mono text-[11px] tabular-nums text-text-tertiary">
+              {run.status === 'running' && !isLive ? `since launch ${elapsed}` : elapsed}
+            </span>
             {canOpenIde && run.workingPath !== null ? (
               <button
                 type="button"
@@ -169,10 +183,20 @@ export function ActiveRunCard({
           </div>
         </div>
 
+        {ownerHint !== null ? (
+          <p
+            className={`mt-1 text-[12px] ${
+              run.ownerObservation === 'unreachable' ? 'text-warning' : 'text-text-secondary'
+            }`}
+          >
+            {ownerHint}
+          </p>
+        ) : null}
+
         <ToolCallAttentionSection run={run} />
 
         {/* Provenance + activity detail: the triggering input (when present, truncated —
-            full text on hover), plus live node/tool rows while running. */}
+            full text on hover), plus node/tool rows while running. */}
         {showDetailGrid ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
             {run.userMessage !== '' ? (
@@ -186,6 +210,7 @@ export function ActiveRunCard({
             {run.status === 'running' && run.activeNodes.length > 0 ? (
               <>
                 <span className="font-mono text-text-tertiary">
+                  {isLive ? '' : 'last recorded '}
                   {run.activeNodes.length === 1 ? 'node' : 'nodes'}
                 </span>
                 <span className="font-mono text-text-primary">{run.activeNodes.join(', ')}</span>
@@ -196,9 +221,11 @@ export function ActiveRunCard({
                 <span className="font-mono text-text-tertiary">tool</span>
                 <span className="font-mono text-text-primary">
                   {run.lastTool}
-                  <span aria-hidden className="ml-1 inline-block animate-pulse">
-                    ▏
-                  </span>
+                  {isLive ? (
+                    <span aria-hidden className="ml-1 inline-block animate-pulse">
+                      ▏
+                    </span>
+                  ) : null}
                 </span>
               </>
             ) : null}

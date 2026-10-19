@@ -878,6 +878,10 @@ cannot tell whether the owner is alive. It says so on its `waiting` line and kee
 watching the run's stored state until it changes or `--timeout` passes. `abandon` prints
 the host the run recorded and says when it is not this one.
 
+The console applies the same rule from the server's host and user: a running run whose
+owner is gone shows "Running · owner not answering", and one the server cannot observe
+shows "Running · owner unknown". Neither is shown as live progress.
+
 `--json` emits one document. On a wake it carries the attention value:
 
 ```json

@@ -43,6 +43,11 @@ export interface Run {
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
+  /**
+   * What the server observes about a running run's execution owner. Null when it makes
+   * no claim: the run is not running, or the payload carries no observation.
+   */
+  ownerObservation?: components['schemas']['DashboardWorkflowRun']['owner_observation'];
   attention: components['schemas']['WorkflowRun']['attention'];
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
@@ -126,7 +131,11 @@ type RawWorkflowRun = Pick<
   Partial<
     Pick<
       DashboardWorkflowRun,
-      'codebase_name' | 'platform_type' | 'active_nodes' | 'worker_platform_id'
+      | 'codebase_name'
+      | 'platform_type'
+      | 'active_nodes'
+      | 'worker_platform_id'
+      | 'owner_observation'
     >
   > &
   Partial<Pick<DetailRun, 'conversation_platform_id' | 'terminal_record'>>;
@@ -221,6 +230,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
+    ownerObservation: raw.owner_observation ?? null,
     attention: raw.attention ?? null,
     outcome: raw.outcome ?? null,
     terminalRecord: raw.terminal_record ?? null,

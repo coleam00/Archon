@@ -6,7 +6,12 @@ import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import { runStatusLabel, statusTextClass } from '../lib/run-status';
+import {
+  isRunLive,
+  ownerObservationHint,
+  runStatusLabel,
+  statusTextClass,
+} from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface RunDetailHeaderProps {
@@ -15,17 +20,17 @@ interface RunDetailHeaderProps {
   projectId: string | undefined;
 }
 
-function useLiveElapsed(run: Run): string {
+function useLiveElapsed(run: Run, live: boolean): string {
   const [, tick] = useState(0);
   useEffect(() => {
-    if (run.status !== 'running') return;
+    if (!live) return;
     const handle = setInterval(() => {
       tick(n => n + 1);
     }, 1000);
     return (): void => {
       clearInterval(handle);
     };
-  }, [run.status]);
+  }, [live]);
   return formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
 }
 
@@ -34,9 +39,11 @@ export function RunDetailHeader({
   projectName,
   projectId,
 }: RunDetailHeaderProps): ReactElement {
-  const elapsed = useLiveElapsed(run);
+  const isLive = isRunLive(run);
+  const elapsed = useLiveElapsed(run, isLive);
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
+  const ownerHint = ownerObservationHint(run);
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const canOpenIde = !isDocker && run.workingPath !== null && run.workingPath !== '';
@@ -85,8 +92,10 @@ export function RunDetailHeader({
 
       {/* Status pill */}
       <div className="flex items-center gap-2">
-        {isRunning ? (
+        {isLive ? (
           <LiveDot />
+        ) : isRunning ? (
+          <span aria-hidden className="h-2 w-2 rounded-full bg-[color:var(--running)]" />
         ) : isPaused ? (
           <span aria-hidden className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />
         ) : (
@@ -127,7 +136,9 @@ export function RunDetailHeader({
             {formatCost(run.costUsd)}
           </span>
         ) : null}
-        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
+        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">
+          {isRunning && !isLive ? `since launch ${elapsed}` : elapsed}
+        </span>
         {canOpenIde && run.workingPath !== null ? (
           <button
             type="button"
@@ -144,6 +155,16 @@ export function RunDetailHeader({
           </button>
         ) : null}
       </div>
+
+      {ownerHint !== null ? (
+        <p
+          className={`w-full text-[12px] ${
+            run.ownerObservation === 'unreachable' ? 'text-warning' : 'text-text-secondary'
+          }`}
+        >
+          {ownerHint}
+        </p>
+      ) : null}
 
       {/* Provenance sub-row: the input that started this run. `w-full` forces its
           own line in the flex-wrap header.
