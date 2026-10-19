@@ -30,7 +30,9 @@ export function installContainerExecHost(rpc: PluginRpc): {
       const error = new Error(
         'Provider disconnected with an unfinished container exec operation; inspect before explicit recovery'
       );
-      if (lease.active) session.gate.failAdmission(error);
+      // A queued operation may be the signal for an already-running body.
+      // Losing the provider loses that control even before the lease is granted.
+      session.gate.failAdmission(error);
       lease.reject(error);
       lease.release();
     }

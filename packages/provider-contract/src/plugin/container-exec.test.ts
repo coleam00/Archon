@@ -173,3 +173,43 @@ test('remote leases are scoped to the authorized session and connection', async 
     await host.close();
   }
 });
+
+test('disconnecting while control is queued also refuses subsequent transfers', async () => {
+  const received = deferred();
+  const pair = streamPair((side, bytes) => {
+    if (side !== 'provider') return;
+    const message = rpcMessageSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+    if ('method' in message && message.method === '_archon/container_exec/acquire')
+      received.resolve();
+  });
+  const host = new PluginRpc(pair.host);
+  const remote = new PluginRpc(pair.provider);
+  const gate = queue();
+  const bridge = installContainerExecHost(host);
+  bridge.enable('session', gate);
+  const frozen = deferred();
+  const thaw = deferred();
+  const transfer = gate.run(async () => {
+    frozen.resolve();
+    await thaw.promise;
+  });
+  await frozen.promise;
+  const acquire = remote
+    .request('_archon/container_exec/acquire', { sessionId: 'session' })
+    .catch(error => error);
+  try {
+    await received.promise;
+    // Drain the RPC handler so the request is queued behind the transfer.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await remote.close();
+    await host.done;
+    thaw.resolve();
+    await transfer;
+    await acquire;
+    await expect(gate.run(async () => {})).rejects.toThrow('unfinished container exec');
+  } finally {
+    thaw.resolve();
+    await remote.close();
+    await host.close();
+  }
+});

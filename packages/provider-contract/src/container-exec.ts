@@ -54,7 +54,6 @@ export interface ContainerExecCommand {
  * spawn event says nothing about whether Docker has admitted the exec yet.
  * The command body can then overlap transfers and other admitted command bodies.
  */
-
 export async function admitContainerCommand<T>(
   containerId: string,
   args: ContainerExecCommand | ((marker: string) => string[]),
@@ -100,17 +99,15 @@ export async function admitContainerCommand<T>(
           return;
         }
         let pending = Buffer.alloc(0);
-        let seen = false;
         child.stderr?.on('data', (data: Buffer | string) => {
           const chunk = typeof data === 'string' ? Buffer.from(data) : data;
-          if (seen) {
+          if (acknowledged) {
             forwardStderr?.(chunk);
             return;
           }
           pending = Buffer.concat([pending, chunk]);
           const offset = pending.indexOf(marker);
           if (offset >= 0) {
-            seen = true;
             acknowledged = true;
             forwardStderr?.(
               Buffer.concat([pending.subarray(0, offset), pending.subarray(offset + marker.length)])
