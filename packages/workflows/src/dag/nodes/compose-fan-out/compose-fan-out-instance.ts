@@ -149,6 +149,7 @@ async function claimInstanceStart(
     }
     await deriveInstanceSinks(ctx, instance.execution);
   } catch (err) {
+    ctx.onRequiredArtifactFailure?.(err);
     return {
       status: 'error',
       output: '',
@@ -305,6 +306,7 @@ async function recordInstanceTerminal(
     await ctx.deps.store.persistWorkflowEvent(serializeNodeStateRecord(record));
     await deriveInstanceSinks(ctx, record);
   } catch (err) {
+    ctx.onRequiredArtifactFailure?.(err);
     return {
       ...outcome,
       status: 'ambiguous',
@@ -429,12 +431,12 @@ export async function runComposeInstance(
   if (notStarted !== undefined) return notStarted;
 
   const instanceCtx = instanceRunContext(instance, expanded.nodes, threaded);
-  // Node executors can turn exchange exceptions into failed outputs; all_done must
-  // still distinguish these required engine operations from authored child failures.
+  // Node executors can turn required write failures into failed outputs; all_done
+  // must still distinguish these engine operations from authored child failures.
   const exchange = instanceCtx.artifactExchange;
-  let artifactFailure: string | undefined;
+  let requiredFailure: string | undefined;
   instanceCtx.onRequiredArtifactFailure = error => {
-    artifactFailure ??= error instanceof Error ? error.message : String(error);
+    requiredFailure ??= error instanceof Error ? error.message : String(error);
     scope.ctx.onRequiredArtifactFailure?.(error);
   };
   if (exchange) {
@@ -466,5 +468,5 @@ export async function runComposeInstance(
       error instanceof Error ? error.message : String(error)
     );
   }
-  return settleInstance(instance, instanceCtx, expanded.primarySink, artifactFailure);
+  return settleInstance(instance, instanceCtx, expanded.primarySink, requiredFailure);
 }
