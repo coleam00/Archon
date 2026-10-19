@@ -3,8 +3,9 @@ description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
-  agent routes it (and proves a bug's symptom first) and launches archon-ship from a
-  brief; one agent answers how that round ended; and after several rounds that each
+  agent routes it (and proves a bug's symptom first), finishing a reviewed, green
+  PR directly or launching archon-ship from a brief when work remains; one agent
+  answers how a launched round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
   attention item whose answer is a declared choice; the ruling is written into the

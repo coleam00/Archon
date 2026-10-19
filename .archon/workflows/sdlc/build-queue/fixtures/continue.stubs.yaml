@@ -26,6 +26,8 @@ route:
   attention: null
 checkout: { head: null }
 ship__forge: { source: forge }
+ship__continuation: { repo: { host: github.com, path: example/repo }, number: 1 }
+ship__checkout: { head: fixturehead }
 ship__deliver__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: READY, route: deliver }

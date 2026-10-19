@@ -107,12 +107,15 @@ same shapes from either source:
   qualified PR, with the authenticated `gh` login.
 
 The preflight names every forge operation the pack uses, and a plugin missing any of
-them is refused before an agent spends. Keep `gh` as the default until a released
-plugin with all of them passes a real-PR check.
+them is refused before an agent spends. This includes `pr.comments`, which the
+build queue uses for direct Ready completion. v0.12.1 lacks that operation; select
+a plugin by its advertised capabilities rather than assuming a minimum version.
+Keep `gh` as the default until a released plugin with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: it reads the trusted
-review comment, the default branch's head and CI, and how far a head is behind it,
-and the forge contract has no read for those yet. The gate itself doesn't refuse over
+The merge queue reads through `gh` alone and refuses `forge`: it reads the default
+branch's head and CI, and how far a head is behind it,
+and the forge contract has no read for those yet. PR conversation comments are
+available through `pr.comments`. The gate itself doesn't refuse over
 threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
@@ -477,8 +480,10 @@ On the forge source, the plugin must support `pr.comments` to read conversation 
 install a release/plugin carrying that operation before using this path. Read failures
 ask for a setup remedy and never fall back to another source.
 
-Actual continuations fetch and merge the qualified PR head before ship starts, preserving
-the local branch. Conflicts stop before delivery and leave git's conflict state visible.
+Build-queue continuations fetch and merge the qualified PR head before ship starts.
+Standalone ship resolves the continuation repository from the target, triage and remotes,
+then fetches and merges the head before delivery. Both preserve the local branch.
+Conflicts stop before delivery and leave git's conflict state visible.
 Publication still uses a normal push and refuses a subsequently advanced remote head.
 
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
@@ -558,8 +563,9 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   rounds and its last twenty decisions with any maintainer's answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
-changes its checkout, so every run needs its own worktree:
+item and a continuation waits for the next run. A launch includes `archon-ship-block`,
+which changes its checkout; direct Ready completion skips it. Since a run may launch
+delivery, give every run its own worktree:
 
 ```json
 {

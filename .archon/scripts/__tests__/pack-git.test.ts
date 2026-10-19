@@ -72,8 +72,9 @@ describe('pushHead', () => {
   });
 });
 
-describe('build queue continuation checkout', () => {
-  const inputs = { INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number) };
+describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
+  const checkout = `${entry}/scripts/checkout`;
+  const inputs = { INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number), INPUTS_REF: JSON.stringify(PR), INPUTS_PULL_REQUEST: String(PR.number) };
 
   it.each([false, true])('contains the PR history before publication, preserving the local branch (divergent=%s)', divergent => {
     const cwd = gitCheckout({}, track);
@@ -87,7 +88,7 @@ describe('build queue continuation checkout', () => {
     }
     const initial = git(cwd, 'rev-parse', 'HEAD');
     expect(spawnSync('git', ['merge-base', '--is-ancestor', prHead, 'HEAD'], { cwd }).status).toBe(1);
-    const prepared = runPackScript('build-queue/scripts/checkout', {
+    const prepared = runPackScript(checkout, {
       cwd, inputs, source: divergent ? 'forge' : 'gh',
       forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: prHead }), title: '', body: '' }) },
     });
@@ -109,7 +110,7 @@ describe('build queue continuation checkout', () => {
   });
 
   it('does nothing on a first round without reading a forge or requiring a repository', () => {
-    const run = runPackScript('build-queue/scripts/checkout', { inputs: { INPUTS_CONTINUES: 'null' } });
+    const run = runPackScript(checkout, { inputs: { INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' } });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({ head: null });
     expect(run.gh).toEqual([]);
@@ -121,12 +122,12 @@ describe('build queue continuation checkout', () => {
     const prHead = git(cwd, 'rev-parse', 'HEAD');
     if (mode !== 'missing') git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'checkout', '-q', '-b', 'archon/build-test', 'dev');
-    const run = runPackScript('build-queue/scripts/checkout', { cwd, inputs, gh: { pr: {
+    const run = runPackScript(checkout, { cwd, inputs, gh: { pr: {
       ...(mode === 'closed' ? { state: 'CLOSED' } : {}),
       ...(mode === 'fork' ? { headRepositoryOwner: { login: 'fork' } } : {}),
     } } });
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain(mode === 'conflict' ? 'merge' : mode === 'missing' ? 'fetch' : 'must be open with a head');
+    expect(run.stderr).toContain(mode === 'conflict' ? 'merge' : mode === 'missing' ? 'fetch' : mode === 'fork' ? 'maintainer edits' : 'must be open with a head');
     expect(git(cwd, 'branch', '--show-current')).toBe('archon/build-test');
     if (mode === 'conflict') {
       expect(git(cwd, 'diff', '--name-only', '--diff-filter=U')).toBe('a.txt');
@@ -140,7 +141,7 @@ describe('build queue continuation checkout', () => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'checkout', '-q', '-b', 'archon/build-test', 'dev');
-    expect(runPackScript('build-queue/scripts/checkout', { cwd, inputs }).code).toBe(0);
+    expect(runPackScript(checkout, { cwd, inputs }).code).toBe(0);
     git(cwd, 'checkout', '-q', 'feature');
     git(cwd, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
     const advanced = git(cwd, 'rev-parse', 'HEAD');
@@ -150,6 +151,36 @@ describe('build queue continuation checkout', () => {
     expect(published.code).not.toBe(0);
     expect(published.stderr).toContain('refused');
     expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(advanced);
+  });
+});
+
+describe('standalone continuation identity', () => {
+  it('refuses a different resolved number before reading the forge', () => {
+    const run = runPackScript('ship/scripts/checkout', { inputs: {
+      INPUTS_PULL_REQUEST: String(PR.number + 1), INPUTS_REF: JSON.stringify(PR),
+    } });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('differs from the continuation');
+    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
+  });
+
+  it('prepares an editable fork from its qualified remote', () => {
+    const cwd = gitCheckout({}, track);
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    git(cwd, 'checkout', '-q', '-b', 'archon/standalone', 'dev');
+    const baseRepo = { host: PR.repo.host, path: 'canonical/repo' };
+    const run = runPackScript('ship/scripts/checkout', {
+      cwd, source: 'forge',
+      inputs: { INPUTS_PULL_REQUEST: String(PR.number), INPUTS_REF: JSON.stringify({ repo: baseRepo, number: PR.number }) },
+      forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ repo: baseRepo, head_revision: head, maintainer_can_modify: true }), title: '', body: '' }) },
+    });
+    expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
+    git(cwd, 'merge-base', '--is-ancestor', head, 'HEAD');
+    expect(git(cwd, 'branch', '--show-current')).toBe('archon/standalone');
+    expect(run.gh).toEqual([]);
+    expect(JSON.parse(run.forgeRequests[0] ?? '')).toEqual({ selector: { kind: 'number', ref: { repo: baseRepo, number: PR.number } } });
   });
 });
 

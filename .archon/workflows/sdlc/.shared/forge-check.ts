@@ -25,6 +25,7 @@ export function forgeAccessRead(repo: QualifiedPr['repo']) {
 
 export const REQUIRED_FORGE_OPERATIONS = [
   'pr.view',
+  'pr.comments',
   'pr.create',
   'pr.edit-body',
   'pr.ready',
@@ -94,7 +95,7 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   if (missing.length)
     throw new Error(
       `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
-        'The GitHub plugin has every one from v0.12.1. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+        'Install a plugin advertising these capabilities, or use ARCHON_SDLC_FORGE=gh.'
     );
 }
 

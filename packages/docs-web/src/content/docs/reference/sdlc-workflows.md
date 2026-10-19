@@ -14,7 +14,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 The queues move work forward without you:
 
 1. `archon-intake` triages each new issue and labels its route.
-2. `archon-build-queue` claims a ready issue, writes the brief and runs `archon-ship` on it until its pull request is reviewed Ready.
+2. `archon-build-queue` claims a ready issue and directly marks its PR ready when a trusted review says Ready and CI is green at the same head. Otherwise it writes the brief and runs `archon-ship` until its pull request is reviewed Ready.
 3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict, CI and open threads, syncing only those that conflict or reshape code first.
 4. `archon-discoveries` files, tracks or drops what runs noticed outside their own task.
 
