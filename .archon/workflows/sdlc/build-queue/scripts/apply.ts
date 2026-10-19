@@ -7,7 +7,9 @@
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer.
+ * its claim until the ruling node records the answer. A continue then starts the item's
+ * next round at once, on the run config this run started with; if that launch fails,
+ * the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
@@ -18,6 +20,7 @@ import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } 
 import { withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
+import { launchNextRound } from '../../.shared/launch.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
@@ -107,6 +110,12 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
   return `${subject}${decision.kind}. ${decision.reason}`;
 }
 
+/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
+function afterWrite(summary: string, pushed: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
+  const written = pushed === null ? summary : `${summary} (${pushed})`;
+  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId)}` : written;
+}
+
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
@@ -175,7 +184,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: pushed === null ? result.summary : `${result.summary} (${pushed})` });
+  emit({ ...result, summary: afterWrite(result.summary, pushed, decision, item, runId) });
 }
 
 try {

@@ -153,6 +153,22 @@ gh api repos/OWNER/REPO/hooks --method POST \
 
 Check-run deliveries wake CI waits quickly. They are not required for correctness: when GitHub does not deliver one, the workflow reaches its deadline and probes CI again.
 
+## GitHub Enterprise Server
+
+To run the adapter against a self-hosted GitHub Enterprise Server, set its base URL:
+
+```ini
+GITHUB_URL=https://github.example.com
+```
+
+With `GITHUB_URL` set, the adapter calls `https://github.example.com/api/v3`, clones from `https://github.example.com/<owner>/<repo>.git`, and `GH_TOKEN`/`GITHUB_TOKEN` authenticate HTTPS clones of that exact scheme, host and port. Leave it unset for github.com. A value with a path, query or credentials is rejected: the adapter and the GitHub App fail startup, and clones to the Enterprise host get no GitHub token. Clones from other forges are unaffected.
+
+- **Webhook:** create it on the Enterprise repository or organization, pointing at the same `/webhooks/github` endpoint with the same secret (Step 3).
+- **GitHub App mode:** register the App on the Enterprise instance (**Settings → Developer settings → GitHub Apps**) with the permissions listed in [GitHub App Setup](/adapters/github-app-setup/). The App's API calls and installation tokens go to the Enterprise instance.
+- **SDLC workflows:** the forge plugin needs a `forge.hosts` entry for the Enterprise host; see [forge plugin configuration](/reference/forge/#plugin-configuration).
+
+Current limits: in App mode, git operations after the first clone (sync, workflow pushes) and per-user identity (`archon auth github`, the device flow) still target github.com. Use PAT mode on Enterprise Server for now.
+
 ## Further Reading
 
 - [Configuration](/getting-started/configuration/)

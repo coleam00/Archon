@@ -1,3 +1,4 @@
+import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
@@ -334,14 +335,16 @@ async function runUntilBash(
         }),
       }
     );
+    const invocation = bashInvocation(substitutedBash);
     await runSubprocessUntilRunStops(
       ctx.deps.store,
       workflowRun.id,
       node.id,
       execContext,
       loopBashPath,
-      ['-c', substitutedBash],
+      invocation.args,
       {
+        input: invocation.input,
         cwd: ctx.cwd,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,

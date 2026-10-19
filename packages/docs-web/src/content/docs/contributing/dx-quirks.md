@@ -45,6 +45,7 @@ Bun's `mock.module()` is process-global and irreversible — `mock.restore()` do
 - When adding a new test file with `mock.module()` to `packages/core`, make its first line exactly `// @archon-test-isolated` so it runs in its own process. Core discovers its tests, and discovery fails on a file that calls `mock.module()` without the marker. A file that mocks through a helper needs the marker too; discovery cannot see that call
 - In the other packages, give the file its own entry in `testGroups` in the package's `package.json`, or its own `bun test` step for a package still using a `&&` chain
 - A package's `testConcurrency` in `package.json` runs that many `testGroups` at once, each still in its own process; leave it out to run groups one at a time
+- Groups start slowest first, by the times in `scripts/test-weights.json`. CI splits slow shards into parts with `ARCHON_TEST_PART=<index>/<count>`, using the same times; `ARCHON_TEST_PART=1/2 bun run test` in a package runs that part locally. A new group with no recorded time counts as one second, so refresh the file with `bun scripts/update-test-weights.ts <run-id>` when one part of a shard finishes well after its sibling
 
 ## Worktree Port Allocation
 

@@ -23,6 +23,7 @@
       "src/exec.test.ts",
       "src/forge.test.ts",
       "src/git.test.ts",
+      "src/github-host.test.ts",
       "src/refresh-worktree-index.test.ts",
       "src/worktree-path.test.ts"
     ],

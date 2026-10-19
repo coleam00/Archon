@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -22,6 +22,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode, ExecNode } from '../../../schemas';
+import { bashInvocation } from '../../../bash-invocation';
 import { CONTAINER_MARKER_PROBE } from '../../../checkout-observation';
 
 describe('executeDagWorkflow -- bash nodes', () => {
@@ -81,6 +82,85 @@ describe('executeDagWorkflow -- bash nodes', () => {
     // Bash node should NOT invoke AI client
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
+
+  it.each([
+    { label: 'ASCII', values: Array.from({ length: 5 }, () => 'x'.repeat(32_000)) },
+    { label: 'multibyte', values: Array.from({ length: 2 }, () => '€'.repeat(32_000)) },
+    { label: 'quoted content', values: ["apostrophe' backslash\\ $() `hi`; *\nembedded\n\n"] },
+  ])('delivers aggregate inline $label references exactly', async ({ values }) => {
+    const artifactsDir = join(testDir, 'artifacts');
+    const deps = createMockDeps();
+    const producers: DagNode[] = values.map((_, index) => ({
+      id: `p${index}`,
+      kind: 'agent',
+      source: { kind: 'inline', prompt: 'produce' },
+    }));
+    const priorCompletedNodes = new Map(values.map((output, index) => [`p${index}`, { output }]));
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        artifactsDir,
+        workflowRun: makeWorkflowRun('aggregate-inline'),
+        priorCompletedNodes,
+        workflow: {
+          name: 'aggregate-inline',
+          nodes: [
+            ...producers,
+            {
+              id: 'consume',
+              kind: 'exec',
+              runtime: 'sh',
+              depends_on: producers.map(node => node.id),
+              script: values
+                .map(
+                  (_, index) =>
+                    `printf '%s' $p${index}.output > ${JSON.stringify(join(testDir, `value-${index}`))}`
+                )
+                .join('\n'),
+            },
+          ],
+        },
+      })
+    );
+    for (const [index, value] of values.entries()) {
+      expect(await readFile(join(testDir, `value-${index}`), 'utf8')).toBe(value);
+    }
+    const spills = join(artifactsDir, '.archon', 'node-output-spills');
+    const files = await readdir(spills).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    expect(files.filter(file => file.endsWith('.nodeoutput'))).toEqual([]);
+    expect(
+      persistedEvents(deps.store).some(
+        event => event.event_type === 'node_completed' && event.step_name === 'consume'
+      )
+    ).toBe(true);
+  });
+
+  it('delivers a large authored body without putting it in argv', async () => {
+    const deps = createMockDeps();
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('large-body'),
+        workflow: {
+          name: 'large-body',
+          nodes: [
+            {
+              id: 'body',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `# ${'x'.repeat(3_000_000)}\nprintf complete`,
+            },
+          ],
+        },
+      })
+    );
+    expect(result).toBe('complete');
+  }, 20_000);
 
   it('bash node stdout is available for downstream $nodeId.output substitution', async () => {
     const mockDeps = createMockDeps();
@@ -241,6 +321,35 @@ describe('executeDagWorkflow -- bash nodes', () => {
       },
     ],
   ];
+  it.each(containerBashNodes)(
+    'rejects NUL in a %s before executing a prefix',
+    async (_label, node) => {
+      const marker = join(testDir, 'nul-prefix');
+      const source = `printf before > ${JSON.stringify(marker)} # '\0'\nexit 7`;
+      if (node.kind === 'exec') node = { ...node, script: source };
+      else if (node.kind === 'loop') {
+        node = { ...node, loop: { ...node.loop, until_bash: source } };
+      } else if (node.kind === 'loop_group') {
+        node = { ...node, loop_group: { ...node.loop_group, until_bash: source } };
+      } else throw new Error('Expected a Bash invocation fixture');
+      const deps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow: { name: 'nul-source', nodes: [node] },
+          workflowRun: makeWorkflowRun('nul-source'),
+        })
+      );
+      expect(await Bun.file(marker).exists()).toBe(false);
+      const events = persistedEvents(deps.store).filter(event => event.step_name === 'shell');
+      expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+      expect(events.find(event => event.event_type === 'node_failed')?.data?.error).toContain(
+        'NUL'
+      );
+    }
+  );
+
   it.each(
     containerBashNodes.flatMap(([label, node]) =>
       (['ENOENT', 'EACCES'] as const).map(code => [label, code, node] as const)
@@ -361,8 +470,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       git.resolveBashPath(),
-      ['-c', 'echo ok'],
+      bashInvocation('echo ok').args,
       expect.objectContaining({
+        input: 'echo ok',
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
       })
     );
@@ -448,9 +558,8 @@ describe('executeDagWorkflow -- bash nodes', () => {
       expect(execSpy).toHaveBeenCalledTimes(1);
       const firstCall = execSpy.mock.calls[0];
 
-      // The script passed to bash -c must contain literal $USER_MESSAGE (not substituted)
-      const bashArgs = firstCall?.[1] as string[];
-      expect(bashArgs[1]).toBe('echo $USER_MESSAGE');
+      expect(firstCall?.[1]).toEqual(bashInvocation('echo $USER_MESSAGE').args);
+      expect(firstCall?.[2]?.input).toBe('echo $USER_MESSAGE');
 
       // The env must contain the user message
       const envArg = (firstCall?.[2] as { env: NodeJS.ProcessEnv }).env;

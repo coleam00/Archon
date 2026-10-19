@@ -190,7 +190,11 @@ export { type TransitionTrigger, getTriggerForCommand } from './state/session-tr
 // =============================================================================
 
 // Conversation lock
-export { ConversationLockManager, type LockAcquisitionResult } from './utils/conversation-lock';
+export {
+  ConversationLockManager,
+  type ConversationLockSnapshot,
+  type LockAcquisitionResult,
+} from './utils/conversation-lock';
 
 // Webhook delivery dedup
 export { DeliveryDeduplicator } from './utils/delivery-dedup';

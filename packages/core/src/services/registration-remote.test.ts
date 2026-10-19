@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectSourcePath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { assertSavedCheckoutRemote, resolveSavedCheckout } from './registration-remote';
+import {
+  assertCheckoutRemote,
+  assertSavedCheckoutRemote,
+  resolveSavedCheckout,
+} from './registration-remote';
 
 const trackRoot = trackTempRoots();
 const remote = 'https://github.com/owner/repo';
@@ -96,5 +100,81 @@ test.skipIf(!canRevokeSearch).each([
     await expect(refusal).rejects.toMatchObject({ cause: { code: 'EACCES' } });
   } finally {
     await chmod(join(root, locked), 0o755);
+  }
+});
+
+test.skipIf(!canRevokeSearch)('refuses an inaccessible local remote target', async () => {
+  const { root, source } = await fixture();
+  const locked = join(root, 'locked');
+  const upstream = join(locked, 'upstream.git');
+  await mkdir(upstream, { recursive: true });
+  execFileSync('git', ['-C', source, 'init', '-q']);
+  execFileSync('git', ['-C', source, 'remote', 'add', 'origin', upstream]);
+  await chmod(locked, 0o000);
+  try {
+    const refusal = assertCheckoutRemote(source, upstream);
+    await expect(refusal).rejects.toThrow('Cannot verify checkout ownership');
+    await expect(refusal).rejects.toMatchObject({ cause: { code: 'EACCES' } });
+  } finally {
+    await chmod(locked, 0o755);
+  }
+});
+
+test('refuses a local remote with invalid Git configuration', async () => {
+  const { root, source } = await fixture();
+  const upstream = join(root, 'upstream.git');
+  execFileSync('git', ['init', '--bare', '-q', upstream]);
+  await writeFile(join(upstream, 'config'), '[broken');
+  execFileSync('git', ['-C', source, 'init', '-q']);
+  execFileSync('git', ['-C', source, 'remote', 'add', 'origin', upstream]);
+  const refusal = assertCheckoutRemote(source, upstream);
+  await expect(refusal).rejects.toThrow('Cannot verify checkout ownership');
+  await expect(refusal).rejects.toMatchObject({ cause: { kind: 'unclassified' } });
+});
+
+test('accepts requested and already-expanded URLs with one-pass checkout-local rewrites', async () => {
+  const { root, source } = await fixture();
+  const config = join(root, 'gitconfig');
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  await writeFile(config, '');
+  process.env.GIT_CONFIG_GLOBAL = config;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  try {
+    execFileSync('git', ['-C', source, 'init', '-q']);
+    execFileSync('git', [
+      '-C',
+      source,
+      'config',
+      'url.https://rewrite.invalid/.insteadOf',
+      'https://short.invalid/',
+    ]);
+    execFileSync('git', [
+      '-C',
+      source,
+      'config',
+      'url.git@mirror.invalid:.insteadOf',
+      'https://rewrite.invalid/',
+    ]);
+    execFileSync('git', [
+      '-C',
+      source,
+      'remote',
+      'add',
+      'origin',
+      'https://short.invalid/owner/repo.git',
+    ]);
+    expect(
+      execFileSync('git', ['-C', source, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8',
+      }).trim()
+    ).toBe('https://rewrite.invalid/owner/repo.git');
+    await assertCheckoutRemote(source, 'https://rewrite.invalid/owner/repo.git');
+    await assertCheckoutRemote(source, 'https://short.invalid/owner/repo.git');
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
   }
 });

@@ -282,6 +282,44 @@ describe('loop node completion channels', () => {
     expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
   });
 
+  it('delivers aggregate inline references to a plain-loop completion check', async () => {
+    const value = '€'.repeat(32_000);
+    const file = join(testDir, 'completion-values');
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'agent_message_chunk', text: 'working' };
+      yield { type: 'result', sessionId: 'completion' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('inline-until'),
+        priorCompletedNodes: new Map([['producer', { output: value }]]),
+        workflow: {
+          name: 'inline-until',
+          nodes: [
+            { id: 'producer', kind: 'agent', source: { kind: 'inline', prompt: 'produce' } },
+            {
+              id: 'poll',
+              kind: 'loop',
+              depends_on: ['producer'],
+              loop: {
+                prompt: 'work',
+                fresh_context: false,
+                max_iterations: 2,
+                until_bash: `a=$producer.output; b=$producer.output; printf '%s%s' "$a" "$b" > ${JSON.stringify(file)}`,
+              },
+            },
+          ],
+        },
+      })
+    );
+    expect(calls).toBe(1);
+    expect(await readFile(file, 'utf8')).toBe(value + value);
+  });
+
   it('does not complete a loop with no until when the model emits a sentinel-shaped string', async () => {
     // The whole point of making `until` optional: with no signal declared there is
     // no prose path, so a model that happens to emit `<promise>COMPLETE</promise>`

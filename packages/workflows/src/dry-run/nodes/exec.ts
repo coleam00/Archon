@@ -1,3 +1,4 @@
+import { bashInvocation } from '../../bash-invocation';
 import { mkdir } from 'node:fs/promises';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { certifyExecOutput } from '../../dag/nodes/exec/exec-output';
@@ -20,9 +21,10 @@ export async function executeCodeNode(
   try {
     let command: string;
     let args: string[];
+    let input: string | undefined;
     if (node.runtime === 'sh') {
       command = resolveBashPath();
-      args = ['-c', code];
+      ({ args, input } = bashInvocation(code));
     } else if (isInlineScript(code)) {
       if (node.runtime === 'bun') {
         command = 'bun';
@@ -47,6 +49,7 @@ export async function executeCodeNode(
     await mkdir(ctx.artifactsDir, { recursive: true });
     await mkdir(ctx.stateDir, { recursive: true });
     const result = await execFileAsync(command, args, {
+      input,
       cwd: ctx.execWorkspace,
       timeout: node.timeout ?? 300_000,
       env: {

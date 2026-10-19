@@ -67,6 +67,7 @@ export interface WorkflowStoreHarness {
     runId: string,
     dates: { started_at?: Date; last_activity_at?: Date | null }
   ): Promise<void>;
+  /** A snapshot: tests compare it with a later call to prove no report was emitted. */
   terminalReports(): string[];
   close(): Promise<void>;
 }
@@ -2498,7 +2499,7 @@ export function describeWorkflowStoreConformance(
         else await store.cancelWorkflowRun(run.id);
         const before = await store.getWorkflowRun(run.id);
         const events = await store.listWorkflowEvents(run.id);
-        const reports = [...harness.terminalReports()];
+        const reports = harness.terminalReports();
 
         expect(
           await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' })
@@ -2535,6 +2536,47 @@ export function describeWorkflowStoreConformance(
       });
       expect(harness.terminalReports()).toEqual([pending.id, pending.id, paused.id, completed.id]);
     });
+    test.each(['operator', 'fan_out'] as const)(
+      '%s cancellation preserves settled runs and cancels eligible runs',
+      async mode => {
+        const cancel = (id: string) =>
+          mode === 'operator'
+            ? store.cancelWorkflowRun(id)
+            : store.cancelFanOutRun(id, 'fan_out_orphan');
+        for (const status of [
+          'pending',
+          'running',
+          'paused',
+          'failed',
+          'completed',
+          'cancelled',
+        ] as const) {
+          const run = await create(store);
+          if (status === 'completed') {
+            await store.updateWorkflowRun(run.id, { status: 'running' });
+            await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+          } else if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
+          else if (status === 'cancelled') await store.cancelWorkflowRun(run.id);
+          else if (status !== 'pending') await store.updateWorkflowRun(run.id, { status });
+          const before = await store.getWorkflowRun(run.id);
+          const events = await store.listWorkflowEvents(run.id);
+          const reports = harness.terminalReports();
+          const settled = status === 'completed' || status === 'cancelled';
+          expect(await cancel(run.id)).toEqual({ cancelled: !settled });
+          if (settled) {
+            expect(await store.getWorkflowRun(run.id)).toEqual(before);
+            expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+            expect(harness.terminalReports()).toEqual(reports);
+          } else {
+            expect((await store.getWorkflowRun(run.id))?.status).toBe('cancelled');
+            expect((await store.listWorkflowEvents(run.id)).at(-1)?.event_type).toBe(
+              'workflow_cancelled'
+            );
+          }
+        }
+        expect(await cancel(crypto.randomUUID())).toEqual({ cancelled: false });
+      }
+    );
     test('fan-out recovery retracts only engine cancellations', async () => {
       for (const reason of FAN_OUT_CANCEL_REASONS) {
         const recovered = await running(store);
@@ -3182,6 +3224,106 @@ export function describeWorkflowStoreConformance(
       for (const prefix of ['', '%', '_', 'not-a-uuid'])
         expect(await store.findWorkflowRunsByIdPrefix(prefix, CONFORMANCE_CODEBASE_ID)).toEqual([]);
     });
+    test('parent sets scope listing rows, totals and status counts', async () => {
+      const first = await create(store);
+      const second = await create(store);
+      const terminal = await create(store, { parent_run_id: first.id });
+      await store.cancelWorkflowRun(terminal.id);
+      const leaf = await create(store, { parent_run_id: second.id });
+      const grandchild = await create(store, { parent_run_id: terminal.id });
+      await create(store);
+      const parentRunIds = [first.id, second.id, first.id];
+      const listed = await store.listWorkflowRuns({ parentRunIds });
+      expect(listed.runs.map(run => run.id).sort()).toEqual([terminal.id, leaf.id].sort());
+      expect(listed.total).toBe(2);
+      expect(listed.counts).toMatchObject({ all: 2, cancelled: 1, pending: 1 });
+      const filtered = await store.listWorkflowRuns({ parentRunIds, status: 'pending', limit: 0 });
+      expect(filtered.runs).toEqual([]);
+      expect(filtered.total).toBe(1);
+      expect(filtered.counts).toMatchObject({ all: 2, cancelled: 1, pending: 1 });
+      expect((await store.listWorkflowRuns({ parentRunIds, limit: 0 })).total).toBe(2);
+      expect(
+        (
+          await store.listWorkflowRuns({
+            parentRunIds: Array<string>(40_000).fill(first.id),
+            limit: 0,
+          })
+        ).total
+      ).toBe(1);
+      const empty = await store.listWorkflowRuns({ parentRunIds: [] });
+      expect(empty.runs).toEqual([]);
+      expect(empty.total).toBe(0);
+      expect(empty.counts.all).toBe(0);
+      expect((await store.listWorkflowRuns()).total).toBe(6);
+      expect(
+        (await store.listWorkflowRuns({ parentRunIds: [terminal.id] })).runs.map(run => run.id)
+      ).toEqual([grandchild.id]);
+    });
+
+    test('frontier counts exclude completed and cancelled leaves but retain unresolved subtrees', async () => {
+      const parent = await create(store);
+      const expected: string[] = [];
+      for (const status of [
+        'completed',
+        'cancelled',
+        'pending',
+        'running',
+        'failed',
+        'paused',
+      ] as const) {
+        for (const hasChild of [false, true]) {
+          const run = await create(store, { parent_run_id: parent.id });
+          switch (status) {
+            case 'completed':
+              await store.updateWorkflowRun(run.id, { status: 'running' });
+              await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+              break;
+            case 'cancelled':
+              await store.cancelWorkflowRun(run.id);
+              break;
+            case 'failed':
+              await store.failWorkflowRun(run.id, 'failure');
+              break;
+            case 'running':
+            case 'paused':
+              await store.updateWorkflowRun(run.id, { status });
+              break;
+          }
+          if (hasChild) await create(store, { parent_run_id: run.id });
+          if (hasChild || (status !== 'completed' && status !== 'cancelled')) expected.push(run.id);
+        }
+      }
+      const options = {
+        parentRunIds: [parent.id],
+        excludeLeafStatuses: ['completed', 'cancelled'] satisfies WorkflowRun['status'][],
+      };
+      const result = await store.listWorkflowRuns(options);
+      expect(result.runs.map(run => run.id).sort()).toEqual(expected.sort());
+      expect(result.total).toBe(10);
+      expect(result.counts).toMatchObject({
+        all: 10,
+        completed: 1,
+        cancelled: 1,
+        pending: 2,
+        running: 2,
+        failed: 2,
+        paused: 2,
+      });
+      const probe = await store.listWorkflowRuns({
+        ...options,
+        limit: 0,
+      });
+      expect(probe.runs).toEqual([]);
+      expect(probe.total).toBe(10);
+      const completed = await store.listWorkflowRuns({ ...options, status: 'completed', limit: 0 });
+      expect(completed.total).toBe(1);
+      expect(completed.counts.all).toBe(10);
+      expect(
+        (await store.listWorkflowRuns({ parentRunIds: [parent.id], excludeLeafStatuses: [] })).total
+      ).toBe(12);
+      expect((await store.listWorkflowRuns({ parentRunIds: [parent.id] })).total).toBe(12);
+    });
+
     test('open work excludes adopted failures, adopters are newest first, cleanup deletes only old terminals', async () => {
       const failed = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       await store.failWorkflowRun(failed.id, 'failed');
