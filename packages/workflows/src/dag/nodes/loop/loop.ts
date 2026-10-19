@@ -5,7 +5,9 @@ import {
   nodeExecutionMetadataSchema,
   type NodeExecutionRecord,
 } from '../../../schemas/node-execution';
-import { recordNodeState } from '../../../node-event-write';
+import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
+import { TerminalStatusWriteError } from '../../../terminal-status-write';
+import { RunBudgetRefusedError } from '../../../run-budget';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type { LoopNode, EffortLevel, LoopGateRunMetadata, WorkflowRun } from '../../../schemas';
 import { isApprovalContext } from '../../../schemas';
@@ -20,7 +22,7 @@ import { safeSendMessage } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
-import { loadNodeCommandPrompt } from '../../node-source';
+import { loadNodeCommandPrompt, RunSourceUnreadableError } from '../../node-source';
 import {
   aiNodeEnvironment,
   beginExecution,
@@ -309,8 +311,32 @@ export async function executeLoopNode(
   };
   const { startIteration, iterationLimit } = resume;
   for (let i = startIteration; i <= iterationLimit; i++) {
-    const result = await runLoopIteration(run, state, i);
-    if (result !== undefined) return result;
+    try {
+      const result = await runLoopIteration(run, state, i);
+      if (result !== undefined) return result;
+    } catch (error) {
+      if (
+        error instanceof TerminalStatusWriteError ||
+        error instanceof NodeEventWriteError ||
+        error instanceof RunBudgetRefusedError ||
+        error instanceof RunSourceUnreadableError
+      )
+        throw error;
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
+      const failed = await failLoopNode(ctx, node.id, state, err.message, {
+        failureKind: 'unknown',
+        ...loopSpend(state),
+        data: { iteration: i },
+      });
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Loop node '${node.id}' failed: ${err.message}`,
+        msgContext
+      );
+      return failed;
+    }
   }
 
   // Max iterations exceeded

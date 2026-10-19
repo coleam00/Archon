@@ -243,6 +243,125 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ]);
   });
 
+  it.each([
+    { kind: 'loop', fault: 'shell', retry: false },
+    { kind: 'loop', fault: 'shell', retry: true },
+    { kind: 'loop', fault: 'listing', retry: false },
+    { kind: 'loop_group', fault: 'shell', retry: false },
+    { kind: 'loop_group', fault: 'listing', retry: false },
+  ] as const)('$kind retains paid usage after $fault throws (retry: $retry)', async test => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const tokens = { input: 100, output: 20, cacheRead: 40, cacheWrite: 5 };
+    const invalidShell = join(testDir, 'missing-bash');
+    const listingDir = join(testDir, 'artifacts', '.archon', 'typed-artifacts');
+    const savedBashPath = process.env.ARCHON_BASH_PATH;
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Paid work.' };
+      yield { type: 'result', sessionId: 'paid-session', cost: 0.25, tokens };
+      if (test.fault === 'shell') process.env.ARCHON_BASH_PATH = invalidShell;
+      else {
+        await removeTempTree(listingDir);
+        await writeFile(listingDir, 'blocks directory creation');
+      }
+    });
+    const node: DagNode =
+      test.kind === 'loop'
+        ? {
+            id: 'work',
+            kind: 'loop',
+            loop: {
+              prompt: 'Work.',
+              until_bash: test.fault === 'listing' ? 'false' : 'true',
+              max_iterations: 3,
+              fresh_context: false,
+            },
+            ...(test.retry ? { retry: { max_attempts: 2, on_error: 'all', delay_ms: 1 } } : {}),
+          }
+        : {
+            id: 'work',
+            kind: 'loop_group',
+            loop_group: {
+              until_bash: 'true',
+              max_iterations: 3,
+              fresh_context: false,
+              nodes: [{ id: 'body', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+            },
+          };
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          logDir: join(testDir, 'logs'),
+          workflowRun,
+          workflow: { name: 'loop-thrown-usage', nodes: [node] },
+        })
+      );
+    } finally {
+      if (savedBashPath === undefined) delete process.env.ARCHON_BASH_PATH;
+      else process.env.ARCHON_BASH_PATH = savedBashPath;
+    }
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    const events = persistedEvents(store);
+    const failures = events.filter(event => event.event_type === 'node_failed');
+    expect(failures).toHaveLength(1);
+    const failed = failures[0];
+    expect(failed.step_name).toBe('work');
+    expect(failed.data?.failure_kind).toBe('unknown');
+    expect(failed.data?.error).toContain(test.fault === 'shell' ? invalidShell : listingDir);
+    if (test.fault === 'listing') expect(failed.data?.error).toContain('EEXIST');
+    expect(failed.data?.cost_usd).toBe(0.25);
+    expect(failed.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.25 },
+      tokens: { source: 'provider', value: tokens },
+    });
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'work')
+    ).toHaveLength(0);
+    expect(runUsageWrites(store)).toEqual([
+      {
+        total_cost_usd: 0.25,
+        total_tokens_in: 100,
+        total_tokens_out: 20,
+        total_cache_read_tokens: 40,
+        total_cache_write_tokens: 5,
+      },
+    ]);
+    const snapshot = await foldDagResumeSnapshot(events, workflowRun.id);
+    expect(snapshot.costUsd).toBe(0.25);
+    expect(snapshot.tokens).toEqual(tokens);
+    expect(snapshot.completedNodeOutputs.has('work')).toBe(false);
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const failureRow = rows.find(row => row.type === 'node_error' && row.step === 'work');
+    expect(failureRow).toBeDefined();
+    if (test.kind === 'loop') {
+      expect(failureRow?.cost_usd).toBe(0.25);
+      expect(failureRow?.tokens).toEqual(tokens);
+    } else {
+      expect(failed.data?.accounting).toBe('aggregate');
+      expect(
+        events.filter(
+          event => event.event_type === 'node_completed' && event.step_name === 'work.body'
+        )
+      ).toHaveLength(1);
+      expect(failureRow).not.toHaveProperty('cost_usd');
+      expect(failureRow).not.toHaveProperty('tokens');
+    }
+    expect(
+      rows
+        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+    ).toBe(0.25);
+    const messages = platform.sendMessage.mock.calls.map(call => call[1]).join('\n');
+    expect(messages).toContain(String(failed.data?.error));
+    expect(messages).not.toContain('failed before execution');
+  });
+
   it.each(['post-body cancel', 'between-iteration cancel', 'completion error'] as const)(
     'loop_group retains paid usage on %s',
     async exit => {

@@ -928,7 +928,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     expect(emitted).not.toContain('node_completed');
   });
 
-  it.each(['agent', 'script'] as const)(
+  it.each(['agent', 'script', 'loop'] as const)(
     'does not retry successful %s work when its completion write rejects',
     async kind => {
       const store = createMockStore();
@@ -939,8 +939,13 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       });
       mockSendQueryDag.mockClear();
       mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'done' };
-        yield { type: 'result', sessionId: 'completion-test' };
+        yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+        yield {
+          type: 'result',
+          sessionId: 'completion-test',
+          cost: 0.25,
+          tokens: { input: 100, output: 20 },
+        };
       });
       mockGetAgentProviderDag.mockImplementation(() => ({
         sendQuery: mockSendQueryDag,
@@ -952,20 +957,32 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       const node: DagNode =
         kind === 'agent'
           ? { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'finish once' }, retry }
-          : {
-              id: 'work',
-              kind: 'exec',
-              runtime: 'bun',
-              script:
-                'import { appendFileSync } from "node:fs"; appendFileSync("workload-count", "x"); console.log("done");',
-              retry,
-            };
+          : kind === 'loop'
+            ? {
+                id: 'work',
+                kind: 'loop',
+                loop: {
+                  prompt: 'finish once',
+                  until: 'DONE',
+                  max_iterations: 3,
+                  fresh_context: false,
+                },
+                retry,
+              }
+            : {
+                id: 'work',
+                kind: 'exec',
+                runtime: 'bun',
+                script:
+                  'import { appendFileSync } from "node:fs"; appendFileSync("workload-count", "x"); console.log("done");',
+                retry,
+              };
       const emitted: string[] = [];
       await expect(run(store, createMockPlatform(), [node], emitted)).rejects.toMatchObject({
         name: 'NodeEventWriteError',
         cause,
       });
-      if (kind === 'agent') expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      if (kind !== 'script') expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
       else expect(await readFile(join(testDir, 'workload-count'), 'utf8')).toBe('x');
       expect(
         store.persistWorkflowEvent.mock.calls.filter(
