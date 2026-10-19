@@ -1,3 +1,4 @@
+import type { ArtifactExchange } from '../container-context';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
 import { buildAiNodeEnvironment } from '../exec-environment';
@@ -125,6 +126,7 @@ export interface RunDerived {
   /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
    *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
   execContext: ExecutionContext;
+  artifactExchange?: ArtifactExchange;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
   workflowLevelOptions: WorkflowLevelOptions;

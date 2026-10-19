@@ -53,6 +53,7 @@
     "./node-event-write": "./src/node-event-write.ts",
     "./subprocess": "./src/subprocess.ts",
     "./logger": "./src/logger.ts",
+    "./artifact-exchange": "./src/artifact-exchange.ts",
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",

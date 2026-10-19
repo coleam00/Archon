@@ -1,27 +1,14 @@
 /**
- * Container isolation backend for FOLDER-kind projects (Phase B).
- *
- * Runs a folder-project workflow inside a Docker container over a **read-only
- * bind mount of the project root** (`/mnt/lower`) plus a **writable overlayfs
- * upper layer** on a per-run named volume (`/mnt/upper`), merged at the SAME
- * absolute path as the host cwd (so `working_path`, `$ARTIFACTS_DIR`, and every
- * path substitution stay unchanged — no translation layer anywhere).
- *
- * Lifecycle in Phase B: `prepare()` creates the volume + container and returns a
- * `{ kind: 'container', containerId }` execution context; the engine threads
- * that to the Claude provider (spawns its CLI via `docker exec`) and to
- * `bash:`/`script:` nodes (also `docker exec`), so isolation has no host-escape
- * hole. `destroy()` removes the container + volume. The approval-gated
- * write-back of the overlay diff to the live root is Phase C — until then a
- * container run's changes stay in the overlay and are discarded on `destroy()`.
- *
- * Only Claude runs in-container in v1; the engine fails fast pre-dispatch for
- * any node whose provider lacks the `containerExec` capability.
+ * Folder-project execution on a read-only workspace lower and a durable overlay upper.
+ * Logical paths stay identical across host and container. New environments exchange
+ * artifact bytes through a separate output volume; pre-key environments retain their
+ * original mounts until they end. Only providers with containerExec can execute here.
  */
 
 import { IsolationFailure } from '../errors';
 import { randomUUID } from 'crypto';
-import { isAbsolute, sep } from 'path';
+import { dirname, isAbsolute, join, resolve, sep, basename } from 'path';
+import { realpath } from 'node:fs/promises';
 import type { BranchName } from '@archon/git';
 import { createLogger, isInsideArchonHome } from '@archon/paths';
 import {
@@ -45,6 +32,7 @@ import {
   type DockerRunner,
 } from '../container/docker-exec';
 import { summarizeOverlayChanges, applyOverlayChanges } from '../container/overlay';
+import { ContainerArtifactExchange } from '../container/artifact-exchange';
 
 const log = createLogger('isolation.container');
 
@@ -91,12 +79,20 @@ export function currentHostIdentity(): HostIdentity | undefined {
   return { uid: process.getuid(), gid: process.getgid() };
 }
 
-/** Archon-owned host directories bound into the container at their host paths. */
+type ArtifactStorage = { root: string; volume: string };
+type ArtifactExchangeMetadata = {
+  version: 1;
+  artifacts: ArtifactStorage | null;
+  finalCollection?: true;
+};
+
+/** Archon-owned paths exposed at the same logical paths inside the container. */
 interface HostMounts {
   /** Frozen workflow source, read-only. */
   readonly source?: string;
-  /** Run artifacts directory, read-write. */
+  /** Legacy writable host bind. */
   readonly artifacts?: string;
+  readonly output?: ArtifactStorage;
 }
 
 /**
@@ -123,11 +119,19 @@ type ContainerEnvMetadata = {
    */
   sourceMount?: string;
   /**
-   * Host path of the run's artifacts directory, bind-mounted read-write at the SAME
+   * Legacy host path of the run's artifacts directory, bind-mounted read-write at the SAME
    * absolute path. Persisted for the same reason as `sourceMount`, and so the ownership
    * hand-back on suspend and destroy knows which host tree the container wrote into.
    */
   artifactsMount?: string;
+  artifactExchange?: ArtifactExchangeMetadata;
+};
+
+type StoredContainerMetadata = Partial<
+  Omit<ContainerEnvMetadata, 'overlayMode' | 'artifactExchange'>
+> & {
+  overlayMode?: unknown;
+  artifactExchange?: unknown;
 };
 
 /**
@@ -164,8 +168,81 @@ function assertMountableHostPath(
 
 function assertMountableHostMounts(mounts: HostMounts, workspacePath: string): void {
   if (mounts.source !== undefined) assertMountableHostPath('source', mounts.source, workspacePath);
-  if (mounts.artifacts !== undefined) {
-    assertMountableHostPath('artifacts', mounts.artifacts, workspacePath);
+  const artifacts = mounts.artifacts ?? mounts.output?.root;
+  if (artifacts !== undefined) assertMountableHostPath('artifacts', artifacts, workspacePath);
+}
+
+function readArtifactExchange(
+  meta: Pick<StoredContainerMetadata, 'artifactExchange' | 'artifactsMount'>
+): ArtifactExchangeMetadata | undefined {
+  const value = meta.artifactExchange;
+  if (value === undefined) return undefined;
+  if (meta.artifactsMount !== undefined) {
+    throw new Error('Separated artifact metadata cannot contain a legacy artifactsMount.');
+  }
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'version' in value &&
+    value.version === 1 &&
+    'artifacts' in value
+  ) {
+    if ('finalCollection' in value && value.finalCollection !== true) {
+      throw new Error('Invalid persisted artifactExchange finalCollection metadata.');
+    }
+    const finalCollection = 'finalCollection' in value ? { finalCollection: true as const } : {};
+    const artifacts = value.artifacts;
+    if (artifacts === null) return { version: 1, artifacts: null, ...finalCollection };
+    if (
+      typeof artifacts === 'object' &&
+      'root' in artifacts &&
+      typeof artifacts.root === 'string' &&
+      isAbsolute(artifacts.root) &&
+      isInsideArchonHome(artifacts.root) &&
+      'volume' in artifacts &&
+      typeof artifacts.volume === 'string' &&
+      /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(artifacts.volume)
+    ) {
+      return {
+        version: 1,
+        artifacts: { root: artifacts.root, volume: artifacts.volume },
+        ...finalCollection,
+      };
+    }
+  }
+  throw new Error('Invalid persisted artifactExchange metadata; refusing legacy fallback.');
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const a = resolve(left) + sep;
+  const b = resolve(right) + sep;
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+// Resolve existing ancestors too: Docker can create a missing bind directory below an alias.
+async function physicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await physicalPath(parent), basename(path));
+  }
+}
+
+async function assertSeparatedMounts(mounts: HostMounts, workspace: string): Promise<void> {
+  if (!mounts.output) return;
+  const root = await physicalPath(mounts.output.root);
+  for (const exposed of [workspace, mounts.source]) {
+    if (
+      exposed !== undefined &&
+      (pathsOverlap(mounts.output.root, exposed) || pathsOverlap(root, await physicalPath(exposed)))
+    ) {
+      throw new Error(
+        `Container artifact storage '${mounts.output.root}' overlaps exposed mount '${exposed}'.`
+      );
+    }
   }
 }
 
@@ -175,6 +252,7 @@ export class ContainerBackend implements IIsolationBackend {
   private readonly store: IIsolationStore;
   private readonly config: ContainerBackendConfig;
   private readonly docker: DockerRunner;
+  private readonly exchanges = new Map<string, ContainerArtifactExchange>();
 
   constructor(deps: ContainerBackendDeps) {
     this.store = deps.store;
@@ -194,15 +272,27 @@ export class ContainerBackend implements IIsolationBackend {
   async prepare(req: BackendPrepareRequest): Promise<PreparedEnv> {
     const hostRoot = req.codebase.defaultCwd;
     const { image } = this.config;
-    const mounts: HostMounts = { source: req.sourceMount, artifacts: req.artifactsMount };
-    // Before any docker work: a rejected mount must not leave a volume or container.
-    assertMountableHostMounts(mounts, hostRoot);
-
-    await dockerPreflight(image, this.docker);
-
     const resourceId = randomUUID();
     const containerName = `archon-${resourceId}`;
     const volume = `archon-${resourceId}-upper`;
+    const artifactExchange: ArtifactExchangeMetadata = {
+      version: 1,
+      artifacts:
+        req.artifactsMount !== undefined
+          ? { root: req.artifactsMount, volume: `archon-${resourceId}-artifacts` }
+          : null,
+    };
+    const mounts: HostMounts = {
+      source: req.sourceMount,
+      output: artifactExchange.artifacts ?? undefined,
+    };
+    assertMountableHostMounts(mounts, hostRoot);
+    await assertSeparatedMounts(mounts, hostRoot);
+    await dockerPreflight(image, this.docker);
+    const volumes = [
+      volume,
+      ...(artifactExchange.artifacts ? [artifactExchange.artifacts.volume] : []),
+    ];
 
     log.info(
       { codebaseId: req.codebase.id, resourceId, image, hostRoot },
@@ -231,6 +321,19 @@ export class ContainerBackend implements IIsolationBackend {
     let containerId: string;
     let overlayMode: OverlayMode;
     try {
+      if (artifactExchange.artifacts) {
+        await this.docker([
+          'volume',
+          'create',
+          '--label',
+          `${CONTAINER_LABELS.managed}=true`,
+          '--label',
+          `${CONTAINER_LABELS.codebaseId}=${req.codebase.id}`,
+          '--label',
+          `${CONTAINER_LABELS.envId}=${containerName}`,
+          artifactExchange.artifacts.volume,
+        ]);
+      }
       ({ containerId, mode: overlayMode } = await this.startContainerWithOverlay(
         containerName,
         volume,
@@ -239,14 +342,7 @@ export class ContainerBackend implements IIsolationBackend {
         mounts
       ));
     } catch (startErr) {
-      // The container(s) are already removed inside startContainerWithOverlay;
-      // only the volume can leak here — remove it (with a breadcrumb on failure).
-      await this.docker(['volume', 'rm', '-f', volume]).catch(rmErr => {
-        log.warn(
-          { volume, detail: extractDockerError(rmErr) },
-          'isolation.container_prepare_volume_cleanup_failed'
-        );
-      });
+      await this.removeContainerAndVolumes(containerName, volumes);
       throw startErr;
     }
 
@@ -261,7 +357,7 @@ export class ContainerBackend implements IIsolationBackend {
       overlayMode,
       workspacePath: hostRoot,
       ...(mounts.source !== undefined ? { sourceMount: mounts.source } : {}),
-      ...(mounts.artifacts !== undefined ? { artifactsMount: mounts.artifacts } : {}),
+      artifactExchange,
     };
     let row;
     try {
@@ -277,18 +373,13 @@ export class ContainerBackend implements IIsolationBackend {
     } catch (createErr) {
       // The container + volume exist but there's no tracking row → they'd be
       // orphaned. Remove both (best-effort, with breadcrumbs) before rethrowing.
-      await this.removeContainerAndVolume(containerName, volume);
+      await this.removeContainerAndVolumes(containerName, volumes);
       throw createErr;
     }
 
     log.info({ envId: row.id, containerId, resourceId }, 'isolation.container_prepare_completed');
 
-    return {
-      cwd: hostRoot,
-      execContext: { kind: 'container', containerId },
-      envId: row.id,
-      overlayMode,
-    };
+    return this.preparedEnvFor(containerId, hostRoot, row.id, overlayMode, metadata);
   }
 
   /**
@@ -303,6 +394,34 @@ export class ContainerBackend implements IIsolationBackend {
     const row = await this.store.getById(envId);
     if (!row) {
       log.warn({ envId }, 'isolation.container_destroy_row_missing');
+      return;
+    }
+    if (row.status === 'destroyed') return;
+    const exchange = this.exchangeFor(envId, row.metadata);
+    if (exchange) {
+      await exchange.serialize(async collect => {
+        const meta = await this.loadMetadata(envId);
+        const handle = meta.containerName ?? meta.containerId;
+        if (!handle || !meta.volume)
+          throw new Error(`Cannot destroy container env '${envId}': missing container/volume.`);
+        const failure = await this.removeIgnoringNotFound(['rm', '-f', handle]);
+        if (failure)
+          throw new Error(`Failed to remove the isolation container '${handle}': ${failure}`);
+        const layout = readArtifactExchange(meta);
+        if (!layout?.finalCollection) {
+          await collect();
+          // Persist before deleting the only source of uncollected output.
+          await this.store.updateMetadata(envId, {
+            artifactExchange: { ...layout, finalCollection: true },
+          });
+        }
+        for (const volume of [layout?.artifacts?.volume, meta.volume]) {
+          if (!volume) continue;
+          const failure = await this.removeIgnoringNotFound(['volume', 'rm', '-f', volume]);
+          if (failure) throw new Error(`Failed to remove isolation volume '${volume}': ${failure}`);
+        }
+        await this.store.updateStatus(envId, 'destroyed');
+      });
       return;
     }
     const meta = row.metadata as Partial<ContainerEnvMetadata>;
@@ -364,6 +483,18 @@ export class ContainerBackend implements IIsolationBackend {
    */
   async suspend(envId: string): Promise<void> {
     const meta = await this.loadMetadata(envId);
+    const exchange = this.exchangeFor(envId, meta);
+    if (exchange) {
+      await exchange.serialize(async collect => {
+        await this.stopContainer(envId, meta);
+        await collect();
+      });
+      return;
+    }
+    await this.stopContainer(envId, meta);
+  }
+
+  private async stopContainer(envId: string, meta: StoredContainerMetadata): Promise<void> {
     const handle = meta.containerName ?? meta.containerId;
     if (!handle) {
       log.warn({ envId }, 'isolation.container_suspend_no_handle');
@@ -409,6 +540,22 @@ export class ContainerBackend implements IIsolationBackend {
         `Cannot resume container env '${envId}': its tracking row is missing the ` +
           'container name / volume / workspace path. The environment may be from an ' +
           'incompatible version; start a fresh --container run.'
+      );
+    }
+    const layout = readArtifactExchange(meta);
+    if (layout?.finalCollection) {
+      throw new Error(
+        `Cannot resume container env '${envId}': final collection completed; retry destruction.`
+      );
+    }
+    const mounts: HostMounts = layout
+      ? { source: meta.sourceMount, output: layout.artifacts ?? undefined }
+      : { source: meta.sourceMount, artifacts: meta.artifactsMount };
+    assertMountableHostMounts(mounts, workspacePath);
+    await assertSeparatedMounts(mounts, workspacePath);
+    if (layout?.artifacts && !(await this.volumeExists(layout.artifacts.volume))) {
+      throw new Error(
+        `Cannot resume container env '${envId}': artifact output volume '${layout.artifacts.volume}' is missing; refusing empty output.`
       );
     }
     const row = await this.store.getById(envId);
@@ -457,6 +604,7 @@ export class ContainerBackend implements IIsolationBackend {
             `${JSON.stringify(modeEntries)} does not match recorded overlay mode '${priorMode}'.`
         );
       }
+      if (layout) await this.verifyArtifactMounts(containerId, mounts);
       if (presence === 'stopped') {
         await this.docker(['start', containerId]);
         await this.waitForReady(containerId);
@@ -467,7 +615,7 @@ export class ContainerBackend implements IIsolationBackend {
           ? 'isolation.container_resume_reused_running'
           : 'isolation.container_resume_restarted'
       );
-      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode, meta);
     }
 
     // Container is gone. The overlay lives on the volume — recreate over it, or
@@ -483,8 +631,7 @@ export class ContainerBackend implements IIsolationBackend {
     // Re-apply the host mounts. A recreated container without them would resolve no
     // named script, and would write artifacts into a container-local directory the host
     // never sees — both at paths the run's own metadata reports as intact.
-    const mounts: HostMounts = { source: meta.sourceMount, artifacts: meta.artifactsMount };
-    if (mounts.source !== undefined && mounts.artifacts === undefined) {
+    if (!layout && mounts.source !== undefined && mounts.artifacts === undefined) {
       // A row from before the artifacts bind existed: the engine has always sent both
       // mounts together since it did. The run continues exactly as it would have before
       // the upgrade, which means `$ARTIFACTS_DIR` writes stay inside the container.
@@ -525,7 +672,10 @@ export class ContainerBackend implements IIsolationBackend {
       throw error;
     }
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
-    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
+    return this.preparedEnvFor(containerId, workspacePath, envId, mode, {
+      ...meta,
+      image: this.config.image,
+    });
   }
 
   /**
@@ -624,9 +774,7 @@ export class ContainerBackend implements IIsolationBackend {
    * store normalizes `metadata` to a parsed object on every dialect (SQLite returns
    * it as a JSON string otherwise), so this reads it directly.
    */
-  private async loadMetadata(
-    envId: string
-  ): Promise<Partial<Omit<ContainerEnvMetadata, 'overlayMode'>> & { overlayMode?: unknown }> {
+  private async loadMetadata(envId: string): Promise<StoredContainerMetadata> {
     const row = await this.store.getById(envId);
     if (!row) {
       throw new Error(`Container env '${envId}' not found (its tracking row is gone).`);
@@ -638,9 +786,80 @@ export class ContainerBackend implements IIsolationBackend {
     containerId: string,
     cwd: string,
     envId: string,
-    overlayMode: OverlayMode
+    overlayMode: OverlayMode,
+    meta: StoredContainerMetadata
   ): PreparedEnv {
-    return { cwd, execContext: { kind: 'container', containerId }, envId, overlayMode };
+    const artifactExchange = this.exchangeFor(envId, meta);
+    return {
+      cwd,
+      execContext: { kind: 'container', containerId },
+      envId,
+      overlayMode,
+      ...(artifactExchange ? { artifactExchange } : {}),
+    };
+  }
+
+  private exchangeFor(
+    envId: string,
+    meta: StoredContainerMetadata
+  ): ContainerArtifactExchange | undefined {
+    const layout = readArtifactExchange(meta);
+    if (!layout?.artifacts) return undefined;
+    const existing = this.exchanges.get(envId);
+    if (existing) return existing;
+    if (!meta.containerName || !meta.image)
+      throw new Error(`Cannot exchange artifacts for '${envId}': missing container name/image.`);
+    const exchange = new ContainerArtifactExchange(this.docker, {
+      container: meta.containerName,
+      helper: `${meta.containerName}-artifacts-helper`,
+      image: meta.image,
+      ...layout.artifacts,
+    });
+    this.exchanges.set(envId, exchange);
+    return exchange;
+  }
+
+  private async verifyArtifactMounts(containerId: string, mounts: HostMounts): Promise<void> {
+    const { stdout } = await this.docker(['inspect', '-f', '{{json .Mounts}}', containerId]);
+    const entries: unknown = JSON.parse(stdout);
+    if (!Array.isArray(entries)) throw new Error('Invalid Docker mount inspection.');
+    let outputs = 0;
+    for (const entry of entries) {
+      if (
+        typeof entry !== 'object' ||
+        entry === null ||
+        !('Type' in entry) ||
+        !('Source' in entry) ||
+        typeof entry.Source !== 'string' ||
+        !('Destination' in entry) ||
+        typeof entry.Destination !== 'string'
+      ) {
+        throw new Error('Invalid Docker mount inspection.');
+      }
+      if (mounts.output && pathsOverlap(entry.Destination, mounts.output.root)) {
+        if (
+          entry.Type !== 'volume' ||
+          !('Name' in entry) ||
+          entry.Name !== mounts.output.volume ||
+          entry.Destination !== mounts.output.root ||
+          !('RW' in entry) ||
+          entry.RW !== true
+        ) {
+          throw new Error('Container artifact mount does not match recorded output volume.');
+        }
+        outputs++;
+      }
+      if (
+        mounts.output &&
+        entry.Type === 'bind' &&
+        (pathsOverlap(entry.Source, mounts.output.root) ||
+          pathsOverlap(await physicalPath(entry.Source), await physicalPath(mounts.output.root)))
+      ) {
+        throw new Error('Container bind exposes canonical artifact storage.');
+      }
+    }
+    if (mounts.output && outputs !== 1)
+      throw new Error('Container is missing its recorded artifact output mount.');
   }
 
   /**
@@ -829,11 +1048,8 @@ export class ContainerBackend implements IIsolationBackend {
       `${hostRoot}:/mnt/lower:ro`,
       '-v',
       `${volume}:/mnt/upper`,
-      // The run's artifacts directory, read-write at the SAME absolute path: `$ARTIFACTS_DIR`
-      // is the run's output channel on both sides of the boundary, so a screenshot or the
-      // evidence marker written here lands on the host where the engine and the operator
-      // read it. Root inside the container writes root-owned files on a rootful Linux
-      // daemon; `restoreHostOwnership` hands them back on suspend and destroy.
+      ...(mounts.output ? ['-v', `${mounts.output.volume}:${mounts.output.root}`] : []),
+      // Pre-key environments retain their original writable bind until they end.
       ...(mounts.artifacts ? ['-v', `${mounts.artifacts}:${mounts.artifacts}`] : []),
       // The run's frozen workflow source, at the SAME absolute path it has on the host.
       // Identical paths are what let the engine hold one source-roots value that means
@@ -911,18 +1127,21 @@ export class ContainerBackend implements IIsolationBackend {
    * a tracking row exists. Failures are logged (breadcrumbs) but never thrown —
    * the caller is already rethrowing the original error.
    */
-  private async removeContainerAndVolume(containerName: string, volume: string): Promise<void> {
-    await this.docker(['rm', '-f', containerName]).catch(err => {
-      log.warn(
-        { containerName, detail: extractDockerError(err) },
+  private async removeContainerAndVolumes(containerName: string, volumes: string[]): Promise<void> {
+    const failure = await this.removeIgnoringNotFound(['rm', '-f', containerName]);
+    if (failure) {
+      log.error(
+        { containerName, volumes, detail: failure },
         'isolation.container_unwind_rm_failed'
       );
-    });
-    await this.docker(['volume', 'rm', '-f', volume]).catch(err => {
-      log.warn(
-        { volume, detail: extractDockerError(err) },
-        'isolation.container_unwind_volume_failed'
-      );
-    });
+      return;
+    }
+    for (const volume of volumes)
+      await this.docker(['volume', 'rm', '-f', volume]).catch(err => {
+        log.warn(
+          { volume, detail: extractDockerError(err) },
+          'isolation.container_unwind_volume_failed'
+        );
+      });
   }
 }
