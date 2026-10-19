@@ -40,7 +40,6 @@ import {
   stateDocuments,
   stateGet,
   statePut,
-  type Stored,
 } from './state.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
@@ -683,7 +682,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-function parsed(name: string, stored: Stored): Read | undefined {
+export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
@@ -691,17 +690,6 @@ function parsed(name: string, stored: Stored): Read | undefined {
     note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
-}
-
-export function read(name: string): Read | undefined {
-  return parsed(name, stateGet(name));
-}
-
-/** Every stored work item with its revision, in one state read. */
-export function readAll(): Read[] {
-  return stateDocuments('work/')
-    .map(stored => parsed(stored.name, stored))
-    .filter((item): item is Read => item !== undefined);
 }
 
 /**
@@ -794,9 +782,10 @@ export function claimable(item: Read | undefined, pickup: Pickup): item is Read 
 }
 
 /**
- * Release terminal claims, then claim the first waiting item in `order` with a
- * conditional write. A conflict re-reads the item once and claims it only if it
- * still waits unclaimed; otherwise the next candidate is tried.
+ * Read every work item in one state call, release terminal claims, then claim the
+ * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * item once and claims it only if it still waits unclaimed; otherwise the next
+ * candidate is tried.
  */
 export function claimNext(
   order: readonly OrderKey[],
@@ -804,7 +793,10 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = readAll().map(item => releaseIfTerminal(item, at, runId, pickup));
+  const items = stateDocuments('work/')
+    .map(stored => read(stored.name, stored))
+    .filter((item): item is Read => item !== undefined)
+    .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));
   for (const candidate of sortCandidates(waiting, order)) {
     const won = claimItem(candidate, at, runId, pickup);
