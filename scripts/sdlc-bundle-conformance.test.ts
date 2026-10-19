@@ -18,6 +18,7 @@ import {
   isLoopGroupNode,
   isOutputFormatEnforced,
   isWaitNode,
+  type WorkflowModelRef,
 } from '../packages/workflows/src/schemas';
 
 registerBuiltinProviders();
@@ -148,7 +149,7 @@ describe('sdlc pack tier coverage', () => {
       //    into the per-iteration context.
       interface Scope {
         provider: string | undefined;
-        model: string | undefined;
+        model: WorkflowModelRef | undefined;
       }
 
       const visit = (

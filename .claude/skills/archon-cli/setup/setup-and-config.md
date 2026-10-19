@@ -3,7 +3,7 @@ name: archon-cli-setup-config
 description: Install Archon, verify with doctor, connect provider credentials, and change config.yaml (tiers, aliases, adapters). Read when setting up Archon or changing its configuration.
 ---
 
-# Setup and Config
+# Setup and config
 
 Install Archon, verify it, and change its configuration. Run from the repo you
 want to work on unless setting up globally.
@@ -18,6 +18,7 @@ archon workflow run archon-forge-check  # can the SDLC workflows reach the forge
 ```
 
 If `doctor` is green, skip to Configuration. Only set up what is actually broken.
+For the SDLC pack's queues, also read `../operate/queues.md` ("Before the first run").
 
 ## Install
 
@@ -157,7 +158,7 @@ Prefer the typed commands over hand-editing when they exist — they validate:
 ```bash
 archon ai tier set large claude claude-<model> --effort high
 archon ai tier list --json     # configured vs built-in defaults
-archon ai alias set @fast pi minimax/MiniMax-M3  # if supported by your build
+archon ai alias set @fast pi minimax/MiniMax-M3
 archon ai key set openai                         # masked prompt, or key via stdin
 ```
 
@@ -205,7 +206,7 @@ Notes:
 - The layer applies to that fresh run and its descendants only; nothing persists.
 - Mutually exclusive with resuming an existing run.
 - One-off, ad-hoc rebinding without a file: use `--model tier=provider/model`
-  instead — see `../manage-run/manage-runs.md`.
+  instead — see `../operate/managing-runs.md`.
 
 To help a user decide scope: persistent default → edit config.yaml (below);
 a named alternate setup they will reuse → a config layer;
@@ -226,10 +227,4 @@ platform — do not proactively configure Slack/Telegram/Discord.
 ## Project initialization for workflow authoring
 
 Creating `.archon/` content (workflows, commands, scripts) belongs to the authoring
-capability: see the sibling `../authoring-workflows/authoring-workflows.md`. Setup only ensures the CLI works.
-
-## Known-stale spots (verify against `--help` when unsure)
-
-The CLI surface grows; this reference summarizes it but `archon --help` and
-`archon <command> --help` are authoritative. If a documented flag is rejected,
-trust the CLI's own help and report the drift rather than forcing the stale form.
+capability: see `../authoring/authoring-workflows.md`. Setup only ensures the CLI works.

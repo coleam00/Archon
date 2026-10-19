@@ -39,9 +39,11 @@ export {
   resolvedRunModelOverridesSchema,
   resolvedAiProfileSchema,
   runModelBindingsMetadataSchema,
+  modelRefSchema,
 } from './model-binding';
 export type {
   TierName,
+  WorkflowModelRef,
   ModelAliasPreset,
   RawAliasEntry,
   RawAliasesConfig,

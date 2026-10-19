@@ -258,3 +258,35 @@ test('a retired size label is never created and never accepted as an area label'
   expect(run.gh).toEqual([]);
   expect(run.stderr).toContain('may not name a pack label');
 });
+
+test('forge triage adds the labels it lacks and removes only the stale one it owns', () => {
+  const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
+  const run = runPackScript('triage/scripts/verdict', {
+    source: 'forge',
+    inputs,
+    forge: {
+      kind: 'fake',
+      response: [
+        forgeOperation('workitem.view', { ...item, title: 't', body: 'b', labels: ['archon-plan', 'someone-elses'] }),
+        forgeOperation('repo.labels.list', {
+          repo: PR.repo,
+          labels: ['archon-ready', 'archon-plan', 'archon-size-s', 'archon-type-feature', 'area'].map(name => ({ name })),
+        }),
+        ...Array.from({ length: 4 }, () => applied('workitem.label.add')),
+        applied('workitem.label.remove'),
+      ],
+    },
+  });
+  expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+  const writes = run.forge
+    .map((argv, index) => [argv.split(' ')[1], JSON.parse(run.forgeRequests[index] ?? '{}').name])
+    .filter(([op]) => op?.startsWith('workitem.label.'));
+  expect(writes).toEqual([
+    ['workitem.label.add', 'archon-ready'],
+    ['workitem.label.add', 'archon-size-s'],
+    ['workitem.label.add', 'archon-type-feature'],
+    ['workitem.label.add', 'area'],
+    ['workitem.label.remove', 'archon-plan'],
+  ]);
+});

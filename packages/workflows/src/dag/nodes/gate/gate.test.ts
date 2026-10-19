@@ -14,6 +14,7 @@ import {
   type MockWorkflowPlatform,
   createMockPlatform,
   persistedEvents,
+  runUsageWrites,
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
@@ -23,7 +24,8 @@ import type { DagNode, WorkflowDefinition } from '../../../schemas';
 import { dagNodeSchema } from '../../../schemas';
 import { expandWorkflowIncludes } from '../../../include-expander';
 import type { IWorkflowPlatform } from '../../../deps';
-import type { IWorkflowStore } from '../../../store';
+import { WorkflowRunPauseConflictError, type IWorkflowStore } from '../../../store';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 
 describe('executeDagWorkflow -- approval node', () => {
   let testDir: string;
@@ -393,33 +395,53 @@ describe('executeDagWorkflow -- approval node', () => {
     });
   });
 
-  it('on_reject runs AI prompt and re-pauses on rejection resume', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Fixed based on feedback' };
-      yield { type: 'result', sessionId: 'reject-fix-session' };
-    });
+  it.each([
+    { external: false, tokensUnknown: false },
+    { external: true, tokensUnknown: false },
+    { external: false, tokensUnknown: true },
+    { external: true, tokensUnknown: true },
+  ])(
+    'counts rework once across pause and resume (external=$external, tokensUnknown=$tokensUnknown)',
+    async ({ external, tokensUnknown }) => {
+      const tokens = { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 };
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Fixed based on feedback' };
+        yield {
+          type: 'result',
+          sessionId: 'reject-fix-session',
+          cost: 0.05,
+          ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
+        };
+      });
 
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
+      const store = createMockStore();
+      const pauseWorkflowRun = store.pauseWorkflowRun;
+      if (external) {
+        let pauseAttempted = false;
+        store.pauseWorkflowRun = mock(async () => {
+          pauseAttempted = true;
+          throw new WorkflowRunPauseConflictError('reject-resume-run');
+        });
+        store.getWorkflowRunStatus = mock(async () => (pauseAttempted ? 'failed' : 'running'));
+      }
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
 
-    // Simulate a rejection resume — metadata has rejection_reason set by reject handler
-    const workflowRun = makeWorkflowRun('reject-resume-run', {
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'review',
-          message: 'Approve this plan?',
-          onRejectPrompt: 'Fix based on: $REJECTION_REASON',
-          onRejectMaxAttempts: 3,
+      const workflowRun = makeWorkflowRun('reject-resume-run', {
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review',
+            message: 'Approve this plan?',
+            onRejectPrompt: 'Fix based on: $REJECTION_REASON',
+            onRejectMaxAttempts: 3,
+          },
+          rejection_reason: 'Missing edge case handling',
+          rejection_count: 1,
         },
-        rejection_reason: 'Missing edge case handling',
-        rejection_count: 1,
-      },
-    });
+      });
 
-    await executeDagWorkflow(
-      dagOptions({
+      const options = dagOptions({
         deps: mockDeps,
         platform,
         conversationId: 'conv-approval',
@@ -444,20 +466,64 @@ describe('executeDagWorkflow -- approval node', () => {
           ],
         },
         workflowRun,
-      })
-    );
+      });
+      await executeDagWorkflow(options);
 
-    // AI should have been called once (on_reject prompt ran)
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    // The prompt should contain the rejection reason
-    const aiPrompt = mockSendQueryDag.mock.calls[0][0] as string;
-    expect(aiPrompt).toContain('Missing edge case handling');
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const aiPrompt = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(aiPrompt).toContain('Missing edge case handling');
 
-    // pauseWorkflowRun should have been called (re-paused at approval gate)
-    const pauseCalls = (store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>).mock
-      .calls;
-    expect(pauseCalls.length).toBe(1);
-  });
+      const pauseCalls = (store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>).mock
+        .calls;
+      expect(pauseCalls.length).toBe(1);
+      expect(
+        platform.sendMessage.mock.calls.some(([, message]) => message.includes('Approval required'))
+      ).toBe(!external);
+      const expectedUsage = {
+        total_cost_usd: 0.05,
+        ...(tokensUnknown
+          ? {
+              total_tokens_unknown: true,
+              total_tokens_in: null,
+              total_tokens_out: null,
+              total_cache_read_tokens: null,
+              total_cache_write_tokens: null,
+              total_cache_partial: null,
+            }
+          : {
+              total_tokens_in: 100,
+              total_tokens_out: 10,
+              total_cache_read_tokens: 40,
+              total_cache_write_tokens: 5,
+            }),
+      };
+      expect(runUsageWrites(store)).toEqual([expectedUsage]);
+      const events = persistedEvents(store);
+      expect(
+        events.filter(e => e.event_type === 'node_completed' && e.step_name === 'review:on_reject')
+      ).toHaveLength(1);
+      expect(
+        events.filter(e => e.event_type === 'node_completed' && e.step_name === 'review')
+      ).toHaveLength(0);
+      const snapshot = await foldDagResumeSnapshot(events, workflowRun.id);
+      expect(snapshot.costUsd).toBe(0.05);
+      expect(snapshot.tokens).toEqual(tokensUnknown ? undefined : tokens);
+      expect(snapshot.tokensUnknown).toBe(tokensUnknown);
+
+      pauseWorkflowRun.mockClear();
+      store.pauseWorkflowRun = pauseWorkflowRun;
+      store.getWorkflowRunStatus = mock(async () => 'running');
+      await executeDagWorkflow({
+        ...options,
+        workflowRun: makeWorkflowRun(workflowRun.id),
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        priorUsage: snapshot,
+      });
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(runUsageWrites(store)).toEqual([expectedUsage, expectedUsage]);
+    }
+  );
 
   it('resolves $TYPED_ARTIFACTS_FILE in an approval rework prompt', async () => {
     mockSendQueryDag.mockImplementation(async function* () {

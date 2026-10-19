@@ -367,6 +367,18 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
+  test('a named item is claimed ahead of one that sorts first, and one that cannot be built refuses with why', () => {
+    const at = install();
+    const urgent = { ...triaged(), subject: { ...SUBJECT, number: 8 }, facts: { triage: { ...TRIAGE, urgency: { value: 'high', reason: 'r' } } } };
+    inProcess(at, () => expect(statePut('work/8', urgent, stateGet('work/8').revision)).toBe('ok'));
+    seed(at, triaged());
+    expect(ok(run(at, 'facts', { INPUTS_NUMBER: '7' }))).toMatchObject({ path: 'route', item: SUBJECT });
+    seed(at, triaged({ stage: 'blocked' }));
+    const refused = run(at, 'facts', { WORKFLOW_ID: 'run-2', INPUTS_NUMBER: '7' });
+    expect(refused.stderr).toContain('issue 7 does not wait for the build queue: stage blocked');
+    expect(stored(at).value?.claim).toBeNull();
+  }, 60_000);
+
   test('a closed issue is parked without an agent', () => {
     const at = install();
     seed(at, triaged());
