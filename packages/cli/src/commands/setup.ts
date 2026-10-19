@@ -35,7 +35,7 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { parseDocument, Scalar } from 'yaml';
+import { type Document, isScalar, parseDocument, Scalar, YAMLMap } from 'yaml';
 import { copyArchonSkill } from './skill';
 import {
   SetupExit,
@@ -551,11 +551,20 @@ export async function configureDocsPath(repoPath: string): Promise<void> {
         const hasDocs =
           typeof parsed === 'object' && parsed !== null && Object.hasOwn(parsed, 'docs');
         if (!hasDocs) {
-          const document = parseDocument(existing);
+          const document: Document = parseDocument(existing);
           if (document.errors.length > 0) throw document.errors[0];
+          if (isScalar(document.contents) && document.contents.value === null) {
+            const root = new YAMLMap(document.schema);
+            root.commentBefore = document.contents.commentBefore;
+            root.comment = document.contents.comment;
+            root.spaceBefore = document.contents.spaceBefore;
+            document.contents = root;
+          }
           const path = new Scalar(docsPath.trim());
           path.type = Scalar.QUOTE_DOUBLE;
-          document.setIn(['docs', 'path'], path);
+          const docs = new YAMLMap(document.schema);
+          docs.set('path', path);
+          document.set('docs', docs);
           writeFileSync(configPath, document.toString());
         } else {
           note(

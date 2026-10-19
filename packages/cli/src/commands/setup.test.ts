@@ -104,6 +104,20 @@ describe('setup command', () => {
       '# docs: example\nassistants:\n  claude:\n    model: opus\n',
       '# docs: example\n',
       '',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n',
+      '%YAML 1.1\n---\n{assistants: {claude: {model: opus}}}\n',
+      '%YAML 1.1\n---\nassistants: {claude: {model: opus}}\n',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n...\n',
+      '%YAML 1.2\n---\nassistants: {claude: {model: opus}}\n',
+      '!!map {assistants: {claude: {model: opus}}}\n',
+      '---\n',
+      '---\n# empty\n',
+      '---\n# empty\n...\n# after document\n',
+      'null # empty\n',
+      '~ # empty\n',
+      '!!null null # empty\n',
+      '%YAML 1.1\n---\n# empty\n',
+      '%YAML 1.2\n---\n# empty\n',
     ])('adds docs within the existing YAML document: %j', async existing => {
       const { path } = bootstrapProjectConfig(TEST_DIR);
       writeFileSync(path, existing);
@@ -113,8 +127,10 @@ describe('setup command', () => {
 
       expect(await loadRepoConfig(TEST_DIR)).toEqual({ ...before, docs: { path: 'docs/' } });
       const written = readFileSync(path, 'utf-8');
-      for (const comment of ['# docs: example', '# trailing comment', '# after document']) {
-        if (existing.includes(comment)) expect(written).toContain(comment);
+      for (const line of existing.split('\n')) {
+        const comment = line.indexOf('#');
+        if (comment !== -1) expect(written).toContain(line.slice(comment));
+        if (line.startsWith('%YAML')) expect(written).toContain(line);
       }
     });
 
