@@ -381,7 +381,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const { skillInstalledPath, skillInstalledBase, projectConfigCreatedPath } =
     await installProjectSkill(options.repoPath, s);
 
-  await configureDocsPath(options.repoPath);
+  await configureDocsPath(skillInstalledBase ?? options.repoPath);
 
   // Summary
   const configuredPlatforms: string[] = [];
