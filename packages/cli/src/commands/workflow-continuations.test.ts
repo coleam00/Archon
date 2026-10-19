@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
+import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import type {
   ContinuationWakeOutcome,
   ContinuationAdmission,
@@ -318,3 +318,97 @@ test('a stale occurrence with an equal deadline never signals or resumes', async
   expect(signal).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
 });
+
+test.each([false, true])(
+  'reports a stopped source segment with success=%s without a run status',
+  async success => {
+    scan.mockResolvedValueOnce([
+      {
+        runId: 'source-run',
+        kind: 'accepted',
+        run: makeTestWorkflowRun(),
+        settled: Promise.resolve(
+          success
+            ? {
+                success: true,
+                paused: true,
+                workflowRunId: 'source-run',
+                executionDisposition: 'source_stopped',
+              }
+            : {
+                success: false,
+                error: 'ownership read rejected',
+                workflowRunId: 'source-run',
+                executionDisposition: 'source_stopped',
+              }
+        ),
+      },
+    ]);
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(
+      success ? 0 : 1
+    );
+    expect(output[0]).toEqual({
+      ok: success,
+      action: 'wake',
+      accepted: 1,
+      outcomes: [
+        {
+          runId: 'source-run',
+          kind: 'accepted',
+          executionDisposition: 'source_stopped',
+          message: expect.stringContaining('archon workflow get source-run'),
+          ...(success ? {} : { error: 'ownership read rejected' }),
+        },
+      ],
+    });
+  }
+);
+
+test.each(['wake', 'signal'] as const)(
+  '%s text output preserves stopped-source diagnostics without inventing a run status',
+  async action => {
+    const wait = {
+      owner: 'node' as const,
+      nodeId: 'hold',
+      kind: 'event' as const,
+      pauseId: 'event-occurrence',
+      event: 'ready',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2099-08-24T11:00:00.000Z',
+    };
+    const run = makeTestWorkflowRun({ id: 'source-run', metadata: { wait } });
+    const admission: Extract<ContinuationAdmission, { kind: 'accepted' }> = {
+      kind: 'accepted',
+      run,
+      settled: Promise.resolve({
+        success: false,
+        error: 'ownership read rejected',
+        workflowRunId: run.id,
+        executionDisposition: 'source_stopped',
+      }),
+    };
+    scan.mockResolvedValueOnce([{ runId: run.id, ...admission }]);
+    getRun.mockResolvedValueOnce(run);
+    resume.mockResolvedValueOnce(admission);
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        await workflowContinuationCommand(
+          host,
+          action,
+          action === 'signal' ? [run.id] : [],
+          action === 'signal' ? { event: wait.event, occurrence: wait.pauseId } : {}
+        )
+      ).toBe(1);
+      const text = log.mock.calls.map(call => call.join(' ')).join('\n');
+      expect(text).toContain('source-run: accepted');
+      expect(text).toContain('ownership read rejected');
+      expect(text).toContain('archon workflow get source-run');
+      expect(text).not.toContain('(failed)');
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }
+);

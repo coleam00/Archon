@@ -1,3 +1,4 @@
+import { isSourceExecutionStopped } from '@archon/workflows/schemas/workflow';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
@@ -378,29 +379,29 @@ async function settleRun(
   const { result } = execution;
   const store = launch.request.host.deps.store;
   const container = ownedContainer(launch.workspace);
+  const sourceStopped = result && isSourceExecutionStopped(result);
+  // A stopped source segment no longer has authority to fail a newer owner on signal.
+  if (sourceStopped) deregisterTermination();
   const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
-  // H2 — preserve the container+volume whenever the un-applied overlay is still the
-  // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
-  // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
-  // → run failed with pending_writeback still un-applied). Destroying then would
-  // silently discard the changes despite the "reconcile manually" message. A failed
-  // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
+  // Preserve paused overlays, unresolved write-back, and resources this segment no
+  // longer owns. A failed run with pending write-back stays resumable: destroying
+  // its overlay would discard the only copy of its changes before a retry can apply it.
   let unresolvedWriteback = false;
   // Kept until the lookup below proves it may go: a signal mid-lookup must not
   // destroy an overlay that may be the only copy of the changes.
   execution.containerPreserved = true;
-  if (container && !runPaused && result?.workflowRunId) {
+  if (container && !sourceStopped && !runPaused && result?.workflowRunId) {
     unresolvedWriteback = await readUnresolvedWriteback(
       store,
       result.workflowRunId,
       container.envId
     );
   }
-  execution.containerPreserved = runPaused || unresolvedWriteback;
+  execution.containerPreserved = Boolean(sourceStopped || runPaused || unresolvedWriteback);
 
   // Renders the rows the run committed since the last poll, up to its settled state.
-  // The signal handlers stay registered through it, so a Ctrl-C here still destroys
-  // a container this process would destroy below.
+  // For a result this process still owns, signal handlers stay registered so a
+  // Ctrl-C here still destroys a container this process would destroy below.
   await execution.progress?.close().catch((drainErr: unknown) => {
     getLog().warn({ err: drainErr as Error, runId }, 'cli.workflow_progress_drain_failed');
     process.stderr.write(
@@ -414,7 +415,7 @@ async function settleRun(
   // failWorkflowRun cleanup must never fire against a settled run (#1123),
   // and removal keeps repeated workflowRunCommand calls in one process from
   // stacking handlers.
-  deregisterTermination();
+  if (!sourceStopped) deregisterTermination();
 
   if (container && unresolvedWriteback) {
     warnPreservedContainer(container.envId, result?.workflowRunId);

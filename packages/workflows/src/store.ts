@@ -941,7 +941,8 @@ export interface IWorkflowStore
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
    * outcome in place, so the caller must not announce its own failure. Missing runs and
-   * other start states reject.
+   * other start states reject. With `expectedExecutionClaim`, only a running row with
+   * that claim can fail; every mismatch (including a missing row) is a no-op.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces
@@ -950,7 +951,11 @@ export interface IWorkflowStore
   failWorkflowRun(
     id: string,
     error: string,
-    options?: { exitReason?: RunExitReason; signal?: RunStopSignal }
+    options?: {
+      exitReason?: RunExitReason;
+      signal?: RunStopSignal;
+      expectedExecutionClaim?: { claimId: string | null };
+    }
   ): Promise<{ failed: boolean }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

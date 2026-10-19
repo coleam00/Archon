@@ -1,17 +1,20 @@
+import type { ExecutionContext } from '@archon/provider-contract';
+import type { ContainerRunContext } from './container-context';
+import { suspendContainerForPause } from './dag/container-gate';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { randomUUID } from 'crypto';
 import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
-import { sourceReleaseNotice } from './deps';
+import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
-import { type RunPhase } from './executor-shared';
 import { resolveAdoptedRunDir, resolveProjectPaths } from './run-paths';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
+  type WorkflowExecutionResult,
   type ResolvedWorkflow,
   type WorkflowLoadError,
   type WorkflowRun,
@@ -20,7 +23,7 @@ import {
 } from './schemas';
 import { isContainerRun } from './schemas/workflow-run';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import { requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite, TerminalStatusWriteError } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import {
   WorkflowSourceIntegrityError,
@@ -404,6 +407,16 @@ export async function prepareWorkflowSource(
   };
 }
 
+class SourceEstablishmentError extends Error {}
+
+type SourcePhase<T> =
+  | { stopped: false; value: T }
+  | {
+      stopped: true;
+      released: boolean;
+      result: WorkflowExecutionResult;
+    };
+
 /**
  * Validate adoption before source setup can stop the run, then establish the source.
  * A refused adoption skips source setup and does not stop the run here: `adoptedRunDir`
@@ -426,7 +439,7 @@ export async function establishAdoptedRunSource(
   >,
   isContinuation: boolean
 ): Promise<
-  RunPhase<{
+  SourcePhase<{
     adoptedRunDir: () => string | undefined;
     workflowSourceRoots: WorkflowSourceRoots | undefined;
   }>
@@ -443,19 +456,59 @@ export async function establishAdoptedRunSource(
       value: { adoptedRunDir: rethrowRefusal, workflowSourceRoots: undefined },
     };
   }
-  const sourced = await establishRunSource(
-    deps,
-    platform,
-    conversationId,
-    workflowRun,
-    workflowSourceDir,
-    opts
-  );
-  if (sourced.stopped) return sourced;
-  return {
-    stopped: false,
-    value: { adoptedRunDir: () => adoptedRunDir, workflowSourceRoots: sourced.value },
-  };
+  try {
+    const sourced = await establishRunSource(
+      deps,
+      platform,
+      conversationId,
+      workflowRun,
+      workflowSourceDir,
+      opts
+    );
+    if (sourced.stopped) return sourced;
+    return {
+      stopped: false,
+      value: { adoptedRunDir: () => adoptedRunDir, workflowSourceRoots: sourced.value },
+    };
+  } catch (error) {
+    if (error instanceof TerminalStatusWriteError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    getLog().error(
+      { err: error, workflowRunId: workflowRun.id },
+      'workflow.source_establishment_failed'
+    );
+    const { failed } = await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(workflowRun.id, message, {
+        exitReason:
+          error instanceof SourceEstablishmentError ? 'source_unavailable' : 'unhandled_error',
+        expectedExecutionClaim: { claimId: executionClaim(workflowRun.metadata) },
+      }),
+      { workflowRunId: workflowRun.id, site: 'workflow.source_fail_db_record_failed' }
+    );
+    if (failed) {
+      await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
+    } else {
+      getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.source_execution_stopped');
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Source establishment stopped for run ${workflowRun.id}: ${message}. ` +
+          `Inspect its persisted state with \`${spellWorkflowCommand(platform, `get ${workflowRun.id}`)}\`.`
+      );
+    }
+    return {
+      stopped: true,
+      released: false,
+      result: failed
+        ? { success: false, workflowRunId: workflowRun.id, error: message }
+        : {
+            success: false,
+            workflowRunId: workflowRun.id,
+            error: message,
+            executionDisposition: 'source_stopped',
+          },
+    };
+  }
 }
 
 /**
@@ -485,32 +538,16 @@ export async function establishRunSource(
     ExecuteWorkflowOptions,
     'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner'
   >
-): Promise<RunPhase<WorkflowSourceRoots | undefined>> {
+): Promise<SourcePhase<WorkflowSourceRoots | undefined>> {
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
   const isResume = opts.priorCompletedNodes !== undefined;
   const { preparedSource } = opts;
   let workflowSourceRoots: WorkflowSourceRoots | undefined;
 
-  const failRunOnSource = async (message: string): Promise<RunPhase<never>> => {
-    getLog().error({ workflowRunId: workflowRun.id, message }, 'workflow.source_unavailable');
-    await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, message, { exitReason: 'source_unavailable' }),
-      {
-        workflowRunId: workflowRun.id,
-        site: 'workflow.source_fail_db_record_failed',
-      }
-    );
-    return {
-      stopped: true,
-      result: { success: false, workflowRunId: workflowRun.id, error: message },
-    };
-  };
-
   if (recordedSourceState.kind === 'unreadable') {
     // The run recorded SOMETHING this build cannot parse. Not the legacy case: treating
     // it as one would resume against whatever is on disk now.
-    return await failRunOnSource(
+    throw new SourceEstablishmentError(
       "This run's workflow source record cannot be read by this build " +
         `(${recordedSourceState.detail}). It may have been written by a newer Archon. ` +
         'Start a fresh run to execute the current workflow.'
@@ -550,32 +587,51 @@ export async function establishRunSource(
           );
           return {
             stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
+            released,
+            result: {
+              success: true,
+              paused: true,
+              workflowRunId: workflowRun.id,
+              executionDisposition: 'source_stopped',
+            },
           };
         }
         const current = await deps.store.getWorkflowRun(workflowRun.id);
         if (current?.status === 'paused') {
           return {
             stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
+            released,
+            result: {
+              success: true,
+              paused: true,
+              workflowRunId: workflowRun.id,
+              executionDisposition: 'source_stopped',
+            },
           };
         }
         if (current?.status === 'completed') {
-          return { stopped: true, result: { success: true, workflowRunId: workflowRun.id } };
+          return {
+            stopped: true,
+            released,
+            result: { success: true, workflowRunId: workflowRun.id },
+          };
         }
         return {
           stopped: true,
+          released,
           result: {
             success: false,
+            executionDisposition: 'source_stopped',
             workflowRunId: workflowRun.id,
             error: 'Workflow status changed before source release',
           },
         };
       }
-      return await failRunOnSource(
+      throw new SourceEstablishmentError(
         `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
           `(${(error as Error).message}). The run cannot be resumed against different source; ` +
-          'start a fresh run to execute the current workflow.'
+          'start a fresh run to execute the current workflow.',
+        { cause: error }
       );
     }
     workflowSourceRoots = capturedSourceRoots(loaded.anchor);
@@ -636,8 +692,9 @@ export async function establishRunSource(
       // leaving it to the hourly age-based sweep.
       opts.capturedSourceOwner?.adopt();
     } catch (error) {
-      return await failRunOnSource(
-        `Could not move this run's captured workflow source into place: ${(error as Error).message}`
+      throw new SourceEstablishmentError(
+        `Could not move this run's captured workflow source into place: ${(error as Error).message}`,
+        { cause: error }
       );
     }
     const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
@@ -664,8 +721,9 @@ export async function establishRunSource(
       // Without the pointer the run is unresumable in the only way that matters: a later
       // resume would find no record and fall through the legacy branch, executing live
       // source. Fail now, while the failure is attributable.
-      return await failRunOnSource(
-        `Could not record this run's workflow source: ${(error as Error).message}`
+      throw new SourceEstablishmentError(
+        `Could not record this run's workflow source: ${(error as Error).message}`,
+        { cause: error }
       );
     }
     getLog().info(
@@ -687,4 +745,37 @@ export async function establishRunSource(
     getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
   }
   return { stopped: false, value: workflowSourceRoots };
+}
+
+export async function suspendReleasedSourceContainer(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  execContext: ExecutionContext,
+  containerCtx: ContainerRunContext | undefined
+): Promise<void> {
+  if (execContext.kind !== 'container' || !containerCtx) return;
+  try {
+    if ((await deps.store.getWorkflowRunStatus(runId)) === 'paused') {
+      await suspendContainerForPause(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        runId
+      );
+    }
+  } catch (error) {
+    getLog().error(
+      { err: error, workflowRunId: runId },
+      'workflow.source_release_container_cleanup_failed'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Run ${runId} paused, but container cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }

@@ -216,10 +216,17 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
-    const approveChild = (surface: WorkflowCommandSurface): string =>
-      `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
+  const pauseParentOnChild = async (
+    childRunId: string,
+    diagnostic?: string
+  ): Promise<NodeExecutionResult> => {
+    const blocked = diagnostic
+      ? `Sub-run \`${node.workflow}\` (run \`${childRunId}\`) is unfinished: ${diagnostic} `
+      : `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
+    const childAction = (surface: WorkflowCommandSurface): string =>
+      diagnostic
+        ? `${blocked}Inspect it: \`${spellWorkflowCommand(surface, `get ${childRunId}`)}\``
+        : `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },
@@ -236,7 +243,7 @@ export async function executeWorkflowNode(
     await safeSendMessage(
       platform,
       conversationId,
-      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${childAction(platform)}`,
       msgContext
     );
     return serializeNodeOutput(suspended);
@@ -246,6 +253,8 @@ export async function executeWorkflowNode(
     switch (outcome.status) {
       case 'completed':
         return await asCompleted(outcome);
+      case 'unsettled':
+        return pauseParentOnChild(outcome.childRunId, outcome.error);
       case 'paused':
         return pauseParentOnChild(outcome.childRunId);
       case 'failed':
@@ -267,9 +276,9 @@ export async function executeWorkflowNode(
       default: {
         // Compile-time exhaustiveness + runtime fail-loud: without this, a status
         // outside the union would silently return `undefined` into runLayers.
-        const unreachable: never = outcome.status;
+        const unreachable: never = outcome;
         return failResult(
-          `Sub-run '${node.workflow}' returned unexpected status '${String(unreachable)}'`,
+          `Sub-run '${node.workflow}' returned unexpected outcome '${String(unreachable)}'`,
           'unknown'
         );
       }
@@ -324,7 +333,10 @@ export async function executeWorkflowNode(
     ) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
-      return await pauseParentOnChild(existing.id);
+      return await pauseParentOnChild(
+        existing.id,
+        existing.status === 'paused' ? undefined : 'The child is still in progress.'
+      );
     }
     // completed / cancelled — thread the outcome through the same state table a
     // freshly-run child uses (interpret handles both).

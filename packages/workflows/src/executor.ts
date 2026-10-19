@@ -20,6 +20,7 @@ import {
 } from './run-preflight';
 import {
   establishAdoptedRunSource,
+  suspendReleasedSourceContainer,
   prepareWorkflowSource,
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
@@ -347,7 +348,20 @@ export async function executeWorkflow(
     opts,
     isContinuation
   );
-  if (sourced.stopped) return sourced.result;
+  if (sourced.stopped) {
+    if (sourced.released) {
+      await suspendReleasedSourceContainer(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        execContext,
+        containerCtx
+      );
+    }
+    // A source stop relinquishes lifecycle authority before the execution backstop.
+    return sourced.result;
+  }
   const { workflowSourceRoots } = sourced.value;
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
@@ -511,7 +525,19 @@ export async function executeWorkflow(
     if (typeof dagResult === 'object') {
       // After release another executor may own even a running row; the backstop has no authority.
       sourceExecutionStopped = true;
-      if (dagResult.released) return { success: true, paused: true, workflowRunId: workflowRun.id };
+      return dagResult.released
+        ? {
+            success: true,
+            paused: true,
+            workflowRunId: workflowRun.id,
+            executionDisposition: 'source_stopped',
+          }
+        : {
+            success: false,
+            workflowRunId: workflowRun.id,
+            error: 'Workflow status changed before source release',
+            executionDisposition: 'source_stopped',
+          };
     }
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
@@ -598,7 +624,6 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
-    if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
       throw error;

@@ -11,6 +11,7 @@ import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
+import { isSourceExecutionStopped } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 
@@ -194,9 +195,17 @@ async function admitFromServer(
     const platform = destination?.platform;
     void admission.settled
       .then(
-        result => {
-          if (!platform || destination?.resultConversationId === undefined || 'paused' in result)
+        async result => {
+          if (!platform || destination?.resultConversationId === undefined) return;
+          if (isSourceExecutionStopped(result)) {
+            await platform.sendMessage(
+              destination.resultConversationId,
+              `Source execution stopped for run ${result.workflowRunId}${result.success ? '' : `: ${result.error}`}. ` +
+                `Inspect its persisted state with \`${spellWorkflowCommand(platform, `get ${result.workflowRunId}`)}\`.`
+            );
             return;
+          }
+          if ('paused' in result) return;
           let message: string;
           let resultRunId: string;
           if (result.success) {

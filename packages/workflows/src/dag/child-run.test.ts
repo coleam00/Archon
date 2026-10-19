@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { childOutcomeFromRun } from './child-run';
+import { childOutcomeFromRun, readChildOutcomeAfterExecution } from './child-run';
 import type { WorkflowRun } from '../schemas';
 
 function settledRun(metadata: Record<string, unknown>): WorkflowRun {
@@ -82,5 +82,55 @@ describe('childOutcomeFromRun cache reporting', () => {
     // toEqual alone would still pass on `cachePartial: undefined`; the key must be absent,
     // because absence is what every reader treats as "this total is exact".
     expect(outcome.tokens).not.toHaveProperty('cachePartial');
+  });
+});
+
+describe('stopped child source execution', () => {
+  const result = {
+    success: false as const,
+    workflowRunId: 'child-1',
+    executionDisposition: 'source_stopped' as const,
+    error: 'source ownership changed',
+  };
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'returns a confirmed %s child outcome',
+    async status => {
+      const child = { ...settledRun({ summary: 'child output', error: 'child error' }), status };
+      expect(
+        await readChildOutcomeAfterExecution(
+          { getWorkflowRun: async () => child },
+          child.id,
+          result
+        )
+      ).toEqual(childOutcomeFromRun(child));
+    }
+  );
+
+  it.each(['pending', 'running', 'paused'] as const)(
+    'leaves a %s child unsettled',
+    async status => {
+      const child = { ...settledRun({}), status };
+      expect(
+        await readChildOutcomeAfterExecution(
+          { getWorkflowRun: async () => child },
+          child.id,
+          result
+        )
+      ).toMatchObject({ status: 'unsettled', error: result.error });
+    }
+  );
+
+  it('leaves a missing or unreadable child unsettled', async () => {
+    for (const getWorkflowRun of [
+      async () => null,
+      async () => {
+        throw new Error('child read rejected');
+      },
+    ]) {
+      expect(
+        await readChildOutcomeAfterExecution({ getWorkflowRun }, 'child-1', result)
+      ).toMatchObject({ status: 'unsettled', error: result.error });
+    }
   });
 });

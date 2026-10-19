@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
-import { childOutcomeFromRun } from './dag/child-run';
+import { readChildOutcomeAfterExecution } from './dag/child-run';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import type { ResolvedRunModelOverrides } from './model-validation';
@@ -459,7 +459,7 @@ export async function runChildWorkflow(
     //    (its own worktree when isolated, else the parent's checkout). Its terminal
     //    output + cost + tokens land in the child run metadata on completion.
     try {
-      await executeWorkflow(
+      const result = await executeWorkflow(
         deps,
         platform,
         conversationId,
@@ -475,27 +475,12 @@ export async function runChildWorkflow(
         }
       );
 
-      // 6. Read the child back for the node-facing outcome (status + summary + cost +
-      //    tokens). Works for synchronous completion AND a child paused at its gate.
-      const finalChild = await deps.store.getWorkflowRun(childRunId);
-      if (!finalChild) {
-        return failOutcome('Child run row disappeared after execution.', childRunId);
-      }
-      return childOutcomeFromRun(finalChild);
+      return await readChildOutcomeAfterExecution(deps.store, childRunId, result);
     } catch (err) {
       if (err instanceof TerminalStatusWriteError) throw err;
 
       // Ordinary setup/read-back failures become failed child outcomes after cleanup.
       // A terminal write rejection escapes instead: cleanup may not have released the lock.
-      //
-      // Wedge guard (symmetric to continueBlockedRun's post-CAS handler): a throw in
-      // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
-      // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
-      // stranding the pre-created child at 'pending' (or 'running' on a later window) —
-      // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
-      // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
-      // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
-      // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
       await requireTerminalStatusWrite(
         deps.store.cancelWorkflowRun(childRunId, { cancel_reason: 'precondition_failed' }),
         {

@@ -1,3 +1,4 @@
+import { isSourceExecutionStopped } from '@archon/workflows/schemas/workflow';
 import { formatDuration } from '@archon/paths/duration';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -149,6 +150,9 @@ export async function presentRunResult(
 ): Promise<PendingWaitContinuation | undefined> {
   const { host, workflow, result, adapter, conversationId, destination, detachedProcessOwner } =
     input;
+  if (isSourceExecutionStopped(result)) {
+    return presentSourceStoppedResult(result, detachedProcessOwner);
+  }
   const presentRunFacts = await readRunFactsPresenter(host, workflow, result);
 
   // Check result and exit appropriately
@@ -257,4 +261,15 @@ async function sendResultCard(
       'cli.workflow_result_surface_failed'
     );
   }
+}
+
+function presentSourceStoppedResult(
+  result: WorkflowExecutionResult & { executionDisposition: 'source_stopped' },
+  detachedProcessOwner: RunResultPresentation['detachedProcessOwner']
+): undefined {
+  console.log(
+    `\nSource execution stopped for run ${result.workflowRunId}. Inspect it with archon workflow get ${result.workflowRunId}.`
+  );
+  if (!result.success) throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
+  return undefined;
 }

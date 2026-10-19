@@ -212,6 +212,27 @@ describe('workflow run transitions', () => {
   });
 
   describe('failWorkflowRun', () => {
+    test.each([null, 'owner-token'])(
+      'conditional failure parameterizes its claim and never reads after a mismatch (%s)',
+      async claimId => {
+        expect(
+          await failWorkflowRun('workflow-run-123', 'source error', {
+            expectedExecutionClaim: { claimId },
+          })
+        ).toEqual({ failed: false });
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const call = mockQuery.mock.calls[0];
+        expect(call?.[0]).toContain("status = 'running'");
+        expect(call?.[0]).not.toContain("'pending'");
+        expect(call?.[0]).toContain(claimId === null ? 'IS NULL' : '= $3');
+        expect(call?.[1]).toEqual([
+          'workflow-run-123',
+          JSON.stringify({ error: 'source error' }),
+          ...(claimId === null ? [] : [claimId]),
+        ]);
+      }
+    );
+
     test('marks workflow run as failed with error', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');

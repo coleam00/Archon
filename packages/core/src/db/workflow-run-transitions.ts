@@ -14,7 +14,6 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
-import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import {
   RUN_STOP_REASON_METADATA_KEY,
   TERMINAL_WORKFLOW_STATUSES,
@@ -321,9 +320,9 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: { exitReason?: RunExitReason; signal?: RunStopSignal } = {}
+  options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): Promise<{ failed: boolean }> {
-  const { exitReason, signal } = options;
+  const { exitReason, signal, expectedExecutionClaim } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -345,7 +344,11 @@ export async function failWorkflowRun(
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutPriorFailure, 2)}
-         WHERE id = $1 AND status IN ('running', 'pending')`,
+         WHERE id = $1 AND ${
+           expectedExecutionClaim === undefined
+             ? "status IN ('running', 'pending')"
+             : `status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${expectedExecutionClaim.claimId === null ? 'IS NULL' : '= $3'}`
+         }`,
         [
           id,
           JSON.stringify({
@@ -359,6 +362,7 @@ export async function failWorkflowRun(
                 }
               : {}),
           }),
+          ...(expectedExecutionClaim?.claimId == null ? [] : [expectedExecutionClaim.claimId]),
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
@@ -376,6 +380,7 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
+    if (expectedExecutionClaim !== undefined) return { failed: false };
     const status = await getWorkflowRunStatus(id);
     if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return { failed: false };
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');

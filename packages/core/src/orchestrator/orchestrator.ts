@@ -55,7 +55,12 @@ import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ResolvedWorkflow, WorkflowSource } from '@archon/workflows/schemas/workflow';
+import {
+  isSourceExecutionStopped,
+  type ResolvedWorkflow,
+  type WorkflowSource,
+} from '@archon/workflows/schemas/workflow';
+import { spellWorkflowCommand } from '@archon/workflows/deps';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { createWorkflowDeps } from '../workflows/store-adapter';
@@ -705,46 +710,29 @@ async function dispatchBackgroundWorkflowOwned(
             },
           });
           await closeRunLiveOwner();
-          // Surface workflow output to parent conversation as a result card
-          if ('paused' in result) {
-            // Paused workflows (approval gates) — no result card yet
-          } else if (result.success && result.summary) {
-            try {
-              await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
-                category: 'workflow_result',
-                segment: 'new',
-                workflowResult: {
-                  workflowName: workflow.name,
-                  runId: result.workflowRunId,
-                },
-              });
-            } catch (surfaceError) {
-              getLog().warn(
-                { err: toError(surfaceError), conversationId: ctx.conversationId },
-                'workflow_output_surface_failed'
-              );
-            }
-          } else if (!result.success && result.workflowRunId) {
-            // Surface failure as a result card so the chat shows status + "View full logs"
-            try {
+          try {
+            if (isSourceExecutionStopped(result)) {
               await ctx.platform.sendMessage(
                 ctx.conversationId,
-                `Workflow **${workflow.name}** failed: ${result.error}`,
-                {
-                  category: 'workflow_result',
-                  segment: 'new',
-                  workflowResult: {
-                    workflowName: workflow.name,
-                    runId: result.workflowRunId,
-                  },
-                }
+                `Source execution stopped for run ${result.workflowRunId}${result.success ? '' : `: ${result.error}`}. Inspect its persisted state with \`${spellWorkflowCommand(ctx.platform, `get ${result.workflowRunId}`)}\`.`
               );
-            } catch (surfaceError) {
-              getLog().warn(
-                { err: toError(surfaceError), conversationId: ctx.conversationId },
-                'workflow_output_surface_failed'
-              );
+              return;
             }
+            if ('paused' in result) return;
+            const text = result.success
+              ? result.summary
+              : `Workflow **${workflow.name}** failed: ${result.error}`;
+            if (!text || !result.workflowRunId) return;
+            await ctx.platform.sendMessage(ctx.conversationId, text, {
+              category: 'workflow_result',
+              segment: 'new',
+              workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+            });
+          } catch (surfaceError) {
+            getLog().warn(
+              { err: toError(surfaceError), conversationId: ctx.conversationId },
+              'workflow_output_surface_failed'
+            );
           }
         } catch (error) {
           const err = toError(error);

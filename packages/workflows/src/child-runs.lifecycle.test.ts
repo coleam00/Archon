@@ -20,6 +20,7 @@ import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
+import * as workflowSource from './workflow-source';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
 import { discoverWorkflows } from './workflow-discovery';
 import type { IWorkflowStore } from './store';
@@ -56,6 +57,159 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  it.each(['record-write', 'follow-up-read'] as const)(
+    'holds a child whose source segment lost authority: %s',
+    async mode => {
+      await writeWorkflow(
+        'stopped-child',
+        `name: stopped-child
+description: child
+nodes:
+  - id: work
+    prompt: child work
+`
+      );
+      await writeWorkflow(
+        'stopped-parent',
+        `name: stopped-parent
+description: parent
+nodes:
+  - id: before
+    prompt: before
+  - id: sub
+    workflow: stopped-child
+    depends_on: [before]
+`
+      );
+      const store = new InMemoryStore();
+      const update = store.updateWorkflowRun;
+      const read = store.getWorkflowRun;
+      let stoppedId: string | undefined;
+      let childReads = 0;
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      const fail = spyOn(store, 'failWorkflowRun');
+      const create = store.createWorkflowRun;
+      store.createWorkflowRun = async data => {
+        const run = await create(data);
+        if (mode === 'follow-up-read' && run?.workflow_name === 'stopped-child') {
+          const source = {
+            version: 1,
+            root: '/blocked-child',
+            origin: cwd,
+            captured_at: new Date().toISOString(),
+            digest: 'digest',
+            file_count: 0,
+            byte_count: 0,
+          };
+          run.metadata.workflow_source = source;
+          store.runs.get(run.id)!.metadata.workflow_source = source;
+        }
+        return run;
+      };
+      const resolve = workflowSource.resolveRunSourceCapture;
+      const sourceSpy = spyOn(workflowSource, 'resolveRunSourceCapture').mockImplementation(
+        async metadata => {
+          if (
+            metadata?.workflow_source &&
+            typeof metadata.workflow_source === 'object' &&
+            'root' in metadata.workflow_source &&
+            metadata.workflow_source.root === '/blocked-child'
+          ) {
+            throw new workflowSource.WorkflowSourceUnavailableError(
+              '/blocked-child',
+              new Error('source read denied')
+            );
+          }
+          return resolve(metadata);
+        }
+      );
+      store.releaseRunForUnreadableSource = async id => {
+        const row = store.runs.get(id)!;
+        row.metadata.execution_claim = 'new-owner';
+        stoppedId = id;
+        return { released: false };
+      };
+      store.updateWorkflowRun = async (id, changes) => {
+        const row = store.runs.get(id)!;
+        if (
+          mode === 'record-write' &&
+          row.workflow_name === 'stopped-child' &&
+          changes.metadata?.workflow_source
+        ) {
+          row.metadata.execution_claim = 'new-owner';
+          stoppedId = id;
+          throw new Error('source record rejected');
+        }
+        return update(id, changes);
+      };
+      store.getWorkflowRun = async id => {
+        if (id === stoppedId) {
+          childReads++;
+          throw new Error('child read rejected');
+        }
+        return read(id);
+      };
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      try {
+        await executeWorkflow(
+          deps,
+          platform,
+          'source-stopped',
+          cwd,
+          await discover('stopped-parent'),
+          'goal'
+        );
+        const parent = [...store.runs.values()].find(
+          run => run.workflow_name === 'stopped-parent'
+        )!;
+        const child = store.runs.get(stoppedId!)!;
+        expect(child.status).toBe('running');
+        expect(child.metadata.execution_claim).toBe('new-owner');
+        expect(cancel).not.toHaveBeenCalled();
+        expect(fail).toHaveBeenCalledTimes(1);
+        expect(childReads).toBe(mode === 'follow-up-read' ? 2 : 1);
+        expect(parent.status).toBe('paused');
+        expect(parent.metadata.approval).toMatchObject({
+          type: 'child_workflow',
+          childRunId: child.id,
+        });
+        const notices = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+          .map(call => String(call[1]))
+          .join('\n');
+        expect(notices).toContain('Inspect it');
+        expect(notices).not.toContain('Approve it');
+        store.getWorkflowRun = read;
+        await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+        const resumed = await hydrateResumableRun(deps, (await read(parent.id))!);
+        if (!resumed) throw new Error('parent not resumable');
+        await executeWorkflow(
+          deps,
+          platform,
+          'source-stopped',
+          cwd,
+          await discover('stopped-parent'),
+          'goal',
+          undefined,
+          resumed
+        );
+        expect(parent.status).toBe('completed');
+        expect(store.runs.size).toBe(2);
+        expect(
+          store.events.filter(
+            event =>
+              event.workflow_run_id === parent.id &&
+              event.step_name === 'before' &&
+              event.event_type === 'node_completed'
+          )
+        ).toHaveLength(1);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        sourceSpy.mockRestore();
+      }
+    }
+  );
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'child source recovery',
