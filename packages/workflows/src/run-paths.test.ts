@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { afterAll, describe, expect, it, mock } from 'bun:test';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -75,7 +75,7 @@ describe('resolveProjectPaths', () => {
     expect(paths.outputRoot).toBe(wsPath('_folder', 'my-platform'));
   });
 
-  // #2304: a transient lookup fault used to drop the run onto `_cwd/<basename>-<digest>` and,
+  // #2304: a transient lookup fault used to drop the run onto `_cwd/v2/<basename>-<digest>` and,
   // because `output_root` is write-once, pin it there for the run's whole life —
   // including its `$STATE_DIR`, so a stateful workflow silently read an empty state
   // directory. Asserting the RESOLVED PATH rather than the call count: the failure is
@@ -167,7 +167,7 @@ describe('resolveProjectPaths', () => {
     expect(result.stateDir).toBe(wsPath('_local', 'workspace', 'state'));
   });
 
-  it('routes an unregistered cwd to _cwd/<basename>-<digest> UNDER ARCHON_HOME, never into the repo', async () => {
+  it('routes an unregistered cwd to _cwd/v2/<basename>-<digest> UNDER ARCHON_HOME, never into the repo', async () => {
     const store = makeStore({ getCodebase: mock(async () => null) });
     const deps = makeDeps(store);
 
@@ -183,7 +183,7 @@ describe('resolveProjectPaths', () => {
     expect(result.artifactsDir.startsWith(wsPath('_cwd'))).toBe(true);
   });
 
-  it('routes to _cwd/<basename>-<digest> when no codebaseId is provided', async () => {
+  it('routes to _cwd/v2/<basename>-<digest> when no codebaseId is provided', async () => {
     const deps = makeDeps();
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
@@ -253,6 +253,37 @@ describe('resolveProjectPaths', () => {
     expect(warn).not.toHaveBeenCalled();
     await resolveProjectPaths(makeDeps(), join(testHome, 'a', 'fresh'), 'fresh-run');
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt legacy state whose basename matches a new storage segment', async () => {
+    const freshCwd = join(testHome, 'fresh', 'collision-notes');
+    const newSegment = basename(cwdPath(freshCwd));
+    const legacyCwd = join(testHome, 'legacy', newSegment);
+    const legacyRoot = wsPath('_cwd', newSegment);
+    await mkdir(freshCwd, { recursive: true });
+    await mkdir(legacyCwd, { recursive: true });
+    await mkdir(join(legacyRoot, 'state'), { recursive: true });
+    await writeFile(join(legacyRoot, 'state', 'memory.txt'), 'belongs to legacy directory');
+
+    const fresh = await resolveProjectPaths(makeDeps(), freshCwd, 'fresh-collision-run');
+    const resumed = await resolveProjectPaths(
+      makeDeps(),
+      legacyCwd,
+      'legacy-collision-run',
+      undefined,
+      {
+        persistedOutputRoot: legacyRoot,
+      }
+    );
+
+    expect(fresh.stateDir).not.toBe(resumed.stateDir);
+    await mkdir(fresh.stateDir, { recursive: true });
+    expect(await readdir(fresh.stateDir)).toEqual([]);
+    await writeFile(join(fresh.stateDir, 'memory.txt'), 'fresh directory');
+    expect(await readFile(join(resumed.stateDir, 'memory.txt'), 'utf8')).toBe(
+      'belongs to legacy directory'
+    );
+    expect(resumed.outputRoot).toBe(legacyRoot);
   });
 
   it('a persisted output_root short-circuits identity resolution entirely', async () => {

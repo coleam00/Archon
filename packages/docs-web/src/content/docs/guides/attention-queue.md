@@ -99,7 +99,8 @@ they cannot disagree about what a run needs.
   storage key that [state documents](/reference/cli/#state) scope by, so
   `archon state --project <item.project.key>` reaches the same project. `codebaseId` is
   null for a project with no codebase row, such as a run in an unregistered directory
-  (`_cwd/<name>`). `name` is the codebase's name, or otherwise the key's last segment. A
+  (`_cwd/v2/<basename>-<digest>`). Copy the exact key from `items[].project.key`
+  in `archon workflow attention --all --json` when using `--project`. `name` is the codebase's name, or otherwise the key's last segment. A
   run started before its codebase was renamed keeps the key it started with; that is the
   key its state lives under. `project` is null only for a run with no trusted storage
   root.

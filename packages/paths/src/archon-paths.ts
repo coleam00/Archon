@@ -7,7 +7,7 @@
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
  * │   │                                  #   _folder/<slug>     folder project (runs in place)
- * │   │                                  #   _cwd/<basename>-<digest>    unregistered working dir
+ * │   │                                  #   _cwd/v2/<basename>-<digest>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
@@ -769,7 +769,7 @@ export function getScopeArtifactsPath(
  * resolve. This is the *one* key the whole codebase derives output paths from:
  * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
  * folder project (`_folder/<slug>`), or an unregistered working directory
- * (`_cwd/<basename>-<digest>`).
+ * (`_cwd/v2/<basename>-<digest>`).
  *
  * It exists because the identity → storage rule was previously implemented
  * three times at three different levels of correctness (the executor handled
@@ -868,7 +868,8 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
       const digest = createHash('sha256').update(cwd).digest('hex');
       // Reserve 65 bytes for the separator and digest within a 255-byte directory name.
       const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
-      root = getProjectRoot('_cwd', `${name}-${digest}`);
+      // Nest new roots so no legacy single-basename root can be adopted.
+      root = join(getProjectRoot('_cwd', 'v2'), `${name}-${digest}`);
       break;
     }
   }
@@ -911,7 +912,7 @@ export function resolveRunStorageRoot(
 
 /**
  * The project key a storage root is filed under: its path below the workspaces
- * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/<name>`).
+ * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/v2/<basename>-<digest>`).
  * Project-scoped state documents use it as their identity, so every surface that
  * names a project derives it here. A root outside the workspaces directory has
  * no key and throws rather than yielding a `..` path.

@@ -82,7 +82,7 @@ projects can derive the same one — two no-remote local repos both called `api`
 projects whose display names slugify identically. Registration keeps them apart: a new project
 whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
 `my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
-parallel checkouts. Unregistered working directories use `_cwd/<basename>-<digest>`, where the digest is
+parallel checkouts. Unregistered working directories use `_cwd/v2/<basename>-<digest>`, where the digest is
 SHA-256 of the resolved absolute directory path. Distinct directory paths have separate
 `$STATE_DIR` roots, even when their folder names match. Moving a directory changes its root.
 

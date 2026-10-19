@@ -693,7 +693,7 @@ describe('archon-paths', () => {
         )
       ).toBe('_folder/my-ops-folder');
       expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe(
-        `_cwd/scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
+        `_cwd/v2/scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
       );
     });
 
@@ -747,12 +747,13 @@ describe('archon-paths', () => {
       });
     });
 
-    test('cwd key resolves UNDER ARCHON_HOME at _cwd/<basename>-<digest>, never into the repo', () => {
+    test('cwd key resolves UNDER ARCHON_HOME at _cwd/v2/<basename>-<digest>, never into the repo', () => {
       const paths = getProjectStoragePaths({ kind: 'cwd', cwd: '/home/u/scratch-repo' });
       const root = join(
         '/custom/archon',
         'workspaces',
         '_cwd',
+        'v2',
         `scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
       );
       expect(paths).toEqual({
@@ -789,12 +790,13 @@ describe('archon-paths', () => {
           '/custom/archon',
           'workspaces',
           '_cwd',
+          'v2',
           `my_repo_v2-${cwdDigest('/home/u/my repo.v2')}`
         )
       );
       // basename('/') is '' → the `_` fallback, not an empty segment.
       expect(getProjectStoragePaths({ kind: 'cwd', cwd: '/' }).root).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', `_-${cwdDigest('/')}`)
+        join('/custom/archon', 'workspaces', '_cwd', 'v2', `_-${cwdDigest('/')}`)
       );
     });
 
@@ -868,6 +870,7 @@ describe('archon-paths', () => {
           '/custom/archon',
           'workspaces',
           '_cwd',
+          'v2',
           `scratch-${cwdDigest('/home/u/scratch')}`,
           'artifacts',
           'runs',

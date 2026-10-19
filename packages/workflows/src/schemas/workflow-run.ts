@@ -677,7 +677,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
  * now share a symbol instead of agreeing by luck.
  *
  * `identity_unresolved` — TRUE on a fresh run whose `output_root` was deliberately NOT
- *                       written because `resolveProjectPaths` returned the `_cwd/<basename>-<digest>`
+ *                       written because `resolveProjectPaths` returned the `_cwd/v2/<basename>-<digest>`
  *                       fallback AFTER `getCodebase` threw on both retry attempts (#2304).
  *                       Distinguishes "this run is on the cwd fallback because the codebase
  *                       had no owner/repo or `_local` identity" (legitimate, the WARN arm
