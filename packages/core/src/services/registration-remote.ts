@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import { execFileAsync, getDefaultRemote, isWorktreePath, toRepoPath } from '@archon/git';
 import { createLogger, getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
@@ -97,16 +97,34 @@ export async function assertSavedCheckoutRemote(
   remoteUrl: string,
   managedSource: string | null
 ): Promise<void> {
-  if (!existsSync(path)) return;
-  if (path === managedSource && (await readdir(path)).length === 0) return;
-  await assertCheckoutRemote(path, remoteUrl, path === managedSource);
+  const normalized = resolve(path);
+  const isManagedSource = managedSource !== null && normalized === resolve(managedSource);
+  if (isManagedSource && existsSync(path)) {
+    try {
+      const [saved, managed] = await Promise.all([stat(path), stat(normalized)]);
+      // realpath normalizes away symlink/.. before consulting the filesystem.
+      if (saved.dev !== managed.dev || saved.ino !== managed.ino) {
+        throw new Error('The saved path reaches a different directory than its managed source.');
+      }
+    } catch (error) {
+      throw new ProjectRegistrationError(
+        `Cannot verify checkout ownership at ${path}. Restore its original checkout or use /update-project to set its path explicitly.`,
+        { cause: error }
+      );
+    }
+  }
+  const checkout = isManagedSource ? normalized : path;
+  if (!existsSync(checkout)) return;
+  if (isManagedSource && (await readdir(checkout)).length === 0) return;
+  await assertCheckoutRemote(checkout, remoteUrl, isManagedSource);
 }
 
 /**
  * The checkout forge events use for a saved project. A saved path that is a
  * worktree, or a worktrees/ path whose checkout is gone, is stale: the
  * project's managed source replaces it once that source proves ownership.
- * Callers persist a returned path that differs from the saved one.
+ * Managed spellings are normalized after verifying they do not reach another
+ * directory. Callers persist a returned path that differs from the saved one.
  */
 export async function resolveSavedCheckout(
   project: Pick<Codebase, 'name' | 'default_cwd'>,
@@ -116,6 +134,10 @@ export async function resolveSavedCheckout(
   const identity = parseOwnerRepo(project.name);
   const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
   const saved = project.default_cwd;
+  if (managedSource !== null && resolve(saved) === resolve(managedSource)) {
+    await assertSavedCheckoutRemote(saved, remoteUrl, managedSource);
+    return resolve(saved);
+  }
   const stale =
     (await isWorktreePath(saved)) ||
     (/[\\/]worktrees[\\/]/.test(saved) && !existsSync(join(saved, '.git')));

@@ -28,6 +28,7 @@ import {
 import {
   ProjectRegistrationError,
   assertCheckoutRemote,
+  assertSavedCheckoutRemote,
   findRemoteOwner,
   effectiveRegistrationUrl,
   registrationRemotes,
@@ -484,36 +485,44 @@ export async function cloneRepository(
   const existing = await findRegisteredRemote(codebases, workingUrl);
   if (existing) {
     rejectExistingChoice(options);
+    const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
+    const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
+    const isManaged =
+      managedSource !== null && resolve(existing.default_cwd) === resolve(managedSource);
+    const checkoutPath = isManaged ? resolve(existing.default_cwd) : existing.default_cwd;
     let missing = false;
     try {
-      await access(join(existing.default_cwd, '.git'));
+      await access(join(checkoutPath, '.git'));
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       missing = true;
     }
     if (missing) {
-      const identity = resolveRepoProjectIdentity(existing.name, existing.default_cwd);
-      if (!identity || existing.default_cwd !== getProjectSourcePath(identity.owner, identity.repo))
+      if (!identity || !isManaged)
         throw new ProjectRegistrationError(
           `Project "${existing.name}" checkout is missing at ${existing.default_cwd}. Restore that checkout or repair its path with /update-project.`
         );
+      await assertSavedCheckoutRemote(
+        existing.default_cwd,
+        resolveRegistrationUrl(existing.repository_url ?? workingUrl, checkoutPath),
+        managedSource
+      );
       const credentials = await repositoryCredentials(workingUrl, options);
       await ensureProjectStructure(identity.owner, identity.repo).catch(refuseOccupiedSource);
-      await cloneCheckout(workingUrl, existing.default_cwd, credentials);
+      await cloneCheckout(workingUrl, checkoutPath, credentials);
     } else if (existing.repository_url) {
-      await assertCheckoutRemote(
-        existing.default_cwd,
-        resolveRegistrationUrl(existing.repository_url, existing.default_cwd)
-      );
+      const remoteUrl = resolveRegistrationUrl(existing.repository_url, checkoutPath);
+      if (isManaged) {
+        await assertSavedCheckoutRemote(existing.default_cwd, remoteUrl, managedSource);
+      } else {
+        await assertCheckoutRemote(checkoutPath, remoteUrl);
+      }
     }
-    if (appSource) await setupAppRepository(existing.default_cwd);
-    return loadRepositoryCommands(
-      codebases,
-      existing,
-      existing.default_cwd,
-      existing.repository_url,
-      true
-    );
+    if (appSource) await setupAppRepository(checkoutPath);
+    if (checkoutPath !== existing.default_cwd) {
+      await codebases.updateCodebase(existing, { default_cwd: checkoutPath });
+    }
+    return loadRepositoryCommands(codebases, existing, checkoutPath, existing.repository_url, true);
   }
 
   const name = await claimProjectName(codebases, {

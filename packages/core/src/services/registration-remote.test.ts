@@ -1,0 +1,113 @@
+import { afterEach, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getProjectSourcePath } from '@archon/paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { assertSavedCheckoutRemote, resolveSavedCheckout } from './registration-remote';
+
+const trackRoot = trackTempRoots();
+const remote = 'https://github.com/owner/repo';
+
+async function fixture(createSource = true): Promise<{ root: string; source: string }> {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-saved-checkout-')));
+  const source = join(root, 'source');
+  if (createSource) await mkdir(source);
+  return { root, source };
+}
+
+for (const suffix of ['', '/', '/./']) {
+  test(`accepts an empty managed source with suffix ${JSON.stringify(suffix)}`, async () => {
+    const { source } = await fixture();
+    await assertSavedCheckoutRemote(source + suffix, remote, source);
+  });
+
+  test(`requires a managed clone root with suffix ${JSON.stringify(suffix)}`, async () => {
+    const { root, source } = await fixture();
+    execFileSync('git', ['-C', root, 'init', '-q']);
+    execFileSync('git', ['-C', root, 'remote', 'add', 'origin', remote]);
+    await writeFile(join(source, 'partial'), 'incomplete clone');
+
+    await expect(assertSavedCheckoutRemote(source + suffix, remote, source)).rejects.toThrow(
+      'Cannot verify checkout ownership'
+    );
+  });
+}
+
+test('verifies non-managed empty directories even with a trailing slash', async () => {
+  const { root, source } = await fixture();
+  await expect(
+    assertSavedCheckoutRemote(`${source}/`, remote, join(root, 'other'))
+  ).rejects.toThrow('Cannot verify checkout ownership');
+  await expect(assertSavedCheckoutRemote(`${source}/`, remote, null)).rejects.toThrow(
+    'Cannot verify checkout ownership'
+  );
+});
+
+test.skipIf(process.platform === 'win32')('does not treat a symlink alias as managed', async () => {
+  const { root, source } = await fixture();
+  const alias = join(root, 'alias');
+  await symlink(source, alias);
+  await expect(assertSavedCheckoutRemote(`${alias}/`, remote, source)).rejects.toThrow(
+    'Cannot verify checkout ownership'
+  );
+});
+
+const previousArchonHome = process.env.ARCHON_HOME;
+afterEach(() => {
+  if (previousArchonHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = previousArchonHome;
+});
+
+for (const state of ['empty', 'occupied', 'missing']) {
+  test.skipIf(process.platform === 'win32')(
+    `refuses a managed spelling reaching a foreign directory (managed: ${state})`,
+    async () => {
+      const { root, source } = await fixture(state !== 'missing');
+      await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
+      await mkdir(join(root, 'foreign', 'source'));
+      await symlink(join(root, 'foreign', 'inner'), join(root, 'alias'));
+      if (state === 'occupied') await writeFile(join(source, 'partial'), 'incomplete clone');
+      const saved = `${root}/alias/../source`;
+      await expect(assertSavedCheckoutRemote(saved, remote, source)).rejects.toThrow(
+        'Cannot verify checkout ownership'
+      );
+    }
+  );
+}
+
+for (const suffix of ['/', '/../missing/../source']) {
+  test(`returns a usable managed checkout path for suffix ${suffix}`, async () => {
+    const { root } = await fixture();
+    process.env.ARCHON_HOME = root;
+    const source = getProjectSourcePath('owner', 'repo');
+    await mkdir(source, { recursive: true });
+    const saved = source + suffix;
+    const checkout = await resolveSavedCheckout({ name: 'owner/repo', default_cwd: saved }, remote);
+    expect(checkout).toBe(source);
+    execFileSync('git', ['-C', checkout, 'init', '-q']);
+  });
+}
+
+test.skipIf(process.platform === 'win32')(
+  'refuses to return a divergent managed saved path',
+  async () => {
+    const { root } = await fixture();
+    process.env.ARCHON_HOME = root;
+    const source = getProjectSourcePath('owner', 'repo');
+    await mkdir(source, { recursive: true });
+    await mkdir(join(root, 'foreign', 'inner'), { recursive: true });
+    await mkdir(join(root, 'foreign', 'source'));
+    await symlink(join(root, 'foreign', 'inner'), join(source, '..', 'alias'));
+    await expect(
+      resolveSavedCheckout(
+        {
+          name: 'owner/repo',
+          default_cwd: `${source}/../alias/../source`,
+        },
+        remote
+      )
+    ).rejects.toThrow('Cannot verify checkout ownership');
+  }
+);
