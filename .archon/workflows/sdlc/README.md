@@ -67,7 +67,7 @@ writes the reply, and `threads` posts the replies, resolves those threads, and r
 the pull request back. A thread about code the pull request doesn't change or make
 reachable, such as one that arrived with a merge of the default branch, is settled
 with a reply saying so; it belongs in its own issue. A thread no agent can settle
-ends the run `needs_human`.
+ends the run `ask`.
 `settle-threads` runs before CI and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
@@ -106,8 +106,10 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
-Keep `gh` as the default until a compatible release passes a real-PR check.
+The GitHub plugin passes this preflight from v0.12.1; v0.11.1 lacks eight required
+operations. Keep `gh` as the default: on `forge`, the merge queue still refuses, delivery
+doesn't read or answer review threads, and a ruling can't be written into an issue body,
+because the forge contract has no review-thread or issue-body operation yet.
 
 The merge queue reads through `gh` alone and refuses `forge`: its sweep judges a pull
 request's unresolved review threads, which the forge contract does not report. The gate
@@ -163,8 +165,8 @@ leaves it as its author left it. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
-another writer adds survive. On the `forge` source it still writes the whole label set back, because
-the forge contract has no single-label add or remove yet. No delivery node files
+another writer adds survive. On the `forge` source it still writes the whole label set back,
+although the GitHub plugin has single-label add and remove from v0.12.1. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
 [`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
 `archon-ship-block` that is the `report` node, which also runs when a node fails, so a
@@ -280,7 +282,7 @@ names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
 falling back to the pack's defaults"; triage names `triage.md`, and plan and review
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
-read before either stops for a person. The build queue's agents name `build.md`, what
+read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
 merge queue's sweep names `merge.md`, which pull requests merge on their own.
 Agents interpret

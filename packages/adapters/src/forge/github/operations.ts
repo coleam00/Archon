@@ -29,6 +29,7 @@ import {
   handleGithubWorkItemList,
   handleGithubRepoLabelsList,
 } from './lifecycle';
+import { handleGithubPrThreads } from './review-threads';
 
 export const githubPluginMetadata = {
   protocol: 1,
@@ -46,6 +47,7 @@ export const githubPluginMetadata = {
     'workitem.label.remove',
     'workitem.comment.upsert',
     'workitem.close',
+    'workitem.edit-body',
     'workitem.list',
     'repo.labels.list',
     'repo.label.ensure',
@@ -58,6 +60,9 @@ export const githubPluginMetadata = {
     'pr.merge',
     'checks.rerun',
     'pr.reviews',
+    'pr.threads',
+    'pr.thread.reply',
+    'pr.thread.resolve',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
@@ -188,6 +193,7 @@ export async function handleGithubOperation(
     if (request.op === 'repo.labels.list')
       return await handleGithubRepoLabelsList(request, fetchImpl, token);
     if (request.op === 'pr.reviews') return await handleGithubPrReviews(request, fetchImpl, token);
+    if (request.op === 'pr.threads') return await handleGithubPrThreads(request, fetchImpl, token);
     if (request.op === 'pr.view') return await handleGithubPrView(request, fetchImpl, token);
 
     const { root, path } = location(request.ref.repo);

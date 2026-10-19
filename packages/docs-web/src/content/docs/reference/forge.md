@@ -64,6 +64,10 @@ archon forge workitem.close --data '{"ref":{"repo":{"host":"github.com","path":"
 archon forge pr.merge --data-file ./merge.json
 archon forge checks.rerun --data-file ./rerun.json
 archon forge pr.reviews --data-file ./reviews.json
+archon forge pr.threads --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
+archon forge pr.thread.reply --data-file ./thread-reply.json
+archon forge pr.thread.resolve --data-file ./thread-resolve.json
+archon forge workitem.edit-body --data-file ./issue-body.json
 ```
 
 Every command emits JSON. When the host selects a credential, it adds `credentialSource` to the CLI response envelope with the source name, never the token. This is host diagnostic metadata; the plugin protocol is unchanged. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation, repository-label operations, listing by label and a `pr.view` head selector; a subject `{kind: "issue" | "pr", ref}` for single-label writes and `workitem.comment.upsert`; a qualified repository and number otherwise. None is inferred from the checkout.
@@ -108,6 +112,12 @@ GitHub associates Actions checks with workflow runs using structured check-suite
 Multi-run requests can have partial effects. Submission stops at the first failure. After an earlier acknowledged write, a later definitive refusal reports `verification_failed`; a lost submission response reports `outcome_unknown`. Failure evidence retains the requested units and observed newer attempts. Merge failures retain the attempted method and conditions and any landed observation. No operation retries, polls, rolls back or deletes after an uncertain write. Reconcile using reads before taking another action.
 
 `pr.reviews` takes `{ref}` and returns `{ref, items}` with submitted review and root diff-review comment items. Each carries `kind`, `id`, `author`, `commit`, vendor `state`, `createdAt`, `url` and `body`; unavailable facts are null. GitHub excludes pending draft reviews and thread replies, and includes dismissed submissions. Issue-conversation comments are not diff reviews. Bodies remain available to the caller but become digest/byte-count projections in audit events. The operation does not classify findings or choose required reviewers.
+
+`pr.threads` takes `{ref}` and returns `{ref, threads}`: every review thread on the pull request, each with its opaque `id`, `resolved`, `outdated`, `path` and `line` (null when the forge has none), and `comments` with `id`, `author`, `body` and `url`. The GitHub plugin reads every page of threads and of each thread's comments, so a long list is never cut short. Comment bodies become digest/byte-count projections in audit events.
+
+`pr.thread.reply` takes `{ref, thread, body}` and posts one reply on that thread; an applied result carries the `thread` and the new `comment` record with its body digest. `pr.thread.resolve` takes `{ref, thread}`; a thread already resolved is applied with `changed: false`. Both refuse, before writing, a thread that does not belong to the pull request `ref`.
+
+`workitem.edit-body` takes `{ref, body}` for an issue and replaces its body; an applied result carries the issue record and the body digest read back. The forge has no conditional body write, so an edit saved between the caller's read and this write is lost. A pull request uses `pr.edit-body`.
 
 ## GitHub credentials and check observations
 
@@ -179,7 +189,7 @@ It also exports `runForgeMutationConformance` for write fixtures. Pass the plugi
 
 The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities, enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews`, `pr.threads`, `pr.thread.reply`, `pr.thread.resolve`, `workitem.edit-body` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
 A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 

@@ -22,7 +22,7 @@
  * - INPUTS_CI: the CI agent's state.
  * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
  *   ended; "null" when the threads node did not run (the forge source, or no pull request).
- * - INPUTS_SETTLE_NEEDS_HUMAN: whether settle-threads found a thread only a person can settle.
+ * - INPUTS_SETTLE_ASK: whether settle-threads found a thread that needs a decision this run cannot make.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
@@ -37,7 +37,7 @@ type Ended =
   | 'review_open'
   | 'threads_open'
   | 'replan'
-  | 'needs_human'
+  | 'ask'
   | 'ci_pr_caused'
   | 'ci_other';
 
@@ -63,8 +63,8 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
   const handedOff = green === 'true' || redCause === 'inherited' || redCause === 'environment';
   if (!handedOff) return { reason: 'implement_blocked', again: false, summary: process.env.INPUTS_IMPLEMENT_SUMMARY };
   if (reviewReady !== 'true') {
-    // Neither a new plan nor evidence only a person can produce comes from another round.
-    if (reviewAction === 'replan' || reviewAction === 'needs_human') {
+    // Neither a new plan nor a decision this run cannot make comes from another round.
+    if (reviewAction === 'replan' || reviewAction === 'ask') {
       return { reason: reviewAction, again: false, summary: reviewSummary };
     }
     return { reason: 'review_open', again: true, summary: reviewSummary };
@@ -72,10 +72,10 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
   const ciSummary = process.env.INPUTS_CI_SUMMARY;
   if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true, summary: ciSummary };
   if (ci !== 'green') return { reason: 'ci_other', again: false, summary: ciSummary };
-  // An open thread is unjudged work; one settle-threads could not settle needs a person.
+  // An open thread is unjudged work; one settle-threads could not settle needs a decision.
   if (Number(threadsOpen) > 0) {
-    return text(process.env.INPUTS_SETTLE_NEEDS_HUMAN) === 'true'
-      ? { reason: 'needs_human', again: false, summary: process.env.INPUTS_SETTLE_SUMMARY }
+    return text(process.env.INPUTS_SETTLE_ASK) === 'true'
+      ? { reason: 'ask', again: false, summary: process.env.INPUTS_SETTLE_SUMMARY }
       : { reason: 'threads_open', again: true, summary: process.env.INPUTS_THREADS_SUMMARY };
   }
   return { reason: 'delivered', again: false, summary: ciSummary };
