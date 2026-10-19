@@ -108,6 +108,8 @@ export interface TriageFacts {
   readonly complexity: Field<string>;
   readonly importance: Field<string>;
   readonly urgency: Field<string>;
+  /** Overlapping issues, earlier attempts and merged changes triage opened; absent on older items. */
+  readonly related?: readonly { readonly url: string; readonly relation: string }[];
   readonly at: string;
   readonly run_id: string;
 }
@@ -564,22 +566,9 @@ export function applyDecision(
   };
   if (decision.path === 'triage') {
     if (triage === null) throw new Error('the triage path has no triage verdict');
-    const { verdict, pull_request, type, size, complexity, importance, urgency, summary, report } =
-      triage;
-    facts = {
-      ...facts,
-      triage: {
-        verdict,
-        pull_request,
-        type,
-        size,
-        complexity,
-        importance,
-        urgency,
-        at,
-        run_id: runId,
-      },
-    };
+    // The stored facts are the verdict minus what only this run's outcome reads.
+    const { closure: _closure, labels: _labels, summary, report, ...kept } = triage;
+    facts = { ...facts, triage: { ...kept, at, run_id: runId } };
     if (bodyMoved) {
       stage = 'needs_maintainer';
       promoted = null;
