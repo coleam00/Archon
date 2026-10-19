@@ -201,7 +201,9 @@ export function matchesForgeOperationResponse(
       evidence.workitem &&
       !(request.op === 'workitem.create'
         ? evidence.workitem.kind === 'issue' && sameRepo(evidence.workitem.ref.repo, request.repo)
-        : request.op === 'workitem.labels.set' || request.op === 'workitem.close'
+        : request.op === 'workitem.labels.set' ||
+            request.op === 'workitem.close' ||
+            request.op === 'workitem.edit-body'
           ? evidence.workitem.kind === 'issue' && sameRef(evidence.workitem.ref, request.ref)
           : (request.op === 'workitem.label.add' ||
               request.op === 'workitem.label.remove' ||
@@ -231,6 +233,7 @@ export function matchesForgeOperationResponse(
       );
     }
     case 'pr.reviews':
+    case 'pr.threads':
     case 'checks.state':
       return request.op === result.op && sameRef(result.value.ref, request.ref);
     case 'workitem.view':
@@ -382,6 +385,28 @@ export function matchesForgeOperationResponse(
         sameRef(result.value.pr, request.ref) &&
         result.value.pr.state === 'open' &&
         result.value.pr.is_draft === (request.op === 'pr.draft')
+      );
+    case 'pr.thread.reply':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.ref) &&
+        result.value.thread === request.thread &&
+        sameRef(result.value.comment.ref, request.ref) &&
+        result.value.comment.bodyDigest === contentDigest(request.body)
+      );
+    case 'pr.thread.resolve':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.ref) &&
+        result.value.thread === request.thread &&
+        result.value.resolved
+      );
+    case 'workitem.edit-body':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.ref) &&
+        sameRef(result.value.workitem.ref, request.ref) &&
+        result.value.bodyDigest === contentDigest(request.body)
       );
   }
 }

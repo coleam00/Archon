@@ -10,20 +10,16 @@
 
 import { z } from 'zod';
 import { handleGithubChecksRerun } from './checks-rerun';
+import { replyOnThread, resolveThread } from './review-threads';
+import { applied, failure, refused, unknown, unverified } from './mutation-results';
 import {
   contentDigest,
   forgePrRecordSchema,
-  forgeResponseSchema,
   type ForgeWorkItemRecord,
   type ForgeSubjectRecord,
   type ForgeLabelRecord,
-  mutationTarget,
-  mutationAttempt,
   type ForgeCommentRecord,
-  type landedSchema,
   reviewItemSchema,
-  type ForgeError,
-  type ForgeMutationFailure,
   type ForgeMutationRequest,
   type ForgePrRecord,
   type ForgeRequest,
@@ -108,14 +104,6 @@ function authorField(host: string, user: User | undefined): { author?: SourceAct
   return user === undefined ? {} : { author: actor(host, user) };
 }
 
-function failure(
-  operationId: string,
-  error: ForgeError,
-  mutation?: ForgeMutationFailure
-): ForgeResponse {
-  return mutation ? { operationId, ok: false, error, mutation } : { operationId, ok: false, error };
-}
-
 async function readPull(fetchImpl: Fetch, token: string, ref: PrRef): Promise<Pull> {
   const { root, path } = location(ref.repo);
   return pullSchema.parse(
@@ -169,74 +157,6 @@ async function verifyRepository(fetchImpl: Fetch, token: string, repo: RepoRef):
       true
     );
   }
-}
-
-function evidenceBase(
-  request: ForgeMutationRequest
-): Pick<ForgeMutationFailure, 'op' | 'target' | 'merge' | 'rerun'> {
-  return { op: request.op, target: mutationTarget(request), ...mutationAttempt(request) };
-}
-function refused(
-  request: ForgeMutationRequest,
-  error: ForgeError,
-  observed?: ForgePrRecord
-): ForgeResponse {
-  return failure(request.operationId, error, {
-    ...evidenceBase(request),
-    outcome: 'refused',
-    ...(observed ? { observed } : {}),
-  });
-}
-function unknown(request: ForgeMutationRequest, error: ForgeError): ForgeResponse {
-  return failure(request.operationId, error, {
-    ...evidenceBase(request),
-    outcome: 'outcome_unknown',
-  });
-}
-function unverified(
-  request: ForgeMutationRequest,
-  message: string,
-  leaveBehind: string,
-  observed?: {
-    pr?: ForgePrRecord;
-    comment?: ForgeCommentRecord;
-    workitem?: ForgeSubjectRecord;
-    label?: ForgeLabelRecord;
-    landed?: z.infer<typeof landedSchema>;
-  }
-): ForgeResponse {
-  return failure(
-    request.operationId,
-    { kind: 'invalid_response', message },
-    {
-      ...evidenceBase(request),
-      outcome: 'verification_failed',
-      leaveBehind,
-      ...(request.op === 'pr.merge' && observed?.landed
-        ? {
-            merge: {
-              method: request.method,
-              conditions: request.conditions,
-              landed: observed.landed,
-            },
-          }
-        : {}),
-      ...(observed?.pr ? { observed: observed.pr } : {}),
-      ...(observed?.comment ? { comment: observed.comment } : {}),
-      ...(observed?.workitem ? { workitem: observed.workitem } : {}),
-      ...(observed?.label ? { label: observed.label } : {}),
-    }
-  );
-}
-function applied(request: ForgeMutationRequest, value: object): ForgeResponse {
-  return forgeResponseSchema.parse({
-    operationId: request.operationId,
-    ok: true,
-    result: {
-      op: request.op,
-      value: { target: mutationTarget(request), outcome: 'applied', ...value },
-    },
-  });
 }
 
 async function createPullRequest(
@@ -900,6 +820,45 @@ async function closeWorkItem(
       });
 }
 
+async function editWorkItemBody(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.edit-body' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: (phase: 'submitted' | 'acknowledged') => void
+): Promise<ForgeResponse> {
+  const issue = { kind: 'issue', ref: request.ref } as const;
+  const before = await readIssue(fetchImpl, token, request.ref);
+  // subjectRecord refuses a pull request number, so the record is an issue's.
+  const workitem = { ...subjectRecord(issue, before), kind: 'issue' as const };
+  const bodyDigest = contentDigest(request.body);
+  if ((before.body ?? '') === request.body)
+    return applied(request, { changed: false, workitem, bodyDigest });
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(request.ref.number)}`,
+    { method: 'PATCH', body: JSON.stringify({ body: request.body }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const leaveBehind = 'the issue body may have changed';
+  let after: Issue;
+  try {
+    after = await readIssue(fetchImpl, token, request.ref);
+  } catch {
+    return unverified(request, 'Edited issue could not be read back', leaveBehind);
+  }
+  const observed = issueRecord(request.ref.repo, after, request.ref.number);
+  return (after.body ?? '') === request.body
+    ? applied(request, { changed: true, workitem: observed, bodyDigest })
+    : unverified(request, 'Issue body read-back did not match', leaveBehind, {
+        workitem: observed,
+      });
+}
+
 export async function handleGithubMutation(
   request: ForgeMutationRequest,
   fetchImpl: Fetch,
@@ -938,6 +897,12 @@ export async function handleGithubMutation(
         return await upsertComment(request, fetchImpl, token, submit);
       case 'workitem.close':
         return await closeWorkItem(request, fetchImpl, token, submit);
+      case 'workitem.edit-body':
+        return await editWorkItemBody(request, fetchImpl, token, submit);
+      case 'pr.thread.reply':
+        return await replyOnThread(request, fetchImpl, token, submit);
+      case 'pr.thread.resolve':
+        return await resolveThread(request, fetchImpl, token, submit);
     }
   } catch (cause) {
     const error = githubErrorDetail(cause);
