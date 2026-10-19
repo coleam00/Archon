@@ -37,8 +37,8 @@ import {
   claimDisposition,
   runStatus,
   stateAppend,
+  stateDocuments,
   stateGet,
-  stateList,
   statePut,
 } from './state.ts';
 
@@ -203,7 +203,7 @@ export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }
 
-function newest<T>(entries: readonly T[]): T[] {
+export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
@@ -682,8 +682,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-function read(name: string): Read | undefined {
-  const stored = stateGet(name);
+export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
@@ -718,7 +717,7 @@ export function readWorkItem(number: number): WorkItem | null {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
+export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
@@ -778,14 +777,15 @@ function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkIte
   };
 }
 
-function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+export function claimable(item: Read | undefined, pickup: Pickup): item is Read {
   return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 
 /**
- * Release terminal claims, then claim the first waiting item in `order` with a
- * conditional write. A conflict re-reads the item once and claims it only if it
- * still waits unclaimed; otherwise the next candidate is tried.
+ * Read every work item in one state call, release terminal claims, then claim the
+ * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * item once and claims it only if it still waits unclaimed; otherwise the next
+ * candidate is tried.
  */
 export function claimNext(
   order: readonly OrderKey[],
@@ -793,8 +793,8 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateList('work/')
-    .map(read)
+  const items = stateDocuments('work/')
+    .map(stored => read(stored.name, stored))
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));

@@ -19,6 +19,7 @@ import {
   type RunAttentionReadStore,
   type RunResolution,
 } from '@archon/workflows/run-attention-resolution';
+import { executionClaim } from '@archon/workflows/store';
 import type { RunOwnerLossWatch } from '@archon/workflows/attention-watch';
 
 import {
@@ -297,10 +298,16 @@ export async function waitForRunAttention(
  * listener per running run would hold one database connection each.
  */
 export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWatch {
-  const ownerStore: RunAttentionReadStore = {
-    getWorkflowRun: async id => withoutRunningAttention(await store.getWorkflowRun(id)),
-  };
-  return async (runId, signal) => {
+  return async (runId, signal, claim) => {
+    const ownerStore: RunAttentionReadStore = {
+      getWorkflowRun: async id => {
+        const run = await store.getWorkflowRun(id);
+        // This wait owns only the armed execution. The feed arms any successor;
+        // presenting it here would attribute its loss to the prior claim.
+        if (id === runId && run && executionClaim(run.metadata) !== claim) return null;
+        return withoutRunningAttention(run);
+      },
+    };
     const result = await waitForRunAttention(ownerStore, runId, { signal });
     return result.kind === 'owner_lost' ? { observedStatus: result.observedStatus } : null;
   };

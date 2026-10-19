@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
-import { buildSDKHooksFromYAML } from '@archon/providers/claude/provider';
+import { buildSDKHooksFromYAML } from '@archon/providers/claude';
 import type { WorkflowNodeHooks, DagNode } from './schemas';
 import { parseWorkflow } from './loader';
 

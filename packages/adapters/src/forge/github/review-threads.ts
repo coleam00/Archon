@@ -21,7 +21,7 @@ import {
   repositoryPath,
   type Fetch,
 } from './api';
-import { applied, failure, refused, unverified } from './mutation-results';
+import { applied, failure, refused, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
   .object({ login: z.string().min(1), databaseId: z.number().int().nullable().optional() })

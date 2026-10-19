@@ -49,3 +49,9 @@ export interface WebhookEvent {
   };
   sender: { login: string };
 }
+
+/** Where the adapter's REST calls go and the token they carry. */
+export interface GiteaClient {
+  baseUrl: string;
+  token: string;
+}

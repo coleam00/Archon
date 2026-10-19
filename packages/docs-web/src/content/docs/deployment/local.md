@@ -1,6 +1,6 @@
 ---
 title: Local Development
-description: Run Archon locally with SQLite or PostgreSQL for development and personal use.
+description: Run the Archon server and Web UI on your own machine, with SQLite or PostgreSQL.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,243 +9,38 @@ sidebar:
   order: 1
 ---
 
-This guide covers how to run the Archon server locally, with Docker, and in production. For VPS deployment with automatic HTTPS, see the [Cloud Deployment Guide](/deployment/cloud/).
+The CLI needs no server. Run the server when you want the Web UI, chat adapters or webhooks. For a VPS with HTTPS, see [Cloud Deployment](/deployment/cloud/); for containers, see [Docker](/deployment/docker/).
 
-**Quick links:** [Local Development](#local-development) | [Docker with Remote DB](#docker-with-remote-postgresql) | [Docker with Local PostgreSQL](#docker-with-local-postgresql) | [Production](#production-deployment)
+## Start the server
 
----
-
-## Local Development
-
-Local development with SQLite is the recommended default. No database setup is needed.
-
-### Prerequisites
-
-- [Bun](https://bun.sh) 1.0+
-- At least one AI assistant installed and configured (Claude Code or Codex — Archon orchestrates them, it does not bundle them)
-- A GitHub token for repository cloning (`GH_TOKEN` / `GITHUB_TOKEN`)
-
-> Source installs (`bun run`) let the SDK resolve Claude Code via `node_modules` unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` is set. Compiled Archon binaries use those pins before autodetecting the native-installer path — see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only).
-
-### Setup
+With an installed binary:
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/coleam00/Archon
-cd Archon
-bun install
-
-# 2. Configure environment
-cp .env.example .env
-nano .env  # Add your AI assistant tokens (Claude, Codex, or Pi)
-
-# 3. Start server + Web UI (SQLite auto-detected, no database setup needed)
-bun run dev
-
-# 4. Open Web UI
-# http://localhost:5173
+archon serve                 # API and Web UI on http://localhost:3090
+archon serve --port 4000     # another port
 ```
 
-In development mode, two servers run simultaneously:
+A binary install downloads the server and Web UI on the first run. `archon serve --download-only` fetches them without starting.
 
-| Service    | URL                    | Purpose                          |
-|------------|------------------------|----------------------------------|
-| Web UI     | http://localhost:5173  | React frontend (Vite dev server) |
-| API Server | http://localhost:3090  | Backend API + SSE streaming      |
+From a source checkout, `bun run dev` starts the API on port 3090 and the Vite dev server for the Web UI on port 5173; see the [new developer guide](/contributing/new-developer-guide/). A run inside a worktree gets an automatic port from 3190 to 4089, based on the path. `PORT` overrides the port in any context.
 
-### Optional: Use PostgreSQL Instead of SQLite
-
-If you prefer PostgreSQL for local development:
+Check it:
 
 ```bash
-docker compose --profile with-db up -d postgres
-# Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent in .env
+curl http://localhost:3090/health               # {"status":"ok"}
+curl http://localhost:3090/health/db            # database connectivity
+curl http://localhost:3090/health/concurrency   # concurrency status
 ```
 
-> **Note:** The database schema is created automatically on first container startup via the mounted migration file. No manual `psql` step is needed for fresh installs.
+## Choose a database
 
-### Production Build (Local)
+| Option | Setup | Best for |
+|---|---|---|
+| SQLite (default) | Nothing. Leave `DATABASE_URL` unset | One operator, CLI use, local work |
+| PostgreSQL | Set `DATABASE_URL` | Shared or server installs |
 
-```bash
-bun run build    # Build the frontend
-bun run start    # Server serves both API and Web UI on port 3090
-```
-
-### Verify It Works
-
-```bash
-curl http://localhost:3090/health
-# Expected: {"status":"ok"}
-```
-
----
-
-## Docker with Remote PostgreSQL
-
-Use this option when your database is hosted externally (Supabase, Neon, AWS RDS, etc.). This starts only the app container.
-
-### Prerequisites
-
-- Docker & Docker Compose
-- A remote PostgreSQL database with `DATABASE_URL` set in `.env`
-- AI assistant tokens configured in `.env`
-
-### Setup
-
-The app container runs without any profile when using an external database. There is no `external-db` profile — the base `app` service always starts.
-
-```bash
-# 1. Get the deployment files
-mkdir archon && cd archon
-curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/deploy/docker-compose.yml -o docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/deploy/.env.example -o .env
-
-# 2. Configure (edit .env with your tokens and DATABASE_URL)
-nano .env
-
-# 3. Start app container (no profile needed for external DB)
-docker compose up -d
-
-# 4. View logs
-docker compose logs -f app
-
-# 5. Verify
-curl http://localhost:3000/api/health
-```
-
-:::note
-Docker defaults to port **3000** (set via `PORT` in `.env`). Local development defaults to port **3090**. The health endpoint in Docker is `/api/health`, while in local dev mode `/health` also works.
-:::
-
-### Database Setup
-
-No manual migration is needed — the app applies `migrations/000_combined.sql` inside an
-advisory-lock transaction on first connection. To confirm the tables landed after starting the app:
-
-```bash
-psql $DATABASE_URL -c "\dt"
-# Should show: remote_agent_codebases, remote_agent_conversations, ...
-```
-
-### Stop
-
-```bash
-docker compose down
-```
-
----
-
-## Docker with Local PostgreSQL
-
-Use this option to run both the app and PostgreSQL in Docker containers. The database schema is created automatically on first startup.
-
-### Setup
-
-```bash
-# 1. Configure .env
-# Set: DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-
-# 2. Start both containers
-docker compose --profile with-db up -d --build
-
-# 3. Wait for startup (watch logs)
-docker compose logs -f app
-
-# 4. Verify
-curl http://localhost:3000/api/health
-```
-
-> **Note:** Database tables are created automatically via the init script on first startup. No manual migration step is needed.
-
-### Updating an Existing Installation
-
-Restart Archon after updating. The app applies `migrations/000_combined.sql`
-idempotently on connection, including additive upgrades for existing installations.
-
-
-### Stop
-
-```bash
-docker compose --profile with-db down
-```
-
----
-
-## Production Deployment
-
-For deploying to a VPS (DigitalOcean, Linode, AWS EC2, etc.) with automatic HTTPS via Caddy, see the [Cloud Deployment Guide](/deployment/cloud/).
-
----
-
-## Database Options Summary
-
-| Option | Setup | Best For |
-|--------|-------|----------|
-| **SQLite** (default) | Zero config, just omit `DATABASE_URL` | Single-user, CLI usage, local development |
-| **Remote PostgreSQL** | Set `DATABASE_URL` to hosted DB | Cloud deployments, shared access |
-| **Local PostgreSQL** | Docker `--profile with-db` | Self-hosted, Docker-based setups |
-
-SQLite stores data at `~/.archon/archon.db` (or `/.archon/archon.db` in Docker). It is auto-initialized on first run.
-
----
-
-## Port Configuration
-
-| Context | Default Port | Notes |
-|---------|-------------|-------|
-| Local dev (`bun run dev`) | 3090 | Default server port |
-| Docker | 3000 | Set via `PORT` in `.env` |
-| Worktrees | 3190-4089 | Auto-allocated, hash-based on path |
-| Override | Any | Set `PORT=4000 bun dev` |
-
-:::tip
-The port difference between local dev (3090) and Docker (3000) is intentional. Override with the `PORT` environment variable in either context.
-:::
-
----
-
-## Health Endpoints
-
-| Context | Endpoint | Notes |
-|---------|----------|-------|
-| Docker / production | `/api/health` | Used by Docker healthcheck |
-| Local dev | `/health` | Convenience alias (also supports `/api/health`) |
-
-```bash
-# Docker
-curl http://localhost:3000/api/health
-
-# Local dev
-curl http://localhost:3090/health
-
-# Additional checks (both contexts)
-curl http://localhost:3090/health/db           # Database connectivity
-curl http://localhost:3090/health/concurrency  # Concurrency status
-```
-
----
+SQLite stores data at `~/.archon/archon.db` and creates it on first run. For a local PostgreSQL container, run `docker compose --profile with-db up -d postgres` from a source checkout and set `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent`. The server creates and upgrades the schema on startup. See [Database](/reference/database/).
 
 ## Troubleshooting
 
-### Container Won't Start
-
-```bash
-# Check logs
-docker compose logs app          # default (SQLite or external DB)
-docker compose logs app          # --profile with-db
-
-# Verify environment
-docker compose config
-
-# Rebuild without cache
-docker compose build --no-cache
-docker compose up -d
-```
-
-### Port Conflicts
-
-```bash
-# Check if port is in use
-lsof -i :3090        # macOS/Linux
-netstat -ano | findstr :3090  # Windows
-```
+If the port is taken, find the process with `lsof -i :3090` on macOS or Linux, or `netstat -ano | findstr :3090` on Windows, or start on another port with `--port`.

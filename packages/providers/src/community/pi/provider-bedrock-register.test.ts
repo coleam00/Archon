@@ -23,7 +23,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { ensureBedrockProviderRegistered, resetBedrockRegistrationForTest } from './provider';
+import { ensureBedrockProviderRegistered, resetBedrockRegistrationForTest } from './sdk-setup';
 
 afterEach(() => {
   resetBedrockRegistrationForTest();

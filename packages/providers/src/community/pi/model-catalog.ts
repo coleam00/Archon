@@ -9,7 +9,7 @@
  * compiled binary without the PI_PACKAGE_DIR shim).
  */
 import { createLogger } from '@archon/paths';
-import { ensurePiPackageDirShim } from './provider';
+import { ensurePiPackageDirShim } from './sdk-setup';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

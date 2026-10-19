@@ -7,6 +7,7 @@ import {
   inputEnvKey,
 } from '../schemas/dag-node';
 import type { EffortLevel } from '../schemas/effort';
+import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
 import {
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
@@ -408,6 +409,25 @@ export function resolveEffort(
     getLog().debug({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
   }
   return effort;
+}
+
+/**
+ * Workflow-level `model:`: one ref or a model preference list. A malformed value rejects the
+ * workflow; dropping it would run every node on the config default without saying so.
+ */
+export function parseWorkflowModel(raw: unknown): ParsedField<WorkflowModelRef> {
+  // A bare `model:` key parses as null and has always meant "no model".
+  if (raw === undefined || raw === null) return { value: undefined };
+  const parsed = modelRefSchema.safeParse(raw);
+  if (parsed.success) return { value: parsed.data };
+  // An array matches the list branch, whose issue names the broken entry. Anything else
+  // fails both branches as a bare "Invalid input", so name the shapes that are accepted.
+  const issue = parsed.error.issues[0];
+  const reason =
+    issue !== undefined && issue.code !== 'invalid_union'
+      ? issue.message
+      : 'expected a model ref string or a preference list of @aliases ending in a tier or model id';
+  return { error: `Invalid workflow-level model: ${reason}.` };
 }
 
 /**
