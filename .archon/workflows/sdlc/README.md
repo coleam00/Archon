@@ -457,9 +457,9 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
 - **A named item.** The `number` input makes the run claim that issue instead of the
   first in order, so an operator chooses what a run builds and, with the launch's
   config, which provider builds it: one launch per issue, such as
-  `--input number=123` with the config that selects Codex. The run refuses, before any
-  agent, when the issue has no work item, another run holds it, or it does not wait
-  for the build queue, and says which, including when intake recorded it blocked.
+  `--input number=123` with the config that selects Codex. An issue that cannot be
+  claimed refuses the run before any agent, with why: it has no work item, another
+  run holds it, or its stage and build status show it does not wait.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a

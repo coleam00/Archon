@@ -20,7 +20,6 @@ import {
   claimNamed,
   countedRounds,
   itemPullRequest,
-  notWaitingReason,
 } from '../../.shared/build.ts';
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
@@ -88,23 +87,6 @@ function emitItem(
   });
 }
 
-/** The named item, claimed; anything else refuses with why it cannot be built now. */
-function claimTarget(number: number, runId: string): WorkItem {
-  const result = claimNamed(number, new Date().toISOString(), runId);
-  switch (result.kind) {
-    case 'claimed':
-      return result.doc;
-    case 'missing':
-      throw new Error(`issue ${String(number)} has no work item: intake has not recorded it`);
-    case 'held':
-      throw new Error(`issue ${String(number)} is claimed by run ${result.runId}`);
-    case 'contended':
-      throw new Error(`issue ${String(number)} kept changing while this run claimed it; launch it again`);
-    case 'not_waiting':
-      throw new Error(`issue ${String(number)} is not ready for the build queue: ${notWaitingReason(result.doc)}`);
-  }
-}
-
 function main(): void {
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -120,7 +102,7 @@ function main(): void {
   const doc =
     number === ''
       ? claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP)
-      : claimTarget(positive('number', number), runId);
+      : claimNamed(positive('number', number), new Date().toISOString(), runId);
   if (doc === null) {
     emit({
       path: 'idle',

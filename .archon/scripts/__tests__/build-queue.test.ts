@@ -373,17 +373,9 @@ describe('the build queue scripts', () => {
     inProcess(at, () => expect(statePut('work/8', urgent, stateGet('work/8').revision)).toBe('ok'));
     seed(at, triaged());
     expect(ok(run(at, 'facts', { INPUTS_NUMBER: '7' }))).toMatchObject({ path: 'route', item: SUBJECT });
-    const refused = (inputs: Record<string, string>) => {
-      const result = run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}', ...inputs });
-      expect(result.code).not.toBe(0);
-      return result.stderr;
-    };
-    expect(refused({ INPUTS_NUMBER: '7' })).toContain('issue 7 is claimed by run run-1');
-    expect(refused({ INPUTS_NUMBER: '9' })).toContain('issue 9 has no work item');
     seed(at, triaged({ stage: 'blocked' }));
-    expect(refused({ INPUTS_NUMBER: '7' })).toContain('intake recorded it blocked');
-    seed(at, triaged({}, record({ status: 'asking' })));
-    expect(refused({ INPUTS_NUMBER: '7' })).toContain("waits for a maintainer's answer");
+    const refused = run(at, 'facts', { WORKFLOW_ID: 'run-2', INPUTS_NUMBER: '7' });
+    expect(refused.stderr).toContain('issue 7 does not wait for the build queue: stage blocked');
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 

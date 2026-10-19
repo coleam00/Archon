@@ -13,7 +13,6 @@ import {
   claimable,
   claimItem,
   type Pickup,
-  type Read,
   read,
   releaseIfTerminal,
   type Stage,
@@ -94,54 +93,25 @@ export function buildWaits(doc: WorkItem): boolean {
   return (doc.facts.triage?.at ?? '') > build.at;
 }
 
-/** Why an unclaimed item does not wait for the build queue, in words an operator acts on. */
-export function notWaitingReason(doc: WorkItem): string {
-  if (doc.stage === 'blocked') return 'intake recorded it blocked; re-triage it once what it waits on is resolved';
-  if (!(LAUNCH_STAGES as readonly string[]).includes(doc.stage)) {
-    return `its stage is ${doc.stage}, not a route intake sends to the build queue`;
-  }
-  switch (doc.facts.build?.status) {
-    case 'ready':
-      return 'the queue already marked its pull request ready';
-    case 'asking':
-      return "it waits for a maintainer's answer on its attention item";
-    case 'parked':
-      return 'the queue parked it; a re-triage starts it over';
-    default:
-      return 'it does not wait for the build queue';
-  }
-}
-
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
-/** What claiming one named item came to. */
-export type NamedClaim =
-  | { readonly kind: 'claimed'; readonly doc: WorkItem }
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'held'; readonly runId: string }
-  | { readonly kind: 'contended' }
-  | { readonly kind: 'not_waiting'; readonly doc: WorkItem };
-
 /**
- * Claim the named item if it waits for the build queue, releasing a terminal claim on
- * it first as `claimNext` does, or say why it cannot be claimed.
+ * Claim the named item for the build queue, releasing a terminal claim on it first as
+ * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
  */
-export function claimNamed(number: number, at: string, runId: string): NamedClaim {
+export function claimNamed(number: number, at: string, runId: string): WorkItem {
+  const issue = `issue ${String(number)}`;
   const found = read(workItemName(number));
-  if (found === undefined) return { kind: 'missing' };
+  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
   const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
-  const outcome = (current: Read): NamedClaim =>
-    current.doc.claim === null
-      ? { kind: 'not_waiting', doc: current.doc }
-      : { kind: 'held', runId: current.doc.claim.run_id };
-  if (!claimable(item, BUILD_PICKUP)) return outcome(item);
-  const won = claimItem(item, at, runId, BUILD_PICKUP);
-  if (won !== null) return { kind: 'claimed', doc: won };
-  // Both conditional writes lost to concurrent writes, such as intake recording a
-  // request, that left the item waiting: say so rather than give a false reason.
-  const fresh = read(item.name);
-  if (fresh === undefined) return { kind: 'missing' };
-  return claimable(fresh, BUILD_PICKUP) ? { kind: 'contended' } : outcome(fresh);
+  const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
+  if (won !== null) return won;
+  const now = read(item.name) ?? item;
+  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
+  // Both conditional writes can lose to concurrent writes that leave the item waiting.
+  if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
+  const status = now.doc.facts.build?.status ?? 'none';
+  throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
 }
 
 /**
