@@ -1651,8 +1651,9 @@ archon skill add
 archon skill add /path/to/project
 ```
 
-The unified skill covers workflow execution, run management, setup, configuration,
-authoring, and prompt guidance. It is also installed automatically during
+The unified skill covers running and watching workflows, answering runs that need a
+decision, driving the SDLC pack's queues, setup and configuration, authoring, and
+prompt guidance. It is also installed automatically during
 `archon setup`.
 
 ### `version`
