@@ -292,3 +292,61 @@ describe('setup provider selection', () => {
     }
   );
 });
+
+describe('setup docs path target', () => {
+  it('writes the docs path into the project the skill was installed in', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-docs-'));
+    const repo = join(root, 'repo');
+    const target = join(root, 'target');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    mkdirSync(target);
+    const repoConfig = '# untouched\n';
+    writeFileSync(join(repo, '.archon', 'config.yaml'), repoConfig);
+    const savedEnv = { ...process.env };
+    delete process.env.DEFAULT_AI_ASSISTANT;
+    process.env.HOME = root;
+    process.env.USERPROFILE = root;
+    process.env.ARCHON_HOME = join(root, 'archon');
+    const selection = spyOn(prompts, 'select').mockImplementation(async options => {
+      const chosen =
+        options.options.find(option => option.value === 'global') ?? options.options[0];
+      if (!chosen) throw new Error(`Unexpected prompt: ${options.message}`);
+      return chosen.value;
+    });
+    const input = spyOn(prompts, 'text').mockImplementation(async options =>
+      options.message === 'Project path to install the skill:'
+        ? target
+        : options.message.startsWith('Where are your project docs?')
+          ? 'documentation/'
+          : ''
+    );
+    const confirm = spyOn(prompts, 'confirm').mockImplementation(
+      async options => !options.message.startsWith('Run `archon doctor`')
+    );
+    const detect = spyOn(providerAuth, 'detectClaudeExecutablePath').mockReturnValue(null);
+    const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
+    const originalCollect = collectAIConfig;
+    const collect = spyOn(setupAi, 'collectAIConfig').mockImplementation(options =>
+      originalCollect(
+        options,
+        async () => undefined,
+        async () => []
+      )
+    );
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    try {
+      expect(await setupCommand({ repoPath: repo, providers: ['claude'] })).toBe(0);
+      const written = readFileSync(join(target, '.archon', 'config.yaml'), 'utf8');
+      expect(Bun.YAML.parse(written)).toEqual({ docs: { path: 'documentation/' } });
+      expect(readFileSync(join(repo, '.archon', 'config.yaml'), 'utf8')).toBe(repoConfig);
+    } finally {
+      for (const spy of [selection, input, confirm, detect, info, collect, platforms])
+        spy.mockRestore();
+      for (const key of Object.keys(process.env)) {
+        if (!(key in savedEnv)) delete process.env[key];
+      }
+      Object.assign(process.env, savedEnv);
+      await removeTempTree(root);
+    }
+  });
+});
