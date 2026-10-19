@@ -33,6 +33,10 @@ const OPS = [
   'pr.merge',
   'checks.rerun',
   'pr.reviews',
+  'pr.threads',
+  'pr.thread.reply',
+  'pr.thread.resolve',
+  'workitem.edit-body',
 ];
 
 if (command === 'metadata') {
@@ -60,6 +64,7 @@ else {
     subject?: { kind: 'issue' | 'pr'; ref: PluginRef };
     label?: string;
     reason?: string;
+    thread?: string;
     selector?: { kind: string; ref?: PluginRef };
     repo?: PluginRef['repo'];
     headRepo?: PluginRef['repo'];
@@ -157,6 +162,18 @@ else {
       });
     if (input.op === 'workitem.close')
       return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: 'not_planned' });
+    if (input.op === 'pr.thread.reply')
+      return answer(ref, {
+        thread: input.thread,
+        comment: { ...comment, bodyDigest: digest('something else') },
+      });
+    if (input.op === 'pr.thread.resolve')
+      return answer(ref, { thread: 'another-thread', resolved: true });
+    if (input.op === 'workitem.edit-body')
+      return answer(ref, {
+        workitem: { ...subject, kind: 'issue' },
+        bodyDigest: digest('something else'),
+      });
     return answer(ref, { pr, bodyDigest: digest('something else') });
   };
 
@@ -250,6 +267,35 @@ else {
     if (input.op === 'workitem.comment.upsert') return answer(ref, { workitem: subject, comment });
     if (input.op === 'workitem.close')
       return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason });
+    if (input.op === 'pr.threads')
+      return {
+        operationId: input.operationId,
+        ok: true,
+        result: {
+          op: input.op,
+          value: {
+            ref,
+            threads: [
+              {
+                id: 'thread-1',
+                resolved: false,
+                outdated: false,
+                path: 'src/a.ts',
+                line: 3,
+                comments: [{ id: 'c1', author: null, body: 'private thread body', url: pr.url }],
+              },
+            ],
+          },
+        },
+      };
+    if (input.op === 'pr.thread.reply') return answer(ref, { thread: input.thread, comment });
+    if (input.op === 'pr.thread.resolve')
+      return answer(ref, { thread: input.thread, resolved: true });
+    if (input.op === 'workitem.edit-body')
+      return answer(ref, {
+        workitem: { ...subject, kind: 'issue' },
+        bodyDigest: digest(input.body ?? ''),
+      });
     return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
   };
 

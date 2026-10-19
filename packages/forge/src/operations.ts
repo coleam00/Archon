@@ -5,6 +5,9 @@ import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
   mergeConditionSchema,
   prReviewsSchema,
+  prThreadsSchema,
+  reviewThreadCommentSchema,
+  reviewThreadSchema,
   lifecycleReadRequestSchemas,
   lifecycleReadResultSchemas,
   mutationFailureSchema,
@@ -224,6 +227,20 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           ),
         }),
       }),
+      z.object({
+        op: z.literal('pr.threads'),
+        value: prThreadsSchema.extend({
+          threads: z.array(
+            reviewThreadSchema.extend({
+              comments: z.array(
+                reviewThreadCommentSchema
+                  .omit({ body: true })
+                  .extend({ content: contentAuditSchema })
+              ),
+            })
+          ),
+        }),
+      }),
       ...mutationResultSchemas,
     ]),
   }),
@@ -244,6 +261,23 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
           items: result.value.items.map(({ body, ...facts }) => ({
             ...facts,
             content: { digest: contentDigest(body), bytes: Buffer.byteLength(body) },
+          })),
+        },
+      },
+    };
+  if (result.op === 'pr.threads')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          threads: result.value.threads.map(thread => ({
+            ...thread,
+            comments: thread.comments.map(({ body, ...facts }) => ({
+              ...facts,
+              content: { digest: contentDigest(body), bytes: Buffer.byteLength(body) },
+            })),
           })),
         },
       },
