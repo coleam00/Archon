@@ -114,6 +114,40 @@ describe('project storage collisions', () => {
     }
   );
 
+  test.each([
+    { backend: 'sql', entry: 'url' },
+    { backend: 'sql', entry: 'path' },
+    { backend: 'file', entry: 'url' },
+    { backend: 'file', entry: 'path' },
+  ] as const)(
+    'a saved relative URL cannot prove ownership through a remote name on $entry reuse ($backend)',
+    async ({ backend, entry }) => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const foreignUrl = 'https://foreign.invalid/other/repo.git';
+      const path = await gitCheckout(join(root, 'api'), foreignUrl);
+      const savedUrl = 'upstream.git';
+      execFileSync('git', ['-C', path, 'remote', 'add', savedUrl, foreignUrl]);
+      const saved = await store.createCodebase({
+        name: 'local-api',
+        default_cwd: path,
+        repository_url: savedUrl,
+      });
+      await expect(
+        entry === 'url'
+          ? cloneRepository(store, pathToFileURL(join(path, savedUrl)).href)
+          : registerInStore(store, path)
+      ).rejects.toThrow('/update-project');
+      expect(await store.listCodebases()).toMatchObject([
+        { id: saved.id, default_cwd: path, repository_url: savedUrl },
+      ]);
+      expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
+
   test.each(
     (['sql', 'file'] as const).flatMap(backend =>
       (['https', 'file'] as const).flatMap(scheme =>

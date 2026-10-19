@@ -82,13 +82,17 @@ export async function assertCheckoutRemote(
     if (observed.size) {
       // Registrations save either requested or already-expanded URLs. Keep direct
       // matches above; preserve URL spelling so Git can apply scheme-specific rewrites.
+      // Resolve filesystem paths so Git cannot interpret them as remote names.
+      const expansionUrl = remoteUrl.trim().startsWith('file:')
+        ? remoteUrl.trim()
+        : resolveRegistrationUrl(remoteUrl, path);
       const { stdout: expanded } = await execFileAsync('git', [
         '-C',
         path,
         'ls-remote',
         '--get-url',
         '--',
-        remoteUrl.trim(),
+        expansionUrl,
       ]);
       if (expanded.trim() && observed.has(await remoteIdentity(expanded.trim(), path))) return;
     }
