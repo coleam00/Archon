@@ -18,7 +18,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
-import { maybeResumeParentRun } from './parent-resume';
+import { maybeResumeParentRun, isChildGateReleased } from './parent-resume';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
 import * as workflowSource from './workflow-source';
@@ -58,6 +58,127 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  it.each(
+    (['completed', 'failed', 'cancelled'] as const).flatMap(terminal =>
+      (['pending', 'running', 'paused'] as const).flatMap(snapshot =>
+        [false, true].map(reentry => ({ terminal, snapshot, reentry }))
+      )
+    )
+  )(
+    'reconciles child completion before the parent pause: %j',
+    async ({ terminal, snapshot, reentry }) => {
+      await writeWorkflow(
+        'racing-child',
+        `name: racing-child
+description: child
+nodes:
+  - id: work
+    prompt: child work
+`
+      );
+      await writeWorkflow(
+        'racing-parent',
+        `name: racing-parent
+description: parent
+nodes:
+  - id: sub
+    workflow: racing-child
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      let stopSource = true;
+      const update = store.updateWorkflowRun;
+      store.updateWorkflowRun = async (id, changes) => {
+        const row = store.runs.get(id)!;
+        if (
+          stopSource &&
+          row.workflow_name === 'racing-child' &&
+          changes.metadata?.workflow_source
+        ) {
+          stopSource = false;
+          row.metadata.execution_claim = 'successor';
+          row.status = snapshot;
+          throw new Error('source write refused');
+        }
+        return update(id, changes);
+      };
+      let finishOnPause = !reentry;
+      const pause = store.pauseWorkflowRun;
+      store.pauseWorkflowRun = async (id, gate, ...rest) => {
+        if (finishOnPause && gate.type === 'child_workflow') {
+          const child = store.runs.get(gate.childRunId!)!;
+          child.status = 'running';
+          if (terminal === 'completed')
+            await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+          else if (terminal === 'failed') await store.failWorkflowRun(child.id, 'child failed');
+          else await store.cancelWorkflowRun(child.id);
+          await maybeResumeParentRun(deps, platform, 'racing', child);
+        }
+        return pause(id, gate, ...rest);
+      };
+      let result = await executeWorkflow(
+        deps,
+        platform,
+        'racing',
+        cwd,
+        await discover('racing-parent'),
+        'goal'
+      );
+      const parent = [...store.runs.values()].find(run => run.workflow_name === 'racing-parent')!;
+      if (reentry) {
+        expect(parent.status).toBe('paused');
+        const hydrated = await hydrateResumableRun(deps, parent);
+        if (!hydrated) throw new Error('parent not resumable');
+        finishOnPause = true;
+        result = await executeWorkflow(
+          deps,
+          platform,
+          'racing',
+          cwd,
+          await discover('racing-parent'),
+          'goal',
+          undefined,
+          hydrated
+        );
+      }
+      expect(parent.status).toBe(terminal === 'cancelled' ? 'failed' : 'completed');
+      expect(result.success).toBe(terminal !== 'cancelled');
+    }
+  );
+
+  it.each(['pending', 'running', 'paused', 'missing', 'read-rejected'] as const)(
+    'keeps a committed child gate when its child is %s',
+    async state => {
+      const store = new InMemoryStore();
+      const child = await store.createWorkflowRun({ workflow_name: 'child', user_message: '' });
+      const parent = await store.createWorkflowRun({
+        workflow_name: 'parent',
+        user_message: '',
+        metadata: {
+          approval: {
+            type: 'child_workflow',
+            nodeId: 'sub',
+            message: 'waiting',
+            childRunId: child.id,
+          },
+        },
+      });
+      parent.status = 'paused';
+      if (state === 'missing') store.runs.delete(child.id);
+      else if (state === 'read-rejected')
+        store.getWorkflowRun = async () => {
+          throw new Error('read rejected');
+        };
+      else store.runs.get(child.id)!.status = state;
+      const released = isChildGateReleased(makeDeps(store), parent);
+      if (state === 'read-rejected') await expect(released).rejects.toThrow('read rejected');
+      else expect(await released).toBe(false);
+      expect(parent.status).toBe('paused');
+    }
+  );
 
   it.each(['record-write', 'follow-up-read', 'completed-before-read'] as const)(
     'fails visibly when a stopped child cannot be read: %s',

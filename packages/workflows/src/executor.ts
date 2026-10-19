@@ -1,6 +1,6 @@
 import {
   continueBlockedRun,
-  isFanOutParentReleased,
+  isChildGateReleased,
   maybeResumeParentRun,
   releaseContinuablePauseSlot,
 } from './parent-resume';
@@ -56,7 +56,6 @@ import type {
 } from './schemas';
 import {
   SUBRUN_METADATA_KEYS,
-  isApprovalContext,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   type ContinuationMode,
@@ -553,7 +552,7 @@ export async function executeWorkflow(
         resolveChildIsolation
       );
     }
-    // A fan-out parent builds its gate from a fresh read of its children, then commits
+    // A parent builds its child gate from a fresh read of its children, then commits
     // its pause. A child that finished in between saw this run still `running`, so its
     // hook stood down; check again now that the pause is committed. Whichever side reads
     // second sees the other, and the resume claim lets only one of them continue.
@@ -569,10 +568,7 @@ export async function executeWorkflow(
       };
       let released = false;
       try {
-        released =
-          isApprovalContext(finalStatus.metadata.approval) &&
-          finalStatus.metadata.approval.type === 'fan_out' &&
-          (await isFanOutParentReleased(deps, finalStatus));
+        released = await isChildGateReleased(deps, finalStatus);
       } catch (err) {
         getLog().error(
           { err: err as Error, workflowRunId: workflowRun.id },

@@ -52,7 +52,7 @@ describe('workflow: fan-out children that pause (#4044)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
-  it.each([false, true])(
+  it.each([false, true, 'missing', 'absent', 'unsettled-missing'] as const)(
     'holds a source-stopped child slot until durable completion (child read fails=%s)',
     async childReadFails => {
       await writeWorkflow(
@@ -88,12 +88,22 @@ nodes:
         ) {
           row.metadata.execution_claim = 'new-owner';
           stoppedId = id;
+
           throw new Error('source record rejected');
         }
         return update(id, changes);
       };
       store.getWorkflowRun = async id => {
-        if (childReadFails && id === stoppedId) throw new Error('child read rejected');
+        if (childReadFails === 'unsettled-missing' && id === stoppedId) {
+          const snapshot = await read(id);
+          store.runs.delete(id);
+          return snapshot;
+        }
+        if (childReadFails && id === stoppedId) {
+          if (childReadFails === 'missing' || childReadFails === 'absent') store.runs.delete(id);
+          if (childReadFails === 'absent') return null;
+          throw new Error('child read rejected');
+        }
         return read(id);
       };
       const deps = makeDeps(store);
@@ -109,8 +119,32 @@ nodes:
       const parent = [...store.runs.values()].find(
         run => run.workflow_name === 'stopped-fan-parent'
       )!;
+      if (
+        childReadFails === 'missing' ||
+        childReadFails === 'absent' ||
+        childReadFails === 'unsettled-missing'
+      ) {
+        expect(parent.status).toBe('failed');
+        const failure = store.events.find(
+          event => event.workflow_run_id === parent.id && event.event_type === 'node_failed'
+        );
+        expect(failure?.data?.error).toContain(stoppedId!);
+        expect(failure?.data?.error).toContain(
+          childReadFails === 'missing'
+            ? 'child read rejected'
+            : childReadFails === 'absent'
+              ? 'row disappeared'
+              : 'source record rejected'
+        );
+        return;
+      }
       const child = store.runs.get(stoppedId!)!;
       expect(parent.status).toBe('paused');
+      const pausedUsage = await store.getDagResumeSnapshot(parent.id);
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(0.01);
+      expect(parent.metadata.total_tokens_in).toBe(7);
+      expect(pausedUsage.costUsd).toBeCloseTo(0.01);
+      expect(pausedUsage.tokens?.input).toBe(7);
       expect(child.status).toBe('running');
       expect(child.metadata.execution_claim).toBe('new-owner');
       expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(
@@ -135,6 +169,11 @@ nodes:
         resumed
       );
       expect(parent.status).toBe('completed');
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(0.02);
+      expect(parent.metadata.total_tokens_in).toBe(14);
+      const finalUsage = await store.getDagResumeSnapshot(parent.id);
+      expect(finalUsage.costUsd).toBeCloseTo(0.02);
+      expect(finalUsage.tokens?.input).toBe(14);
       expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(
         3
       );
@@ -158,6 +197,91 @@ nodes:
       expect(store.events.filter(event => event.event_type === 'workflow_cancelled')).toHaveLength(
         0
       );
+    }
+  );
+
+  it.each(['paused', 'lookup-failed', 'pause-lost', 'child-missing'] as const)(
+    'records settled sibling usage when fan-out is %s',
+    async mode => {
+      await writeWorkflow(
+        'paid-wait-child',
+        `name: paid-wait-child
+description: paid child
+nodes:
+  - id: echo
+    bash: printf '%s' "$ARGUMENTS"
+  - id: paid
+    prompt: work
+    depends_on: [echo]
+  - id: ask
+    approval:
+      message: review
+    depends_on: [paid]
+    when: "$echo.output == 'second'"
+`
+      );
+      await writeWorkflow(
+        'paid-wait-parent',
+        fanAskParent(
+          'paid-wait-parent',
+          'paid-wait-child',
+          '["first","second","third"]',
+          '      max_parallel: 1'
+        )
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      const find = store.findChildRuns;
+      store.findChildRuns = async id => {
+        const rows = await find(id);
+        if (mode === 'child-missing') {
+          for (const row of rows) if (row.status === 'paused') store.runs.delete(row.id);
+          return rows.filter(row => store.runs.has(row.id));
+        }
+        if (mode === 'lookup-failed' && rows.some(row => row.status === 'paused')) {
+          throw new Error('children lookup failed');
+        }
+        return rows;
+      };
+      const pause = store.pauseWorkflowRun;
+      store.pauseWorkflowRun = async (id, gate, ...rest) => {
+        if (mode === 'pause-lost' && gate.type === 'fan_out') {
+          await store.cancelWorkflowRun(id);
+        }
+        return pause(id, gate, ...rest);
+      };
+      await executeWorkflow(
+        deps,
+        platform,
+        'paid-wait',
+        cwd,
+        await discover('paid-wait-parent'),
+        'goal'
+      );
+      const parent = [...store.runs.values()].find(
+        row => row.workflow_name === 'paid-wait-parent'
+      )!;
+      expect(parent.status).toBe(
+        mode === 'paused' ? 'paused' : mode === 'pause-lost' ? 'cancelled' : 'failed'
+      );
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(0.01);
+      expect(parent.metadata.total_tokens_in).toBe(7);
+      const snapshot = await store.getDagResumeSnapshot(parent.id);
+      expect(snapshot.costUsd).toBeCloseTo(0.01);
+      expect(snapshot.tokens?.input).toBe(7);
+      if (mode === 'paused') {
+        const child = [...store.runs.values()].find(
+          row => row.parent_run_id === parent.id && row.status === 'paused'
+        )!;
+        await answerChild(deps, store, child.id, 'paid-wait-child');
+        expect(parent.status).toBe('completed');
+        expect(parent.metadata.total_cost_usd).toBeCloseTo(0.03);
+        expect(parent.metadata.total_tokens_in).toBe(21);
+        const completed = await store.getDagResumeSnapshot(parent.id);
+        expect(completed.costUsd).toBeCloseTo(0.03);
+        expect(completed.tokens?.input).toBe(21);
+      }
     }
   );
 

@@ -207,13 +207,7 @@ import type {
 export const holdsPathLock = (status: WorkflowRun['status']): boolean =>
   status === 'pending' || status === 'running' || status === 'paused';
 
-// ---------------------------------------------------------------------------
-// Stateful in-memory store — implements just enough of IWorkflowStore to drive
-// the real run lifecycle (create / pause / resume / complete / fail / cancel),
-// event log (for DAG resume snapshots), the run tree (findChildRuns /
-// getRunAncestry), and the ancestor-aware path lock.
-// ---------------------------------------------------------------------------
-
+/** Stateful run lifecycle, event log, ancestry, and checkout locks for child-run tests. */
 export class InMemoryStore implements IWorkflowStore {
   getWorkflowEventHead: IWorkflowStore['getWorkflowEventHead'] = async () => {
     throw new Error('Unexpected event feed read');
@@ -334,9 +328,17 @@ export class InMemoryStore implements IWorkflowStore {
   deleteOldWorkflowRuns: IWorkflowStore['deleteOldWorkflowRuns'] = async () => {
     throw new Error('Not used by this test');
   };
-  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async () => {
-    throw new Error('Not used by this test');
-  };
+  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
+    this.events
+      .filter(event => event.workflow_run_id === runId)
+      .map((event, i) => ({
+        ...event,
+        id: String(i),
+        step_name: event.step_name ?? null,
+        step_index: null,
+        data: event.data ?? {},
+        created_at: new Date().toISOString(),
+      }));
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async () => {
     throw new Error('Not used by this test');
   };
@@ -586,18 +588,14 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cancelled: false });
   };
 
-  private recordWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data => {
+  persistWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data => {
     this.events.push(data);
     return Promise.resolve();
   };
 
   setToolCallAttention: IWorkflowStore['setToolCallAttention'] = async () => true;
 
-  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data =>
-    this.recordWorkflowEvent(data);
-
-  persistWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data =>
-    this.recordWorkflowEvent(data);
+  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = this.persistWorkflowEvent;
 
   persistWorkflowEventIfRunning: IWorkflowStore['persistWorkflowEventIfRunning'] = data => {
     const run = this.runs.get(data.workflow_run_id);

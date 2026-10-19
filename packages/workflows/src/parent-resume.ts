@@ -14,7 +14,12 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
 } from './schemas';
-import { isApprovalContext, isFanOutBlockReleased, isRunBlockedOnChild } from './schemas';
+import {
+  isApprovalContext,
+  isFanOutBlockReleased,
+  isRunBlockedOnChild,
+  isTerminalRunStatus,
+} from './schemas';
 import { continuablePauseCursor } from './store';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -154,6 +159,15 @@ export async function isFanOutParentReleased(
     (await deps.store.findChildRuns(run.id)).map(child => [child.id, child.status])
   );
   return isFanOutBlockReleased(approval, id => statusById.get(id));
+}
+
+export async function isChildGateReleased(deps: WorkflowDeps, run: WorkflowRun): Promise<boolean> {
+  const approval = run.metadata.approval;
+  if (!isApprovalContext(approval)) return false;
+  if (approval.type === 'fan_out') return isFanOutParentReleased(deps, run);
+  if (approval.type !== 'child_workflow' || !approval.childRunId) return false;
+  const child = await deps.store.getWorkflowRun(approval.childRunId);
+  return child !== null && isTerminalRunStatus(child.status);
 }
 
 /**

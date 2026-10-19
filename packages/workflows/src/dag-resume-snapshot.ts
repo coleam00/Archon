@@ -35,6 +35,14 @@ export interface DagResumeEvent {
   data?: string | Record<string, unknown>;
 }
 
+function isUsageEvent(eventType: string, data: Record<string, unknown>): boolean {
+  return (
+    eventType === 'node_completed' ||
+    eventType === 'node_failed' ||
+    (eventType === 'node_suspended' && data.fan_out === true)
+  );
+}
+
 /**
  * Keep the failure a `node_failed` row records, as a later pass replays it. Every other
  * node state row already cleared the entry, so a node that ran again is not kept.
@@ -113,8 +121,8 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
  * run. Used by the DAG executor to restore state when resuming a failed run.
  * Throws on invalid execution records — caller owns the degradation policy.
  *
- * Both usage axes are summed from `node_completed`, `node_failed` and `node_deferred_usage`
- * rows, and only from rows whose `nodeCostScope` is their own spend. Failed rows contribute
+ * Both usage axes sum completion, failure, deferred usage, and suspended workflow fan-out
+ * increments, only where `nodeCostScope` is their own spend. Failed rows contribute
  * spend but never completed outputs, so their nodes remain eligible for resume. A
  * deferred-usage row is accounting only: it never changes lifecycle state or output.
  *
@@ -365,13 +373,12 @@ export async function foldDagResumeSnapshot(
         if (metadata.path === record.path) unfinishedInvocations.delete(key);
     }
     recordPriorFailure(failedNodes, row.event_type, row.step_name, data);
-    if (
-      row.event_type !== 'node_completed' &&
-      row.event_type !== 'node_skipped_prior_success' &&
-      row.event_type !== 'node_failed'
-    )
+    if (!(isUsageEvent(row.event_type, data) || row.event_type === 'node_skipped_prior_success'))
       continue;
-    if (row.event_type !== 'node_failed' && typeof data.node_output === 'string') {
+    if (
+      ['node_completed', 'node_skipped_prior_success'].includes(row.event_type) &&
+      typeof data.node_output === 'string'
+    ) {
       // A bash/script node's persisted text is a bounded preview once it exceeded the
       // truncation cap; the full bytes were spilled to `node_output_spill_path` at write
       // time (#2726). Prefer the spill so a resumed run's `$node.output`/`.field` sees
