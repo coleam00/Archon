@@ -38,6 +38,7 @@ review__publish:
   contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: true, summary: "stub: the issue stays referenced as Refs #1; added the Left open list" }
 fixture:

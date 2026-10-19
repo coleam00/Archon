@@ -2586,16 +2586,37 @@ describe('executeWorkflow', () => {
             preCreatedRun,
             modelOverrideLayer: {
               kind: 'raw',
-              overrides: { aliases: { '@missing': 'codex/gpt-5.6-sol' } },
+              overrides: { aliases: { '@missing': 'gpt-5.6-sol' } },
             },
           }
         )
-      ).rejects.toThrow(/unknown alias '@missing'/);
+      ).rejects.toThrow(/'@missing' is not configured/);
       expect(failRun).toHaveBeenCalledWith(
         'invalid-model-run',
-        expect.stringContaining("unknown alias '@missing'")
+        expect.stringContaining("'@missing' is not configured")
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('names the selected ref, not the whole preference list, in a provider-conflict warning', async () => {
+      const platform = makePlatform();
+      await executeWorkflow(
+        makeDeps(),
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ provider: 'claude', model: ['@cx', 'large'] }),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          modelOverrideLayer: {
+            kind: 'raw',
+            overrides: { aliases: { '@cx': 'codex/gpt-5.6-sol' } },
+          },
+        }
+      );
+      const warning = sentMessages(platform).find(message => message.includes('sets provider'));
+      expect(warning).toContain("model '@cx' resolves to provider 'codex'");
     });
 
     it('keeps concurrent profiles isolated and leaves no residue', async () => {
