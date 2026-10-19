@@ -11,6 +11,8 @@ import { NodeFailure } from './ai-turn';
 import { writeNodeArtifact } from '../artifacts-index';
 import { dagNodeSchema } from '../schemas';
 import {
+  mockLogFn,
+  runUsageWrites,
   createMockDeps,
   createMockStore,
   dagOptions,
@@ -152,37 +154,60 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     }
   );
 
-  it('surfaces a canonical typed-artifact parent refusal after successful invocation', async () => {
-    const store = createMockStore();
-    const artifactsDir = join(root, 'canonical');
-    const outside = join(root, 'outside');
-    await mkdir(artifactsDir);
-    await mkdir(outside);
-    await writeFile(join(outside, 'produce.md'), 'untouched');
-    await symlink(outside, join(artifactsDir, 'nodes'));
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'output' };
-      yield { type: 'result' };
-    });
-    await expect(
-      executeDagWorkflow(
-        exchangeOptions({
-          deps: createMockDeps(store),
-          cwd: root,
-          artifactsDir,
-          workflowRun: makeWorkflowRun('typed-refusal', { output_root: root }),
-          artifactExchange: { async publish() {}, async collect() {} },
-          workflow: {
-            name: 'typed-refusal',
-            description: 'test',
-            nodes: [dagNodeSchema.parse({ id: 'produce', prompt: 'produce', output_type: 'text' })],
-          },
-        })
-      )
-    ).rejects.toThrow('real directory');
-    expect(await readFile(join(outside, 'produce.md'), 'utf8')).toBe('untouched');
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
+  it.each([0, 1])(
+    'preserves paid sibling usage and logs a typed-artifact refusal at index %s',
+    async failingIndex => {
+      mockLogFn.mockClear();
+      const store = createMockStore();
+      const artifactsDir = join(root, 'canonical');
+      const outside = join(root, 'outside');
+      await mkdir(artifactsDir);
+      await mkdir(outside);
+      await writeFile(join(outside, 'produce.md'), 'untouched');
+      await symlink(outside, join(artifactsDir, 'nodes'));
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'output' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+      });
+      await expect(
+        executeDagWorkflow(
+          exchangeOptions({
+            deps: createMockDeps(store),
+            cwd: root,
+            artifactsDir,
+            workflowRun: makeWorkflowRun('typed-refusal', { output_root: root }),
+            artifactExchange: { async publish() {}, async collect() {} },
+            workflow: {
+              name: 'typed-refusal',
+              description: 'test',
+              nodes: [0, 1].map(index =>
+                dagNodeSchema.parse({
+                  id: index === failingIndex ? 'produce' : 'sibling',
+                  prompt: 'produce',
+                  ...(index === failingIndex ? { output_type: 'text' } : {}),
+                })
+              ),
+            },
+          })
+        )
+      ).rejects.toThrow('real directory');
+      expect(await readFile(join(outside, 'produce.md'), 'utf8')).toBe('untouched');
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.2,
+        total_tokens_in: 20,
+        total_tokens_out: 2,
+      });
+      expect(mockLogFn.mock.calls).toContainEqual([
+        expect.objectContaining({
+          nodeId: 'produce',
+          workflowRunId: 'typed-refusal',
+          err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
+        }),
+        'artifacts.write_failed',
+      ]);
+    }
+  );
 
   it('carries exchange into a composed fan-out body', async () => {
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
@@ -361,11 +386,11 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     const large = 'z'.repeat(33000);
     const events: string[] = [];
     let publishedListings: string[] = [];
-    const exec = spyOnNodeExec().mockImplementation(async (_cmd, args, options) => {
+    const exec = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
       events.push('invoke');
       expect(publishedListings).toContain(options?.env?.TYPED_ARTIFACTS_FILE ?? '');
       const spills = await readdir(join(artifactsDir, '.archon', 'node-output-spills'));
-      expect(spills.some(f => args.at(-1)?.includes(f))).toBe(true);
+      expect(spills.some(f => options?.input?.includes(f))).toBe(true);
       return { stdout: '', stderr: '' };
     });
     try {
@@ -614,12 +639,12 @@ describe('artifact exchange at workflow invocation boundaries', () => {
         yield { type: 'result' };
       });
       let conditions = 0;
-      const exec = spyOnNodeExec().mockImplementation(async (_cmd, args, options) => {
+      const exec = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
         conditions++;
         const listing = options?.env?.TYPED_ARTIFACTS_FILE;
         expect(listing).toBeDefined();
         expect(publishedFiles).toContain(listing ?? '');
-        const script = args.at(-1) ?? '';
+        const script = options?.input ?? '';
         const spills = publishedFiles.filter(f => f.endsWith('.nodeoutput'));
         expect(spills.some(f => script.includes(f) && existsSync(f))).toBe(true);
         expect(await readFile(spills.find(f => script.includes(f)) ?? '', 'utf8')).toBe(large);

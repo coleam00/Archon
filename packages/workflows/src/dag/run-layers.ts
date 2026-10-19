@@ -492,7 +492,7 @@ async function aggregateLayerResults(
   let layerHadFailure = false;
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
-      const { nodeId, output, sessionProvider } = result.value;
+      const { nodeId, output } = result.value;
       // SINGLE aggregation point for this segment's run-level usage: the run
       // row's persisted totals and the transcript. Per-node cost/tokens must be
       // summed here and ONLY here. Terminal telemetry does not read this: it
@@ -519,6 +519,11 @@ async function aggregateLayerResults(
           { nodeId }
         );
       }
+    }
+  }
+  for (const result of layerResults) {
+    if (result.status === 'fulfilled') {
+      const { nodeId, output, sessionProvider } = result.value;
       ctx.nodeOutputs.set(nodeId, output);
       if (
         ctx.nodeSessionHandles !== undefined &&
