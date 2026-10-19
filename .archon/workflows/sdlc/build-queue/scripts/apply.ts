@@ -36,6 +36,21 @@ type RouteOutput = {
   | { readonly decision: Exclude<RouteDecision, 'ready'>; readonly ready_head: null }
 );
 
+function parseRoute(value: string | undefined): RouteOutput | null {
+  const route = nullableJson(value) as
+    | (Omit<RouteOutput, 'decision' | 'ready_head'> & { decision: RouteDecision; ready_head: unknown })
+    | null;
+  if (route === null) return null;
+  if (route.decision === 'ready') {
+    const head = route.ready_head;
+    if (typeof head !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head))
+      throw new Error('route ready_head must be a full reviewed head SHA for ready');
+    return { ...route, decision: 'ready', ready_head: head };
+  }
+  if (route.ready_head !== null) throw new Error('route ready_head must be null for launch or ask');
+  return { ...route, decision: route.decision, ready_head: null };
+}
+
 interface AnswerOutput {
   readonly decision: 'done' | 'continue' | 'ask';
   readonly brief: string;
@@ -102,7 +117,6 @@ function pushTo(pr: QualifiedPr): string {
 
 function finishReviewedPr(pr: PrRecord | null, head: string): PrRecord {
   if (pr === null) throw new Error('route-ready has no pull request');
-  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head)) throw new Error('route-ready requires a full reviewed head SHA');
   const ref = { repo: pr.repo, number: pr.number };
   const source = forgeSource();
   const before = viewPr(ref, source).pr;
@@ -152,7 +166,7 @@ function main(): void {
   const round: BuildRound | null =
     ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
-  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
+  const route = parseRoute(process.env.INPUTS_ROUTE);
   const decision = decide(
     path,
     route,

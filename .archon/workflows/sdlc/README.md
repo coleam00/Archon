@@ -601,7 +601,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   `ready` and the merge queue has not settled it: it never decided it, or left it
   waiting or asking. When the build queue readies an item again after the merge queue
   returned or parked it, it waits again. The pull request is the one the build
-  queue's last round delivered. One already merged or closed is recorded without the
+  queue's last round delivered, or the triage-linked pull request when the build
+  queue finished it without a round. An enrolled maintainer PR is recorded on its
+  own work item. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). The sweep

@@ -29,7 +29,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, forgeOperation, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -245,10 +245,11 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string } = {}
+  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string; preload?: string } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
+    preload: options.preload,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
@@ -283,7 +284,7 @@ function applyInputs(answer: Record<string, unknown>, atCap = false): Record<str
   return {
     INPUTS_PATH: 'route',
     INPUTS_ITEM: JSON.stringify(SUBJECT),
-    INPUTS_ROUTE: JSON.stringify({ decision: 'launch', brief: 'deliver 7', reason: 'a contract', attention: null }),
+    INPUTS_ROUTE: JSON.stringify({ decision: 'launch', ready_head: null, brief: 'deliver 7', reason: 'a contract', attention: null }),
     INPUTS_ENDING: JSON.stringify(ENDING),
     INPUTS_ANSWER: JSON.stringify(answer),
     INPUTS_AT_CAP: String(atCap),
@@ -339,7 +340,7 @@ describe('the build queue scripts', () => {
     // A failed round after the pull request's round opened none; the item's PR is still 42.
     const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
     seed(at, triaged({}, record({ rounds })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, maintainers: [], continues: 42, branch: '' });
     seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
     seed(at, triaged({ claim: null }));
@@ -361,6 +362,22 @@ describe('the build queue scripts', () => {
     git('checkout', '-q', 'feature');
     seed(at, triaged({ facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ source: 'gh', maintainers: ['maintainer'] });
+  }, 60_000);
+
+  test('facts refuses a maintainer object read error instead of trusting an empty list', () => {
+    const at = install();
+    seed(at, triaged({ facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
+    const refused = run(at, 'facts', {}, { preload: `
+const spawnWithGh = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
+  if (argv[0] === 'git' && ['cat-file', 'ls-tree'].includes(argv[1]))
+    return { exitCode: 128, stdout: Buffer.alloc(0), stderr: Buffer.from('object read denied') };
+  return spawnWithGh(argv, options);
+} });
+` });
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('object read denied');
+    expect(refused.stdout).toBe('');
   }, 60_000);
 
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
@@ -457,6 +474,84 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
+  }, 60_000);
+
+  test.each([
+    { decision: 'ready', ready_head: null },
+    { decision: 'ask', ready_head: 'a'.repeat(40) },
+    { decision: 'launch', ready_head: 'a'.repeat(40) },
+    { decision: 'ready', ready_head: 'short' },
+  ])('rejects an invalid route/head pair before any write: %j', route => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const applied = run(at, 'apply', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
+      INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord()),
+      INPUTS_ROUTE: JSON.stringify({ ...route, brief: 'Delivered', reason: 'Ready and green', attention: ATTENTION }),
+      INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
+    });
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('route ready_head');
+    expect(applied.gh).toEqual([]);
+    expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
+  test('a route ask with no reviewed head keeps the claim and records its question', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const applied = run(at, 'apply', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
+      INPUTS_ROUTE: JSON.stringify({ decision: 'ask', ready_head: null, brief: 'Need a ruling', reason: 'Unclear scope', attention: ATTENTION }),
+      INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
+    });
+    expect(ok(applied)).toMatchObject({ decision: 'asked', class: 'route' });
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { build: { status: 'asking', rounds: [] } } });
+    expect(applied.gh).toEqual([]);
+  }, 60_000);
+
+  test('forge route-ready converts the draft through pr.ready and records no round', () => {
+    const at = install();
+    seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
+    const root = track(mkdtempSync(join(tmpdir(), 'archon-ready-forge-')));
+    const calls = join(root, 'calls.jsonl');
+    const cli = join(root, 'cli.ts');
+    const draft = forgePrRecord({ head_revision: 'a'.repeat(40), is_draft: true });
+    const ready = { ...draft, is_draft: false };
+    writeFileSync(cli, `
+import { appendFileSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const argv = process.argv.slice(2);
+if (argv[0] === 'forge') {
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ op: argv[1], request: JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8')) }) + '\\n');
+  const replies = ${JSON.stringify({ 'pr.view': forgeOperation('pr.view', { pr: draft }), 'pr.ready': forgeOperation('pr.ready', { target: PR, outcome: 'applied', changed: true, pr: ready }) })};
+  const reply = replies[argv[1]];
+  if (reply === undefined) throw new Error('unexpected operation: ' + argv[1]);
+  process.stdout.write(reply);
+} else {
+  const child = spawnSync(process.execPath, [${JSON.stringify(FAKE_ARCHON)}, ...argv], { env: process.env, input: readFileSync(0), encoding: 'utf8' });
+  process.stdout.write(child.stdout);
+  process.stderr.write(child.stderr);
+  process.exitCode = child.status ?? 1;
+}
+`);
+    const applied = runPackScript('build-queue/scripts/apply', {
+      cwd: at.checkout, source: 'forge', forge: { kind: 'command', argv: [process.execPath, cli] },
+      inputs: {
+        ...at.env, WORKFLOW_ID: 'run-1',
+        INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
+        INPUTS_PULL_REQUEST: JSON.stringify(draft),
+        INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Delivered', reason: 'Ready and green', attention: null }),
+        INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
+      },
+    });
+    expect(ok(applied)).toMatchObject({ decision: 'ready' });
+    expect(readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line))).toEqual([
+      { op: 'pr.view', request: { selector: { kind: 'number', ref: PR } } },
+      { op: 'pr.ready', request: { ref: PR } },
+    ]);
+    expect(applied.gh).toEqual([]);
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
   }, 60_000);
 
   test.each([true, false])('route-ready completes a triage-only PR without a delivery round (draft=%s)', isDraft => {
