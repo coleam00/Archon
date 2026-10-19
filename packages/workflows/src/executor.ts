@@ -330,8 +330,6 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
-
   const sourced = await establishRunSource(
     deps,
     platform,
@@ -358,6 +356,8 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const adoptedRunDir = await resolveAdoptedRunDir(deps, workflowRun, opts, isContinuation);
+
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
     Object.assign(
