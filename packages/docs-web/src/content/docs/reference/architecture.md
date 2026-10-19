@@ -14,7 +14,7 @@ Archon is a Bun and TypeScript monorepo. A small set of packages carries the eng
 - **Engine.** `workflows` loads, validates and runs workflow graphs, records events through a store contract, and pauses runs durably. It reaches providers and persistence only through injected dependencies.
 - **Isolation.** `isolation` provides git worktrees for repo projects, and in-place and container execution backends.
 - **Host.** `core` owns the database, conversations, the chat orchestrator and workflow operations. `server` serves the API, webhooks and the console; `cli` is the `archon` command.
-- **Integrations.** `providers` holds the maintained Claude, Codex and Pi providers and the deprecated bundled OpenCode and Copilot providers. `adapters` and `chat-slack` hold the bundled chat and forge integrations. New integrations ship as [plugins](/guides/publishing-plugins/).
+- **Integrations.** `providers` holds the maintained Claude, Codex and Pi providers and the deprecated bundled OpenCode and Copilot providers. `adapters` holds the bundled chat and forge integrations; `chat-slack` is the maintained Slack chat plugin, installed with `archon plugin add`. New integrations ship as [plugins](/guides/publishing-plugins/).
 
 The maintained map, with each package's ownership, the main flows, extension points and the checks that enforce each boundary, is [`.archon/architecture.md`](https://github.com/coleam00/Archon/blob/dev/.archon/architecture.md) in the repository. It is kept beside the code, and CI checks declared package dependencies against the linked layering policy.
 

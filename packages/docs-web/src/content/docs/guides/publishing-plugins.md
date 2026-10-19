@@ -133,8 +133,8 @@ The host reads `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` from the desc
 It authorizes inbound traffic and run actions, resolves Archon users, and pushes typed
 run events. The plugin renders progress, decisions, reactions and cost footers.
 `/archon connect github` points to the Web UI or `archon auth github`; it does not run a
-GitHub device flow. Installing the Slack receipt replaces the bundled Slack transport
-and bridge on restart. Removing it restores the bundled adapter for this transition.
+GitHub device flow. The server has no bundled Slack adapter: without this plugin Slack is
+off, and a set `SLACK_BOT_TOKEN` makes startup log the install command.
 
 The plugin declares `attentionNotices`. A route's `destination` is a channel id the bot
 has joined, or `channel:thread_ts` to post inside an existing thread. Each notice offers
@@ -229,9 +229,10 @@ Restart the server after installing, updating, or removing a chat plugin. The se
 starts one supervised process per usable chat receipt and verifies its live descriptor
 against the receipt. A receipt that is unreadable or does not own its executable starts
 no process and registers no platform policy; the server logs its path. Run
-`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed platform supersedes its bundled adapter;
-for Slack, this also skips the bundled workflow bridge. The server logs that replacement.
-Without a matching receipt, bundled adapters continue to work as before.
+`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed
+platform supersedes its bundled adapter, and the server logs that replacement. Without a
+matching receipt, bundled adapters continue to work as before. Slack has no bundled adapter:
+without the `chat-slack` plugin, Slack stays off.
 
 The host enforces the descriptor's allowlist for messages and run actions before creating
 an Archon identity. Run actions require the run's starter or an admin. Run events go only

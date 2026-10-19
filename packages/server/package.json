@@ -122,7 +122,7 @@
       "src/resolve-user-id.test.ts"
     ],
     [
-      "src/index.slack-resume.test.ts"
+      "src/index.boot.test.ts"
     ],
     [
       "src/boot/claude-auth-posture.test.ts",
