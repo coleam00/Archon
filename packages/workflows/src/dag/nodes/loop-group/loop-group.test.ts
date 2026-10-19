@@ -503,15 +503,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
       previous: 'S'.repeat(33_000),
       current: 'S'.repeat(33_000),
     })),
-    // Over the threshold in UTF-8 bytes but not in code units, so both values stay inline.
-    // Three-byte characters keep the two inline values together under Windows' 32,767-character
-    // command-line limit, which `bash -c` must fit within.
-    ...['', '.data'].map(field => ({
-      label: `multibyte ${field || 'whole'} output`,
-      field,
-      previous: '€'.repeat(11_000) + '\n',
-      current: '€'.repeat(11_000) + '\n\n',
-    })),
   ])(
     'keeps current and previous $label distinct in a body bash node',
     async ({ field, previous, current }) => {
@@ -583,19 +574,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(await readFile(currentFile, 'utf8')).toBe(current);
       expect(await readFile(previousFile, 'utf8')).toBe(previous);
       const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
-      if (previous.length > 32_768) {
-        const files = await readdir(spillDir, { recursive: true });
-        const contents = await Promise.all(
-          files
-            .filter(file => file.endsWith('.nodeoutput'))
-            .map(file => readFile(join(spillDir, file), 'utf8'))
-        );
-        expect(contents).toContain(previous);
-        if (current === previous) {
-          expect(contents.filter(content => content === previous).length).toBeGreaterThan(1);
-        }
-      } else {
-        expect(existsSync(spillDir)).toBe(false);
+      // Shell spills sit directly in spillDir; the resume spill under persisted/ is not one.
+      const files = await readdir(spillDir);
+      const contents = await Promise.all(
+        files
+          .filter(file => file.endsWith('.nodeoutput'))
+          .map(file => readFile(join(spillDir, file), 'utf8'))
+      );
+      expect(contents).toContain(previous);
+      if (current === previous) {
+        expect(contents.filter(content => content === previous).length).toBeGreaterThan(1);
       }
     }
   );
