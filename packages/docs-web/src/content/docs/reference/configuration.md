@@ -86,8 +86,8 @@ assistants:
     settingSources:   # Which sources the Claude SDK loads (default: ['project', 'user'])
       - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Optional: absolute path to the Claude Code executable. Compiled binaries
+    # find the native installer's ~/.local/bin/claude without it.
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).

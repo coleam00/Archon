@@ -117,7 +117,7 @@ artifact.
 
 ## Further reading
 
-- [Getting Started](/getting-started/overview/)
+- [Quickstart](/getting-started/quick-start/)
 - [Configuration](/getting-started/configuration/)
 - [Authoring Workflows](/guides/authoring-workflows/)
 - [API Reference](/reference/api/)

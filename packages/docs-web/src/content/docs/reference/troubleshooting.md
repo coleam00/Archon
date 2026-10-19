@@ -312,18 +312,22 @@ Claude Code not found. Archon requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They need an explicit path to the Claude Code executable. Source/dev mode (`bun run`) auto-resolves via `node_modules` and is unaffected.
+**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They look for it at the native installer's path (`~/.local/bin/claude`, or `%USERPROFILE%\.local\bin\claude.exe` on Windows) unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` points elsewhere. This error means neither the pin nor that path holds an executable. Source/dev mode (`bun run`) resolves Claude Code through `node_modules` and is unaffected.
 
-**Fix:** Install Claude Code separately and point Archon at it.
+**Fix:** Install Claude Code with the native installer, which Archon then finds on its own:
 
 ```bash
-# macOS / Linux / WSL — Anthropic's recommended native installer
+# macOS / Linux / WSL
 curl -fsSL https://claude.ai/install.sh | bash
-export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
 
 # Windows (PowerShell)
 irm https://claude.ai/install.ps1 | iex
-$env:CLAUDE_BIN_PATH = "$env:USERPROFILE\.local\bin\claude.exe"
+```
+
+If Claude Code is installed somewhere else, such as through npm, set `CLAUDE_BIN_PATH` to it:
+
+```bash
+export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
 ```
 
 For a durable setup, set the path in `~/.archon/config.yaml` instead:

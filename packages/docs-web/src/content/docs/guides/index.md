@@ -58,7 +58,7 @@ Archon ships the `sdlc` workflow pack, which covers the software development lif
 | `archon-validate` | Run the project's own checks and report a verdict |
 | `archon-upkeep` | Update one dependency through the reviewed delivery tail |
 
-For usage examples and guidance on which one to pick, see [The Essential Workflows](/book/essential-workflows/).
+For usage examples and guidance on which one to pick, see [SDLC pack workflows](/reference/sdlc-workflows/).
 
 To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
 

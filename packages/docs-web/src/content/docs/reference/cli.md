@@ -13,26 +13,7 @@ Run AI-powered workflows from your terminal.
 
 ## Prerequisites
 
-1. Clone the repository and install dependencies:
-   ```bash
-   git clone https://github.com/coleam00/Archon
-   cd Archon
-   bun install
-   ```
-
-2. Make CLI globally available (recommended):
-   ```bash
-   cd packages/cli
-   bun link
-   ```
-   This creates an `archon` command available from anywhere.
-
-3. Authenticate with Claude:
-   ```bash
-   claude /login
-   ```
-
-**Note:** Examples below use `archon` (after `bun link`). If you skip step 2, use `bun run cli` from the repo directory instead.
+Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
 ## Forge operations
 
@@ -70,7 +51,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run investigate --cwd /path/to/repo --no-worktree "Why does the nightly build fail?"
 ```
 
-**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, and `serve` commands and `workflow attention` work anywhere.
+**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/guides/multi-repo-projects/) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, and `serve` commands and `workflow attention` work anywhere.
 
 ## Commands
 
@@ -518,7 +499,7 @@ archon workflow run implement --from origin/release/2.0 --base dev "Backport the
 copy of the start point may be stale.
 
 **Where `--base` is rejected** (rather than half-applied): with `--no-worktree`,
-against a [folder project](/getting-started/concepts/#folder-projects),
+against a [folder project](/guides/multi-repo-projects/),
 and against a workflow pinning `worktree.enabled: false`. None of these create a
 worktree, so the flag could only move the PR target -- which would report a base
 no worktree was ever cut from.

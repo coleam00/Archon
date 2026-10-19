@@ -161,8 +161,8 @@ assistants:
     settingSources:
       - project      # Default: only project-level CLAUDE.md
       - user         # Optional: also load ~/.claude/CLAUDE.md
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries if CLAUDE_BIN_PATH is not set.
+    # Optional: absolute path to the Claude Code executable. Compiled binaries
+    # find the native installer's ~/.local/bin/claude without it.
     # claudeBinaryPath: /absolute/path/to/claude
 ```
 
