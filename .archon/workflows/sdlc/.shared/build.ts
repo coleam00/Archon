@@ -8,11 +8,16 @@
  */
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
+import { note } from './io.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
+import { stateDocuments, statePut } from './state.ts';
 import {
   claimable,
   claimItem,
+  type HistoryEntry,
+  newest,
   type Pickup,
+  parseWorkItem,
   read,
   releaseIfTerminal,
   type Stage,
@@ -112,6 +117,49 @@ export function claimNamed(number: number, at: string, runId: string): WorkItem 
   if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
   const status = now.doc.facts.build?.status ?? 'none';
   throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
+}
+
+/** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
+export interface BlockedItem {
+  readonly number: number;
+  readonly summary: string;
+}
+
+// A scheduled queue would otherwise judge the same blocked items on every run.
+const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
+const REVISITED = 'revisited';
+
+/** The unclaimed blocked items the queue has not revisited in the last few hours. */
+export function dueBlocked(at: string): BlockedItem[] {
+  const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
+  const items: BlockedItem[] = [];
+  for (const stored of stateDocuments('work/')) {
+    if (stored.value === null) continue;
+    let doc: WorkItem;
+    try {
+      doc = parseWorkItem(stored.value);
+    } catch (error) {
+      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
+    if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
+    const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
+    items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+  }
+  return items;
+}
+
+/** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
+export function recordRevisit(subject: QualifiedPr, runId: string, summary: string): boolean {
+  const entry: HistoryEntry = { at: new Date().toISOString(), stage: 'build', run_id: runId, outcome: REVISITED, summary };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const stored = read(workItemName(subject.number));
+    if (stored === undefined) return false;
+    const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
+    if (statePut(stored.name, doc, stored.revision) === 'ok') return true;
+  }
+  return false;
 }
 
 /**
