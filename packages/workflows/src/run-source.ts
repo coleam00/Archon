@@ -7,12 +7,12 @@ import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
+import type { RunPhase } from './executor-shared';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import { resolveAdoptedRunDir, resolveProjectPaths } from './run-paths';
 import {
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
-  type WorkflowExecutionResult,
   type ResolvedWorkflow,
   type WorkflowLoadError,
   type WorkflowRun,
@@ -20,7 +20,7 @@ import {
   type WorkflowWithSource,
 } from './schemas';
 import { isContainerRun } from './schemas/workflow-run';
-import { CONTINUATION_RETRY_MS, executionClaim } from './store';
+import { CONTINUATION_RETRY_MS, executionClaim, type SourceReleaseWrite } from './store';
 import { requireTerminalStatusWrite, TerminalStatusWriteError } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import {
@@ -407,14 +407,6 @@ export async function prepareWorkflowSource(
 
 class SourceEstablishmentError extends Error {}
 
-type SourcePhase<T> =
-  | { stopped: false; value: T }
-  | {
-      stopped: true;
-      released: boolean;
-      result: WorkflowExecutionResult;
-    };
-
 /**
  * Validate adoption before source setup can stop the run, then establish the source.
  * A refused adoption skips source setup and does not stop the run here: `adoptedRunDir`
@@ -439,7 +431,7 @@ export async function establishAdoptedRunSource(
   >,
   isContinuation: boolean
 ): Promise<
-  SourcePhase<{
+  RunPhase<{
     adoptedRunDir: () => string | undefined;
     workflowSourceRoots: WorkflowSourceRoots | undefined;
   }>
@@ -498,7 +490,6 @@ export async function establishAdoptedRunSource(
     }
     return {
       stopped: true,
-      released: false,
       result: failed
         ? { success: false, workflowRunId: workflowRun.id, error: message }
         : {
@@ -508,6 +499,41 @@ export async function establishAdoptedRunSource(
             executionDisposition: 'source_stopped',
           },
     };
+  }
+}
+
+async function releaseUnreadableSource(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  release: SourceReleaseWrite,
+  opts: Pick<ExecuteWorkflowOptions, 'execContext' | 'container'>
+): Promise<{ released: boolean }> {
+  const { execContext, container } = opts;
+  let suspension: Promise<void> | undefined;
+  const beforeRelease =
+    execContext?.kind === 'container' && container
+      ? async (): Promise<void> => {
+          suspension = Promise.resolve().then(() => container.backend.suspend(container.envId));
+          // Suspension is best-effort; publish the recoverable pause even on backend failure.
+          await suspension.catch(() => undefined);
+        }
+      : undefined;
+  try {
+    return await deps.store.releaseRunForUnreadableSource(runId, release, beforeRelease);
+  } finally {
+    if (suspension && execContext?.kind === 'container' && container) {
+      await reportContainerPauseSuspension(
+        deps,
+        platform,
+        conversationId,
+        container,
+        execContext,
+        runId,
+        suspension
+      );
+    }
   }
 }
 
@@ -538,7 +564,7 @@ export async function establishRunSource(
     ExecuteWorkflowOptions,
     'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner' | 'execContext' | 'container'
   >
-): Promise<SourcePhase<WorkflowSourceRoots | undefined>> {
+): Promise<RunPhase<WorkflowSourceRoots | undefined>> {
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
   const isResume = opts.priorCompletedNodes !== undefined;
   const { preparedSource } = opts;
@@ -569,44 +595,20 @@ export async function establishRunSource(
           { workflowRunId: workflowRun.id, path, err: error },
           'workflow.source_restore_unreadable'
         );
-        const { execContext, container } = opts;
-        let suspension: Promise<void> | undefined;
-        const beforeRelease =
-          execContext?.kind === 'container' && container
-            ? async (): Promise<void> => {
-                suspension = Promise.resolve().then(() =>
-                  container.backend.suspend(container.envId)
-                );
-                // Suspension is best-effort; publish the recoverable pause even on backend failure.
-                await suspension.catch(() => undefined);
-              }
-            : undefined;
-        let released: boolean;
-        try {
-          ({ released } = await deps.store.releaseRunForUnreadableSource(
-            workflowRun.id,
-            {
-              claimId: executionClaim(workflowRun.metadata),
-              nodeId: 'workflow-source',
-              path,
-              error: error instanceof Error ? error.message : String(error),
-              retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-            },
-            beforeRelease
-          ));
-        } finally {
-          if (suspension && execContext?.kind === 'container' && container) {
-            await reportContainerPauseSuspension(
-              deps,
-              platform,
-              conversationId,
-              container,
-              execContext,
-              workflowRun.id,
-              suspension
-            );
-          }
-        }
+        const { released } = await releaseUnreadableSource(
+          deps,
+          platform,
+          conversationId,
+          workflowRun.id,
+          {
+            claimId: executionClaim(workflowRun.metadata),
+            nodeId: 'workflow-source',
+            path,
+            error: error instanceof Error ? error.message : String(error),
+            retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+          },
+          opts
+        );
         if (released) {
           await safeSendMessage(
             platform,
@@ -618,7 +620,6 @@ export async function establishRunSource(
           );
           return {
             stopped: true,
-            released,
             result: {
               success: true,
               paused: true,
@@ -631,7 +632,6 @@ export async function establishRunSource(
         if (current?.status === 'paused') {
           return {
             stopped: true,
-            released,
             result: {
               success: true,
               paused: true,
@@ -643,13 +643,11 @@ export async function establishRunSource(
         if (current?.status === 'completed') {
           return {
             stopped: true,
-            released,
             result: { success: true, workflowRunId: workflowRun.id },
           };
         }
         return {
           stopped: true,
-          released,
           result: {
             success: false,
             executionDisposition: 'source_stopped',
