@@ -12,7 +12,7 @@ const NODE_REFERENCE = join(
   '.claude',
   'skills',
   'archon-cli',
-  'authoring-workflows',
+  'authoring',
   'node-reference.md'
 );
 const reference = readFileSync(NODE_REFERENCE, 'utf8').replaceAll('\r\n', '\n');

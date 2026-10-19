@@ -203,7 +203,7 @@ export function bodyDigest(body: string): string {
   return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
 }
 
-function newest<T>(entries: readonly T[]): T[] {
+export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
@@ -682,7 +682,7 @@ export interface Read {
   readonly doc: WorkItem;
 }
 
-function read(name: string): Read | undefined {
+export function read(name: string): Read | undefined {
   const stored = stateGet(name);
   if (stored.value === null) return undefined;
   try {
@@ -718,7 +718,7 @@ export function readWorkItem(number: number): WorkItem | null {
  * A run that finishes clears its own claim, so a terminal run still holding one
  * stopped before its labels were written, and its requests wait again.
  */
-function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
+export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
@@ -778,7 +778,7 @@ function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkIte
   };
 }
 
-function claimable(item: Read | undefined, pickup: Pickup): item is Read {
+export function claimable(item: Read | undefined, pickup: Pickup): item is Read {
   return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
 }
 

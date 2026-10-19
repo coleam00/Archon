@@ -14,6 +14,8 @@ facts:
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1
   branch: ""
+  blocked: []
+  blocked_count: 0
 route:
   decision: launch
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
@@ -63,6 +65,7 @@ review__publish:
   contract_left: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 ship__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 answer:

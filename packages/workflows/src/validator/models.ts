@@ -1,6 +1,6 @@
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
 import { isIncludeDirective, isLoopGroupNode } from '../schemas';
-import { buildAiProfile, isLiteralSpec, resolveModelSpec } from '../model-validation';
+import { buildAiProfile, isAliasRef, isLiteralSpec, resolveModelRef } from '../model-validation';
 import type { ResolvedAiProfile } from '../model-validation';
 import type { ResourceValidation } from './context';
 import type { ValidationConfig, ValidationIssue } from './types';
@@ -34,10 +34,14 @@ export function buildValidationAiProfile(
   }
 }
 
-function validateModelRef(validation: ResourceValidation, ref: string, nodeId?: string): void {
+function validateModelRef(
+  validation: ResourceValidation,
+  ref: NonNullable<DagNode['model']>,
+  nodeId?: string
+): void {
   if (!validation.aiProfile) return;
   try {
-    resolveModelSpec(validation.aiProfile, ref);
+    resolveModelRef(validation.aiProfile, ref);
   } catch (error) {
     validation.issues.push({
       level: 'error',
@@ -52,11 +56,11 @@ function validateModelRef(validation: ResourceValidation, ref: string, nodeId?: 
 /** A tier or alias names its provider; a literal model string does not. */
 function modelProvider(
   aiProfile: ResolvedAiProfile | undefined,
-  model: string | undefined
+  model: DagNode['model']
 ): string | undefined {
   if (!aiProfile || !model) return undefined;
   try {
-    const modelSpec = resolveModelSpec(aiProfile, model);
+    const modelSpec = resolveModelRef(aiProfile, model);
     return isLiteralSpec(modelSpec) ? undefined : modelSpec.provider;
   } catch {
     // validateModelRef reports the actionable model error separately.
@@ -70,12 +74,12 @@ export function validateWorkflowModel(
   workflow: ValidatedWorkflow
 ): string | undefined {
   const { config } = validation;
-  if (validation.requiresPortableModelRefs && workflow.model?.startsWith('@')) {
+  if (validation.requiresPortableModelRefs && isAliasRef(workflow.model)) {
     validation.issues.push({
       level: 'error',
       field: 'model',
       message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config?.workflowSource} workflows`,
-      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      hint: "Use small, medium, large, a literal provider model string, or a preference list that ends in one, such as ['@reviewer', medium].",
     });
   }
   if (workflow.model) validateModelRef(validation, workflow.model);
@@ -88,13 +92,13 @@ export function validateWorkflowModel(
 
 export function validateNodeModel(validation: ResourceValidation, node: DagNode): void {
   if (!('model' in node) || !node.model) return;
-  if (validation.requiresPortableModelRefs && node.model.startsWith('@')) {
+  if (validation.requiresPortableModelRefs && isAliasRef(node.model)) {
     validation.issues.push({
       level: 'error',
       nodeId: node.id,
       field: 'model',
       message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${validation.config?.workflowSource} workflows`,
-      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      hint: "Use small, medium, large, a literal provider model string, or a preference list that ends in one, such as ['@reviewer', medium].",
     });
   }
   validateModelRef(validation, node.model, node.id);
