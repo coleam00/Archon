@@ -851,7 +851,9 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * An unregistered directory keys on a digest of its {@link canonicalizeProjectPath} path.
+ * An unregistered directory keys on a SHA-256 of `resolve(cwd)`. The digest is
+ * lexical, so pass a {@link canonicalizeProjectPath} path when it must match the
+ * CLI's key; other spellings of one directory get separate roots.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
