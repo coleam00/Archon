@@ -1399,6 +1399,19 @@ describe('CodexProvider', () => {
         expect(result.tokens).toMatchObject({ input: 100, output: 10 });
       });
 
+      test('a tool turn process that needed SIGTERM never settles, even when the final turn then fails', async () => {
+        const server = createFakeAppServer(
+          scripted(
+            { ...toolTurn, ignoreStdinClose: true },
+            { errors: { 'thread/resume': { code: -32603, message: 'resume failed' } } }
+          )
+        );
+        const chunks = await run(new CodexProvider(server, 20), options('glm-5.3'));
+        expect(server.processes[0].signals).toEqual(['SIGTERM']);
+        expect(resultOf(chunks).failure).toBeDefined();
+        expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+      });
+
       test('another model keeps one turn with tools and the schema together', async () => {
         const { provider, server } = providerWith(scripted(finalTurn));
         const chunks = await run(provider, options('gpt-5.5'));

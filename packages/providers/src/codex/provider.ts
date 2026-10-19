@@ -24,7 +24,7 @@ import { sessionPreview } from '@archon/provider-contract';
 import { failureResult } from '../shared/failure';
 import { diagnoseBinary } from '../shared/binary-diagnostics';
 import { readCodexSetupEnv, formatCodexSetupDeprecation } from './setup-env';
-import { parseCodexConfig } from './config';
+import { parseCodexConfig, type CodexProviderDefaults } from './config';
 import { buildCodexNativeTools } from './native-tools';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { CODEX_CREDENTIAL_ENV } from './credential-env';
@@ -329,8 +329,11 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const abortSignal = requestOptions?.abortSignal;
     const run: CodexRun = { connection: undefined, threadId: undefined, turnId: undefined };
-    let resultReported = false;
-    let observationLost = false;
+    const call: CallState = {
+      resultReported: false,
+      observationLost: false,
+      toolTurnResult: undefined,
+    };
     const onAbort = (): void => {
       this.cancel(run);
     };
@@ -344,7 +347,6 @@ export class CodexProvider implements IAgentProvider {
     const titleRequest = requestOptions?.purpose === 'title-generation';
     const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
     let catalogId: string | undefined;
-    let toolTurnResult: ResultChunk | undefined;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     try {
@@ -373,86 +375,72 @@ export class CodexProvider implements IAgentProvider {
         splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
-      run.connection = AppServerConnection.start(
-        binary,
-        appServerArgs(login, nodePlugins),
-        launch.env,
-        this.spawner,
-        requestOptions?.protectedEnvKeys
-      );
-      // An abort while the setup above awaited found no process to stop.
-      if (abortSignal?.aborted) throw new Error('Query aborted');
-
-      const stream = streamTurn({ ...request, connection: run.connection });
-      for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
-        if (chunk.type === 'result') {
-          if (finalTurnParams && !chunk.failure) {
-            toolTurnResult = chunk;
-            continue;
-          }
-          reportResult(chunk, abortSignal, catalogId);
-          resultReported = true;
-        }
-        yield chunk;
-      }
-
-      if (toolTurnResult && finalTurnParams) {
-        if (!(await this.shutDown(run.connection))) observationLost = true;
-        run.connection = AppServerConnection.start(
+      const startAppServer = (plugins: readonly string[] | undefined): AppServerConnection =>
+        AppServerConnection.start(
           binary,
-          appServerArgs(login, []),
+          appServerArgs(login, plugins),
           launch.env,
           this.spawner,
           requestOptions?.protectedEnvKeys
         );
-        if (abortSignal?.aborted) throw new Error('Query aborted');
-        const finalStream = streamTurn({
-          ...request,
-          connection: run.connection,
-          tools: buildCodexNativeTools([]),
-          resumeSessionId: run.threadId,
-          forkSession: false,
-          // The empty title scope: no plugin, app or MCP server, which the thread check enforces.
-          nodePlugins: [],
-          threadParams: {
-            ...request.threadParams,
-            config: {
-              ...buildThreadConfig(launch.config, undefined, true),
-              ...TOOL_FREE_THREAD_CONFIG,
-            },
-          },
-          turnParams: finalTurnParams,
-          hasOutputFormat: true,
-        });
-        for await (const chunk of closeOpenToolCalls(finalStream, { resultEndsTurn: true })) {
-          if (chunk.type === 'result') {
-            withToolTurnOf(chunk, toolTurnResult);
-            reportResult(chunk, abortSignal, catalogId);
-            resultReported = true;
-          }
-          yield chunk;
-        }
+      run.connection = startAppServer(nodePlugins);
+      // An abort while the setup above awaited found no process to stop.
+      if (abortSignal?.aborted) throw new Error('Query aborted');
+
+      yield* reportedTurn(streamTurn({ ...request, connection: run.connection }), call, {
+        holdsSuccess: finalTurnParams !== undefined,
+        catalogId,
+        abortSignal,
+      });
+      if (call.toolTurnResult && finalTurnParams) {
+        const finalRequest = finalTurnRequestOf(request, finalTurnParams, launch.config);
+        yield* this.finalTurn(run, finalRequest, startAppServer, call, catalogId);
       }
     } catch (error) {
       await run.connection?.finishToolCalls();
       if (abortSignal?.aborted === true) {
         throw new Error('Query aborted');
       }
-      observationLost = error instanceof ConnectionClosedError || resultReported;
-      getLog().error({ err: error, resultReported }, 'query_error');
-      if (!resultReported) {
+      call.observationLost ||= error instanceof ConnectionClosedError || call.resultReported;
+      getLog().error({ err: error, resultReported: call.resultReported }, 'query_error');
+      if (!call.resultReported) {
         const result = stopFailureResult(error, model, Boolean(nativeTools?.length), {
           threadId: run.threadId,
           catalogId,
         });
-        if (toolTurnResult) withToolTurnOf(result, toolTurnResult);
-        yield result;
+        yield withToolTurnOf(result, call.toolTurnResult);
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
-      if (run.connection && !(await this.shutDown(run.connection))) observationLost = true;
+      if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
     }
-    if (!observationLost) yield { type: 'settled' };
+    if (!call.observationLost) yield { type: 'settled' };
+  }
+
+  /**
+   * The tool-free turn of a split call, on a second process that resumes the tool turn's
+   * thread. The tool turn's process ends first.
+   */
+  private async *finalTurn(
+    run: CodexRun,
+    request: Omit<TurnRequest, 'connection' | 'resumeSessionId'>,
+    startAppServer: (plugins: readonly string[]) => AppServerConnection,
+    call: CallState,
+    catalogId: string | undefined
+  ): AsyncGenerator<MessageChunk> {
+    if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
+    run.connection = startAppServer([]);
+    if (request.abortSignal?.aborted) throw new Error('Query aborted');
+    const stream = streamTurn({
+      ...request,
+      connection: run.connection,
+      resumeSessionId: run.threadId,
+    });
+    yield* reportedTurn(stream, call, {
+      holdsSuccess: false,
+      catalogId,
+      abortSignal: request.abortSignal,
+    });
   }
 
   /**
@@ -510,17 +498,72 @@ interface TurnInputs {
   run: CodexRun;
 }
 
+/** What one `sendQuery` has observed so far, shared by its turns and its error path. */
+interface CallState {
+  resultReported: boolean;
+  /** A process ended abnormally, so its work may still be running unobserved. */
+  observationLost: boolean;
+  /** The held-back success of a split call's tool turn. */
+  toolTurnResult: ResultChunk | undefined;
+}
+
+/**
+ * Pass one turn's chunks through and report its result. A turn that `holdsSuccess` keeps a
+ * successful result back as the tool turn's; a later result carries that turn's usage.
+ */
+async function* reportedTurn(
+  stream: AsyncIterable<MessageChunk>,
+  call: CallState,
+  turn: { holdsSuccess: boolean; catalogId: string | undefined; abortSignal?: AbortSignal }
+): AsyncGenerator<MessageChunk> {
+  for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
+    if (chunk.type === 'result') {
+      if (turn.holdsSuccess && !chunk.failure) {
+        call.toolTurnResult = chunk;
+        continue;
+      }
+      withToolTurnOf(chunk, call.toolTurnResult);
+      reportResult(chunk, turn.abortSignal, turn.catalogId);
+      call.resultReported = true;
+    }
+    yield chunk;
+  }
+}
+
 /**
  * The final turn reports the whole call: both turns' tokens, and whether the node's own
  * session was resumed. Its internal resume of the tool turn's thread is not one.
  */
-function withToolTurnOf(final: ResultChunk, toolTurn: ResultChunk): void {
+function withToolTurnOf(final: ResultChunk, toolTurn: ResultChunk | undefined): ResultChunk {
+  if (!toolTurn) return final;
   const tokens = mergeTokenUsage(
     [toolTurn.tokens, final.tokens].filter((usage): usage is TokenUsage => usage !== undefined)
   );
   if (tokens) final.tokens = tokens;
   if (toolTurn.resumed) final.resumed = true;
   else delete final.resumed;
+  return final;
+}
+
+/** The tool-free turn: every tool off, the empty plugin scope, and the schema. */
+function finalTurnRequestOf(
+  request: Omit<TurnRequest, 'connection'>,
+  turnParams: TurnRequest['turnParams'],
+  launchConfig: CodexProviderDefaults
+): Omit<TurnRequest, 'connection' | 'resumeSessionId'> {
+  return {
+    ...request,
+    tools: buildCodexNativeTools([]),
+    forkSession: false,
+    // The empty title scope: no plugin, app or MCP server, which the thread check enforces.
+    nodePlugins: [],
+    threadParams: {
+      ...request.threadParams,
+      config: { ...buildThreadConfig(launchConfig, undefined, true), ...TOOL_FREE_THREAD_CONFIG },
+    },
+    turnParams,
+    hasOutputFormat: true,
+  };
 }
 
 /**
