@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { buildRequestSubprocessEnv } from './provider';
+import { buildRequestSubprocessEnv, ClaudeProvider } from './provider';
 import { resolveBundledClaudeBinary } from './plugins';
 
 const cloudSelectors = [
@@ -183,4 +183,46 @@ for (const selector of ['CLAUDE_CODE_USE_MANTLE', 'CLAUDE_CODE_USE_ANTHROPIC_AWS
       testTimeout(20_000)
     );
   }
+}
+
+for (const key of ['', 'preflight-test-key']) {
+  test(
+    `native preflight checks Claude account without a model request (key=${Boolean(key)})`,
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'claude-preflight-'));
+      let requests = 0;
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch() {
+          requests++;
+          return new Response('No model request expected', { status: 500 });
+        },
+      });
+      try {
+        const env: Record<string, string> = {
+          CLAUDE_CONFIG_DIR: dir,
+          ANTHROPIC_API_KEY: key,
+          CLAUDE_API_KEY: '',
+          CLAUDE_CODE_OAUTH_TOKEN: '',
+          ANTHROPIC_AUTH_TOKEN: '',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}`,
+        };
+        for (const selector of cloudSelectors) env[selector] = '0';
+        expect(
+          await new ClaudeProvider().checkCredential({
+            env,
+            assistantConfig: { settingSources: [] },
+            signal: AbortSignal.timeout(15000),
+          })
+        ).toEqual({ state: key ? 'usable' : 'not_connected', source: 'native' });
+        expect(requests).toBe(0);
+      } finally {
+        server.stop(true);
+        await removeTempTree(dir);
+      }
+    },
+    testTimeout(30000)
+  );
 }

@@ -28,6 +28,10 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -1636,8 +1640,57 @@ export class ClaudeProvider implements IAgentProvider {
     );
   }
 
-  async checkCredential(): Promise<CredentialStatus> {
-    return { state: 'not_checked', source: 'native' };
+  async checkCredential(
+    request: Parameters<IAgentProvider['checkCredential']>[0]
+  ): Promise<CredentialStatus> {
+    const config = parseClaudeConfig(request.assistantConfig ?? {});
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    request.signal.addEventListener('abort', abort, { once: true });
+    let session: ReturnType<typeof query> | undefined;
+    try {
+      request.signal.throwIfAborted();
+      // An empty input stream initializes the SDK without sending a model request.
+      session = query({
+        prompt: (async function* () {
+          return;
+        })(),
+        options: {
+          env: buildRequestSubprocessEnv({ env: request.env }),
+          pathToClaudeCodeExecutable: await resolveClaudeBinaryPath(config.claudeBinaryPath),
+          settingSources: config.settingSources ?? [...DEFAULT_SETTING_SOURCES],
+          abortController: controller,
+          tools: [],
+          mcpServers: {},
+          strictMcpConfig: true,
+          plugins: [],
+        },
+      });
+      const account = await session.accountInfo();
+      request.signal.throwIfAborted();
+      // Cloud backends resolve credentials outside Claude's first-party account store.
+      if (account.apiProvider && account.apiProvider !== 'firstParty')
+        return { state: 'not_checked', source: 'native' };
+      const hasCredential = [account.tokenSource, account.apiKeySource].some(
+        source => source && source !== 'none'
+      );
+      return { state: hasCredential ? 'usable' : 'not_connected', source: 'native' };
+    } catch (error) {
+      request.signal.throwIfAborted();
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence:
+          redactCredentialValues(
+            error instanceof Error ? error.message : String(error),
+            collectCredentialValues({ ...process.env, ...request.env })
+          ) || 'Claude account check failed',
+      };
+    } finally {
+      session?.close();
+      controller.abort();
+      request.signal.removeEventListener('abort', abort);
+    }
   }
 
   constructor() {
