@@ -201,7 +201,7 @@ async function admitFromServer(
             await platform.sendMessage(
               destination.resultConversationId,
               `Source execution stopped for run ${result.workflowRunId}${result.success ? '' : `: ${result.error}`}. ` +
-                `Inspect its state and ownership with \`${spellWorkflowCommand(platform, `get ${result.workflowRunId}`)}\`.`
+                `Inspect its persisted state with \`${spellWorkflowCommand(platform, `get ${result.workflowRunId}`)}\`.`
             );
             return;
           }

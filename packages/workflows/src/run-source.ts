@@ -499,7 +499,7 @@ export async function establishAdoptedRunSource(
         platform,
         conversationId,
         `Source establishment stopped for run ${workflowRun.id}: ${message}. ` +
-          `Inspect its state and ownership with \`${spellWorkflowCommand(platform, `get ${workflowRun.id}`)}\`.`
+          `Inspect its persisted state with \`${spellWorkflowCommand(platform, `get ${workflowRun.id}`)}\`.`
       );
     }
     return {

@@ -123,7 +123,7 @@ function settledExecution(
       runId,
       kind: 'accepted',
       executionDisposition: result.executionDisposition,
-      message: `Source execution stopped. Inspect its state and ownership with archon workflow get ${runId}.`,
+      message: `Source execution stopped. Inspect its persisted state with archon workflow get ${runId}.`,
       ...(result.success ? {} : { error: result.error }),
     };
   }
