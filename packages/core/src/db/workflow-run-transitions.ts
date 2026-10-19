@@ -16,6 +16,7 @@ import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
 import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunOriginSchema,
@@ -392,19 +393,12 @@ export async function cancelWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
-    // Guard against re-stamping an already-finished run. Cancelling a run that
-    // is 'completed' or 'cancelled' must be a no-op, not a re-write of
-    // completed_at / a resurrection of terminal state. 'failed' is intentionally
-    // still cancellable (it remains a resumable state, so the user must be able
-    // to discard it), and a 'running' run stays cancellable — that is
-    // cooperative cancellation, which the executor honors via its between-layer
-    // status check (workflows dag/run-layers.ts).
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled', completed_at = ${dialect.now()}
-         WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
-        [id]
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})`,
+        [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(query, {
@@ -449,8 +443,8 @@ export async function cancelFanOutRun(
          SET status = 'cancelled',
              completed_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge('metadata', 2)}
-         WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
-        [id, JSON.stringify({ cancelled_reason: reason })]
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 3}`).join(', ')})`,
+        [id, JSON.stringify({ cancelled_reason: reason }), ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(query, {

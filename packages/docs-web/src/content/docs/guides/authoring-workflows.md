@@ -2244,8 +2244,9 @@ sub-pipeline.**
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
   run).
-- **Cancel cascade.** Abandoning the parent cancels its non-terminal descendants
-  cooperatively: their executors abort at the next status check, within ~10s. A running
+- **Cancel cascade.** Abandoning the parent attempts to cancel discovered descendants except completed
+  and cancelled runs, within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
+  Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
   detached run ends its owner's process group.
@@ -2529,17 +2530,19 @@ written.
 #### `max_parallel` bounds concurrency, not count
 
 `max_parallel` is a sliding window, not a limit on how many children exist. `items` is
-**unbounded**: a 400-element array produces 400 child runs regardless of the window. Two
-consequences worth planning for:
+**unbounded**: a 400-element array produces 400 child runs regardless of the window.
+Consequences worth planning for:
 
 - Cost scales with `items.length`, not with `max_parallel`. Bound the list in the producer
   node, not here.
 - A child that pauses keeps its slot until it finishes, so unanswered children can hold
   the whole window and later items wait. Paused children use no process or provider, so
   raising `max_parallel` costs nothing while they wait.
-- Abandoning the parent cascade-cancels at most 500 descendant runs (`MAX_CASCADE_RUNS`).
-  A fan-out wider than that can leave children uncancelled and still billing; they have to
-  be abandoned individually. A run-tree-wide budget ceiling is tracked in
+- Abandoning the parent expands at most 500 parents (`MAX_CASCADE_RUNS`), considering
+  every discovered child for cancellation even in a wide fan-out. One final aggregate
+  lookup checks beneath the remaining queue, excluding completed and cancelled leaves. Deeper subtrees may remain
+  unvisited; a warning means those descendants need individual inspection. This bounds
+  lookup rounds, not cancellation count or total work. A run-tree-wide budget ceiling is tracked in
   [#1961](https://github.com/coleam00/Archon/issues/1961).
 
 #### Join semantics
