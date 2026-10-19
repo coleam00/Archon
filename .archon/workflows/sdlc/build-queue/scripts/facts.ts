@@ -6,6 +6,9 @@
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * apply parks without an agent.
  *
+ * With `retriage_as` set and no item named, it also lists the blocked items due a
+ * revisit, for the revisit agent beside the item's path.
+ *
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the pull request the round continues;
  * otherwise the round opens one from a new branch named after the issue.
@@ -15,9 +18,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BUILD_PICKUP,
+  type BlockedItem,
   type BuildRound,
   buildBranch,
   claimNamed,
+  dueBlocked,
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
@@ -72,7 +77,8 @@ function emitItem(
   doc: WorkItem | null,
   rounds: readonly BuildRound[],
   atCap: boolean,
-  itemPr: ItemPr
+  itemPr: ItemPr,
+  blocked: readonly BlockedItem[]
 ): void {
   emit({
     path,
@@ -84,6 +90,8 @@ function emitItem(
     at_cap: atCap,
     policy_defaults: POLICY_DEFAULTS,
     ...itemPr,
+    blocked,
+    blocked_count: blocked.length,
   });
 }
 
@@ -99,6 +107,8 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const number = trimmed(process.env.INPUTS_NUMBER);
+  const revisits = number === '' && trimmed(process.env.INPUTS_RETRIAGE_AS) !== '';
+  const blocked = revisits ? dueBlocked(new Date().toISOString()) : [];
   const doc =
     number === ''
       ? claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP)
@@ -114,6 +124,8 @@ function main(): void {
       at_cap: false,
       policy_defaults: POLICY_DEFAULTS,
       ...NO_ITEM_PR,
+      blocked,
+      blocked_count: blocked.length,
     });
     return;
   }
@@ -128,7 +140,8 @@ function main(): void {
     doc,
     rounds,
     countedRounds(doc) + 1 >= limit,
-    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId)
+    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId),
+    blocked
   );
 }
 
