@@ -39,6 +39,7 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
 
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
 export const mockLogger = {
+  level: 'info',
   info: mockLogFn,
   warn: mockLogFn,
   error: mockLogFn,
@@ -353,6 +354,7 @@ export function createMockStore(): MockWorkflowStore {
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },

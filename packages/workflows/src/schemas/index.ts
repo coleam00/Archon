@@ -325,6 +325,14 @@ export type { WorkflowDefinition as DagWorkflow } from './workflow';
 export * from './workflow-run-listing';
 
 export { workflowRunOriginSchema } from './workflow-run';
+export {
+  PAUSE_CAUSE_METADATA_KEY,
+  pauseCauseSchema,
+  pauseCauseOfApproval,
+  pauseCauseOfWait,
+  readPauseCause,
+  type PauseCause,
+} from './pause-cause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';

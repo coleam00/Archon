@@ -145,6 +145,12 @@ const commandHelp: HelpEntry[] = [
     description: 'List users, link identities and manage roles as the operator',
   },
   {
+    command: 'project',
+    subcommand: 'list',
+    spec: 'project list',
+    description: 'List registered projects (id, kind, name, key, path)',
+  },
+  {
     command: 'trigger',
     spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
     description: 'Start configured workflows and inspect durable resource admission',
@@ -197,6 +203,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'get',
     spec: 'workflow get <run-id>',
     description: 'Show detail for a single run (any status)',
+  },
+  {
+    command: 'workflow',
+    subcommand: 'artifacts',
+    spec: 'workflow artifacts <run-id> [path]',
+    description: "List a run's artifact files, or print one",
   },
   {
     command: 'workflow',
@@ -879,7 +891,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)',
+      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list)',
     owners: [],
   },
   {
@@ -1018,6 +1030,11 @@ const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow get <run-id> --json',
     owner: { command: 'workflow', subcommand: 'get' },
   },
+  {
+    text: 'archon workflow artifacts <run-id> plan.md',
+    owner: { command: 'workflow', subcommand: 'artifacts' },
+  },
+  { text: 'archon project list --json', owner: { command: 'project', subcommand: 'list' } },
   {
     text: 'archon workflow logs <run-id> --follow',
     owner: { command: 'workflow', subcommand: 'logs' },

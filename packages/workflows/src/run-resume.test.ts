@@ -13,6 +13,7 @@ mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => m
 
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
+import type { DagResumeSnapshot } from './store';
 
 type ResumeStore = ResumeStoreDeps['store'];
 
@@ -62,40 +63,184 @@ describe('hydrateResumableRun', () => {
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const snapshot: DagResumeSnapshot = {
+      completedNodeOutputs: priorNodes,
+      fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      tokens: { input: 4, output: 1 },
+      costUsd: 0.1,
+    };
     const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: priorNodes,
-        fanOutSnapshots: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 4, output: 1 },
-        costUsd: 0.1,
-      })),
+      getDagResumeSnapshot: mock(async () => snapshot),
     });
 
     const result = await inspectResumableRun(makeDeps(store), candidate);
 
     expect(result).toEqual({
       priorCompletedNodes: priorNodes,
-      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1 },
+      priorFailedNodes: new Map(),
+      priorUsage: snapshot,
     });
+    expect(result?.priorUsage).toBe(snapshot);
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('names why it resumes from the cause the consumed pause recorded', async () => {
+    const failedNodes = new Map([['flaky', { error: 'exit 1' }]]);
+    const snapshot = {
+      completedNodeOutputs: new Map([['report', { output: 'saw' }]]),
+      failedNodes,
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      costUsd: 0,
+    };
+    const since = '2026-10-19T10:00:00.000Z';
+    const later = '2026-10-19T11:00:00.000Z';
+    const gate = { type: 'approval', nodeId: 'review', message: 'Ok?', pauseId: 'g-1' };
+    const cases = [
+      {
+        name: 'an approval gate',
+        status: 'paused',
+        metadata: { approval: gate, pause_cause: 'gate' },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a time wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 't',
+            kind: 'time',
+            pauseId: 't-1',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'an event wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'e',
+            kind: 'event',
+            pauseId: 'e-1',
+            event: 'deploy',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a child workflow',
+        status: 'paused',
+        metadata: {
+          approval: { type: 'child_workflow', nodeId: 'sub', message: 'child', childRunId: 'c-1' },
+          pause_cause: 'child',
+        },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a fan-out',
+        status: 'paused',
+        metadata: { pause_cause: 'child' },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a loop-owned wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'loop_group',
+            nodeId: 'loop',
+            bodyWaitId: 'ask',
+            iteration: 2,
+            sessionId: null,
+            sessionProvider: null,
+            kind: 'attention',
+            waitingSince: since,
+            message: 'Ok?',
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
+      },
+      // A resolved gate's context outlives it: approve, a later node fails, the operator
+      // resumes, the source is unreadable and the run is released. The release is the
+      // pause being continued, so the failures it stopped on run again.
+      {
+        name: 'a source release after an earlier gate',
+        status: 'paused',
+        metadata: {
+          approval: { ...gate, resolved: 'approved' },
+          source_release: { nodeId: 'check', releaseId: 'r-1', releasedAt: since },
+          pause_cause: 'source_release',
+        },
+        cause: 'retry_failed',
+      },
+      {
+        name: 'a provider-limit pause',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'flaky',
+            kind: 'quota',
+            pauseId: 'q-1',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'quota',
+        },
+        cause: 'retry_failed',
+      },
+      {
+        name: 'a pause with no recorded cause',
+        status: 'paused',
+        metadata: { approval: gate },
+        cause: 'retry_failed',
+      },
+      { name: 'a failed run', status: 'failed', metadata: {}, cause: 'retry_failed' },
+    ] as const;
+    const received: Record<string, string | undefined> = {};
+    for (const { name, status, metadata } of cases) {
+      const store = makeStore({
+        getDagResumeSnapshot: mock(async () => snapshot),
+        // The compare-and-swap returns the resumed row; the cause is read from it.
+        resumeWorkflowRun: mock(async () => makeRun({ status: 'running', metadata })),
+      });
+      const result = await hydrateResumableRun(makeDeps(store), makeRun({ status, metadata }));
+      received[name] = result?.resumeCause;
+      expect(result?.priorFailedNodes).toBe(failedNodes);
+    }
+    expect(received).toEqual(Object.fromEntries(cases.map(({ name, cause }) => [name, cause])));
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const resumed = makeRun({ id: 'prior-failed', status: 'running' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const snapshot: DagResumeSnapshot = {
+      completedNodeOutputs: priorNodes,
+      fanOutSnapshots: new Map(),
+      failedNodes: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      tokens: { input: 40, output: 4 },
+      costUsd: 0.75,
+    };
     const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: priorNodes,
-        fanOutSnapshots: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 40, output: 4 },
-        costUsd: 0.75,
-      })),
+      getDagResumeSnapshot: mock(async () => snapshot),
       listWorkflowRunNodeSessions: mock(async () => [
         {
           workflow_run_id: 'prior-failed',
@@ -121,7 +266,7 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.preCreatedRun).toBe(resumed);
     expect(result?.priorCompletedNodes).toBe(priorNodes);
-    expect(result?.priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.75 });
+    expect(result?.priorUsage).toBe(snapshot);
     expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');
@@ -133,6 +278,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -165,6 +311,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        failedNodes: new Map(),
         fanOutSnapshots,
         unresolvedNodeStarts: new Set(['fan__instance-a']),
         budget: { workUnits: 0, spendUsd: 0 },
@@ -193,6 +340,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -242,6 +390,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -283,6 +432,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -318,6 +468,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -345,6 +496,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
@@ -375,6 +527,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },

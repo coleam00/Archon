@@ -61,7 +61,7 @@ You assign every finding's label, and this section is the only definition of the
 A finding is **blocking** when merging would leave something wrong, untrue, undocumented, unproved, unneeded, or doubly owned that this change caused or touched — on the path it changed, made reachable or visible by it, or a claim it makes false:
 
 - **Wrong** — a reachable path behaves incorrectly, reports false success, loses data, or opens an isolation or security hole.
-- **Untrue** — a comment, doc, name, type, or pull-request claim is false after the change.
+- **Untrue** — a comment, doc, name, or type is false after the change. A pull-request description claim is not in this list; see the paragraph below.
 - **Undocumented** — user-facing behavior the change adds has no documentation where the project documents that kind of behavior.
 - **Unproved** — a test passes for the old or a plausibly wrong implementation; a new guard, check, or retry was never seen failing; behavior the change adds or fixes at a tool boundary, in persisted data, in user-visible output, or in failure semantics has no test that fails when a plausible edit breaks it silently; an acceptance item is met without the proof it names.
 - **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes: dead code, an unused field, parameter, or extension point, a pass-through wrapper, a redundant gate or branch, a reimplemented primitive, speculative configuration or fallback.
@@ -74,6 +74,8 @@ Weigh the fix against the defect. When the smallest fix for a wrong or unproved 
 Scope does not demote them. An unneeded or doubly owned finding on the touched path — the code the change edits, or structure it extends — stays blocking when its fix reaches a file outside the scope the work order lists. Only a boundary the operator stated in the trigger or originating contract, or a plan the trigger explicitly names as this delivery, can stop that fix; an inferred boundary cannot. When an operator-stated boundary does stop it, the finding becomes a `scope_conflict` discovery, which the run relays to the operator, never a note the owner can quietly decline.
 
 A boundary never demotes the other kinds. A wrong, untrue, undocumented, or unproved finding stays blocking whatever the work order puts out of scope: "out of scope" is never a reason to label one a note. When its fix needs an operator-stated boundary crossed, the action is `ask`.
+
+The pull request description is the exception. No node in a round can edit it, and delivery's `update-pr-body` node rewrites it from the live description and the final diff after the rounds end, so a round cannot close a finding about it and would only end `ask`, `implement_blocked`, or at the round cap on work that is already correct. A description claim the reviewed head falsifies is therefore never blocking and never `ask`, and it never makes `ready` false: record a note that names the stale claim, so `update-pr-body` corrects it. This covers only the description's accuracy. The change itself is still judged in full, and a narrowing the description discloses is still unmet under contract coverage below.
 
 A **note** is a real, evidence-backed improvement that fails that test: a smaller shape that changes observable behavior or could not be falsified, a speculative one, small local duplication the project's own documents allow, naming and wording, test-local tidying, tests or docs beyond what the change adds or claims. A note never blocks.
 

@@ -26,7 +26,8 @@
     "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3",
     "@archon/plugin-manifest": "workspace:*",
-    "@archon/chat-contract": "workspace:*"
+    "@archon/chat-contract": "workspace:*",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
@@ -59,6 +60,12 @@
     ],
     [
       "src/commands/workflow.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-owned.test.ts"
+    ],
+    [
+      "src/commands/workflow-control.test.ts"
     ],
     [
       "src/commands/workflow-shared.test.ts"
@@ -218,6 +225,10 @@
     ],
     [
       "src/commands/user.test.ts"
+    ],
+    [
+      "src/commands/project.test.ts",
+      "src/commands/workflow-artifacts.test.ts"
     ],
     [
       "src/commands/auth.test.ts"

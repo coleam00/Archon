@@ -5,13 +5,14 @@ import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:te
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { bootstrapProjectConfig, setupCommand } from './setup';
+import { bootstrapProjectConfig, configureDocsPath, setupCommand } from './setup';
 import { collectAIConfig } from './setup-ai';
 import * as setupAi from './setup-ai';
 import * as providerAuth from './setup-provider-auth';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { loadRepoConfig } from '@archon/core/config/config-loader';
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
@@ -24,6 +25,140 @@ describe('setup command', () => {
 
   afterEach(async () => {
     await removeTempTree(TEST_DIR);
+  });
+
+  describe('configureDocsPath', () => {
+    beforeEach(() => {
+      spyOn(prompts, 'confirm').mockResolvedValue(true);
+      spyOn(prompts, 'text').mockResolvedValue('docs/');
+      spyOn(prompts, 'note').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      mock.restore();
+    });
+
+    it('writes the docs path after bootstrap while preserving the template', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const template = readFileSync(path, 'utf-8');
+
+      await configureDocsPath(TEST_DIR);
+
+      const written = readFileSync(path, 'utf-8');
+      expect(written.startsWith(template)).toBe(true);
+      expect(written).toContain('#   docs:');
+      expect(Bun.YAML.parse(written)).toEqual({ docs: { path: 'docs/' } });
+      expect(prompts.note).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'docs:\n  path: existing/\n',
+      '"docs": null\n',
+      'docs: null\ndocs: null\n',
+      '{docs: {path: existing/}}\n',
+      'docs:\n  path: existing/\n...\n',
+      'key: &key docs\n*key : {path: existing/}\n',
+      '? [docs]\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      '%YAML 1.1\n---\ndefaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: [*defaults]\n',
+      '<<: {docs: {path: existing/}}\n',
+      '!!str docs: {path: existing/}\n',
+      '? >-\n  docs\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: inherited/}}\n<<: *defaults\ndocs: {path: existing/}\n',
+    ])('preserves an active docs key and asks for a manual edit: %s', async docs => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = readFileSync(path, 'utf-8') + docs;
+      writeFileSync(path, existing);
+
+      await configureDocsPath(TEST_DIR);
+
+      expect(readFileSync(path, 'utf-8')).toBe(existing);
+      expect(prompts.note).toHaveBeenCalledWith(
+        `A "docs:" key already exists in ${path}.\nEdit it manually to set path: docs/`,
+        'Docs path not written'
+      );
+    });
+
+    it('preserves other settings and comments containing docs:', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = '# docs: example\nassistants:\n  claude:\n    model: opus\n';
+      writeFileSync(path, existing);
+
+      await configureDocsPath(TEST_DIR);
+
+      const written = readFileSync(path, 'utf-8');
+      expect(written.startsWith(existing)).toBe(true);
+      expect(Bun.YAML.parse(written)).toEqual({
+        assistants: { claude: { model: 'opus' } },
+        docs: { path: 'docs/' },
+      });
+    });
+
+    it.each(['docs\\team', 'docs\\guide', 'docs/"quoted"', 'docs/line\nbreak'])(
+      'round-trips the selected path through the repository loader: %s',
+      async docsPath => {
+        bootstrapProjectConfig(TEST_DIR);
+        spyOn(prompts, 'text').mockResolvedValue(docsPath);
+
+        await configureDocsPath(TEST_DIR);
+
+        expect((await loadRepoConfig(TEST_DIR)).docs?.path).toBe(docsPath);
+      }
+    );
+
+    it.each([
+      '# docs: example\n{assistants: {claude: {model: opus}}}\n',
+      '# docs: example\n{assistants: {claude: {model: opus}},} # trailing comment\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n...\n# after document\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n',
+      'assistants: {}\nassistants: {claude: {model: opus}}\n',
+      'key: &key other\n*key : value\n',
+      '? [other]\n: value\n',
+      '? {other: key}\n: value\n',
+      '# docs: example\n',
+      '',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n',
+      '%YAML 1.1\n---\n{assistants: {claude: {model: opus}}}\n',
+      '%YAML 1.1\n---\nassistants: {claude: {model: opus}}\n',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n...\n',
+      '%YAML 1.2\n---\nassistants: {claude: {model: opus}}\n',
+      '!!map {assistants: {claude: {model: opus}}}\n',
+      '---\n',
+      '---\n# empty\n',
+      '---\n# empty\n...\n# after document\n',
+      'null # empty\n',
+      '~ # empty\n',
+      '!!null null # empty\n',
+      '%YAML 1.1\n---\n# empty\n',
+      '%YAML 1.2\n---\n# empty\n',
+    ])('adds docs within the existing YAML document: %j', async existing => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      writeFileSync(path, existing);
+      const before = await loadRepoConfig(TEST_DIR);
+
+      await configureDocsPath(TEST_DIR);
+
+      expect(await loadRepoConfig(TEST_DIR)).toEqual({ ...before, docs: { path: 'docs/' } });
+      const written = readFileSync(path, 'utf-8');
+      for (const line of existing.split('\n')) {
+        const comment = line.indexOf('#');
+        if (comment !== -1) expect(written).toContain(line.slice(comment));
+        if (line.startsWith('%YAML')) expect(written).toContain(line);
+      }
+    });
+
+    it('reports malformed YAML without changing the file', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = 'assistants: [\n';
+      writeFileSync(path, existing);
+      const cancel = spyOn(prompts, 'cancel').mockImplementation(() => undefined);
+
+      await expect(configureDocsPath(TEST_DIR)).rejects.toMatchObject({ exitCode: 1 });
+
+      expect(readFileSync(path, 'utf-8')).toBe(existing);
+      expect(cancel).toHaveBeenCalledWith(expect.stringContaining('Could not write docs config:'));
+    });
   });
 
   describe('bootstrapProjectConfig', () => {

@@ -110,11 +110,13 @@ work the next item.
 ## Merge queue
 
 A sweep claims every waiting item up to `limit` and merges what policy allows, one
-at a time, through a gate that requires a Ready verdict and green CI at a head that
-contains the default branch. Each merge moves the default branch, so a later pull
-request needs a sync, and its new head needs CI before the gate passes. In practice
-that pull request usually merges in a later sweep. After a batch the sweep waits for
-the default branch's CI.
+at a time, through a gate that requires a Ready verdict and green CI at the head. A
+pull request that merges cleanly into the default branch merges directly, even when
+it is behind, so one sweep can land many. A pull request that conflicts, or that
+reshapes code across a package, is synced first and merges once CI at its synced
+head is green, usually in a later sweep. After a batch the sweep waits for the
+default branch's CI, which judges the combined result; red there is raised with the
+pull requests merged since it was last green.
 
 Run sweeps one after another, not in parallel: two sweeps would sync the same
 branches. Start the next sweep once CI on the pull requests it synced has finished.

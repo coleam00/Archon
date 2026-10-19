@@ -14,7 +14,7 @@ import {
   TextPartBlocks,
   toolPartEvents,
 } from './session';
-import { normalizeTokens } from './tokens';
+import { sumAssistantUsage } from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -27,7 +27,8 @@ interface AgentRunState {
   sessionId: string;
   chunks: MessageChunk[];
   textBlocks: TextPartBlocks;
-  latestAssistantInfo?: Record<string, unknown>;
+  /** Latest update of each assistant message, keyed by message id. */
+  assistantInfos: Map<string, Record<string, unknown>>;
   lastAssistantMessageId?: string;
   done: boolean;
 }
@@ -186,6 +187,7 @@ export async function* streamMultiAgentOpencodeSession(
           sessionId,
           chunks: [],
           textBlocks: new TextPartBlocks(),
+          assistantInfos: new Map(),
           done: false,
         };
         sessionToAgent.set(sessionId, state);
@@ -237,9 +239,9 @@ export async function* streamMultiAgentOpencodeSession(
         const sessionId = typeof info?.sessionID === 'string' ? info.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state || info?.role !== 'assistant') continue;
-        state.latestAssistantInfo = info;
         if (typeof info.id === 'string') {
           state.lastAssistantMessageId = info.id;
+          state.assistantInfos.set(info.id, info);
         }
         continue;
       }
@@ -341,7 +343,7 @@ export async function* streamMultiAgentOpencodeSession(
           // flags it, instead of erasing cache the others did report. A total is only
           // available when every sub-agent reported every component needed to compute it.
           const perAgentUsage = states
-            .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
+            .map(candidate => sumAssistantUsage([...candidate.assistantInfos.values()]).tokens)
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
           const cost = perAgentUsage.some(usage => usage.cost !== undefined)
