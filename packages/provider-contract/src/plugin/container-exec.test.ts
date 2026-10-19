@@ -5,7 +5,7 @@ import {
   type ContainerExecGate,
 } from '../container-exec';
 import { connectProvider } from './connect';
-import { installContainerExecHost } from './container-exec';
+import { withRemoteContainerExecGate, installContainerExecHost } from './container-exec';
 import { descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
 import { PluginRpc } from './rpc';
@@ -213,3 +213,42 @@ test('disconnecting while control is queued also refuses subsequent transfers', 
     await host.close();
   }
 });
+
+for (const mode of ['operation', 'release', 'both', 'neither'] as const) {
+  test(`remote gate preserves ${mode} failure evidence`, async () => {
+    const pair = streamPair();
+    const host = new PluginRpc(pair.host);
+    const remote = new PluginRpc(pair.provider);
+    const operationError = new Error('command failed after partial action');
+    host.handle('_archon/container_exec/acquire', () => ({ leaseId: 'lease' }));
+    host.handle('_archon/container_exec/release', () => {
+      if (mode === 'release' || mode === 'both') throw new Error('release failed');
+      return {};
+    });
+    try {
+      const result = withRemoteContainerExecGate(remote, 'session', 'container', () =>
+        coordinateContainerCommand('container', async () => {
+          if (mode === 'operation' || mode === 'both') throw operationError;
+          return 'completed';
+        })
+      );
+      if (mode === 'both') {
+        const error = await result.catch(error => error);
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error.errors).toEqual([
+          operationError,
+          expect.objectContaining({ message: expect.stringContaining('release failed') }),
+        ]);
+      } else if (mode === 'operation') {
+        await expect(result).rejects.toBe(operationError);
+      } else if (mode === 'release') {
+        await expect(result).rejects.toThrow('release failed');
+      } else {
+        expect(await result).toBe('completed');
+      }
+    } finally {
+      await remote.close();
+      await host.close();
+    }
+  });
+}

@@ -67,8 +67,11 @@ export async function runLoopGroupIteration(
   recordIterationStarted(run, i);
 
   const body = bodyIteration(run, state, i);
-  await runLayers(body.iterCtx);
-  addIterationUsage(run, body.iterCtx, i);
+  try {
+    await runLayers(body.iterCtx);
+  } finally {
+    addIterationUsage(run, body.iterCtx, i);
+  }
 
   // A body approval/cancel node may have paused or cancelled the run mid-iteration.
   // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror

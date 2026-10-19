@@ -109,15 +109,28 @@ export function withRemoteContainerExecGate<T>(
             containerExecLeaseSchema,
             await rpc.request('_archon/container_exec/acquire', { sessionId })
           );
-          try {
-            return await operation();
-          } finally {
-            await rpc.request('_archon/container_exec/release', {
+          const release = () =>
+            rpc.request('_archon/container_exec/release', {
               sessionId,
               leaseId,
               failedAdmission,
             });
+          let value;
+          try {
+            value = await operation();
+          } catch (operationError) {
+            try {
+              await release();
+            } catch (releaseError) {
+              throw new AggregateError(
+                [operationError, releaseError],
+                'Container operation and lease release failed'
+              );
+            }
+            throw operationError;
           }
+          await release();
+          return value;
         })();
         pending.add(result);
         void result.then(

@@ -490,6 +490,7 @@ async function aggregateLayerResults(
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
   let layerHadFailure = false;
+  const artifactErrors: unknown[] = [];
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
       const { nodeId, output } = result.value;
@@ -570,7 +571,7 @@ async function aggregateLayerResults(
             { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
             'artifacts.write_failed'
           );
-          if (ctx.artifactExchange) throw err;
+          if (ctx.artifactExchange) artifactErrors.push(err);
         }
         // Scope mirror (#1846): persistence-participating nodes also write their
         // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
@@ -611,6 +612,9 @@ async function aggregateLayerResults(
       if (output.state === 'failed') layerHadFailure = true;
     }
   }
+  if (artifactErrors.length === 1) throw artifactErrors[0];
+  if (artifactErrors.length > 1)
+    throw new AggregateError(artifactErrors, 'Layer artifact persistence failed');
   return layerHadFailure;
 }
 

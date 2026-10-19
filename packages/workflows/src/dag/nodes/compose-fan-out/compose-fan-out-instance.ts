@@ -317,7 +317,8 @@ async function recordInstanceTerminal(
 async function settleInstance(
   instance: InstanceRun,
   instanceCtx: RunLayersContext,
-  primarySink: string
+  primarySink: string,
+  bodyError?: string
 ): Promise<ComposeInstanceOutcome> {
   // Every instance exit carries the work it already paid for.
   const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
@@ -326,7 +327,7 @@ async function settleInstance(
     tokensUnknown: instanceCtx.totalTokensUnknown,
   };
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
-  if (failed.length > 0) {
+  if (bodyError !== undefined || failed.length > 0) {
     const providerFailure = aggregateProviderFailure(
       failed.map(o => o.providerFailure),
       Date.now()
@@ -334,7 +335,7 @@ async function settleInstance(
     const outcome: ComposeInstanceOutcome = {
       status: 'failed',
       output: '',
-      error: failed[0].error ?? 'composed instance node failed',
+      error: bodyError ?? failed[0]?.error ?? 'composed instance node failed',
       ...(providerFailure !== undefined ? { providerFailure } : {}),
       ...instanceUsage,
     };
@@ -432,8 +433,15 @@ export async function runComposeInstance(
   } catch (error) {
     if (error instanceof RunSourceUnreadableError) {
       await releaseSourceUnreadableInstance(instance, error);
+      throw error;
     }
-    throw error;
+    if (isLifecycleWriteError(error)) throw error;
+    return settleInstance(
+      instance,
+      instanceCtx,
+      expanded.primarySink,
+      error instanceof Error ? error.message : String(error)
+    );
   }
   return settleInstance(instance, instanceCtx, expanded.primarySink);
 }

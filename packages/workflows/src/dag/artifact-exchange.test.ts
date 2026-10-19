@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import { NodeFailure } from './ai-turn';
+import { readNodeRecordEvent } from '../node-record-reader';
 import { writeNodeArtifact } from '../artifacts-index';
 import { dagNodeSchema } from '../schemas';
 import {
@@ -206,6 +207,151 @@ describe('artifact exchange at workflow invocation boundaries', () => {
         }),
         'artifacts.write_failed',
       ]);
+    }
+  );
+
+  it.each(['loop-group', 'compose'] as const)(
+    'preserves paid nested %s usage and closes its failure record',
+    async kind => {
+      const artifactsDir = join(root, 'canonical');
+      await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(root, '.archon', 'workflows', 'block.yaml'),
+        'name: block\ndescription: Nested usage\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
+      );
+      const store = createMockStore();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'paid work' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+      });
+      await executeDagWorkflow(
+        exchangeOptions({
+          deps: createMockDeps(store),
+          cwd: root,
+          artifactsDir,
+          workflowRun: makeWorkflowRun('nested-failure', { output_root: root }),
+          artifactExchange: {
+            async publish() {},
+            async collect() {
+              await writeFile(join(artifactsDir, 'nodes'), 'blocks sidecar directory');
+            },
+          },
+          workflow: {
+            name: 'nested-failure',
+            nodes: [
+              dagNodeSchema.parse(
+                kind === 'compose'
+                  ? {
+                      id: 'outer',
+                      include: 'block',
+                      fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+                    }
+                  : {
+                      id: 'outer',
+                      loop_group: {
+                        max_iterations: 1,
+                        until: 'DONE',
+                        nodes: [{ id: 'work', prompt: 'work', output_type: 'text' }],
+                      },
+                    }
+              ),
+            ],
+          },
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.1,
+        total_tokens_in: 10,
+        total_tokens_out: 1,
+      });
+      const records = store.createWorkflowEvent.mock.calls.flatMap(([event]) => {
+        const record = readNodeRecordEvent({ ...event, data: event.data });
+        return record ? [record] : [];
+      });
+      const started = records.filter(record => record.metadata?.lifecycle.status === 'started');
+      expect(started.length).toBeGreaterThan(0);
+      for (const record of started) {
+        expect(
+          records.some(
+            terminal =>
+              terminal.metadata?.invocation.id === record.metadata?.invocation.id &&
+              (terminal.metadata?.lifecycle.status === 'completed' ||
+                terminal.metadata?.lifecycle.status === 'failed')
+          )
+        ).toBe(true);
+      }
+      const failedOwner = records.find(
+        record =>
+          record.metadata?.node.kind ===
+            (kind === 'compose' ? 'compose_fan_out_instance' : 'loop_group') &&
+          record.metadata.lifecycle.status === 'failed'
+      );
+      expect(failedOwner?.metadata?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.1 },
+        tokens: { source: 'provider', value: { input: 10, output: 1 } },
+      });
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['collision', 'linked-parent', 'io'] as const)(
+    'persists later settled sibling artifacts after a %s refusal',
+    async failure => {
+      mockLogFn.mockClear();
+      const artifactsDir = join(root, 'canonical');
+      const store = createMockStore();
+      let collections = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'paid work' };
+        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+      });
+      await expect(
+        executeDagWorkflow(
+          exchangeOptions({
+            deps: createMockDeps(store),
+            cwd: root,
+            artifactsDir,
+            workflowRun: makeWorkflowRun('siblings', { output_root: root }),
+            artifactExchange: {
+              async publish() {},
+              async collect() {
+                if (++collections !== 3 || failure === 'collision') return;
+                if (failure === 'io')
+                  await mkdir(join(artifactsDir, 'nodes', 'a_b.md'), { recursive: true });
+                else {
+                  const outside = join(root, 'outside');
+                  await mkdir(outside);
+                  await symlink(outside, join(artifactsDir, 'nodes'));
+                }
+              },
+            },
+            workflow: {
+              name: 'siblings',
+              nodes: ['a.b', 'a_b', 'later'].map(id =>
+                dagNodeSchema.parse({ id, prompt: 'work', output_type: 'text' })
+              ),
+            },
+          })
+        )
+      ).rejects.toThrow();
+      if (failure === 'linked-parent') {
+        expect(await readdir(join(root, 'outside'))).toEqual([]);
+        for (const nodeId of ['a.b', 'a_b', 'later']) {
+          expect(mockLogFn.mock.calls).toContainEqual([
+            expect.objectContaining({ nodeId }),
+            'artifacts.write_failed',
+          ]);
+        }
+      } else {
+        expect(await readFile(join(artifactsDir, 'nodes', 'later.md'), 'utf8')).toBe('paid work');
+        expect(
+          JSON.parse(await readFile(join(artifactsDir, 'nodes', 'later.meta.json'), 'utf8')).nodeId
+        ).toBe('later');
+      }
+      const usage = runUsageWrites(store).at(-1);
+      expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+      expect(usage).toMatchObject({ total_tokens_in: 30, total_tokens_out: 3 });
     }
   );
 
