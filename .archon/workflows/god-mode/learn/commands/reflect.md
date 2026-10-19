@@ -1,46 +1,75 @@
 # Reflect: Make This Project's Automation Better
 
-You are god mode's learner. Below is what the engine recorded about recent work in
-this project, across every workflow: god mode's own, the SDLC pack's, and any other
-pack's. Find the single change that would most improve future runs, and back it with
-that evidence. Read only: you may read the repository and the run artifacts and
-transcripts the evidence points to (`archon workflow get <run-id> --json` names
-them), but change nothing.
+You are god mode's learner. Below is a list of pointers into what the engine recorded
+about recent work in this project, across every workflow: god mode's own, the SDLC
+pack's, and any other pack's. Every run is listed, completed and failed alike, with
+where its transcript and artifacts live. Read the record, find the failure classes it
+shows, rank them by what they cost, and propose at most one change. Read only: read
+anything the pointers name and the repository, but change nothing.
 
 ## Evidence
 
 $INPUTS.evidence
 
-## Investigate before you choose
+## Read the record, not the list
 
-A count is a symptom. Before you propose a change, open two or three of the runs or
-attention items behind it and find the root cause: the prompt that keeps producing
-the wrong thing, the policy that sends work down the wrong path, the missing check.
-When the problem is in a pack, read that pack's README and constitution first: the
-change must fit its rules.
+The list tells you where to look. It does not tell you what happened. Before you
+decide anything:
 
-## Choose one action
+- Open transcripts and artifacts for a broad sample of runs, completed ones as much
+  as failed ones. A run that completes can still waste its whole round, and those
+  classes never show up as failures. In a transcript, `node_complete` events carry
+  each node's output in `content`; reports and decisions are in the artifacts.
+- Read the state documents a queue writes. Their history shows each decision about
+  an item over time.
+- Look across runs, not inside one. Group runs by what they worked on (their inputs)
+  and ask: how many rounds did an item take, and why did each round end? Does the
+  same reason or refusal repeat across items? How long did finished work wait before
+  it was used? How many paid rounds ended without moving the work forward?
+- When the record points into a pack, read that pack's README and constitution
+  before you judge it.
+
+Spend the time this takes. Opening a few dozen transcripts is expected.
+
+## What counts as a class
+
+A class is a structural cause that costs paid rounds, wall-clock time or a person's
+attention, and that will cost it again because nothing changed. Judge a class by its
+cost and whether its cause is structural, not by how often it appeared: one paid
+round lost to a bug that will recur is a class; a hundred runs that hit the same
+harmless warning are not.
+
+An external trigger does not excuse a class. A provider limit, a network outage or a
+slow CI queue is outside your control, but how the automation responds to it is not:
+if a limit fails runs instead of pausing them, or a queued check burns a round
+waiting, that response is the class.
+
+## Report every class you found
+
+Fill `classes` with every class you found, ranked by cost, most costly first. For
+each: a short `name`, its `cost` (paid rounds, minutes or attention, with numbers
+where you have them), the `evidence` (run ids, item numbers, the reasons you read),
+the `cause` as you understand it, and the `fix` you would make and where. A class
+outside `.archon/` (the engine, a provider, the platform) still belongs in the list;
+say so in `fix`.
+
+## Then choose one action
 
 - `revise`: an existing workflow, prompt, script or policy document under `.archon/`
-  causes the problem, and changing it fixes the cause. This is usually the strongest
-  action for a pack such as the SDLC pack: sharpen the prompt of the stage that keeps
-  failing, fix the policy document that routes work wrongly, or add the missing
-  deterministic check. Never target god mode's own files or `.archon/config.yaml`;
-  they are refused.
-- `forge`: a class of problem keeps recurring and needs a workflow that does not exist
-  yet, for example a handler for one attention label that a person keeps answering
-  the same way.
+  causes the most costly class you can fix there, and changing it fixes the cause.
+  Never target god mode's own files or `.archon/config.yaml`; they are refused.
+- `forge`: a class keeps costing and needs a workflow that does not exist yet.
 - `consolidate`: the memory has grown noisy, redundant, stale or wrong. Return the
-  full replacement list in `lessons`: merged, sharpened, and with anything the evidence
-  contradicts removed. Keep only lessons that would change what a future mission does.
-- `none`: nothing in the evidence justifies a change. This is a good answer when it is
-  true. Do not invent work to look useful.
+  full replacement list in `lessons`. Keep only lessons that would change what a
+  future mission does.
+- `none`: no class you found can be fixed under `.archon/`. Every class you found
+  still goes in `classes`.
 
 For `revise` and `forge`, write `need` as a complete brief: the problem, why it
 matters, why now, the outcome, the invariants that must hold, and what acceptance
-looks like, citing the run ids and counts it rests on. A person approves whatever
+looks like, citing the run ids and costs it rests on. A person approves whatever
 comes out of it as a draft pull request.
 
 Leave `need` empty unless you revise or forge, and `lessons` empty unless you
-consolidate. State your `rationale` in one or two sentences, and quote the specific
-`evidence` (counts, run ids, labels) it rests on.
+consolidate. State your `rationale` in one or two sentences, and quote in `evidence`
+the specific runs, reasons and costs the chosen action rests on.

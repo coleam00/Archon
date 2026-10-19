@@ -8,6 +8,8 @@ reflect:
   evidence: "label stage=archon-deliver: 6 open items"
   need: "Sharpen the deliver implementer prompt so it runs the package's type-check before finishing"
   lessons: []
+  classes:
+    - { name: stub class, cost: 1 round, evidence: run x, cause: stub, fix: stub }
 fixture:
   expect: failed
   fail-node: [revise, report]

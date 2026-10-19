@@ -8,6 +8,8 @@ reflect:
   evidence: "label god-mode=charter: 7 open items"
   need: "A workflow that answers recurring charter questions from project docs"
   lessons: []
+  classes:
+    - { name: stub class, cost: 1 round, evidence: run x, cause: stub, fix: stub }
 fixture:
   expect: failed
   fail-node: [forge, report]

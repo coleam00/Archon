@@ -1,6 +1,6 @@
 # The evidence justifies no change: neither branch runs, and the report says so.
 observe: { evidence: "## Recent runs in this project (0)\nnone", lessons_revision: 0 }
-reflect: { action: none, rationale: no runs to learn from yet, evidence: "0 runs", need: "", lessons: [] }
+reflect: { action: none, rationale: no runs to learn from yet, evidence: "0 runs", need: "", lessons: [], classes: [] }
 fixture:
   expect: completed
   reached: [observe, reflect, report]
