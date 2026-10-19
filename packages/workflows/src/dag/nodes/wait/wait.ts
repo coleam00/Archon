@@ -105,7 +105,12 @@ function staleAnswer(
     condition.form === persisted.form &&
     JSON.stringify(options) === JSON.stringify(persisted.options ?? []);
   if (same) return undefined;
-  const changed = getStaleCachedDependencies(node, ctx.nodeOutputs, ctx.priorCompletedNodes);
+  const changed = getStaleCachedDependencies(
+    node,
+    ctx.nodeOutputs,
+    ctx.priorCompletedNodes,
+    ctx.replayedFailures
+  );
   getLog().warn(
     { workflowRunId: ctx.workflowRun.id, nodeId: node.id, changedDependencies: changed },
     'dag.wait_answer_discarded_stale_question'

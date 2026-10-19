@@ -28,7 +28,11 @@ import {
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
 } from './node-record-serialization';
-import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
+import type {
+  NodeExecutionMetadata,
+  NodeExecutionRecord,
+  NodeFailureKind,
+} from './schemas/node-execution';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
@@ -86,10 +90,18 @@ export interface PersistedNodeOutput {
   execution?: NodeExecutionMetadata;
 }
 
+/** A node whose latest record in a prior pass is its failure. */
+export interface PriorFailedNode {
+  error: string;
+  failureKind?: NodeFailureKind;
+}
+
 export interface DagResumeSnapshot {
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
+  /** Nodes whose latest record is `node_failed`; a run continued after a pause replays them. */
+  failedNodes: Map<string, PriorFailedNode>;
   /** First durable ordered snapshot for each instance-qualified composed fan-out scope. */
   fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
   /** Node/instance starts with no later terminal event, in lifecycle order. */

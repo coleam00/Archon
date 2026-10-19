@@ -2815,6 +2815,28 @@ export function describeWorkflowStoreConformance(
       expect(snapshot.tokens).toMatchObject({ input: 9, output: 12 });
       expect(snapshot.costUsd).toBe(1);
     });
+    test('resume reduction keeps the failure of a node whose latest record is node_failed', async () => {
+      const run = await create(store);
+      const rows = [
+        {
+          event_type: 'node_failed' as const,
+          step_name: 'still-failed',
+          data: { error: 'first', failure_kind: 'config' },
+        },
+        { event_type: 'node_failed' as const, step_name: 'recovered', data: { error: 'old' } },
+        { event_type: 'node_started' as const, step_name: 'recovered', data: {} },
+        {
+          event_type: 'node_completed' as const,
+          step_name: 'recovered',
+          data: { node_output: 'ok' },
+        },
+      ];
+      for (const row of rows) await store.persistWorkflowEvent({ ...row, workflow_run_id: run.id });
+      const snapshot = await store.getDagResumeSnapshot(run.id);
+      expect(snapshot.failedNodes).toEqual(
+        new Map([['still-failed', { error: 'first', failureKind: 'config' }]])
+      );
+    });
     test('resume reduction rebuilds run-budget work units and spend, failing closed on unknown cost', async () => {
       const run = await create(store);
       const agentStart = (path: string) =>

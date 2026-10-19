@@ -25,6 +25,14 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   }
 }
 
+function isReplayedFailure(
+  depId: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>,
+  replayedFailures: ReadonlyMap<string, unknown> | undefined
+): boolean {
+  return nodeOutputs.get(depId)?.state === 'failed' && replayedFailures?.has(depId) === true;
+}
+
 /**
  * Return the IDs of `node`'s dependencies whose current `nodeOutputs` value no
  * longer matches their cached `priorCompletedNodes` snapshot (#2402). A
@@ -40,7 +48,9 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
  * failure arm in the executor returns `output: ''`, so comparing a fresh
  * failure's value against a prior success's value (cases 2/3 below) can find
  * them equal and silently miss the failure; a dependency that failed on THIS
- * resume must never be judged by value equality.
+ * resume must never be judged by value equality. The one exception is a failure
+ * replayed from the prior pass (`replayedFailures`): the dependent was computed on
+ * that same failure, so it is not stale.
  *
  * Past that, three cases surface a dep as "ran fresh this resume":
  *
@@ -72,9 +82,13 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
 export function getStaleCachedDependencies(
   node: DagNode,
   nodeOutputs: ReadonlyMap<string, NodeOutput>,
-  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
+  replayedFailures?: ReadonlyMap<string, unknown>
 ): string[] {
-  const deps = node.depends_on ?? [];
+  // A failure replayed from the prior pass is the state its dependents were computed on.
+  const deps = (node.depends_on ?? []).filter(
+    depId => !isReplayedFailure(depId, nodeOutputs, replayedFailures)
+  );
   if (deps.length === 0) return [];
   const stale: string[] = [];
   for (const depId of deps) {
