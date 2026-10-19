@@ -1,4 +1,3 @@
-import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerInvocation } from './dag/capability-preflight';
 import {
   type ProviderRegistry,
@@ -388,9 +387,12 @@ export async function assertRunCredentials(
     // A stored credential this provider cannot consume is never delivered to it, so the
     // provider must authenticate natively; the stored kind only explains a missing login.
     let unconsumedKind: StoredCredentialKind | undefined;
-    if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
-      if (deps.credentialStore === 'files')
-        throw new FileStoreUnsupportedError('stored per-user provider credentials');
+    if (
+      deps.credentialStore !== 'files' &&
+      prepared.executionUserId &&
+      deps.isPerUserProviderKeysEnabled?.() &&
+      vendor
+    ) {
       if (!deps.getUserProviderCredential)
         throw new WorkflowCredentialPreflightError(
           requirement,

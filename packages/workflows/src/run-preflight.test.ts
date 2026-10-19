@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
@@ -571,23 +570,51 @@ test('preflight protects only effective database values after run overrides', as
   expect(overridden.config.protectedCredentialValues).not.toContain('db');
 });
 
-test('files reject stored per-user credential reads, while native credentials and script-only runs work', async () => {
-  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+test.each(['claude', 'codex', 'pi'])(
+  'files check native %s authentication with a CLI user and never read stored credentials',
+  async provider => {
+    const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+    deps.loadConfig.mockResolvedValue({
+      ...config,
+      envVars: { NATIVE_AUTH: 'environment-credential' },
+    });
+    deps.getUserProviderCredential.mockRejectedValue(new Error('SQL must not be read'));
+    const files = { ...deps, credentialStore: 'files' as const };
+    const ai = makeTestResolvedWorkflow({ name: 'ai', provider });
+    const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
+    await assertRunCredentials(files, prepared);
+    expect(prepared.executionUserId).toBe('origin');
+    expect(checkCredential).toHaveBeenCalledTimes(1);
+    expect(checkCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantConfig: prepared.config.assistants[provider],
+        env: expect.objectContaining({ NATIVE_AUTH: 'environment-credential' }),
+      })
+    );
+    expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
+    expect([...prepared.connectedVendors]).toEqual([]);
+    const shell = makeTestResolvedWorkflow({
+      name: 'shell',
+      nodes: [{ id: 'shell', bash: 'true' }],
+    });
+    await assertRunCredentials(
+      files,
+      await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
+    );
+    expect(checkCredential).toHaveBeenCalledTimes(1);
+    expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
+  }
+);
+
+test('files report a missing native login at preflight with a CLI user', async () => {
+  const { deps, checkCredential } = fixture({ state: 'not_connected', source: 'native' });
   const files = { ...deps, credentialStore: 'files' as const };
-  const ai = makeTestResolvedWorkflow({ name: 'ai' });
+  const ai = makeTestResolvedWorkflow({ name: 'ai', provider: 'claude' });
   const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
-  const refused = assertRunCredentials(files, prepared);
-  await expect(refused).rejects.toBeInstanceOf(FileStoreUnsupportedError);
-  await expect(refused).rejects.toThrow('store: database');
-  expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
-  expect(checkCredential).not.toHaveBeenCalled();
-  await assertRunCredentials(files, await prepareRunAiConfiguration(files, ai, '/p'));
-  expect(checkCredential).toHaveBeenCalledTimes(1);
-  const shell = makeTestResolvedWorkflow({ name: 'shell', nodes: [{ id: 'shell', bash: 'true' }] });
-  await assertRunCredentials(
-    files,
-    await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
+  await expect(assertRunCredentials(files, prepared)).rejects.toThrow(
+    "Credential preflight failed for provider 'claude' (vendor 'anthropic'): no usable login"
   );
+  expect(checkCredential).toHaveBeenCalledTimes(1);
   expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
 });
 

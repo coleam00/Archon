@@ -109,6 +109,37 @@ async function cli(
   ]);
   return { output, error, code };
 }
+test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
+  const f = fixture('store: files\ndefaultAssistant: claude\n');
+  writeFileSync(
+    join(f.project, '.archon/workflows/native.yaml'),
+    `name: native
+description: native credential preflight
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready to call Claude?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+  );
+  const started = await cli(f, ['workflow', 'run', 'native', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(listed.code).toBe(0);
+  expect(JSON.parse(listed.output).runs).toMatchObject([
+    { workflow_name: 'native', status: 'paused', user_id: expect.any(String) },
+  ]);
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();
   f.env.GITHUB_APP_ID = '123';
