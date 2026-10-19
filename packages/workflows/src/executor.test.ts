@@ -4425,64 +4425,74 @@ describe('executeWorkflow', () => {
       });
     }
 
-    it('removes stale credential files before a credential refresh failure', async () => {
-      const artifactsDir = cwdPath('/tmp', 'artifacts', 'runs', 'run-123');
-      const codexAuthPath = join(artifactsDir, 'codex-home', 'auth.json');
-      const piAuthPath = join(artifactsDir, 'pi-home', 'auth.json');
-      await mkdir(dirname(codexAuthPath), { recursive: true });
-      await mkdir(dirname(piAuthPath), { recursive: true });
-      await writeFile(codexAuthPath, 'stale-codex-secret');
-      await writeFile(piAuthPath, 'stale-pi-secret');
-      const deps: WorkflowDeps = {
-        ...makeDeps(makeStore()),
-        isPerUserProviderKeysEnabled: () => true,
-        getUserProviderEnv: mock(async () => {
-          throw new Error('network down');
-        }),
-      };
-      const publish = mock(async () => {
-        await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
-        await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
-      });
-      const collect = mock(async () => {});
-      try {
-        const result = await executeWorkflow(
-          deps,
-          makePlatform(),
-          'conv-1',
-          '/tmp',
-          makeWorkflow(),
-          'msg',
-          { conversationId: 'db-c1', userId: 'u-1' },
-          {
-            container: {
-              envId: 'env-1',
-              writeBack: 'auto',
-              backend: {
-                suspend: mock(async () => {}),
-                finalize: mock(async () => ({ requiresApproval: false })),
-                applyChanges: mock(async () => ({
-                  filesApplied: 0,
-                  filesDeleted: 0,
-                  warnings: [],
-                })),
-                discardChanges: mock(async () => {}),
+    it.each(['preflight', 'refresh'] as const)(
+      'publishes cleared credential files before a %s failure',
+      async mode => {
+        const artifactsDir = cwdPath('/tmp', 'artifacts', 'runs', 'run-123');
+        const codexAuthPath = join(artifactsDir, 'codex-home', 'auth.json');
+        const piAuthPath = join(artifactsDir, 'pi-home', 'auth.json');
+        await mkdir(dirname(codexAuthPath), { recursive: true });
+        await mkdir(dirname(piAuthPath), { recursive: true });
+        await writeFile(codexAuthPath, 'stale-codex-secret');
+        await writeFile(piAuthPath, 'stale-pi-secret');
+        const deps: WorkflowDeps = {
+          ...makeDeps(makeStore()),
+          isPerUserProviderKeysEnabled: () => true,
+          getUserProviderEnv: mock(async () => {
+            throw new Error('network down');
+          }),
+        };
+        if (mode === 'preflight') {
+          deps.getUserProviderCredential = mock(async () => {
+            throw new Error('credential status unavailable');
+          });
+        }
+        const publish = mock(async () => {
+          await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
+          await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
+        });
+        const collect = mock(async () => {});
+        try {
+          const result = await executeWorkflow(
+            deps,
+            makePlatform(),
+            'conv-1',
+            '/tmp',
+            makeWorkflow(),
+            'msg',
+            { conversationId: 'db-c1', userId: 'u-1' },
+            {
+              container: {
+                envId: 'env-1',
+                writeBack: 'auto',
+                backend: {
+                  suspend: mock(async () => {}),
+                  finalize: mock(async () => ({ requiresApproval: false })),
+                  applyChanges: mock(async () => ({
+                    filesApplied: 0,
+                    filesDeleted: 0,
+                    warnings: [],
+                  })),
+                  discardChanges: mock(async () => {}),
+                },
+                artifactExchange: { publish, collect },
               },
-              artifactExchange: { publish, collect },
-            },
-          }
-        );
-        expect(result.success).toBe(false);
-        expect(publish).toHaveBeenCalledTimes(1);
-        expect(collect).not.toHaveBeenCalled();
-        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-        await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
-        await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
-      } finally {
-        await rm(join(artifactsDir, 'codex-home'), { recursive: true, force: true });
-        await rm(join(artifactsDir, 'pi-home'), { recursive: true, force: true });
+            }
+          );
+          expect(result.success).toBe(false);
+          expect(publish).toHaveBeenCalledTimes(1);
+          expect(collect).not.toHaveBeenCalled();
+          if (mode === 'preflight') expect(deps.getUserProviderEnv).not.toHaveBeenCalled();
+          else expect(deps.getUserProviderEnv).toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+          await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
+          await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
+        } finally {
+          await rm(join(artifactsDir, 'codex-home'), { recursive: true, force: true });
+          await rm(join(artifactsDir, 'pi-home'), { recursive: true, force: true });
+        }
       }
-    });
+    );
 
     it('blocks DAG entry and cleans partial delivery when a later file write fails', async () => {
       const credentialValue = 'oauth-partial-write-secret';
