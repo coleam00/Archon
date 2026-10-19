@@ -10,6 +10,18 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
  */
 export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/operations/workflow-operations.ts',
+  'packages/core/src/operations/workflow/abandon.ts',
+  'packages/core/src/operations/workflow/answer.ts',
+  'packages/core/src/operations/workflow/answer-admission.ts',
+  'packages/core/src/operations/workflow/approve.ts',
+  'packages/core/src/operations/workflow/cancel.ts',
+  'packages/core/src/operations/workflow/context.ts',
+  'packages/core/src/operations/workflow/gate-publishing.ts',
+  'packages/core/src/operations/workflow/label.ts',
+  'packages/core/src/operations/workflow/reject.ts',
+  'packages/core/src/operations/workflow/respond.ts',
+  'packages/core/src/operations/workflow/run-actions.ts',
+  'packages/core/src/operations/workflow/teardown.ts',
   'packages/core/src/operations/workflow-adoption.ts',
   'packages/core/src/services/run-attention-watch.ts',
   'packages/core/src/services/codebase-checkout-resolver.ts',
