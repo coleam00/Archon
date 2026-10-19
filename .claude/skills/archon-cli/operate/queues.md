@@ -106,11 +106,15 @@ Launch another build-queue run to work the next round or the next item.
 
 ## Merge queue
 
-A sweep claims every waiting item up to `limit`, brings each pull request up to date,
-and merges at most one: each merge moves the default branch, so the rest wait for
-their sync and CI. Run sweeps one after another, not in parallel; two sweeps would
-sync the same branches. Wait for CI between sweeps, or the next one finds nothing it
-can merge.
+A sweep claims every waiting item up to `limit` and merges what policy allows, one
+at a time, through a gate that requires a Ready verdict and green CI at a head that
+contains the default branch. Each merge moves the default branch, so a later pull
+request needs a sync, and its new head needs CI before the gate passes. In practice
+that pull request usually merges in a later sweep. After a batch the sweep waits for
+the default branch's CI.
+
+Run sweeps one after another, not in parallel: two sweeps would sync the same
+branches. Start the next sweep once CI on the pull requests it synced has finished.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
