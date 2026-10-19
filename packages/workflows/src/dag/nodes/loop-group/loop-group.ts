@@ -1,4 +1,5 @@
-import { safeSendMessage, describeUnmetCompletion } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
+import { describeUnmetCompletion } from '../../../executor-shared';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';

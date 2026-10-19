@@ -77,14 +77,14 @@ describe("ship's terminal outcome", () => {
     expect(result.summary).toContain('the probe could not authenticate');
   });
 
-  it('relays every open question when planning stops on a person’s call', () => {
+  it('relays every open question when planning stops on a call it cannot make', () => {
     const result = outcome({
       INPUTS_ROUTE: 'plan',
       INPUTS_CONTRACT: 'READY',
       INPUTS_PLAN_SUMMARY: 'needs a product call',
       INPUTS_OPEN_QUESTIONS: JSON.stringify(['keep the field?', 'which default?']),
     });
-    expect(result).toMatchObject({ delivered: false, reason: 'needs_human', pr_url: '' });
+    expect(result).toMatchObject({ delivered: false, reason: 'ask', pr_url: '' });
     expect(result.summary).toContain('needs a product call\n- keep the field?\n- which default?');
   });
 
@@ -258,7 +258,7 @@ describe("deliver's round", () => {
           INPUTS_CI_SUMMARY: 'all passed',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
-          INPUTS_SETTLE_NEEDS_HUMAN: 'null',
+          INPUTS_SETTLE_ASK: 'null',
           INPUTS_SETTLE_SUMMARY: 'null',
           ...inputs,
         },
@@ -295,24 +295,24 @@ describe("deliver's round", () => {
       done: true,
       reason: 'replan',
     });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'needs_human', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI: 'null' })).toMatchObject({
       done: true,
       ready: false,
-      reason: 'needs_human',
+      reason: 'ask',
     });
   });
 
-  it('does not end ready while a review thread is open, and stops for a person on one no round can settle', () => {
+  it('does not end ready while a review thread is open, and asks on one no round can settle', () => {
     const open = round({ INPUTS_THREADS_OPEN: '2', INPUTS_THREADS_SUMMARY: '2 review threads are unresolved' });
     expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open' });
     expect(round({ INPUTS_PREVIOUS: '3', INPUTS_THREADS_OPEN: '1' })).toMatchObject({ done: true, ready: false, reason: 'round_cap' });
-    const human = round({
+    const asked = round({
       INPUTS_THREADS_OPEN: '1',
-      INPUTS_SETTLE_NEEDS_HUMAN: 'true',
+      INPUTS_SETTLE_ASK: 'true',
       INPUTS_SETTLE_SUMMARY: 'a person decides the API name',
     });
-    expect(human).toMatchObject({ done: true, ready: false, reason: 'needs_human' });
-    expect(human.summary).toContain('a person decides the API name');
+    expect(asked).toMatchObject({ done: true, ready: false, reason: 'ask' });
+    expect(asked.summary).toContain('a person decides the API name');
     // A CI red decides the round before the threads do.
     expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
   });
