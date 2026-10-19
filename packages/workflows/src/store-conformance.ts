@@ -67,6 +67,7 @@ export interface WorkflowStoreHarness {
     runId: string,
     dates: { started_at?: Date; last_activity_at?: Date | null }
   ): Promise<void>;
+  /** A snapshot: tests compare it with a later call to prove no report was emitted. */
   terminalReports(): string[];
   close(): Promise<void>;
 }
@@ -2498,7 +2499,7 @@ export function describeWorkflowStoreConformance(
         else await store.cancelWorkflowRun(run.id);
         const before = await store.getWorkflowRun(run.id);
         const events = await store.listWorkflowEvents(run.id);
-        const reports = [...harness.terminalReports()];
+        const reports = harness.terminalReports();
 
         expect(
           await store.failWorkflowRun(run.id, 'late failure', { exitReason: 'node_error' })

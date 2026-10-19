@@ -42,7 +42,7 @@ describeWorkflowStoreConformance('files', async () => {
         Object.assign(run, dates);
         return { result: undefined, changes: { runs: [{ run }] } };
       }),
-    terminalReports: () => reports,
+    terminalReports: () => [...reports],
     close: async () => {},
   };
 });
