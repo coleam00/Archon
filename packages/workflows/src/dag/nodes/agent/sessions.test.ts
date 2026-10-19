@@ -1464,11 +1464,16 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         return resumedStore;
       };
       const callsBeforeInvalidResume = mockSendQueryDag.mock.calls.length;
-      const invalid = await resume({
-        ...metadata,
-        approval: { ...pause, bodySessionCursorAncestry: undefined },
-      });
-      expect(invalid.failWorkflowRun).toHaveBeenCalled();
+      let invalid: Awaited<ReturnType<typeof resume>> | undefined;
+      expect(
+        await failedLoopIterations('outer', async () => {
+          invalid = await resume({
+            ...metadata,
+            approval: { ...pause, bodySessionCursorAncestry: undefined },
+          });
+        })
+      ).toBe(1);
+      expect(invalid?.failWorkflowRun).toHaveBeenCalled();
       expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
       expect(await failedLoopIterations('outer', () => resume(metadata, true))).toBe(1);
       expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);

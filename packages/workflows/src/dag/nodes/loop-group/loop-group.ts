@@ -170,10 +170,9 @@ async function executeLoopGroupBody(
     workflowModel,
     workflowTier,
     workflowPreset,
-    resume: readLoopGroupResume(ctx, node, bodyNodes, stepName),
+    resume: readLoopGroupResume(ctx, node, bodyNodes, stepName, progress),
   };
   const { resume } = run;
-  progress.lastStartedIteration = resume.lastStartedIteration;
 
   const finalized = await finalizeGroupOnBareApprove(run);
   if (finalized !== undefined) return finalized;

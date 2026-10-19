@@ -51,7 +51,6 @@ export interface LoopGroupResume {
   /** The iteration the run paused in. */
   resumeIteration: number;
   startIteration: number;
-  lastStartedIteration: number;
   feedbackGiven: boolean;
   iterationLimit: number;
   loopUserInput: string;
