@@ -2136,10 +2136,12 @@ values it ignored. To run fresh with different values, abandon the existing run 
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
 `archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
 
-Chat platforms (Slack, Telegram, Discord, GitHub) have **no** channel for inputs yet: they carry
-only a trigger message, so a required-input workflow invoked there still refuses up front and
-points at the CLI and console. That gap is tracked in
-[#2555](https://github.com/coleam00/Archon/issues/2555).
+In chat (Slack, Telegram, Discord, GitHub, Web UI), the assistant sees each workflow's declared
+inputs, asks you for missing required values in conversation, and passes them through its
+`invoke_workflow` tool. The same validation and pre-cost refusal apply. Assistants without
+[in-process native tools](/reference/provider-capabilities/) launch workflows by writing
+`/invoke-workflow` lines, which carry no inputs, so a required-input workflow launched that way
+still refuses up front and points at the CLI and console.
 
 ---
 

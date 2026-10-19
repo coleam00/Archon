@@ -21,9 +21,8 @@ import { createWorkflowDeps } from '../../workflows/store-adapter';
 
 export interface WorkflowDispatchOptions {
   /**
-   * Declared inputs supplied by the caller (#2554), already carried this far by
-   * `HandleMessageContext.workflowInputs`. Populated only by the run route; chat
-   * platforms have no channel and leave it unset, so their behaviour is unchanged.
+   * Declared inputs supplied by the caller (#2554): the run route's
+   * `HandleMessageContext.workflowInputs`, or the chat agent's `invoke_workflow` launch.
    * Validated at the dispatch gate before any worktree/clone/AI cost.
    */
   inputs?: Readonly<Record<string, string>>;
