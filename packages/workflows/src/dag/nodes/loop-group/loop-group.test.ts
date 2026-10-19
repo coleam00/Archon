@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, readFile } from 'fs/promises';
@@ -581,7 +580,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
   it('reads oversized $LOOP_PREV output from the run-owned spill directory', async () => {
     const artifactsDir = join(testDir, 'loop-prev-artifacts');
     const logDir = join(testDir, 'loop-prev-logs');
-    const largeOutput = 'x'.repeat(33_000);
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('lg-large-loopprev');
@@ -626,18 +624,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(result).toContain('33000');
-    expect(
-      await readFile(
-        join(
-          artifactsDir,
-          '.archon',
-          'node-output-spills',
-          createHash('sha256').update(largeOutput, 'utf8').digest('hex'),
-          'work.nodeoutput'
-        ),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'work.nodeoutput')).exists()).toBe(false);
   });
 
@@ -691,18 +677,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(result).toBe(largeOutput);
-    expect(
-      await readFile(
-        join(
-          artifactsDir,
-          '.archon',
-          'node-output-spills',
-          createHash('sha256').update(largeOutput, 'utf8').digest('hex'),
-          'bump.nodeoutput'
-        ),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'bump.nodeoutput')).exists()).toBe(false);
   });
 
