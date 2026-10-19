@@ -289,7 +289,9 @@ running host `bash:` and `script:` nodes and `until_bash` checks within about a 
 records the node failed as cancelled. Other runs' processes are not touched. A process that
 left the node's group with `setsid` escapes. On Windows, background work whose node process
 already exited is not reached. A container node's command is not reached.
-Cancelling a detached run ends its owner's process group, nodes included.
+Cancelling a detached run ends its owner's process group on macOS and Linux, nodes included.
+On Windows it ends the owner's Job Object, which also holds node processes whose parent
+already exited.
 
 ### Addressable session ancestry
 
@@ -2248,7 +2250,7 @@ sub-pipeline.**
   cooperatively: their executors abort at the next status check, within ~10s. A running
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
-  detached run ends its owner's process group.
+  detached run ends its owner's process group (macOS and Linux) or Job Object (Windows).
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its
