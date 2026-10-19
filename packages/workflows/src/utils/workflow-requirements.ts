@@ -32,8 +32,7 @@ export class WorkflowRequirementError extends Error {
   constructor(public readonly requirement: WorkflowRequirement) {
     super(
       `This workflow requires a connected ${requirement} identity, but you haven't connected yours. ` +
-        'Connect GitHub (Slack: `/archon connect github`, CLI: `archon auth github`, ' +
-        'or the Web UI Settings page) and re-invoke. No worktree was created and no AI cost was incurred.'
+        'Connect GitHub (CLI: `archon auth github`, or the Web UI Settings page) and re-invoke. No worktree was created and no AI cost was incurred.'
     );
     this.name = 'WorkflowRequirementError';
   }

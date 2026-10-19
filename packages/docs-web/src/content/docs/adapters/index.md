@@ -17,7 +17,7 @@ Archon supports multiple platform adapters. Each adapter connects Archon to a di
 |---------|-----------|---------------|-------|
 | [**Web UI**](/adapters/web/) | SSE streaming | None | Built-in |
 | [**CLI**](/reference/cli/) | stdout | None | Built-in |
-| [**Slack**](/adapters/slack/) | Socket Mode | Bot + App tokens | [Setup guide](/adapters/slack/) |
+| [**Slack**](/adapters/slack/) | Socket Mode, as a chat plugin | Plugin + Bot and App tokens | [Setup guide](/adapters/slack/) |
 | [**Telegram**](/adapters/telegram/) | Bot API polling | Bot token | [Setup guide](/adapters/telegram/) |
 | [**GitHub**](/adapters/github/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/github/) |
 
@@ -33,7 +33,7 @@ Community adapters follow the same `IPlatformAdapter` interface but target platf
 
 ## How Adapters Work
 
-All adapters implement the `IPlatformAdapter` interface. They handle:
+Slack runs as a chat plugin: a separate process the server starts from an installed plugin, speaking the chat plugin protocol. The other adapters are built into the server. All bundled adapters implement the `IPlatformAdapter` interface. They handle:
 
 - **Message ingestion** -- receiving messages from the platform and forwarding them to Archon's orchestrator
 - **Response delivery** -- streaming or batching AI responses back to the platform
@@ -47,4 +47,4 @@ All adapters implement the `IPlatformAdapter` interface. They handle:
 - **GitHub** integrates directly into your issue and PR workflow.
 - **Discord** works well for community or team servers.
 
-You can run multiple adapters simultaneously. Any adapter with the required environment variables set will start automatically when you launch the server.
+You can run multiple adapters simultaneously. Any bundled adapter with the required environment variables set will start automatically when you launch the server. Slack also needs its plugin installed; see the [Slack guide](/adapters/slack/).

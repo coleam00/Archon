@@ -28,7 +28,6 @@
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "@octokit/rest": "^22.0.0",
-    "@slack/bolt": "^4.6.0",
     "discord.js": "^14.27.0",
     "grammy": "^1.36.0",
     "telegramify-markdown": "^1.3.3",
@@ -45,9 +44,6 @@
       "src/forge/github/project-assistant.integration.test.ts"
     ],
     [
-      "src/chat/slack/adapter.test.ts",
-      "src/chat/slack/auth.test.ts",
-      "src/chat/slack/blocks.test.ts",
       "src/chat/telegram/",
       "src/community/chat/",
       "src/community/forge/gitea/comment-delivery.test.ts",
@@ -60,9 +56,6 @@
       "src/forge/github/webhook-intake.test.ts",
       "src/test/no-archon-home-writes.test.ts",
       "src/utils/"
-    ],
-    [
-      "src/chat/slack/workflow-bridge.test.ts"
     ],
     [
       "src/forge/github/adapter.test.ts"
@@ -112,7 +105,8 @@
       "src/forge/github/review-threads.test.ts"
     ],
     [
-      "src/platform-policies.test.ts"
+      "src/platform-policies.test.ts",
+      "src/retired-adapters.test.ts"
     ],
     [
       "src/sources/standard-webhooks/"
