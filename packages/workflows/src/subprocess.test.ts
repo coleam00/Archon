@@ -442,7 +442,10 @@ describe('subprocess input delivery', () => {
       runSubprocess(
         { kind: 'host' },
         process.execPath,
-        ['-e', `process.stderr.write('evidence'); process.exit(${code})`],
+        [
+          '-e',
+          `require('node:fs').closeSync(0); process.stderr.write('evidence'); setTimeout(() => process.exit(${code}), 100)`,
+        ],
         {
           cwd: import.meta.dir,
           env: {},
