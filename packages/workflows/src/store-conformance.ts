@@ -2577,7 +2577,7 @@ export function describeWorkflowStoreConformance(
           else if (state === 'failed') await store.failWorkflowRun(run.id, 'first');
           else await store.cancelWorkflowRun(run.id);
         }
-        const id = state === 'missing' ? 'missing-run' : run.id;
+        const id = state === 'missing' ? crypto.randomUUID() : run.id;
         const before = await store.getWorkflowRun(id);
         const events = await store.listWorkflowEvents(id);
         const reports = [...harness.terminalReports()];
