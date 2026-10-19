@@ -797,7 +797,7 @@ describe('cloneRepository', () => {
               'https://github.com/other/repo',
             ]);
           }
-          const saved = `${source}/../alias/../source`;
+          const saved = `${root}/managed/alias/../source`;
           const existing = makeCodebase({ default_cwd: saved });
           mockListCodebaseClaims.mockResolvedValue([existing]);
           spyFsAccess.mockImplementation(realFsAccess);
