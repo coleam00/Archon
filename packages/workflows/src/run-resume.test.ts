@@ -85,7 +85,7 @@ describe('hydrateResumableRun', () => {
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
   });
 
-  it('names why it resumes: a paused run continues, a failed run retries', async () => {
+  it('names why it resumes from the cause the consumed pause recorded', async () => {
     const failedNodes = new Map([['flaky', { error: 'exit 1' }]]);
     const snapshot = {
       completedNodeOutputs: new Map([['report', { output: 'saw' }]]),
@@ -96,40 +96,131 @@ describe('hydrateResumableRun', () => {
       costUsd: 0,
     };
     const since = '2026-10-19T10:00:00.000Z';
-    const attention = {
-      wait: {
-        owner: 'node',
-        nodeId: 'ask',
-        kind: 'attention',
-        waitingSince: since,
-        message: 'Ok?',
+    const later = '2026-10-19T11:00:00.000Z';
+    const gate = { type: 'approval', nodeId: 'review', message: 'Ok?', pauseId: 'g-1' };
+    const cases = [
+      {
+        name: 'an approval gate',
+        status: 'paused',
+        metadata: { approval: gate, pause_cause: 'gate' },
+        cause: 'continue_after_wait',
       },
-    };
-    const quota = {
-      wait: {
-        owner: 'node',
-        nodeId: 'flaky',
-        kind: 'quota',
-        pauseId: 'q-1',
-        waitingSince: since,
-        resumeAt: '2026-10-19T11:00:00.000Z',
+      {
+        name: 'a time wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 't',
+            kind: 'time',
+            pauseId: 't-1',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
       },
-    };
-    // Paused at a wait, the run had moved past its earlier failures. Paused on a provider
-    // limit, or failed outright, the failures are what stopped it and they run again.
-    for (const [status, metadata, cause] of [
-      ['paused', attention, 'continue_after_wait'],
-      ['paused', quota, 'retry_failed'],
-      ['failed', {}, 'retry_failed'],
-    ] as const) {
+      {
+        name: 'an event wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'e',
+            kind: 'event',
+            pauseId: 'e-1',
+            event: 'deploy',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a child workflow',
+        status: 'paused',
+        metadata: {
+          approval: { type: 'child_workflow', nodeId: 'sub', message: 'child', childRunId: 'c-1' },
+          pause_cause: 'child',
+        },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a fan-out',
+        status: 'paused',
+        metadata: { pause_cause: 'child' },
+        cause: 'continue_after_wait',
+      },
+      {
+        name: 'a loop-owned wait',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'loop_group',
+            nodeId: 'loop',
+            bodyWaitId: 'ask',
+            iteration: 2,
+            sessionId: null,
+            sessionProvider: null,
+            kind: 'attention',
+            waitingSince: since,
+            message: 'Ok?',
+          },
+          pause_cause: 'wait',
+        },
+        cause: 'continue_after_wait',
+      },
+      // A resolved gate's context outlives it: approve, a later node fails, the operator
+      // resumes, the source is unreadable and the run is released. The release is the
+      // pause being continued, so the failures it stopped on run again.
+      {
+        name: 'a source release after an earlier gate',
+        status: 'paused',
+        metadata: {
+          approval: { ...gate, resolved: 'approved' },
+          source_release: { nodeId: 'check', releaseId: 'r-1', releasedAt: since },
+          pause_cause: 'source_release',
+        },
+        cause: 'retry_failed',
+      },
+      {
+        name: 'a provider-limit pause',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'flaky',
+            kind: 'quota',
+            pauseId: 'q-1',
+            waitingSince: since,
+            resumeAt: later,
+          },
+          pause_cause: 'quota',
+        },
+        cause: 'retry_failed',
+      },
+      {
+        name: 'a pause with no recorded cause',
+        status: 'paused',
+        metadata: { approval: gate },
+        cause: 'retry_failed',
+      },
+      { name: 'a failed run', status: 'failed', metadata: {}, cause: 'retry_failed' },
+    ] as const;
+    const received: Record<string, string | undefined> = {};
+    for (const { name, status, metadata } of cases) {
       const store = makeStore({
         getDagResumeSnapshot: mock(async () => snapshot),
-        resumeWorkflowRun: mock(async () => makeRun({ id: 'run-123', status: 'running' })),
+        // The compare-and-swap returns the resumed row; the cause is read from it.
+        resumeWorkflowRun: mock(async () => makeRun({ status: 'running', metadata })),
       });
       const result = await hydrateResumableRun(makeDeps(store), makeRun({ status, metadata }));
-      expect(result?.resumeCause).toBe(cause);
+      received[name] = result?.resumeCause;
       expect(result?.priorFailedNodes).toBe(failedNodes);
     }
+    expect(received).toEqual(Object.fromEntries(cases.map(({ name, cause }) => [name, cause])));
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {

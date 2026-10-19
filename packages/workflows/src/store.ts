@@ -1,4 +1,5 @@
 import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
+import { PAUSE_CAUSE_METADATA_KEY, type PauseCause } from './schemas/pause-cause';
 import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore, ResourceBlocker } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -486,7 +487,11 @@ export function sourceReleaseMetadata(
     releasedAt,
     ...(release.path !== undefined ? { path: release.path } : {}),
   };
-  return { [SOURCE_RELEASE_METADATA_KEY]: record, continuation_retry_at: release.retryAt };
+  return {
+    [SOURCE_RELEASE_METADATA_KEY]: record,
+    continuation_retry_at: release.retryAt,
+    [PAUSE_CAUSE_METADATA_KEY]: 'source_release' satisfies PauseCause,
+  };
 }
 
 /** The row every store's source release commits with its write. */
