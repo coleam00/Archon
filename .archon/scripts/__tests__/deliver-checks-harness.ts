@@ -57,6 +57,7 @@ export interface GhPr {
 }
 
 export interface GhFake {
+  readonly commitChecks?: { readonly oid: string; readonly statusCheckRollup: unknown };
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
@@ -276,6 +277,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api graphql')) {
+    if (text.includes('object(oid:$head)')) return result(0, JSON.stringify({ data: { repository: { object: fake.commitChecks ?? null } } }));
     const history = fake.issue?.history ?? {};
     const createdAt = '2026-01-01T00:00:00Z';
     if (text.includes('userContentEdits(first: 100)')) {

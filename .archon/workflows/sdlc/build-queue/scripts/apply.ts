@@ -17,10 +17,12 @@
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus, ROUTE_DECISIONS } from '../../.shared/build.ts';
 import { withBuild } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type QualifiedPr, type PrRecord } from '../../.shared/forge.ts';
+import { forgeSource, invokeForge, record, parseQualifiedPr, type QualifiedPr, type PrRecord } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { setPrDraft, viewPr } from '../../.shared/pr.ts';
+import { ghGraphql, ghIssueComments, setPrDraft, viewPr } from '../../.shared/pr.ts';
+import { checksOf, ROLLUP } from '../../.shared/merge.ts';
+import { readReviewStamp } from '../../.shared/review-comment.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
@@ -115,6 +117,44 @@ function pushTo(pr: QualifiedPr): string {
   return `pushed ${pushed} to ${view.pr.head}`;
 }
 
+function verifyReady(ref: QualifiedPr, head: string): void {
+  const source = forgeSource();
+  const logins: unknown = nullableJson(process.env.INPUTS_MAINTAINERS);
+  if (!Array.isArray(logins) || !logins.every((login): login is string => typeof login === 'string'))
+    throw new Error('route-ready requires maintainer logins from facts');
+  const maintainers = new Set(logins.map(login => login.toLowerCase()));
+  const comments = source === 'gh'
+    ? ghIssueComments(ref)
+    : (() => {
+        const value = invokeForge('pr.comments', { ref });
+        if (!Array.isArray(value?.comments)) throw new Error('forge returned no PR comments');
+        return value.comments.map((value: unknown) => {
+          const comment = record(value);
+          if (typeof comment?.body !== 'string') throw new Error('forge returned an invalid PR comment');
+          const login = record(comment.author)?.login;
+          return { body: comment.body, author: typeof login === 'string' ? login : null };
+        });
+      })();
+  const reviews = comments.flatMap(comment => {
+    const stamp = readReviewStamp(comment.body);
+    return stamp !== null && comment.author !== null && maintainers.has(comment.author.toLowerCase()) ? [stamp] : [];
+  });
+  if (reviews.length !== 1 || reviews[0]?.ready !== true || reviews[0].reviewed !== head)
+    throw new Error(`route-ready requires one trusted Ready review at ${head}`);
+  if (source === 'forge') {
+    const checks = invokeForge('checks.state', { ref });
+    if (checks?.revision !== head || record(checks.summary)?.state !== 'green' || checks.approvalPending === true)
+      throw new Error(`route-ready requires green CI at ${head}`);
+  } else {
+    const data = ghGraphql(ref.repo.host, `query($owner:String!,$name:String!,$head:GitObjectID!) {
+      repository(owner:$owner,name:$name) { object(oid:$head) { ... on Commit { oid ${ROLLUP} } } }
+    }`, { owner: ref.repo.path.split('/')[0], name: ref.repo.path.split('/')[1], head });
+    const commit = record(record(data.repository)?.object);
+    if (commit?.oid !== head || checksOf(commit.statusCheckRollup).state !== 'green')
+      throw new Error(`route-ready requires green CI at ${head}`);
+  }
+}
+
 function finishReviewedPr(pr: PrRecord | null, head: string): PrRecord {
   if (pr === null) throw new Error('route-ready has no pull request');
   const ref = { repo: pr.repo, number: pr.number };
@@ -130,6 +170,7 @@ function finishReviewedPr(pr: PrRecord | null, head: string): PrRecord {
   }
   if (after.state !== 'open' || after.is_draft || after.head_revision !== head)
     throw new Error(`draft conversion may have landed: ${after.url} is ${after.state}, draft=${String(after.is_draft)} at ${after.head_revision}; expected open and non-draft at ${head}`);
+  verifyReady(ref, head);
   return after;
 }
 

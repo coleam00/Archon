@@ -20,6 +20,7 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
+import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   applyDecision,
@@ -29,7 +30,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, forgeOperation, type ScriptRun } from './deliver-checks-harness';
+import { type GhApiIssue, type GhPr, type GhFake, gitCheckout, hostCli, PACK, packScriptRunner, PR, forgePrRecord, forgeOperation, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -37,6 +38,8 @@ const track = trackTempRoots();
 const AT = '2026-10-16T00:00:00.000Z';
 const LATER = '2026-10-16T01:00:00.000Z';
 const SUBJECT = { repo: PR.repo, number: 7 };
+const READY_COMMENT = { id: 1, author: 'Maintainer', body: reviewCommentBody('a'.repeat(40), true, 'Ready report') };
+const GREEN_CHECKS = { oid: 'a'.repeat(40), statusCheckRollup: { contexts: { totalCount: 1, nodes: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }] } } };
 const ISSUE_URL = 'https://ghe.example.com/example/repo/issues/7';
 
 const TRIAGE: TriageFacts = {
@@ -245,7 +248,7 @@ function run(
   at: Install,
   script: 'facts' | 'apply' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string; preload?: string } = {}
+  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean; afterReady?: GhPr; readyFail?: string; preload?: string; comments?: GhFake['comments']; commitChecks?: GhFake['commitChecks'] } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
@@ -253,6 +256,8 @@ function run(
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
+      comments: options.comments ?? [READY_COMMENT],
+      commitChecks: options.commitChecks ?? GREEN_CHECKS,
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
@@ -262,6 +267,7 @@ function run(
     },
     inputs: {
       ...at.env,
+      INPUTS_MAINTAINERS: JSON.stringify(['maintainer']),
       WORKFLOW_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
@@ -510,7 +516,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
     expect(applied.gh).toEqual([]);
   }, 60_000);
 
-  test('forge route-ready converts the draft through pr.ready and records no round', () => {
+  test.each(['green', 'pending', 'red', 'gated', 'unknown', 'none', 'moved', 'removed_review', 'approval_pending'] as const)('forge route-ready checks current eligibility before recording ready (%s)', eligibility => {
     const at = install();
     seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
     const root = track(mkdtempSync(join(tmpdir(), 'archon-ready-forge-')));
@@ -524,7 +530,7 @@ import { spawnSync } from 'node:child_process';
 const argv = process.argv.slice(2);
 if (argv[0] === 'forge') {
   appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ op: argv[1], request: JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8')) }) + '\\n');
-  const replies = ${JSON.stringify({ 'pr.view': forgeOperation('pr.view', { pr: draft }), 'pr.ready': forgeOperation('pr.ready', { target: PR, outcome: 'applied', changed: true, pr: ready }) })};
+  const replies = ${JSON.stringify({ 'pr.comments': forgeOperation('pr.comments', { ref: PR, comments: eligibility === 'removed_review' ? [] : [{ ...READY_COMMENT, author: { login: 'Maintainer' } }] }), 'checks.state': forgeOperation('checks.state', { ref: PR, revision: (eligibility === 'moved' ? 'b' : 'a').repeat(40), summary: { state: ['approval_pending', 'moved', 'removed_review'].includes(eligibility) ? 'green' : eligibility }, approvalPending: eligibility === 'approval_pending' }), 'pr.view': forgeOperation('pr.view', { pr: draft }), 'pr.ready': forgeOperation('pr.ready', { target: PR, outcome: 'applied', changed: true, pr: ready }) })};
   const reply = replies[argv[1]];
   if (reply === undefined) throw new Error('unexpected operation: ' + argv[1]);
   process.stdout.write(reply);
@@ -538,17 +544,26 @@ if (argv[0] === 'forge') {
     const applied = runPackScript('build-queue/scripts/apply', {
       cwd: at.checkout, source: 'forge', forge: { kind: 'command', argv: [process.execPath, cli] },
       inputs: {
-        ...at.env, WORKFLOW_ID: 'run-1',
+        ...at.env, WORKFLOW_ID: 'run-1', INPUTS_MAINTAINERS: JSON.stringify(['maintainer']),
         INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT),
         INPUTS_PULL_REQUEST: JSON.stringify(draft),
         INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: 'a'.repeat(40), brief: 'Delivered', reason: 'Ready and green', attention: null }),
         INPUTS_ENDING: 'null', INPUTS_ANSWER: 'null', INPUTS_AT_CAP: 'false',
       },
     });
+    if (eligibility !== 'green') {
+      expect(applied.code).not.toBe(0);
+      expect(applied.stderr).toContain(eligibility === 'removed_review' ? 'one trusted Ready review' : 'green CI');
+      expect(stored(at).value?.facts.build?.status).not.toBe('ready');
+      expect(stored(at).value?.claim?.run_id).toBe('run-1');
+      return;
+    }
     expect(ok(applied)).toMatchObject({ decision: 'ready' });
     expect(readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line))).toEqual([
       { op: 'pr.view', request: { selector: { kind: 'number', ref: PR } } },
       { op: 'pr.ready', request: { ref: PR } },
+      { op: 'pr.comments', request: { ref: PR } },
+      { op: 'checks.state', request: { ref: PR } },
     ]);
     expect(applied.gh).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', rounds: [] } } });
@@ -570,12 +585,16 @@ if (argv[0] === 'forge') {
     expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: at.checkout, encoding: 'utf8' }).stdout).toBe('');
   }, 60_000);
 
-  test.each([
+  test.each<NonNullable<Parameters<typeof run>[3]> & { error: string }>([
     { pr: { headRefOid: 'b'.repeat(40) }, error: 'expected open at' },
     { pr: { state: 'CLOSED' as const }, error: 'is closed' },
     { afterReady: { headRefOid: 'b'.repeat(40) }, error: 'draft conversion may have landed' },
     { afterReady: { state: 'CLOSED' as const }, error: 'after conversion' },
     { readyFail: 'permission denied', error: 'permission denied' },
+    ...[[], [{ ...READY_COMMENT, author: 'outsider' }], [READY_COMMENT, { ...READY_COMMENT, id: 2 }], [{ ...READY_COMMENT, body: reviewCommentBody('b'.repeat(40), true, '') }], [{ ...READY_COMMENT, body: reviewCommentBody('a'.repeat(40), false, '') }]].map(comments => ({ comments, error: 'one trusted Ready review' })),
+    ...['FAILURE', null].map(conclusion => ({ commitChecks: { ...GREEN_CHECKS, statusCheckRollup: { contexts: { totalCount: 1, nodes: [{ __typename: 'CheckRun', name: 'test', status: conclusion === null ? 'IN_PROGRESS' : 'COMPLETED', conclusion }] } } }, error: 'green CI' })),
+    { commitChecks: { ...GREEN_CHECKS, oid: 'b'.repeat(40) }, error: 'green CI' },
+    { commitChecks: { ...GREEN_CHECKS, statusCheckRollup: null }, error: 'green CI' },
     { writeLost: true, error: 'after conversion' },
   ])('direct completion refuses without recording ready: %j', options => {
     const at = install();

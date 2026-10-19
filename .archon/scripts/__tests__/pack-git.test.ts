@@ -76,7 +76,7 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
   const checkout = `${entry}/scripts/checkout`;
   const inputs = { INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number), INPUTS_REF: JSON.stringify(PR), INPUTS_PULL_REQUEST: String(PR.number) };
 
-  it.each([false, true])('contains the PR history before publication, preserving the local branch (divergent=%s)', divergent => {
+  it.each([false, true])('starts exactly at the PR head or refuses divergent local history (divergent=%s)', divergent => {
     const cwd = gitCheckout({}, track);
     const prHead = git(cwd, 'rev-parse', 'HEAD');
     git(cwd, 'push', '-q', 'upstream', 'feature');
@@ -93,12 +93,18 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
       forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: prHead }), title: '', body: '' }) },
     });
     if (divergent) expect(prepared.gh).toEqual([]);
+    if (divergent) {
+      expect(prepared.code).not.toBe(0);
+      expect(prepared.stderr).toContain('cannot fast-forward exactly');
+      expect(git(cwd, 'rev-parse', 'HEAD')).toBe(initial);
+      expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(prHead);
+      return;
+    }
     expect({ code: prepared.code, stderr: prepared.stderr }).toEqual({ code: 0, stderr: '' });
     expect(JSON.parse(prepared.stdout)).toEqual({ head: prHead });
     expect(git(cwd, 'branch', '--show-current')).toBe('archon/build-test');
     git(cwd, 'merge-base', '--is-ancestor', prHead, 'HEAD');
-    git(cwd, 'merge-base', '--is-ancestor', initial, 'HEAD');
-    if (!divergent) expect(git(cwd, 'rev-parse', 'HEAD')).toBe(prHead);
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(prHead);
     const published = runPackScript('pr/scripts/publish-pr', {
       cwd,
       gh: { pr: { headRefOid: git(cwd, 'rev-parse', 'HEAD') } },
@@ -127,12 +133,10 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
       ...(mode === 'fork' ? { headRepositoryOwner: { login: 'fork' } } : {}),
     } } });
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain(mode === 'conflict' ? 'merge' : mode === 'missing' ? 'fetch' : mode === 'fork' ? 'maintainer edits' : 'must be open with a head');
+    expect(run.stderr).toContain(mode === 'conflict' ? 'cannot fast-forward exactly' : mode === 'missing' ? 'fetch' : mode === 'fork' ? 'maintainer edits' : 'must be open with a head');
     expect(git(cwd, 'branch', '--show-current')).toBe('archon/build-test');
     if (mode === 'conflict') {
-      expect(git(cwd, 'diff', '--name-only', '--diff-filter=U')).toBe('a.txt');
-      expect(run.stderr).toContain('CONFLICT');
-      expect(run.stderr).toContain('a.txt');
+      expect(git(cwd, 'diff', '--name-only', '--diff-filter=U')).toBe('');
     }
     expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(mode === 'missing' ? '' : prHead);
   });
@@ -165,11 +169,12 @@ describe('standalone continuation identity', () => {
     expect(run.forge).toEqual([]);
   });
 
-  it('prepares an editable fork from its qualified remote', () => {
+  it.each([true, false])('prepares an editable fork (configured remote=%s)', configured => {
     const cwd = gitCheckout({}, track);
     const head = git(cwd, 'rev-parse', 'HEAD');
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'checkout', '-q', '-b', 'archon/standalone', 'dev');
+    if (!configured) git(cwd, 'remote', 'remove', 'upstream');
     const baseRepo = { host: PR.repo.host, path: 'canonical/repo' };
     const run = runPackScript('ship/scripts/checkout', {
       cwd, source: 'forge',

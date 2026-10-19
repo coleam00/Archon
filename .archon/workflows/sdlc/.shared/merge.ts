@@ -254,7 +254,7 @@ export function requireGh(): void {
   }
 }
 
-const ROLLUP = `statusCheckRollup { contexts(first: 100) { totalCount nodes {
+export const ROLLUP = `statusCheckRollup { contexts(first: 100) { totalCount nodes {
   __typename
   ... on CheckRun { name status conclusion }
   ... on StatusContext { context state }
