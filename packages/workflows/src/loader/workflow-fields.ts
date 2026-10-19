@@ -7,6 +7,7 @@ import {
   inputEnvKey,
 } from '../schemas/dag-node';
 import type { EffortLevel } from '../schemas/effort';
+import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
 import {
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
@@ -414,6 +415,18 @@ export function resolveEffort(
  * fallbackModel: non-empty trimmed string. Inline trim rather than
  * `safeParse` so a stray surrounding space is normalised rather than rejected.
  */
+/**
+ * Workflow-level `model:`: one ref or a model preference list. A malformed value rejects the
+ * workflow; dropping it would run every node on the config default without saying so.
+ */
+export function parseWorkflowModel(raw: unknown): ParsedField<WorkflowModelRef> {
+  if (raw === undefined) return { value: undefined };
+  const parsed = modelRefSchema.safeParse(raw);
+  if (parsed.success) return { value: parsed.data };
+  const reason = parsed.error.issues[0]?.message ?? 'expected a model ref or a preference list';
+  return { error: `Invalid workflow-level model: ${reason}.` };
+}
+
 export function parseFallbackModel(raw: unknown, filename: string): string | undefined {
   const fallbackModelTrimmed = typeof raw === 'string' ? raw.trim() : '';
   const fallbackModel = fallbackModelTrimmed.length > 0 ? fallbackModelTrimmed : undefined;

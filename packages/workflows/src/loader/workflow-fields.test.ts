@@ -395,3 +395,37 @@ describe('workflow-level field parity (#2457)', () => {
     });
   }
 });
+
+describe('workflow-level model preference list', () => {
+  it('keeps a list, so it can travel to the nodes', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: listed
+description: preference list
+model: ['@reviewer', medium]
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'listed.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.model).toEqual(['@reviewer', 'medium']);
+  });
+
+  it('rejects a list that could fail to resolve instead of dropping it', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: unresolvable
+description: preference list without a final tier
+model: ['@reviewer', '@implementer']
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'unresolvable.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain('Invalid workflow-level model');
+  });
+});
