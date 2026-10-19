@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { bashScriptCommand } from './bash-script';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
-import { basename, join } from 'path';
+import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -467,8 +467,8 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
 
   const spillPath = async (artifactsDir: string, filename: string): Promise<string> => {
     const root = join(artifactsDir, '.archon', 'node-output-spills');
-    const files = await readdir(root, { recursive: true });
-    const file = files.find(file => basename(file) === filename);
+    const files = await readdir(root);
+    const file = files.find(file => file.endsWith(`.${filename}`));
     if (!file) throw new Error(`Missing spill ${filename}`);
     return join(root, file);
   };

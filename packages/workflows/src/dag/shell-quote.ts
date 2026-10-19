@@ -47,7 +47,7 @@ export function shellQuoteOrFile(
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
-    const path = joinPath('node-output-spills', randomUUID(), filename);
+    const path = joinPath('node-output-spills', `${randomUUID()}.${filename}`);
     const filePath = writeSpillFile(artifactsDir, path, value);
     if (filePath) {
       // Command substitution strips every trailing LF; append that suffix outside it.
