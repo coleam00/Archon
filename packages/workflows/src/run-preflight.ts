@@ -1,7 +1,9 @@
-import { FileStoreUnsupportedError } from './file-store/errors';
+import { checkCredentialRequestSchema } from '@archon/provider-contract/plugin/wire';
 import { providerInvocation } from './dag/capability-preflight';
 import {
+  type ExecutionContext,
   type ProviderRegistry,
+  type NodeConfig,
   type StoredCredentialKind,
   consumesStoredCredential,
   requireProvider,
@@ -288,6 +290,7 @@ export interface PreparedRunAiConfiguration {
   executionUserId?: string;
 }
 export interface RunCredentialRequirement {
+  settingSources?: NodeConfig['settingSources'];
   provider: string;
   model?: string;
   vendor?: string;
@@ -319,9 +322,10 @@ export function collectRunCredentialRequirements(
       }
       const invoked = invocation.kind === 'gate_rework' ? invocation.rework : invocation.node;
       const { provider, model } = resolveNodeModel(invoked, scope, models, prepared.aiProfile);
-      requirements.set(JSON.stringify([provider, model]), {
+      requirements.set(JSON.stringify([provider, model, invoked.settingSources]), {
         provider,
         model,
+        ...(invoked.settingSources !== undefined ? { settingSources: invoked.settingSources } : {}),
         vendor: requireProvider(providers, provider).credentials.vendorFor(model),
       });
     }
@@ -379,7 +383,11 @@ export async function assertRunCredentials(
     | 'getUserProviderCredential'
     | 'credentialStore'
   >,
-  prepared: PreparedRunAiConfiguration
+  prepared: PreparedRunAiConfiguration,
+  // Native authentication depends on where the provider runs. Before isolation picks the
+  // execution checkout or container, check stored credentials only; executeWorkflow checks
+  // native authentication in the resolved context before any node runs.
+  context: { cwd: string; execContext?: ExecutionContext } | 'pending-isolation'
 ): Promise<void> {
   const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
   const storedStatuses = new Map<string, CredentialStatus>();
@@ -388,9 +396,12 @@ export async function assertRunCredentials(
     // A stored credential this provider cannot consume is never delivered to it, so the
     // provider must authenticate natively; the stored kind only explains a missing login.
     let unconsumedKind: StoredCredentialKind | undefined;
-    if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
-      if (deps.credentialStore === 'files')
-        throw new FileStoreUnsupportedError('stored per-user provider credentials');
+    if (
+      deps.credentialStore !== 'files' &&
+      prepared.executionUserId &&
+      deps.isPerUserProviderKeysEnabled?.() &&
+      vendor
+    ) {
       if (!deps.getUserProviderCredential)
         throw new WorkflowCredentialPreflightError(
           requirement,
@@ -442,22 +453,28 @@ export async function assertRunCredentials(
         }
       }
     }
+    if (context === 'pending-isolation') continue;
     let status: CredentialStatus;
     try {
       status = await deps.getAgentProvider(provider).checkCredential({
+        ...context,
+        settingSources: requirement.settingSources,
         model,
-        assistantConfig: prepared.config.assistants[provider],
+        assistantConfig: checkCredentialRequestSchema.shape.assistantConfig.parse(
+          prepared.config.assistants[provider]
+        ),
         env: {
           ...Object.fromEntries(
-            Object.entries(process.env).flatMap(([key, value]) =>
-              value === undefined ? [] : [[key, value]]
+            Object.entries(context.execContext?.kind === 'container' ? {} : process.env).flatMap(
+              ([key, value]) => (value === undefined ? [] : [[key, value]])
             )
           ),
           ...prepared.config.envVars,
         },
         signal: AbortSignal.timeout(20_000),
       });
-    } catch {
+    } catch (error) {
+      log.warn({ err: error as Error, provider }, 'workflow.native_credential_check_failed');
       throw new WorkflowCredentialPreflightError(
         requirement,
         'could not verify native authentication'

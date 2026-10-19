@@ -1669,6 +1669,55 @@
     "ProviderCheckCredentialRequest": {
       "type": "object",
       "properties": {
+        "execContext": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "host"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "container"
+                },
+                "containerId": {
+                  "type": "string"
+                },
+                "execUser": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "containerId"
+              ]
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settingSources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "project",
+              "user"
+            ]
+          }
+        },
         "model": {
           "type": "string"
         },
@@ -1679,6 +1728,15 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema9"
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
           }
         }
       }

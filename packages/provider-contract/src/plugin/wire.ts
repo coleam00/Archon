@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   executionContextSchema,
+  settingSourcesSchema,
   nativeToolInputSchema,
   type NativeTool,
   systemPromptInputSchema,
@@ -141,12 +142,20 @@ export type ProviderLog = z.infer<typeof logNotificationSchema>;
 export type ProviderLogSink = (record: ProviderLog) => Promise<void>;
 
 export const checkCredentialRequestSchema = z.object({
+  execContext: executionContextSchema.optional(),
+  cwd: z.string().min(1).optional(),
+  settingSources: settingSourcesSchema.optional(),
   model: z.string().optional(),
   assistantConfig: configSchema.optional(),
 });
-export const resolveCredentialModelRequestSchema = checkCredentialRequestSchema.extend({
-  cwd: z.string().min(1),
+export const checkCredentialParamsSchema = checkCredentialRequestSchema.extend({
+  env: z.record(z.string(), z.string()).optional(),
 });
+export const resolveCredentialModelRequestSchema = checkCredentialRequestSchema
+  .pick({ model: true, assistantConfig: true })
+  .extend({
+    cwd: z.string().min(1),
+  });
 export const resolveCredentialModelResponseSchema = z.object({ model: z.string().optional() });
 
 export const diagnoseRequestSchema = z.object({
@@ -177,7 +186,7 @@ export const providerPluginWireSchemas = {
   ProviderToolCallRequest: toolCallRequestSchema,
   ProviderToolCallResponse: toolCallResponseSchema,
   ProviderLogNotification: logNotificationSchema,
-  ProviderCheckCredentialRequest: checkCredentialRequestSchema,
+  ProviderCheckCredentialRequest: checkCredentialParamsSchema,
   ProviderCheckCredentialResponse: credentialStatusSchema,
   ProviderResolveCredentialModelRequest: resolveCredentialModelRequestSchema,
   ProviderResolveCredentialModelResponse: resolveCredentialModelResponseSchema,

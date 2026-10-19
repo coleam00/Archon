@@ -310,7 +310,7 @@ export interface WorkflowDeps {
    * the shared process-global keys.
    */
   isPerUserProviderKeysEnabled?: () => boolean;
-  /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
+  /** Where stored per-user credentials live; `files` uses only native provider authentication. */
   credentialStore?: WorkflowStoreKind;
   /** The user's stored credential for `vendor`, or `undefined` when none is stored. */
   getUserProviderCredential?: (

@@ -1,3 +1,4 @@
+import type { checkCredentialRequestSchema } from './plugin/wire';
 import type { ProviderDiagnostics, ProviderModelList } from './information';
 import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
@@ -21,6 +22,8 @@ export const agentDefinitionSchema = z.object({
 });
 
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
+
+export const settingSourcesSchema = z.array(z.enum(['project', 'user']));
 
 export interface PiExtensionPosture {
   /** Load Pi's native user and project extensions. Enabled by default; extension
@@ -234,7 +237,7 @@ export interface NodeConfig {
    * when neither is set. Claude-only; other providers ignore it (the
    * dag-executor warns via the settingSources capability axis).
    */
-  settingSources?: ('project' | 'user')[];
+  settingSources?: z.infer<typeof settingSourcesSchema>;
   idle_timeout?: number;
   /**
    * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
@@ -298,12 +301,12 @@ export interface IAgentProvider {
   }): Promise<string | undefined>;
 
   /** Check the credential this provider uses when Archon delivers none. */
-  checkCredential(request: {
-    assistantConfig?: SendQueryOptions['assistantConfig'];
-    model?: string;
-    env: Record<string, string>;
-    signal: AbortSignal;
-  }): Promise<CredentialStatus>;
+  checkCredential(
+    request: z.infer<typeof checkCredentialRequestSchema> & {
+      env: Record<string, string>;
+      signal: AbortSignal;
+    }
+  ): Promise<CredentialStatus>;
 
   /**
    * Send a message and get streaming response.

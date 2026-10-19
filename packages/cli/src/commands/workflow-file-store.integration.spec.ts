@@ -15,6 +15,7 @@ import {
   realpathSync,
   writeFileSync,
   readFileSync,
+  unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -30,7 +31,10 @@ interface Fixture {
   trap: string;
   env: NodeJS.ProcessEnv;
 }
-function fixture(config = 'store: files\n'): Fixture {
+function fixture(
+  config = 'store: files\n',
+  nativeStatus?: 'usable' | 'not_connected' | 'real'
+): Fixture {
   const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
   const project = join(root, 'project'),
     home = join(root, 'home'),
@@ -68,6 +72,14 @@ import {appendFileSync} from 'node:fs';
 const fail=() => {appendFileSync(${JSON.stringify(trap)},'open\\n');throw new Error('SQL open trap');};
 const connection=await import(${src('packages/core/src/db/connection.ts')});
 mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,getDatabase:fail,getDialect:fail,pool:{query:fail,connect:fail}}));
+${
+  nativeStatus
+    ? `const {ClaudeProvider}=await import(${src('packages/providers/src/claude/provider.ts')});
+${nativeStatus === 'real' ? '' : `ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});`}
+const {registerBuiltinProviders}=await import(${src('packages/providers/src/in-process.ts')});
+mock.module(${src('packages/core/src/providers/register-host-providers.ts')},()=>({registerHostProviders:async()=>registerBuiltinProviders()}));`
+    : ''
+}
 await import(${src('packages/cli/src/cli.ts')});`
   );
   const env = {
@@ -91,10 +103,11 @@ async function cli(
   f: ReturnType<typeof fixture>,
   args: string[],
   env = f.env,
-  input = ''
+  input = '',
+  launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
   const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: f.project,
+    cwd: launchCwd,
     env,
     stdin: 'pipe',
     stdout: 'pipe',
@@ -108,6 +121,268 @@ async function cli(
     child.exited,
   ]);
   return { output, error, code };
+}
+test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
+  const f = fixture('store: files\ndefaultAssistant: claude\n', 'usable');
+  writeFileSync(
+    join(f.project, '.archon/workflows/native.yaml'),
+    `name: native
+description: native credential preflight
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready to call Claude?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+  );
+  const started = await cli(f, ['workflow', 'run', 'native', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(listed.code).toBe(0);
+  expect(JSON.parse(listed.output).runs).toMatchObject([
+    { workflow_name: 'native', status: 'paused', user_id: expect.any(String) },
+  ]);
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
+for (const nodeOverride of [false, true]) {
+  test(`Claude native CLI preflight uses --cwd and node settings (override=${nodeOverride})`, async () => {
+    const f = fixture(
+      `store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: ${nodeOverride ? '[]' : '[project]'}\n`,
+      'real'
+    );
+    mkdirSync(join(f.project, '.claude'));
+    writeFileSync(
+      join(f.project, '.claude/settings.json'),
+      JSON.stringify({ apiKeyHelper: 'printf project-key' })
+    );
+    const claudeConfig = join(f.root, 'claude-config');
+    mkdirSync(claudeConfig);
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: scoped native credentials
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    ${nodeOverride ? 'settingSources: [project]' : ''}
+    prompt: Say hello
+`
+    );
+    const env = {
+      ...f.env,
+      CLAUDE_CONFIG_DIR: claudeConfig,
+      ANTHROPIC_API_KEY: '',
+      CLAUDE_API_KEY: '',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      ANTHROPIC_AUTH_TOKEN: '',
+      CLAUDE_CODE_USE_BEDROCK: '0',
+      CLAUDE_CODE_USE_VERTEX: '0',
+      CLAUDE_CODE_USE_FOUNDRY: '0',
+      CLAUDE_CODE_USE_MANTLE: '0',
+      CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+      CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    const started = await cli(
+      f,
+      ['workflow', 'run', 'native', '--cwd', f.project, '--folder', '--no-worktree'],
+      env,
+      '',
+      f.root
+    );
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toMatchObject([
+      { workflow_name: 'native', status: 'paused' },
+    ]);
+    expect(existsSync(f.trap)).toBe(false);
+  }, 30000);
+}
+for (const detached of [false, true]) {
+  for (const launchOnly of [true, false]) {
+    test(`isolated Claude CLI checks the worktree account (launchOnly=${launchOnly}, detached=${detached})`, async () => {
+      const f = fixture(
+        'store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: [project]\n',
+        'real'
+      );
+      const git = (...args: string[]): void => {
+        const result = Bun.spawnSync(['git', ...args], {
+          cwd: f.project,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+      };
+      git('init', '-b', 'main');
+      git('remote', 'add', 'origin', f.project);
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'user.name', 'Fixture');
+      writeFileSync(join(f.project, '.gitignore'), launchOnly ? '.claude/\n' : '');
+      mkdirSync(join(f.project, '.claude'));
+      const settings = join(f.project, '.claude/settings.json');
+      writeFileSync(settings, JSON.stringify({ apiKeyHelper: 'printf worktree-key' }));
+      writeFileSync(
+        join(f.project, '.archon/workflows/native.yaml'),
+        `name: native
+description: isolated credentials
+provider: claude
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+      );
+      git('add', '.gitignore', '.archon');
+      if (!launchOnly) git('add', '.claude');
+      git('commit', '-m', 'Fixture');
+      if (!launchOnly) unlinkSync(settings);
+      const claudeConfig = join(f.root, 'claude-config');
+      mkdirSync(claudeConfig);
+      const env = {
+        ...f.env,
+        CLAUDE_CONFIG_DIR: claudeConfig,
+        ANTHROPIC_API_KEY: '',
+        CLAUDE_API_KEY: '',
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+        ANTHROPIC_AUTH_TOKEN: '',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_USE_BEDROCK: '0',
+        CLAUDE_CODE_USE_VERTEX: '0',
+        CLAUDE_CODE_USE_FOUNDRY: '0',
+        CLAUDE_CODE_USE_MANTLE: '0',
+        CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+        CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+      };
+      const started = await cli(
+        f,
+        [
+          'workflow',
+          'run',
+          'native',
+          '--branch',
+          'credential-test',
+          '--base',
+          'main',
+          ...(detached ? ['--detach'] : []),
+        ],
+        env
+      );
+      expect(started, started.output + started.error).toMatchObject({
+        code: launchOnly && !detached ? 1 : 0,
+      });
+      if (launchOnly && !detached) expect(started.error).toContain('no usable login');
+      const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+      let { runs } = await store.listWorkflowRuns();
+      if (detached) {
+        const deadline = Date.now() + 15000;
+        while (
+          Date.now() < deadline &&
+          !runs.some(run => ['failed', 'paused'].includes(run.status))
+        ) {
+          await Bun.sleep(25);
+          ({ runs } = await store.listWorkflowRuns());
+        }
+      }
+      expect(runs).toMatchObject([
+        { workflow_name: 'native', status: launchOnly ? 'failed' : 'paused' },
+      ]);
+      if (!launchOnly)
+        expect(existsSync(join(runs[0]?.working_path ?? '', 'before-count'))).toBe(true);
+      expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+      expect(existsSync(f.trap)).toBe(false);
+      if (launchOnly) {
+        const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], {
+          cwd: f.project,
+        });
+        const worktrees = paths.stdout
+          .toString()
+          .split('\0')
+          .filter(field => field.startsWith('worktree '))
+          .map(field => field.slice('worktree '.length));
+        const worktree = worktrees.find(path => realpathSync(path) !== realpathSync(f.project));
+        if (!worktree) throw new Error('Missing isolated checkout');
+        expect(existsSync(join(worktree, 'before-count'))).toBe(false);
+        if (detached) return;
+        mkdirSync(join(worktree, '.claude'));
+        writeFileSync(
+          join(worktree, '.claude/settings.json'),
+          JSON.stringify({ apiKeyHelper: 'printf reused-key' })
+        );
+        unlinkSync(settings);
+        const reused = await cli(
+          f,
+          ['workflow', 'run', 'native', '--branch', 'credential-test', '--base', 'main'],
+          env
+        );
+        expect(reused, reused.output + reused.error).toMatchObject({ code: 0 });
+        expect(existsSync(join(worktree, 'before-count'))).toBe(true);
+      }
+    }, 30000);
+  }
+}
+for (const flags of [[], ['--detach']] as const) {
+  test(`file-store CLI refuses missing native login before launch (${flags.join(' ') || 'foreground'})`, async () => {
+    const f = fixture('store: files\ndefaultAssistant: claude\n', 'not_connected');
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: refuse before launch
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: ai
+    depends_on: [before]
+    prompt: Say hello
+`
+    );
+    const refused = await cli(f, [
+      'workflow',
+      'run',
+      'native',
+      '--folder',
+      '--no-worktree',
+      ...flags,
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.output + refused.error).toContain('no usable login');
+    expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toEqual([]);
+    expect(existsSync(f.trap)).toBe(false);
+    expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+  }, 30000);
 }
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();

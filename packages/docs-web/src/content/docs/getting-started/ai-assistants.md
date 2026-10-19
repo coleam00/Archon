@@ -120,7 +120,7 @@ Claude Code supports three authentication modes via `CLAUDE_USE_GLOBAL_AUTH`:
 2. **Explicit Tokens** (set to `false`): Uses tokens from env vars below
 3. **Auto-Detect** (not set): Uses tokens if present in env, otherwise global auth
 
-If both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_API_KEY` are set, the OAuth token wins and no API key is passed to Claude. A per-user credential connected in Settings → Agents always takes precedence over these install-wide variables for that user's runs.
+If both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_API_KEY` are set, the OAuth token wins and no API key is passed to Claude. With `store: database`, a per-user credential connected in Settings → Agents takes precedence over these install-wide variables for that user's runs.
 
 ### Option 1: Global Auth (Recommended)
 
@@ -257,7 +257,7 @@ ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 
 By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. To run Codex on an OpenAI API key instead, set `CODEX_API_KEY` in Archon's environment, for example in `~/.archon/.env`. Archon hands the key to the Codex process in memory and never writes it into your Codex home, so your own login is untouched. Codex does not read `OPENAI_API_KEY`.
 
-A credential you connect in Archon for `openai` (`archon ai key set openai` or `archon ai login openai`) also runs Codex without touching your Codex home. A connected API key reaches Codex as `CODEX_API_KEY`, and a connected ChatGPT subscription logs the Codex process in in memory. Both work in workflows and direct chat, and both take precedence over your native Codex login. Your Codex config, global `AGENTS.md`, hooks, plugins and MCP servers load as usual. A subscription token that expires during a run fails the turn with `auth`; resuming the run picks up a refreshed token.
+With `store: database`, a credential you connect in Archon for `openai` (`archon ai key set openai` or `archon ai login openai`) also runs Codex without touching your Codex home. A connected API key reaches Codex as `CODEX_API_KEY`, and a connected ChatGPT subscription logs the Codex process in in memory. Both work in workflows and direct chat, and both take precedence over your native Codex login. Your Codex config, global `AGENTS.md`, hooks, plugins and MCP servers load as usual. A subscription token that expires during a run fails the turn with `auth`; resuming the run picks up a refreshed token.
 
 ### How Archon runs Codex
 
@@ -734,9 +734,9 @@ DEFAULT_AI_ASSISTANT=copilot
 
 Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
 
-Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
+Runs check stored credentials before creating isolation. Native authentication is checked where the run executes, once its worktree or container is known: CLI launches check it before submitting the run, a detached in-place CLI launch checks it before returning, and every run checks again when execution starts or resumes, before any node runs. With `store: database`, an unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
 
-Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
+With `store: files`, runs never read or deliver stored per-user credentials; they use the provider's native or environment account, even if a different account is connected in Archon. Database runs without a connected credential also check native login. Claude checks account information in the target working directory with each node's effective setting sources, without sending a model request. When authentication depends on `apiKeyHelper`, the command must exit successfully and return a non-empty credential. An effective environment credential, including one a container runner image sets, can authenticate even if an unused helper fails. Copilot uses its SDK authentication status. Missing login blocks launch. Providers that cannot check without a model session, including OpenCode and Claude cloud backends whose credentials resolve externally, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
 
 ### When you need this
 

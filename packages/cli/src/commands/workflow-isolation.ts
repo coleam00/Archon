@@ -369,6 +369,27 @@ interface FolderCodebase {
 }
 
 /**
+ * Whether a folder project's run executes in a container rather than in place.
+ * Precedence: --container flag > workflow `container.enabled` > config
+ * `container.enabled` (default off). A resume honors the original run's stamped
+ * isolation, never the current flag or config, so it cannot switch a container run
+ * to in-place on the live root.
+ */
+export function folderRunsInContainer(
+  options: Pick<WorkflowRunOptions, 'container' | 'resume'>,
+  workflow: Pick<ResolvedWorkflow, 'container'>,
+  folderConfig: Awaited<ReturnType<WorkflowHost['deps']['loadConfig']>> | undefined,
+  resumable: WorkflowRun | null | undefined
+): boolean {
+  return options.resume
+    ? resumable?.metadata?.isolation === 'container'
+    : (options.container ??
+        workflow.container?.enabled ??
+        folderConfig?.container?.enabled ??
+        false);
+}
+
+/**
  * Prepare a folder project's execution. Folder projects run through the folder-backend
  * seam — no worktree isolation. The in-place backend (default) keeps the agent's cwd at
  * the folder root, so it sees every child folder/repo, and per-service git
@@ -393,25 +414,12 @@ export async function prepareFolderExecution(input: {
     kind: 'folder' as const,
   };
 
-  // Selection precedence: --container flag > workflow container.enabled >
-  // config container.enabled (default off). Do NOT swallow loadConfig errors:
-  // a malformed/unreadable config that would carry `container.*` policy must
-  // FAIL the run, never silently downgrade to an in-place host run (fail-fast).
-  // loadConfig returns defaults when no config file exists (not an error).
-  //
-  // On a RESUME (approve/reject/resume re-enter with `{ resume: true }` and no
-  // --container flag), honor the ORIGINAL run's isolation via its stamped
-  // metadata — never re-derive from the flag/config, or a resume could silently
-  // switch a container run to in-place on the live root.
+  // Do NOT swallow loadConfig errors: a malformed/unreadable config that would carry
+  // `container.*` policy must FAIL the run, never silently downgrade to an in-place
+  // host run. loadConfig returns defaults when no config file exists (not an error).
   const folderConfig = await host.deps.loadConfig(codebase.default_cwd);
-  const wantsContainer = options.resume
-    ? resumable?.metadata?.isolation === 'container'
-    : (options.container ??
-      workflow.container?.enabled ??
-      folderConfig?.container?.enabled ??
-      false);
 
-  if (wantsContainer) {
+  if (folderRunsInContainer(options, workflow, folderConfig, resumable)) {
     const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
     const backend = resolveFolderBackend(folderCodebase, {
       container: true,

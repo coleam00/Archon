@@ -587,3 +587,19 @@ test('provider log records without a contract failure class are dropped', async 
     warn.mockRestore();
   }
 });
+
+test('container credential checks deliver only the execution credential bag to the provider', async () => {
+  process.env.PROCESS_HOST_CANARY = 'host-value';
+  try {
+    expect(
+      await provider('container-check').checkCredential({
+        env: { TEST_CREDENTIAL: 'container-value', PATH: 'container-path' },
+        execContext: { kind: 'container', containerId: 'runner' },
+        cwd: '/runner',
+        signal: AbortSignal.timeout(5000),
+      })
+    ).toEqual({ state: 'usable', source: 'native' });
+  } finally {
+    delete process.env.PROCESS_HOST_CANARY;
+  }
+});

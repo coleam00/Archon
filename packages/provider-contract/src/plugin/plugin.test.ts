@@ -251,6 +251,8 @@ test('credential states and credential model resolution round-trip without env o
   const provider = fixtureProvider({
     checkCredential: async request => {
       expect(matchesProcessEnvironment(request.env)).toBe(true);
+      expect(request.cwd).toBe('/target-project');
+      expect(request.settingSources).toEqual(['project']);
       const status = credentialStatuses.find(status => status.state === request.model);
       if (!status) throw new Error('Unknown fixture state');
       return status;
@@ -266,6 +268,8 @@ test('credential states and credential model resolution round-trip without env o
           check: () =>
             client.checkCredential({
               model: status.state,
+              cwd: '/target-project',
+              settingSources: ['project'],
               env: { KEY: 'host-secret-value' },
               signal: new AbortController().signal,
             }),
@@ -816,4 +820,29 @@ test('a diagnostic caller can cancel while the shared connection remains usable'
       }
     }
   );
+});
+
+test('container credential checks preserve the execution environment and context', async () => {
+  const provider = fixtureProvider({
+    checkCredential: async request => {
+      expect(request.env).toEqual({ KEY: 'container-key' });
+      expect(request.execContext).toEqual({
+        kind: 'container',
+        containerId: 'runner',
+        execUser: 'worker',
+      });
+      expect(request.cwd).toBe('/runner');
+      return { state: 'usable', source: 'native' };
+    },
+  });
+  await withProvider(provider, async client => {
+    expect(
+      await client.checkCredential({
+        env: { KEY: 'container-key' },
+        signal: new AbortController().signal,
+        execContext: { kind: 'container', containerId: 'runner', execUser: 'worker' },
+        cwd: '/runner',
+      })
+    ).toEqual({ state: 'usable', source: 'native' });
+  });
 });
