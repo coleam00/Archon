@@ -25,6 +25,7 @@ describe('validate check selection', () => {
       'installer',
       'package-tests',
       'cli-tests',
+      'core-tests',
       'script-tests',
     ]);
     expect(selectChecks(['workflow-fixtures', 'format']).map(check => check.id)).toEqual([
@@ -88,6 +89,7 @@ describe('validate check selection', () => {
     };
     const shardCheck: Record<string, string> = {
       cli: 'cli-tests',
+      core: 'core-tests',
       packages: 'package-tests',
       scripts: 'script-tests',
     };

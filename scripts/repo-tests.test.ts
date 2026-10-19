@@ -139,7 +139,7 @@ describe('planRequestedRuns', () => {
 });
 
 describe('planShard', () => {
-  test.each(['cli', 'packages', 'scripts', 'pack'] as const)(
+  test.each(['cli', 'core', 'packages', 'scripts', 'pack'] as const)(
     '--plan %s selects that shard',
     shard => {
       expect(planShard(['--plan', shard])).toBe(shard);
@@ -150,7 +150,7 @@ describe('planShard', () => {
     'rejects the malformed request %j',
     requested => {
       expect(() => planShard(requested)).toThrow(
-        'Usage: bun run test --plan <cli|packages|scripts|pack>'
+        'Usage: bun run test --plan <cli|core|packages|scripts|pack>'
       );
     }
   );
@@ -223,7 +223,7 @@ describe('repo-tests exit codes', () => {
     const { exitCode, stderr } = invoke(['--plan', 'nope']);
 
     expect(exitCode).toBe(1);
-    expect(stderr).toContain('Usage: bun run test --plan <cli|packages|scripts|pack>');
+    expect(stderr).toContain('Usage: bun run test --plan <cli|core|packages|scripts|pack>');
   });
 
   test('propagates a failing run instead of reporting success', () => {
