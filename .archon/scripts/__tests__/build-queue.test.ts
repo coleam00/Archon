@@ -243,7 +243,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'apply' | 'ruling',
+  script: 'facts' | 'apply' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
 ): ScriptRun {
@@ -365,6 +365,41 @@ describe('the build queue scripts', () => {
     seed(at, triaged({}, record({ status: 'ready' })));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'idle' });
     expect(stored(at).value?.claim).toBeNull();
+  }, 60_000);
+
+  test('a named item is claimed ahead of one that sorts first, and one that cannot be built refuses with why', () => {
+    const at = install();
+    const urgent = { ...triaged(), subject: { ...SUBJECT, number: 8 }, facts: { triage: { ...TRIAGE, urgency: { value: 'high', reason: 'r' } } } };
+    inProcess(at, () => expect(statePut('work/8', urgent, stateGet('work/8').revision)).toBe('ok'));
+    seed(at, triaged());
+    expect(ok(run(at, 'facts', { INPUTS_NUMBER: '7' }))).toMatchObject({ path: 'route', item: SUBJECT });
+    seed(at, triaged({ stage: 'blocked' }));
+    const refused = run(at, 'facts', { WORKFLOW_ID: 'run-2', INPUTS_NUMBER: '7' });
+    expect(refused.stderr).toContain('issue 7 does not wait for the build queue: stage blocked');
+    expect(stored(at).value?.claim).toBeNull();
+  }, 60_000);
+
+  test('a blocked item judged unblocked gets archon-triage and an intake run, and is not listed again until its revisit is due', () => {
+    const at = install();
+    seed(at, triaged({ stage: 'blocked' }));
+    const blocked = ok(run(at, 'facts', { INPUTS_RETRIAGE_AS: 'maintainer' })).blocked;
+    expect(blocked).toEqual([{ number: 7, summary: '' }]);
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const retriage = (judged: unknown[]) =>
+      run(at, 'retriage', {
+        INPUTS_BLOCKED: JSON.stringify(blocked),
+        INPUTS_RETRIAGE: JSON.stringify(judged),
+        INPUTS_RETRIAGE_AS: 'maintainer',
+        ARCHON_CALL_LOG: calls,
+      });
+    expect(retriage([{ number: 9, reason: 'r' }]).stderr).toContain('issue 9, which it was not given');
+
+    const sent = retriage([{ number: 7, reason: '#5 merged' }]);
+    expect(ok(sent)).toMatchObject({ retriaged: [7] });
+    expect(sent.gh).toContain(`issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach']));
+    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
   }, 60_000);
 
   test('a closed issue is parked without an agent', () => {

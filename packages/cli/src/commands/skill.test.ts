@@ -47,7 +47,7 @@ describe('copyArchonSkill', () => {
   });
 
   it('bundles active cancel guidance without the obsolete abandon mapping', () => {
-    const content = BUNDLED_SKILL_FILES['manage-run/manage-runs.md'];
+    const content = BUNDLED_SKILL_FILES['operate/managing-runs.md'];
     expect(content).toContain('archon workflow cancel <run-id>');
     expect(content).toContain('archon workflow abandon <run-id>');
     expect(content).toContain('archon workflow respond <run-id>');

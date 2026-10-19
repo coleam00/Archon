@@ -7,13 +7,18 @@ import { NoDefaultProviderError } from '@archon/provider-contract';
  * (#1764). The executor's own function is `async` and takes a platform + conversation id
  * because it MESSAGES the user about capability mismatches; calling it from a dry run
  * would send chat messages for a run that never happens. Reimplementing the chain in
- * dry-run.ts instead would guarantee drift, which turns a legibility feature into an
+ * the dry run instead would guarantee drift, which turns a legibility feature into an
  * actively misleading one — so both callers go through here.
  *
  * Pure: no I/O, no messaging, no registry mutation.
  */
-import { isLiteralSpec, resolveModelSpec, isTierName } from './model-validation';
-import type { ModelAliasPreset, ResolvedAiProfile, TierName } from './model-validation';
+import { isLiteralSpec, resolveModelSpec, isTierName, selectModelRef } from './model-validation';
+import type {
+  ModelAliasPreset,
+  WorkflowModelRef,
+  ResolvedAiProfile,
+  TierName,
+} from './model-validation';
 import type { DagNode, EffortLevel } from './schemas';
 import { readComposedMeta } from './compiled-command';
 
@@ -94,6 +99,8 @@ export function resolveNodeModelScope(
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): Omit<NodeModelResolution, 'provider'> & { provider: string | undefined } {
+  // A preference list collapses to the one ref it selects against this run's config.
+  const nodeModel = selectModelRef(node.model, aiProfile);
   let provider = node.provider ?? scope.provider;
   let providerOrigin: ResolutionOrigin = node.provider ? 'node' : scope.providerOrigin;
   let preset: ModelAliasPreset | undefined;
@@ -101,10 +108,10 @@ export function resolveNodeModelScope(
   let modelOrigin: ResolutionOrigin = 'unset';
   let providerConflict: NodeModelResolution['providerConflict'];
 
-  if (node.model) {
+  if (nodeModel) {
     modelOrigin = 'node';
     if (aiProfile) {
-      const spec = resolveModelSpec(aiProfile, node.model);
+      const spec = resolveModelSpec(aiProfile, nodeModel);
       if (isLiteralSpec(spec)) {
         model = spec.literal;
       } else {
@@ -117,12 +124,12 @@ export function resolveNodeModelScope(
           providerConflict = {
             declared: node.provider,
             resolved: provider,
-            modelRef: node.model,
+            modelRef: nodeModel,
           };
         }
       }
     } else {
-      model = node.model;
+      model = nodeModel;
     }
   }
 
@@ -141,7 +148,7 @@ export function resolveNodeModelScope(
   }
 
   const effectivePreset =
-    preset ?? (!node.model && provider === scope.provider ? scope.preset : undefined);
+    preset ?? (!nodeModel && provider === scope.provider ? scope.preset : undefined);
 
   // What the author declared, before a preset fills in and before the provider's
   // capability gate drops it — the executor threads exactly this value into both
@@ -158,9 +165,9 @@ export function resolveNodeModelScope(
           : 'unset';
 
   const tier =
-    node.model && isTierName(node.model)
-      ? node.model
-      : !node.model && provider === scope.provider
+    nodeModel && isTierName(nodeModel)
+      ? nodeModel
+      : !nodeModel && provider === scope.provider
         ? scope.tier
         : undefined;
 
@@ -190,16 +197,17 @@ export function resolveNodeModelScope(
  * over an unexpanded definition, and the fallbacks have to behave the same for it.
  */
 export function resolveWorkflowModelScope(
-  workflow: { provider?: string; model?: string; effort?: EffortLevel },
+  workflow: { provider?: string; model?: WorkflowModelRef; effort?: EffortLevel },
   defaultAssistant: string | undefined,
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): WorkflowModelScope {
+  const workflowModel = selectModelRef(workflow.model, aiProfile);
   let provider = workflow.provider ?? defaultAssistant;
   let model: string | undefined;
   let preset: ModelAliasPreset | undefined;
-  if (workflow.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, workflow.model);
+  if (workflowModel && aiProfile) {
+    const spec = resolveModelSpec(aiProfile, workflowModel);
     if (isLiteralSpec(spec)) {
       model = spec.literal;
     } else {
@@ -207,15 +215,15 @@ export function resolveWorkflowModelScope(
       provider = spec.provider;
       model = spec.model;
     }
-  } else if (workflow.model) {
-    model = workflow.model;
+  } else if (workflowModel) {
+    model = workflowModel;
   }
   if (provider !== undefined) model ??= assistantModels[provider];
   return {
     provider,
     model,
     preset,
-    tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
+    tier: workflowModel && isTierName(workflowModel) ? workflowModel : undefined,
     effort: workflow.effort,
     // The preset is checked FIRST because when one resolves, its provider is what won —
     // `provider` was reassigned from `spec.provider` above, overriding any `provider:` the

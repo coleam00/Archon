@@ -46,6 +46,7 @@ import {
   buildAiProfile,
   isLiteralSpec,
   resolveModelSpec,
+  selectModelRef,
   type ModelAliasPreset,
   type RawTiersConfig,
 } from '../model-validation';
@@ -1006,7 +1007,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     let workflowModel: string | undefined;
     let workflowPreset: ModelAliasPreset | undefined;
     if (workflow.model) {
-      const spec = resolveModelSpec(aiProfile, workflow.model);
+      const spec = resolveModelSpec(aiProfile, selectModelRef(workflow.model, aiProfile));
       if (isLiteralSpec(spec)) {
         workflowModel = spec.literal;
       } else {

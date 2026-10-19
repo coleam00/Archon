@@ -395,3 +395,69 @@ describe('workflow-level field parity (#2457)', () => {
     });
   }
 });
+
+describe('workflow-level model preference list', () => {
+  it('keeps a list, so it can travel to the nodes', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: listed
+description: preference list
+model: ['@reviewer', medium]
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'listed.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.model).toEqual(['@reviewer', 'medium']);
+  });
+
+  it('rejects a list that could fail to resolve instead of dropping it', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: unresolvable
+description: preference list without a final tier
+model: ['@reviewer', '@implementer']
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'unresolvable.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("must be a tier or a model id, not the alias '@implementer'");
+  });
+
+  it('treats a bare model key as no model, as it always has', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: bare
+description: bare model key
+model:
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'bare.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.model).toBeUndefined();
+  });
+
+  it('rejects a model that is neither a ref nor a list, naming both shapes', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: numeric
+description: numeric model
+model: 5
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'numeric.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain('a model ref string or a preference list');
+  });
+});

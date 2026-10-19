@@ -48,7 +48,7 @@ let selectedPacks = ['shipped'];
 const index = spyOn(inventory, 'readBundleIndex').mockImplementation(async () => selectedPacks);
 const { discoverWorkflows } = await import('./workflow-discovery');
 const { discoverScriptsForCwd } = await import('./script-discovery');
-const { loadCommandPrompt } = await import('./executor-shared');
+const { loadCommandPrompt } = await import('./load-command-prompt');
 const { validateWorkflowResources } = await import('./validator');
 const { captureWorkflowSource, capturedSourceRoots } = await import('./workflow-source');
 const { formatPackagedResourceReference } = await import('./packaged-workflow');

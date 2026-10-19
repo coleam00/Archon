@@ -45,7 +45,7 @@ mock.module('./defaults/bundled-defaults', () => ({
 const { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } = await import(
   './workflow-source'
 );
-const { loadCommandPrompt } = await import('./executor-shared');
+const { loadCommandPrompt } = await import('./load-command-prompt');
 const { discoverScriptsForCwd } = await import('./script-discovery');
 
 let root: string;

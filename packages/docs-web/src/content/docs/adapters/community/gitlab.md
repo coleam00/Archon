@@ -16,7 +16,7 @@ Connect Archon to a GitLab instance (gitlab.com or self-hosted) so you can inter
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - GitLab project with issues and merge requests enabled
 - GitLab Personal Access Token or Project Access Token with `api` scope
 - Public endpoint for webhooks (see ngrok setup below for local development)

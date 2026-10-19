@@ -1354,7 +1354,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
   it('STATE_DIR reaches script and bash subprocesses as an env var, not just as text', async () => {
     // The textual `$STATE_DIR` path is protected by the fail-fast in
-    // executor-shared (referenced-but-unresolved throws). The ENV-BAG path is
+    // workflow-variables (referenced-but-unresolved throws). The ENV-BAG path is
     // not: a dropped `STATE_DIR: stateDir` beside `ARTIFACTS_DIR` would be
     // silent, since a node reading `process.env.STATE_DIR` would just see
     // undefined. This locks both delivery channels.
