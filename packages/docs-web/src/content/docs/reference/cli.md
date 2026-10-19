@@ -988,7 +988,8 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 - **Scope.** The default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
-  project key such as `_cwd/scratch`; `--all` covers the install. A run is in scope when
+  project key such as `@cwd/scratch-<digest>`; copy the exact key from
+  `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when
   its codebase id matches, when both sides have one, and otherwise when its project key
   matches, so a run paused before its codebase was renamed is still listed under the new
   name.
