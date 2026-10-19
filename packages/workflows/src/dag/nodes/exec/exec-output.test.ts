@@ -420,7 +420,10 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
         })
       );
 
-      const call = runSpy.mock.calls.find(c => c[2].some(arg => arg.includes('UNDECLARED')));
+      // Bash source travels on stdin; script source is still an argument.
+      const call = runSpy.mock.calls.find(
+        c => c[2].some(arg => arg.includes('UNDECLARED')) || c[3].input?.includes('UNDECLARED')
+      );
       expect(call).toBeDefined();
       expect(call?.[3].timeout).toBeUndefined();
     } finally {

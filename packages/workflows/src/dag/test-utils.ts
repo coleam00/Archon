@@ -590,7 +590,8 @@ export function spyOnNodeExec(): ReturnType<typeof spyOn<typeof git, 'execFileAs
   const execSpy = spyOn(git, 'execFileAsync');
   if (process.platform === 'win32')
     ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
-      (cmd, args, options) => git.execFileAsync(cmd, args, options)
+      (cmd, args, options) =>
+        git.execFileAsync(cmd, args, { ...options, input: options.node?.input })
     );
   return execSpy;
 }

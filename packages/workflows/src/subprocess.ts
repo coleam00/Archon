@@ -389,7 +389,7 @@ export async function execOwnedProcessGroup(
     timeout?: number;
     env: NodeJS.ProcessEnv;
     /**
-     * Node mode: keep execFile's node semantics (stdin an unwritten pipe, background
+     * Node mode: keep execFile's node semantics (stdin a pipe carrying only `input`, background
      * jobs outlive the command, a deadline reports the SIGTERM documented for
      * `exit_code`) and make the tree endable through the recorder. The deadline SIGTERMs
      * the whole tree when `endTreeOnTimeout` is set, the root only otherwise. An abort
