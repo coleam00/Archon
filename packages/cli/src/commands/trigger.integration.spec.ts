@@ -220,6 +220,7 @@ describe('trigger CLI durable execution', () => {
       writeFileSync(
         fixturePath,
         `
+        import { renameSync } from 'node:fs';
         import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
         import createSource from ${JSON.stringify(join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts'))};
         import { SourceReceiptDigestConflictError } from ${JSON.stringify(join(packagesRoot, 'workflows/src/resource-start-store.ts'))};
@@ -236,7 +237,8 @@ describe('trigger CLI durable execution', () => {
             throw error;
           }
         }});
-        await Bun.write(${JSON.stringify(portPath)}, String(server.port));
+        await Bun.write(${JSON.stringify(`${portPath}.tmp`)}, String(server.port));
+        renameSync(${JSON.stringify(`${portPath}.tmp`)}, ${JSON.stringify(portPath)});
       `
       );
       const env = {
@@ -259,7 +261,7 @@ describe('trigger CLI durable execution', () => {
       const serverOutput = new Response(server.stderr).text();
       try {
         const port = await waitFor(
-          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') : undefined),
+          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') || undefined : undefined),
           'recipe fixture port'
         );
         const runScript = async (path: string, syntaxOnly = false): Promise<string> => {
