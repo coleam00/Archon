@@ -43,6 +43,7 @@ review:
   sha: abc1234
   delivers: all
   dispositions: []
+  judge_changes: []
   reason: "stub: every criterion passed, CI green"
 land:
   outcome: merged

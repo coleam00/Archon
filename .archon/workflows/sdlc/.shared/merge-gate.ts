@@ -22,6 +22,9 @@ export interface CheckLine {
 
 export interface AppCheck {
   readonly pr: string;
+  /** The pull request head the check tested, and its merge with the default branch. */
+  readonly head: string;
+  readonly merged_with: string;
   readonly overall: string;
   readonly lines: readonly CheckLine[];
 }
@@ -42,9 +45,9 @@ export function readAppCheck(json: string): AppCheck {
       defect: str(line.defect).toUpperCase(),
       carried_from: str(line.carried_from),
     }));
-    return { pr: str(raw.pr), overall: str(raw.overall), lines };
+    return { pr: str(raw.pr), head: str(raw.head), merged_with: str(raw.merged_with), overall: str(raw.overall), lines };
   } catch {
-    return { pr: '(unreadable report)', overall: '', lines: [] };
+    return { pr: '(unreadable report)', head: '', merged_with: '', overall: '', lines: [] };
   }
 }
 
@@ -78,12 +81,32 @@ export interface CitedFile {
 /** Slack for clocks and file systems that round modification times. */
 export const CLOCK_SLACK_MS = 2000;
 
+export interface Proofs {
+  /** The text names a file that exists (a default-branch run, or the holdout baseline). */
+  readonly namesFile: (text: string) => boolean;
+  /** The commit is an earlier commit of the tested head. */
+  readonly earlierCommit: (sha: string) => boolean;
+}
+
 /** Why the report does not stand on its own evidence; empty when it does. */
-export function evidenceProblems(report: AppCheck, startedMs: number, look: (path: string) => CitedFile): string[] {
+export function evidenceProblems(
+  report: AppCheck,
+  startedMs: number,
+  look: (path: string) => CitedFile,
+  proofs: Proofs
+): string[] {
   if (report.pr === '') return [];
   const problems: string[] = report.lines.length === 0 ? ['the report has no lines'] : [];
   for (const line of report.lines) {
-    if (line.carried_from !== '' && line.kind !== 'defect') continue;
+    if (line.pre_existing !== '' && !proofs.namesFile(line.pre_existing)) {
+      problems.push(`${line.id} says the default branch fails the same way but names no file that shows it`);
+    }
+    if (line.carried_from !== '' && line.kind !== 'defect') {
+      if (!proofs.earlierCommit(line.carried_from)) {
+        problems.push(`${line.id} is carried from ${line.carried_from}, which is not an earlier commit of the tested head`);
+      }
+      continue;
+    }
     if (line.evidence.length === 0) problems.push(`${line.id} cites no evidence`);
     for (const path of line.evidence) {
       const file = look(path);
@@ -125,8 +148,63 @@ export function parseDispositions(json: string): Map<string, Disposition> {
   return found;
 }
 
+/** What `gh issue view N --json state,url` says counts as tracking: an open issue, not a pull request. */
+export const isTrackingIssue = (view: { state?: string; url?: string }): boolean =>
+  view.state === 'OPEN' && /\/issues\/\d+$/.test(view.url ?? '');
+
+export interface MergeFacts {
+  /** Trees (git tree ids) of the commit to merge and of what the app check tested. */
+  readonly shaTree: string;
+  readonly testedTree: string;
+  /** The tree of the tested result merged cleanly with the current default branch; '' on conflict. */
+  readonly withBaseTree: string;
+  /** Files that merge brings in from the default branch, and the files the pull request changes. */
+  readonly fromBase: readonly string[];
+  readonly prFiles: readonly string[];
+}
+
+/**
+ * Why the commit to merge is not what the app check tested; null when it is. A reviewer may merge
+ * the default branch in after the check (the gate needs the base in the head). That commit stands
+ * on the check only when it is the tested result plus the base's new commits merged cleanly, and
+ * none of those commits touches a file of this change; anything else needs a new check.
+ */
+export function untestedMerge(facts: MergeFacts): string | null {
+  if (facts.testedTree === '') return 'the app check did not record what it tested';
+  if (facts.shaTree === facts.testedTree) return null;
+  if (facts.withBaseTree === '' || facts.shaTree !== facts.withBaseTree) {
+    return 'the commit to merge is not what the app check tested (it changed more than a clean merge of the default branch)';
+  }
+  const shared = facts.fromBase.filter(file => facts.prFiles.includes(file));
+  return shared.length > 0
+    ? `the default branch changed ${shared.slice(0, 5).join(', ')} since the check, which this change also changes`
+    : null;
+}
+
+export interface JudgeChange {
+  readonly file: string;
+  readonly change: string;
+  readonly approval: string;
+}
+
+/** The reviewer's list of changes to what a check judges; anything malformed is dropped. */
+export function parseJudgeChanges(json: string): JudgeChange[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [])
+    .filter(entry => entry !== null && typeof entry === 'object')
+    .map(entry => ({ file: str(entry.file), change: str(entry.change), approval: str(entry.approval) }))
+    .filter(entry => entry.file !== '' || entry.change !== '');
+}
+
 export interface GateFacts {
   readonly report: AppCheck;
+  /** Changes to what a check judges, each with the owner's approval or the criterion asking for it. */
+  readonly judgeChanges: readonly JudgeChange[];
   readonly evidenceProblems: readonly string[];
   readonly dispositions: Map<string, Disposition>;
   /** Shipping-pipeline nodes that failed in this run. */
@@ -168,6 +246,9 @@ export function recordRefusals(facts: GateFacts): string[] {
       refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
     }
   }
+  for (const judge of facts.judgeChanges.filter(change => change.approval === '')) {
+    refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
+  }
   for (const failed of facts.shipFailures) refusals.push(`the shipping pipeline's ${failed} failed`);
   return refusals;
 }
@@ -178,8 +259,13 @@ export function recordRefusals(facts: GateFacts): string[] {
 
 /** Failed shipping-pipeline nodes recorded in a run's event log. */
 export function shipFailuresInLog(log: string): string[] {
-  return eventsOf(log)
-    .filter(e => (e.type === 'node_error' || e.type === 'node_failed') && (e.step ?? '').startsWith('ship__'))
+  const last = new Map<string, LogEvent>();
+  for (const e of eventsOf(log)) {
+    const ends = e.type === 'node_error' || e.type === 'node_failed' || e.type === 'node_complete';
+    if (ends && (e.step ?? '').startsWith('ship__')) last.set(e.step ?? '', e);
+  }
+  return [...last.values()]
+    .filter(e => e.type !== 'node_complete')
     .map(e => `${e.step}${e.error ? `: ${e.error.slice(0, 200)}` : ''}`);
 }
 

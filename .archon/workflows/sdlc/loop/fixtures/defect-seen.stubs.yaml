@@ -59,6 +59,7 @@ review:
     file: ""
     issue: ""
     reason: ""
+  judge_changes: []
   reason: "stub: D1 is this change's to fix"
 claim:
   held: "true"

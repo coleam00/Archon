@@ -60,6 +60,7 @@ review:
   sha: ''
   delivers: none
   dispositions: []
+  judge_changes: []
   reason: 'stub: ship stopped at its green gate'
 claim:
   held: "true"

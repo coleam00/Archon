@@ -5,12 +5,16 @@ import {
   blocksPass,
   evidenceProblems,
   filesReadInLog,
+  isTrackingIssue,
   parseDispositions,
+  parseJudgeChanges,
   readAppCheck,
   recordRefusals,
   shipFailuresInLog,
+  untestedMerge,
   type CheckLine,
   type CitedFile,
+  type Proofs,
 } from '../../workflows/sdlc/.shared/merge-gate';
 
 const pack = resolve(import.meta.dir, '../../workflows/sdlc');
@@ -43,14 +47,16 @@ function gate(json: string, extra: Partial<Parameters<typeof recordRefusals>[0]>
     evidenceProblems: [],
     dispositions: new Map(),
     shipFailures: [],
+    judgeChanges: [],
     freshFile: () => false,
     issueExists: () => false,
     ...extra,
   });
 }
 
-const problems = (json: string, look: (path: string) => CitedFile = () => fresh): string[] =>
-  evidenceProblems(readAppCheck(json), STARTED, look);
+const proven: Proofs = { namesFile: () => true, earlierCommit: () => true };
+const problems = (json: string, look: (path: string) => CitedFile = () => fresh, proofs: Proofs = proven): string[] =>
+  evidenceProblems(readAppCheck(json), STARTED, look, proofs);
 
 describe('evidence check', () => {
   it('a clean report with fresh, opened evidence passes', () => {
@@ -219,6 +225,62 @@ describe('merge gate', () => {
       issue: '#2',
       reason: '',
     });
+  });
+});
+
+describe('what the record proves (2026-10-19 audit)', () => {
+  it('a default-branch failure must name the file that shows it', () => {
+    const json = report([line('H2', 'holdout', 'FAIL', { pre_existing: 'yes' })]);
+    expect(problems(json, () => fresh, { ...proven, namesFile: () => false })).toEqual([
+      'H2 says the default branch fails the same way but names no file that shows it',
+    ]);
+    expect(problems(json)).toEqual([]);
+  });
+
+  it('a carried line must come from an earlier commit of the tested head', () => {
+    const json = report([line('C1', 'criterion', 'PASS', { evidence: [], carried_from: 'x' })]);
+    expect(problems(json, () => fresh, { ...proven, earlierCommit: sha => sha !== 'x' })).toEqual([
+      'C1 is carried from x, which is not an earlier commit of the tested head',
+    ]);
+  });
+
+  it('only an open issue tracks anything: not a pull request, not a closed issue', () => {
+    expect(isTrackingIssue({ state: 'OPEN', url: 'https://github.com/o/r/issues/12' })).toBe(true);
+    expect(isTrackingIssue({ state: 'MERGED', url: 'https://github.com/o/r/pull/409' })).toBe(false);
+    expect(isTrackingIssue({ state: 'OPEN', url: 'https://github.com/o/r/pull/430' })).toBe(false);
+    expect(isTrackingIssue({ state: 'CLOSED', url: 'https://github.com/o/r/issues/12' })).toBe(false);
+  });
+
+  it('the merged commit must be what the check tested, or that plus a clean merge of the base away from this change', () => {
+    const facts = { shaTree: 't1', testedTree: 't1', withBaseTree: 't2', fromBase: ['b.cs'], prFiles: ['a.cs'] };
+    expect(untestedMerge(facts)).toBeNull();
+    expect(untestedMerge({ ...facts, shaTree: 't2' })).toBeNull();
+    expect(untestedMerge({ ...facts, shaTree: 't3' })).toContain('not what the app check tested');
+    expect(untestedMerge({ ...facts, shaTree: 't2', fromBase: ['a.cs'] })).toContain('a.cs');
+    expect(untestedMerge({ ...facts, shaTree: 't2', withBaseTree: '' })).toContain('not what the app check tested');
+    expect(untestedMerge({ ...facts, testedTree: '' })).toContain('did not record');
+  });
+
+  it('a ship step that failed and then completed on resume is not a failure', () => {
+    const log = [
+      JSON.stringify({ step: 'ship__deliver__pr__publish', type: 'node_error', error: 'bad escape' }),
+      JSON.stringify({ step: 'ship__deliver__pr__publish', type: 'node_complete' }),
+      JSON.stringify({ step: 'ship__deliver__review__code', type: 'node_error', error: 'crashed' }),
+    ].join('\n');
+    expect(shipFailuresInLog(log)).toEqual(['ship__deliver__review__code: crashed']);
+  });
+
+  it('a change to what a check judges needs an approval named', () => {
+    const changes = parseJudgeChanges(
+      JSON.stringify([
+        { file: 'game/harness/AllegianceCheck.cs', change: 'ghost pixels left out of foe samples', approval: '' },
+        { file: 'game/harness/SceneryViewCheck.cs', change: 'new check', approval: 'C1' },
+      ])
+    );
+    expect(gate(CLEAN, { judgeChanges: changes })).toEqual([
+      'game/harness/AllegianceCheck.cs changes what a check judges (ghost pixels left out of foe samples) with no approval named',
+    ]);
+    expect(parseJudgeChanges('not json')).toEqual([]);
   });
 });
 

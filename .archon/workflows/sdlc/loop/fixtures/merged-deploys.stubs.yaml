@@ -41,6 +41,7 @@ review:
   sha: abc1234
   delivers: all
   dispositions: []
+  judge_changes: []
   reason: stub
 land:
   outcome: merged

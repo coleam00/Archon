@@ -253,8 +253,17 @@ nodes:
               issue: { type: string }
               reason: { type: string }
             required: [line, action, file, issue, reason]
+        judge_changes:
+          type: array
+          items:
+            type: object
+            properties:
+              file: { type: string }
+              change: { type: string }
+              approval: { type: string }
+            required: [file, change, approval]
         reason: { type: string }
-      required: [outcome, pr, sha, delivers, dispositions, reason]
+      required: [outcome, pr, sha, delivers, dispositions, judge_changes, reason]
 
   # The merge gate (no model). Merges the reviewed commit only when the evidence held,
   # every failing line has the reviewer's re-check or default-branch proof, every
@@ -263,18 +272,20 @@ nodes:
   - id: land
     script: land
     runtime: bun
-    depends_on: [check-app, evidence, review]
+    depends_on: [subject, check-app, evidence, review]
     when: "$review.output.outcome == 'merge' && $INPUTS.merge == 'auto'"
     with:
       pr: "$review.output.pr"
       sha: "$review.output.sha"
       delivers: "$review.output.delivers"
       dispositions: "$review.output.dispositions"
+      judge_changes: "$review.output.judge_changes"
       route: "$pick.output.route"
       target: "$pick.output.target"
       report: "$check-app.output"
       evidence_problems: "$evidence.output.problems"
       review_started: "$evidence.output.checked_at"
+      files: "$subject.output.files"
     output_format:
       type: object
       properties:

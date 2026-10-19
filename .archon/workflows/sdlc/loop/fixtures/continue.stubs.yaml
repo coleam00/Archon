@@ -42,6 +42,7 @@ review:
   sha: def5678
   delivers: none
   dispositions: []
+  judge_changes: []
   reason: "stub: a test was skipped to get green"
 claim:
   held: "true"

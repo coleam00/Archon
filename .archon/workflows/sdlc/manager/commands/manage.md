@@ -53,6 +53,13 @@ claims of runs that ended, you are the backstop for what it misses.
 - **Items the loop keeps failing.** A work item that has taken more laps than the loop's attempt
   limit without a merge, counted across every park and unpark, gets no more laps from you: do not
   remove its `needs-owner`; put it in the owner decisions issue with what every lap found.
+  One exception, because it is not the owner's to decide: when what keeps failing is wording this
+  loop or you wrote (a criterion in a `Contract` or in an issue you filed, or a `Depends on` you
+  added), and none of it is the owner's (the issue body the owner wrote, an `Owner decision`
+  comment, the product document), you may narrow the item once: move the disputed part to its own
+  issue or to an existing one, keep everything the owner asked for, drop the `Depends on` edges you
+  added that the narrowed item no longer needs, say so in one comment, and remove `needs-owner`.
+  Never narrow a criterion the owner wrote, a look-and-feel choice, or what a check judges.
 
 Every action here gets one line in your report with the run id and why.
 
