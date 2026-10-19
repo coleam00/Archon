@@ -922,6 +922,39 @@ describe('waitForRunAttention', () => {
 });
 
 describe('runOwnerLossWatch', () => {
+  test.each([null, 'old-claim'])('checks only the requested execution claim %s', async claim => {
+    putRun('orphan', {
+      metadata: { ...localOwner, execution_claim: 'new-claim' },
+    });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('orphan', signal, claim)).toBeNull();
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+    expect(await watchOwner('orphan', signal, 'new-claim')).toEqual({
+      observedStatus: 'running',
+    });
+  });
+
+  test('related runs retain their own claims during an owner check', async () => {
+    putRun('parent', { metadata: { ...localOwner, execution_claim: 'parent-claim' } });
+    putRun('child', {
+      parent_run_id: 'parent',
+      metadata: { ...localOwner, execution_claim: 'child-claim' },
+    });
+    reachableOwners = new Set(['parent']);
+    const controller = new AbortController();
+    const pending = runOwnerLossWatch(store)('child', controller.signal, 'child-claim');
+    try {
+      await waitForOwner('parent');
+    } finally {
+      controller.abort();
+      await pending;
+    }
+    expect(mockWatchRunLiveOwner.mock.calls.map(([id]) => id)).toEqual(['child', 'parent']);
+  });
+
   test('reports a lost owner with its observed status, and any other end as null', async () => {
     putRun('orphan', { status: 'running' });
     putRun('asking', { status: 'paused', metadata: { ...localOwner, ...gate() } });
@@ -929,8 +962,8 @@ describe('runOwnerLossWatch', () => {
     const watchOwner = runOwnerLossWatch(store);
     const signal = new AbortController().signal;
 
-    expect(await watchOwner('orphan', signal)).toEqual({ observedStatus: 'running' });
-    expect(await watchOwner('asking', signal)).toBeNull();
+    expect(await watchOwner('orphan', signal, null)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('asking', signal, null)).toBeNull();
     expect(rows.get('orphan')?.status).toBe('running');
   });
 
@@ -952,8 +985,8 @@ describe('runOwnerLossWatch', () => {
     const watchOwner = runOwnerLossWatch(store);
     const signal = new AbortController().signal;
 
-    expect(await watchOwner('stalled', signal)).toEqual({ observedStatus: 'running' });
-    expect(await watchOwner('malformed', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('stalled', signal, null)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('malformed', signal, null)).toEqual({ observedStatus: 'running' });
     expect(rows.get('stalled')?.metadata).toMatchObject({ tool_call_attention: [stalled] });
   });
 });
