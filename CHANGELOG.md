@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `archon workflow artifacts <run-id> [path]` lists a run's artifact files or prints one, and `archon project list` lists registered projects with the key `--project` accepts. Both take `--json` and need no running server. (#2239)
+
 ### Changed
 
 - A workflow node that carries a key belonging to another node type, or a loop setting outside `loop:`/`loop_group:`, now fails the workflow load instead of being ignored or only warned about. For example, `runtime: bun` on a `prompt:` node or a top-level `interactive: true` on a `command:` node is now a load error naming the node, the key and the node types that support it. Move the key to a node that honours it, or delete it. (#2478)

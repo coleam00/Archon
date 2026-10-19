@@ -85,7 +85,8 @@ export class WorkflowMissingInputsError extends Error {
         `${missing.length === 1 ? 'it' : 'them'} with \`--input ${missing[0]}=<value>\` on the ` +
         'CLI (repeat the flag per input), or fill the run form in the web console. When ' +
         'composing this workflow from another, pass the same values via `with:` on the ' +
-        '`include:`/`workflow:` node. Chat platforms cannot supply inputs yet (#2555). ' +
+        '`include:`/`workflow:` node. In chat, an assistant with the `invoke_workflow` tool ' +
+        'supplies them when it starts the workflow. ' +
         'No worktree was created and no AI cost was incurred.'
     );
     this.name = 'WorkflowMissingInputsError';

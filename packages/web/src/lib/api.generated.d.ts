@@ -5992,6 +5992,7 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          reaskedFrom?: string;
         }
       | {
           /** @enum {string} */
@@ -6122,6 +6123,7 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          reaskedFrom?: string;
         };
     RunStopReason: {
       /** @enum {string} */

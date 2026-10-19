@@ -190,7 +190,9 @@ export const mockWaitForRunAttention = mock(
     }
   ): Promise<unknown> => Promise.resolve({ kind: 'not_found', runId: 'unset' })
 );
+const realRunAttentionWatch = await import('@archon/core/services/run-attention-watch');
 mock.module('@archon/core/services/run-attention-watch', () => ({
+  ...realRunAttentionWatch,
   waitForRunAttention: mockWaitForRunAttention,
 }));
 

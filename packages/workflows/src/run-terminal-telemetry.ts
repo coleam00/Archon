@@ -1,6 +1,6 @@
 import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@archon/paths';
 import type { WorkflowTerminalProperties } from '@archon/paths';
-import type { TokenUsage } from '@archon/provider-contract';
+import type { DagResumeSnapshot } from './store';
 import { readNodeRecordData } from './node-record-reader';
 import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
@@ -42,7 +42,7 @@ export interface RunTelemetryEvent {
 export function buildRunTerminalTelemetry(input: {
   run: Pick<WorkflowRun, 'id' | 'workflow_name' | 'parent_run_id' | 'status' | 'metadata'>;
   events: readonly RunTelemetryEvent[];
-  usage: { costUsd: number; tokens?: TokenUsage };
+  usage: Pick<DagResumeSnapshot, 'costUsd' | 'tokens'>;
 }): WorkflowTerminalProperties | undefined {
   const { run, events, usage } = input;
   const status = terminalStatusSchema.safeParse(run.status);
@@ -100,7 +100,7 @@ export function buildRunTerminalTelemetry(input: {
     ...(firstFailed ? { errorClass: failureKind.success ? failureKind.data : 'unknown' } : {}),
     ...(failedNode.success ? { failedNodeType: telemetryNodeType(failedNode.data) } : {}),
     // Absent when no provider reported spend, so absence never reads as "free".
-    ...(usage.costUsd > 0 ? { costUsd: usage.costUsd } : {}),
+    ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage.tokens !== undefined
       ? {
           tokensIn: usage.tokens.input,
@@ -140,7 +140,7 @@ function time(event: RunTelemetryEvent): number {
 export function reportRunTerminalTelemetry(
   run: WorkflowRun,
   events: readonly RunTelemetryEvent[],
-  usage: { costUsd: number; tokens?: TokenUsage }
+  usage: Pick<DagResumeSnapshot, 'costUsd' | 'tokens'>
 ): void {
   if (isTelemetryDisabled()) return;
   try {

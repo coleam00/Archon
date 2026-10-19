@@ -18,10 +18,10 @@ import {
   type IntakeRequest,
   parseOrder,
   parseTrustInput,
-  readMaintainers,
   REQUEST_ACTIONS,
   type RequestAction,
 } from '../../.shared/workitem.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 
 function main(): void {
   // The inputs' own validation: a value outside their vocabularies refuses the run

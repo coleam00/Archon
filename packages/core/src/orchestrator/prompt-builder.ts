@@ -21,7 +21,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { isRejectableUnreadableGate } from '../operations/workflow-operations';
 
-type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description' | 'deprecated'> & {
+type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description' | 'deprecated' | 'inputs'> & {
   readonly nodes: readonly unknown[];
 };
 
@@ -45,6 +45,21 @@ export function formatProjectSection(
   return section;
 }
 
+function formatInputs(inputs: PromptWorkflow['inputs']): string {
+  const entries = Object.entries(inputs ?? {});
+  if (entries.length === 0) return '';
+  const lines = entries.map(([name, spec]) => {
+    const kind =
+      spec.required === true
+        ? 'required'
+        : spec.default !== undefined
+          ? `default: ${JSON.stringify(spec.default)}`
+          : 'optional';
+    return `    - ${name} (${kind})${spec.description ? `: ${spec.description}` : ''}\n`;
+  });
+  return `  Inputs:\n${lines.join('')}`;
+}
+
 /**
  * Format workflow list for the orchestrator prompt.
  */
@@ -56,7 +71,7 @@ export function formatWorkflowSection(workflows: readonly PromptWorkflow[]): str
   return workflows
     .map(w => {
       const deprecation = w.deprecated ? `  Deprecated: ${w.deprecated.message}\n` : '';
-      return `**${w.name}**\n  ${w.description}\n${deprecation}  Type: DAG (${String(w.nodes.length)} nodes)\n\n`;
+      return `**${w.name}**\n  ${w.description}\n${deprecation}${formatInputs(w.inputs)}  Type: DAG (${String(w.nodes.length)} nodes)\n\n`;
     })
     .join('');
 }
@@ -355,6 +370,7 @@ Use the name returned by registration for subsequent workflow and project comman
       workflow: '{workflow-name}',
       project: 'my-project',
       prompt: exampleTask,
+      inputs: '{"base_branch":"dev"}',
     } satisfies Record<keyof typeof INVOKE_WORKFLOW_SCHEMA.properties, string>;
     const registerExample = {
       name: 'my-new-app',
@@ -372,6 +388,7 @@ ${Object.entries(INVOKE_WORKFLOW_SCHEMA.properties)
 
 Rules:
 ${promptRules('`prompt`')}
+- If the chosen workflow lists inputs, pass the values the user gave in \`inputs\`. If a required input is missing, ask the user for it before calling \`invoke_workflow\`.
 - Call \`invoke_workflow\` at most once per reply. The run starts after your reply ends: say what you launched, and never claim the run finished.
 
 Routing behavior:

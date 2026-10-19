@@ -11,7 +11,7 @@ const run = {
   status: 'failed' as const,
   metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['plan', 'build'] } },
 };
-const noUsage = { costUsd: 0 };
+const noUsage = {};
 
 async function failedRunEvents(): Promise<RunTelemetryEvent[]> {
   const events: RunTelemetryEvent[] = [
@@ -64,6 +64,12 @@ describe('buildRunTerminalTelemetry', () => {
       nodesTotal: 2,
       exitReason: 'node_error',
       errorClass: 'exec_failed',
+    });
+  });
+
+  test.each([0, 0.25])('keeps reported cost %s', costUsd => {
+    expect(buildRunTerminalTelemetry({ run, events: [], usage: { costUsd } })).toMatchObject({
+      costUsd,
     });
   });
 

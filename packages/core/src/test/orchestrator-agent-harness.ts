@@ -308,6 +308,8 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
   async (_deps, candidate) => ({
     preCreatedRun: { ...candidate, status: 'running' },
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
+    resumeCause: candidate.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
     priorUsage: { costUsd: 0 },
     priorNodeSessions: [],
   })
@@ -315,6 +317,7 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
 export const mockInspectResumableRun = mock<typeof WorkflowRunResume.inspectResumableRun>(() =>
   Promise.resolve({
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
     priorUsage: { costUsd: 0 },
   })
 );
@@ -700,9 +703,9 @@ mock.module('@archon/git', () => ({
   verifyWorktreeOwnership: mock(async () => {}),
   getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
-  // /register-project probes git-ness via findRepoRoot; a non-null root marks
-  // the registered path as a repo project (kind: 'repo').
+  // /register-project marks a path whose findRepoRoot root is non-null as kind: 'repo'.
   findRepoRoot: mock((p: string) => Promise.resolve(p)),
+  trustRegisteredPath: mock(async () => {}),
   // Stubs for post-message-reminder (loaded transitively by orchestrator-agent).
   // Return null/0/false so the reminder short-circuits without emitting an event.
   getCurrentBranch: mock(() => Promise.resolve(null)),
@@ -1015,6 +1018,7 @@ export function resetDispatchMocks(): void {
   mockInspectResumableRun.mockImplementation(() =>
     Promise.resolve({
       priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+      priorFailedNodes: new Map(),
       priorUsage: { costUsd: 0 },
     })
   );

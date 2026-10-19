@@ -17,7 +17,6 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseMaintainers,
   parseOrder,
   parseTrustInput,
   parseWorkItem,
@@ -29,6 +28,7 @@ import {
   updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
+import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
 import {
   gitCheckout,
   hostCli,
@@ -384,6 +384,10 @@ describe('pickup', () => {
     expect([...parseMaintainers('[" Wirasm ", "Other"]')]).toEqual(['wirasm', 'other']);
     expect(() => parseMaintainers('{"maintainers": []}')).toThrow('JSON array of forge logins');
     expect(() => parseMaintainers('[""]')).toThrow('JSON array of forge logins');
+    const list = parseMaintainerList('["Alice", { "login": " Wirasm ", "merge_queue": "own-prs" }]');
+    expect([...list.logins]).toEqual(['alice', 'wirasm']);
+    expect([...list.ownPrs]).toEqual(['wirasm']);
+    expect(() => parseMaintainerList('[{ "login": "x", "merge_queue": "all" }]')).toThrow('JSON array of forge logins');
   });
 });
 
@@ -503,6 +507,7 @@ const READY_VERDICT = {
   INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
   INPUTS_SUMMARY: 'Ready to deliver',
   INPUTS_CLOSURE: 'null',
+  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
@@ -611,6 +616,13 @@ describe('the intake scripts', () => {
       importance: { value: 'high' },
       urgency: { value: 'soon' },
     });
+    // Related work is stored for later rounds; the run-only fields are not.
+    expect(doc.facts.triage?.related).toEqual([
+      { url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' },
+    ]);
+    expect(Object.keys(doc.facts.triage ?? {}).sort()).toEqual(
+      ['at', 'complexity', 'importance', 'pull_request', 'related', 'run_id', 'size', 'type', 'urgency', 'verdict']
+    );
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'deliver',
       verdict: 'READY',

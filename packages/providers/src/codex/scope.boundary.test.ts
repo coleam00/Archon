@@ -634,6 +634,65 @@ describe('Codex capability scope on the real binary', () => {
   );
 
   test(
+    'a model listed as tool-free for structured output gets its tools first, then a tool-free schema request with the evidence',
+    async () => {
+      const answer = { summary: 'done' };
+      let responses = 0;
+      modelReply = () => {
+        const index = responses++;
+        const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(answer);
+        const item = {
+          type: 'message',
+          id: `msg_${String(index)}`,
+          role: 'assistant',
+          content: [{ type: 'output_text', text, annotations: [] }],
+        };
+        const events = [
+          { type: 'response.output_item.done', output_index: 0, item },
+          {
+            type: 'response.completed',
+            response: {
+              id: `resp_${String(index)}`,
+              status: 'completed',
+              output: [item],
+              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+            },
+          },
+        ];
+        return new Response(
+          events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+          { headers: { 'content-type': 'text/event-stream' } }
+        );
+      };
+      const result = resultOf(
+        await runRequest({
+          assistantConfig: { model: 'stub-model', toolFreeStructuredOutputModels: ['stub-model'] },
+          nodeConfig: {
+            nodeId: 'review',
+            output_format: {
+              type: 'object',
+              properties: { summary: { type: 'string' } },
+              required: ['summary'],
+            },
+          },
+        })
+      );
+      expect(result.failure).toBeUndefined();
+      expect(result.structuredOutput).toEqual(answer);
+      const bodies = modelRequests.map(
+        request => JSON.parse(request.body) as { tools?: unknown[]; text?: { format?: unknown } }
+      );
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0].tools?.length).toBeGreaterThan(0);
+      expect(bodies[0].text?.format).toBeUndefined();
+      expect(bodies[1].tools ?? []).toEqual([]);
+      expect(bodies[1].text?.format).toMatchObject({ type: 'json_schema' });
+      expect(modelRequests[1].body).toContain('REVIEW-FINDING-MARKER');
+    },
+    testTimeout(20_000)
+  );
+
+  test(
     'a named plugin that is not installed fails misconfigured before any model request',
     async () => {
       const result = resultOf(await runNode({ plugins: ['ghost@fixture'] }));
