@@ -11,6 +11,7 @@ import {
   assertLabelable,
   type WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
+import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
@@ -104,10 +105,8 @@ export function registerRunAttentionRoutes(
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
   const { assertRunActionAllowed, labelAttentionWait } = operations;
-  const attentionQueue = attentionQueueSource(
-    createWorkflowStore(),
-    createWorkflowHostStore().isolation
-  );
+  const store = createWorkflowStore();
+  const attentionQueue = attentionQueueSource(store, createWorkflowHostStore().isolation);
 
   // GET /api/runs/attention - The attention queue. A server has no working directory, so
   // without `project` the scope is the whole install.
@@ -142,7 +141,12 @@ export function registerRunAttentionRoutes(
       const selected = selectAttentionQueue(items, { scope, labels, order });
       const ids = new Set(selected.map(item => item.runId));
       const runs = rows.filter(run => ids.has(run.id));
-      return c.json({ runs: runs.map(toApiDashboardWorkflowRun), items: selected });
+      return c.json({
+        runs: await Promise.all(
+          runs.map(async run => toApiDashboardWorkflowRun(run, await observeRunOwner(store, run)))
+        ),
+        items: selected,
+      });
     } catch (error) {
       getLog().error({ err: error }, 'list_runs_needing_attention_failed');
       return apiError(c, 500, 'Failed to list runs needing attention');
