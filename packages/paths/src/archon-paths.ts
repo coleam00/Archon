@@ -851,8 +851,7 @@ export function resolveProjectStorageKey(
  * showed them. Relocating it is a breaking change accepted in #2200 so that
  * EVERY run's output is retrievable from one tree.
  *
- * Unregistered directories use the resolved absolute path, not just the basename:
- * same-named directories must never share cross-run state.
+ * An unregistered directory keys on a digest of its {@link canonicalizeProjectPath} path.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -865,11 +864,9 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
       break;
     case 'cwd': {
       const cwd = resolve(key.cwd);
-      const digest = createHash('sha256').update(cwd).digest('hex');
-      // Reserve 65 bytes for the separator and digest within a 255-byte directory name.
       const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
-      // @ cannot occur in registered repo owners; this also stays outside legacy _cwd trees.
-      root = getProjectRoot('@cwd', `${name}-${digest}`);
+      // `@` never starts a repo owner; 190 + '-' + 64 hex digits fits a 255-byte name.
+      root = getProjectRoot('@cwd', `${name}-${createHash('sha256').update(cwd).digest('hex')}`);
       break;
     }
   }
