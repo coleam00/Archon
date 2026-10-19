@@ -130,12 +130,13 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
 /**
- * Watches one running run until its owner is lost (`observedStatus`) or it stops needing
- * one (null). Rejects or resolves early when `signal` aborts.
+ * Watches one execution claim until its owner is lost (`observedStatus`), the claim
+ * changes, or it stops needing an owner (null). Rejects or resolves early when `signal` aborts.
  */
 export type RunOwnerLossWatch = (
   runId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  claim: ReturnType<typeof executionClaim>
 ) => Promise<{ observedStatus: WorkflowRunStatus } | null>;
 
 /** What a host gives the watch beyond the store. */
@@ -312,7 +313,7 @@ export async function watchAttentionQueue(
       let result: Awaited<ReturnType<RunOwnerLossWatch>>;
       for (;;) {
         try {
-          result = await watchOwner(runId, signal);
+          result = await watchOwner(runId, signal, claim);
           break;
         } catch (error) {
           if (signal.aborted) return;
