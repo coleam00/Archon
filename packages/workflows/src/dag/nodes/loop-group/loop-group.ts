@@ -173,7 +173,7 @@ async function executeLoopGroupBody(
     resume: readLoopGroupResume(ctx, node, bodyNodes, stepName),
   };
   const { resume } = run;
-  progress.lastStartedIteration = resume.startIteration - 1;
+  progress.lastStartedIteration = resume.lastStartedIteration;
 
   const finalized = await finalizeGroupOnBareApprove(run);
   if (finalized !== undefined) return finalized;

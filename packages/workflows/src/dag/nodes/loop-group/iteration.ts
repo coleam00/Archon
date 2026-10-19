@@ -89,6 +89,7 @@ export async function runLoopGroupIteration(
       error: `Workflow ${effectiveStatus}`,
       failureKind: 'cancelled',
       ...run.progress.usage,
+      loopIterations: run.progress.lastStartedIteration,
     };
   }
   // Carry the body's final sequential session into the next iteration (unless
@@ -167,6 +168,7 @@ async function stopBeforeIteration(
     error: `Workflow ${effectiveStatus}`,
     failureKind: 'cancelled',
     ...run.progress.usage,
+    loopIterations: run.progress.lastStartedIteration,
   };
 }
 
@@ -693,5 +695,5 @@ async function pauseAtGroupGate(
       logGroupIterationEventError(node.id, err, i);
     });
 
-  return serializeNodeOutput(suspended);
+  return { ...serializeNodeOutput(suspended), loopIterations: i };
 }

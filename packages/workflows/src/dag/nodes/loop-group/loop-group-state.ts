@@ -15,9 +15,13 @@ import type { ModelAliasPreset, TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
 
-export type LoopGroupBodyResult = NodeExecutionResult & {
-  suspensionPoint?: 'approval' | 'wait';
-};
+export type LoopGroupBodyResult = NodeExecutionResult &
+  (
+    | { state: 'failed'; loopIterations: number }
+    | { state: Exclude<NodeExecutionResult['state'], 'failed'> }
+  ) & {
+    suspensionPoint?: 'approval' | 'wait';
+  };
 
 export interface LoopGroupProgress {
   usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
@@ -47,6 +51,7 @@ export interface LoopGroupResume {
   /** The iteration the run paused in. */
   resumeIteration: number;
   startIteration: number;
+  lastStartedIteration: number;
   feedbackGiven: boolean;
   iterationLimit: number;
   loopUserInput: string;
