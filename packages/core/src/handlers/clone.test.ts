@@ -825,6 +825,52 @@ describe('cloneRepository', () => {
       }
     );
 
+    test('refuses to adopt a present managed source through an alias when no URL is saved', async () => {
+      const root = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-null-url-alias-'));
+      const source = join(root, 'managed', 'source');
+      managedSourceOverride = source;
+      try {
+        await fsPromises.mkdir(join(root, 'foreign', 'inner'), { recursive: true });
+        // The saved spelling reaches a foreign checkout whose remote matches, so
+        // the URL-less row is found; the managed source is a different checkout.
+        for (const checkout of [join(root, 'foreign', 'source'), source]) {
+          await fsPromises.mkdir(checkout, { recursive: true });
+          execFileSync('git', ['init', '-q', checkout]);
+          execFileSync('git', [
+            '-C',
+            checkout,
+            'remote',
+            'add',
+            'origin',
+            'https://github.com/owner/repo',
+          ]);
+        }
+        await fsPromises.symlink(
+          join(root, 'foreign', 'inner'),
+          join(root, 'managed', 'alias'),
+          'junction'
+        );
+        const saved = `${root}/managed/alias/../source`;
+        const existing = makeCodebase({ default_cwd: saved, repository_url: null });
+        mockListCodebaseClaims.mockResolvedValue([existing]);
+        spyFsAccess.mockImplementation(realFsAccess);
+        spyFsStat.mockImplementation(realFsStat);
+        spyCheckoutRemote.mockImplementation(realCheckoutRemote);
+        spyExecFileAsync.mockImplementation(realExecFileAsync);
+
+        await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+          'Cannot verify checkout ownership'
+        );
+
+        expect(spyCloneGitRepository).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(existing.default_cwd).toBe(saved);
+      } finally {
+        managedSourceOverride = undefined;
+        await removeTempTree(root);
+      }
+    });
+
     test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       'refuses retry when the saved spelling cannot be inspected',
       async () => {
