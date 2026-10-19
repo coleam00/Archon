@@ -6,8 +6,6 @@ import {
   type NodeExecutionRecord,
 } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
-import { TerminalStatusWriteError } from '../../../terminal-status-write';
-import { RunBudgetRefusedError } from '../../../run-budget';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type { LoopNode, EffortLevel, LoopGateRunMetadata, WorkflowRun } from '../../../schemas';
 import { isApprovalContext } from '../../../schemas';
@@ -22,7 +20,7 @@ import { safeSendMessage } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
-import { loadNodeCommandPrompt, RunSourceUnreadableError } from '../../node-source';
+import { loadNodeCommandPrompt } from '../../node-source';
 import {
   aiNodeEnvironment,
   beginExecution,
@@ -316,13 +314,9 @@ export async function executeLoopNode(
       const result = await runLoopIteration(run, state, i);
       if (result !== undefined) return result;
     } catch (error) {
-      if (
-        error instanceof TerminalStatusWriteError ||
-        error instanceof NodeEventWriteError ||
-        error instanceof RunBudgetRefusedError ||
-        error instanceof RunSourceUnreadableError
-      )
-        throw error;
+      // An iteration reads no node source, reserves no run budget and writes no terminal
+      // status; a failed event write is the only engine error it can raise.
+      if (error instanceof NodeEventWriteError) throw error;
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
       const failed = await failLoopNode(ctx, node.id, state, err.message, {
