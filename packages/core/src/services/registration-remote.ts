@@ -47,6 +47,28 @@ export async function effectiveRegistrationUrl(
   return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
+async function expandRegistrationUrl(
+  path: string,
+  remoteUrl: string,
+  names: readonly string[]
+): Promise<string> {
+  // A command-local remote preserves rewrite spelling without letting Git
+  // interpret a relative URL as an existing remote's name.
+  let expansionRemote = 'archon-ownership';
+  while (names.includes(expansionRemote)) expansionRemote += '-';
+  const { stdout } = await execFileAsync('git', [
+    '-C',
+    path,
+    '-c',
+    `remote.${expansionRemote}.url=${remoteUrl.trim()}`,
+    'ls-remote',
+    '--get-url',
+    '--',
+    expansionRemote,
+  ]);
+  return stdout.trim();
+}
+
 /**
  * A saved checkout belongs to a repository when any of its remotes points there.
  * Registration stores the URL of the remote worktree.remote selects at that
@@ -81,22 +103,10 @@ export async function assertCheckoutRemote(
       observed.add(identity);
     }
     if (observed.size) {
-      // Registrations save either requested or already-expanded URLs. Keep direct
-      // matches above. A command-local remote preserves rewrite spelling without
-      // letting Git interpret a relative URL as an existing remote's name.
-      let expansionRemote = 'archon-ownership';
-      while (names.includes(expansionRemote)) expansionRemote += '-';
-      const { stdout: expanded } = await execFileAsync('git', [
-        '-C',
-        path,
-        '-c',
-        `remote.${expansionRemote}.url=${remoteUrl.trim()}`,
-        'ls-remote',
-        '--get-url',
-        '--',
-        expansionRemote,
-      ]);
-      if (expanded.trim() && observed.has(await remoteIdentity(expanded.trim(), path))) return;
+      // Registrations save either requested or already-expanded URLs, so direct
+      // matches take precedence over applying another rewrite.
+      const expanded = await expandRegistrationUrl(path, remoteUrl, names);
+      if (expanded && observed.has(await remoteIdentity(expanded, path))) return;
     }
     throw new Error('No checkout remote matches the registered repository.');
   } catch (error) {
