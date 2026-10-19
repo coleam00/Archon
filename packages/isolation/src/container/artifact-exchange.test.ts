@@ -27,34 +27,39 @@ function fixture(
     calls.push(args);
     const failure = options.fail?.(args);
     if (failure) throw failure;
-    if (args[0] === 'container') {
-      return {
-        stdout: [
-          ...(state === 'missing'
-            ? []
-            : [{ Names: target.container, ID: 'producer-id', State: state }]),
-          ...(helperExists ? [{ Names: target.helper, ID: 'helper-id', State: 'running' }] : []),
-        ]
-          .map(entry => JSON.stringify(entry))
-          .join('\n'),
-        stderr: '',
-      };
+    switch (args[0]) {
+      case 'container':
+        return {
+          stdout: [
+            ...(state === 'missing'
+              ? []
+              : [{ Names: target.container, ID: 'producer-id', State: state }]),
+            ...(helperExists ? [{ Names: target.helper, ID: 'helper-id', State: 'running' }] : []),
+          ]
+            .map(entry => JSON.stringify(entry))
+            .join('\n'),
+          stderr: '',
+        };
+      case 'volume':
+        return { stdout: options.missingVolume ? '' : target.volume, stderr: '' };
+      case 'pause':
+        state = 'paused';
+        break;
+      case 'unpause':
+        state = 'running';
+        break;
+      case 'create':
+        helperExists = true;
+        return { stdout: 'helper-id\n', stderr: '' };
+      case 'wait':
+        await options.beforeWait?.();
+        return { stdout: options.exitCode ?? '0', stderr: '' };
+      case 'logs':
+        return { stdout: '', stderr: 'Artifact exchange refused a linked parent' };
+      case 'rm':
+        helperExists = false;
+        break;
     }
-    if (args[0] === 'volume')
-      return { stdout: options.missingVolume ? '' : target.volume, stderr: '' };
-    if (args[0] === 'pause') state = 'paused';
-    if (args[0] === 'unpause') state = 'running';
-    if (args[0] === 'create') {
-      helperExists = true;
-      return { stdout: 'helper-id\n', stderr: '' };
-    }
-    if (args[0] === 'wait') {
-      await options.beforeWait?.();
-      return { stdout: options.exitCode ?? '0', stderr: '' };
-    }
-    if (args[0] === 'logs')
-      return { stdout: '', stderr: 'Artifact exchange refused a linked parent' };
-    if (args[0] === 'rm') helperExists = false;
     return { stdout: '', stderr: '' };
   };
   return { exchange: new ContainerArtifactExchange(docker, target), calls, state: () => state };

@@ -487,6 +487,36 @@ async function recordPreExecutionFailure(
   };
 }
 
+function aggregateNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
+  // SINGLE aggregation point for this segment's run-level usage: the run
+  // row's persisted totals and the transcript. Per-node cost/tokens must be
+  // summed here and ONLY here. Terminal telemetry does not read this: it
+  // folds the persisted node events (getDagResumeSnapshot) across segments.
+  if (output.costUsd !== undefined) {
+    // Same guard as tokens below, and for the same reason: cost comes from
+    // providers (incl. community ones), and one NaN poisons the run total for
+    // every other node — NaN > 0 is false, so the cost is dropped from the run
+    // row with no trace. Exactly the silent loss #2469 exists to
+    // remove. Guarded here, at the single aggregation point, so one bad node
+    // costs only its own contribution.
+    if (Number.isFinite(output.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+    } else {
+      getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
+    }
+  }
+  ctx.totalTokensUnknown ||= output.tokensUnknown === true;
+  if (ctx.totalTokensUnknown) {
+    ctx.totalTokens = undefined;
+    return;
+  }
+  if (output.tokens === undefined) return;
+  ctx.totalTokens = sumTokenUsage(
+    [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
+    { nodeId }
+  );
+}
+
 /**
  * Fold one layer's settled results into the run context: outputs, usage, session
  * cursors, and typed artifacts. Returns whether any node in the layer failed.
@@ -501,35 +531,7 @@ async function aggregateLayerResults(
   let layerHadFailure = false;
   const artifactErrors: unknown[] = [];
   for (const result of layerResults) {
-    if (result.status === 'fulfilled') {
-      const { nodeId, output } = result.value;
-      // SINGLE aggregation point for this segment's run-level usage: the run
-      // row's persisted totals and the transcript. Per-node cost/tokens must be
-      // summed here and ONLY here. Terminal telemetry does not read this: it
-      // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
-      }
-      ctx.totalTokensUnknown ||= output.tokensUnknown === true;
-      if (ctx.totalTokensUnknown) {
-        ctx.totalTokens = undefined;
-      } else if (output.tokens !== undefined) {
-        ctx.totalTokens = sumTokenUsage(
-          [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
-          { nodeId }
-        );
-      }
-    }
+    if (result.status === 'fulfilled') aggregateNodeUsage(ctx, result.value);
   }
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {

@@ -108,7 +108,8 @@ test.each([
   });
   expect((await lstat(path)).isFile()).toBe(true);
   expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('untouched');
-  if (leaf.endsWith('auth.json')) expect((await lstat(path)).mode & 0o777).toBe(0o600);
+  if (leaf.endsWith('auth.json') && process.platform !== 'win32')
+    expect((await lstat(path)).mode & 0o777).toBe(0o600);
 });
 
 test('credential cleanup removes a leaf link without removing its target', async () => {

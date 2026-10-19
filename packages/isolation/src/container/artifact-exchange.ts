@@ -104,12 +104,54 @@ export class ContainerArtifactExchange implements ArtifactExchange {
       });
   }
 
+  private async runHelper(helperId: string): Promise<void> {
+    await this.docker(['start', helperId]);
+    const completed = await this.docker(['wait', helperId]);
+    if (completed.stdout.trim() !== '0') {
+      const logs = await this.docker(['logs', helperId]);
+      throw new Error(
+        `Artifact helper '${this.target.helper}' failed: ${logs.stderr || logs.stdout}`
+      );
+    }
+  }
+
   private async transfer(direction: TransferDirection): Promise<void> {
     const { container, helper, root, volume, image } = this.target;
     const failures: unknown[] = [];
     let pausedId: string | undefined;
     let helperId: string | undefined;
     let helperAbsent = false;
+    const restoreProducer = async (): Promise<void> => {
+      if (helperId) {
+        try {
+          await this.docker(['rm', '-f', helperId]);
+          helperAbsent = true;
+        } catch (cause) {
+          failures.push(cause);
+        }
+      }
+      if (!helperAbsent) {
+        try {
+          helperAbsent = !(await this.containers()).some(entry => entry.name === helper);
+        } catch (cause) {
+          failures.push(cause);
+        }
+      }
+      if (pausedId && helperAbsent) {
+        try {
+          await this.docker(['unpause', pausedId]);
+        } catch (cause) {
+          failures.push(cause);
+        }
+      } else if (pausedId) {
+        failures.push(
+          new Error(
+            `Producer '${container}' left paused: helper '${helper}' completion is unknown. ` +
+              'Inspect both containers before explicit recovery; the output volume is preserved.'
+          )
+        );
+      }
+    };
     try {
       const containers = await this.containers();
       if (containers.some(entry => entry.name === helper)) {
@@ -166,44 +208,11 @@ export class ContainerArtifactExchange implements ArtifactExchange {
       ]);
       helperId = created.stdout.trim();
       if (!helperId) throw new Error(`Docker did not identify artifact helper '${helper}'`);
-      await this.docker(['start', helperId]);
-      const completed = await this.docker(['wait', helperId]);
-      if (completed.stdout.trim() !== '0') {
-        const logs = await this.docker(['logs', helperId]);
-        throw new Error(`Artifact helper '${helper}' failed: ${logs.stderr || logs.stdout}`);
-      }
+      await this.runHelper(helperId);
     } catch (cause) {
       failures.push(cause);
     } finally {
-      if (helperId) {
-        try {
-          await this.docker(['rm', '-f', helperId]);
-          helperAbsent = true;
-        } catch (cause) {
-          failures.push(cause);
-        }
-      }
-      if (!helperAbsent) {
-        try {
-          helperAbsent = !(await this.containers()).some(entry => entry.name === helper);
-        } catch (cause) {
-          failures.push(cause);
-        }
-      }
-      if (pausedId && helperAbsent) {
-        try {
-          await this.docker(['unpause', pausedId]);
-        } catch (cause) {
-          failures.push(cause);
-        }
-      } else if (pausedId) {
-        failures.push(
-          new Error(
-            `Producer '${container}' left paused: helper '${helper}' completion is unknown. ` +
-              'Inspect both containers before explicit recovery; the output volume is preserved.'
-          )
-        );
-      }
+      await restoreProducer();
     }
     if (failures.length) {
       log.error(

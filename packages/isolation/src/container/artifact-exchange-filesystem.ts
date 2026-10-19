@@ -94,13 +94,16 @@ async function transferArtifacts(options: TransferOptions): Promise<void> {
       canonicalFiles.add(rel);
     } else refuse(rel, 'engine input is not a regular file');
   };
-  for (const dir of directories) await walkCanonicalInputs(dir);
-  for (const credential of credentials) {
-    await checkParents(canonical, credential);
-    const info = await maybeStat(path.join(canonical, credential));
-    if (info && !info.isFile()) refuse(credential, 'credential must be a regular file');
-    if (info) canonicalFiles.add(credential);
-  }
+  const readCanonicalInputs = async (): Promise<void> => {
+    for (const dir of directories) await walkCanonicalInputs(dir);
+    for (const credential of credentials) {
+      await checkParents(canonical, credential);
+      const info = await maybeStat(path.join(canonical, credential));
+      if (info && !info.isFile()) refuse(credential, 'credential must be a regular file');
+      if (info) canonicalFiles.add(credential);
+    }
+  };
+  await readCanonicalInputs();
 
   // Reserved entries are never imported, but a linked parent there must still fail visibly.
   const validateReserved = async (rel: string): Promise<void> => {
@@ -142,7 +145,7 @@ async function transferArtifacts(options: TransferOptions): Promise<void> {
       await fs.rm(temporary, { force: true });
     }
   };
-  if (publishing) {
+  const publish = async (): Promise<void> => {
     for (const dir of canonicalDirs) await mkdir(output, dir);
     for (const rel of canonicalFiles) {
       await copy(path.join(canonical, rel), output, rel, credentials.includes(rel) ? 0o600 : 0o644);
@@ -152,76 +155,82 @@ async function transferArtifacts(options: TransferOptions): Promise<void> {
       await checkParents(output, rel);
       await fs.rm(path.join(output, rel), { force: true });
     }
-    return;
-  }
-
-  const resolveLeaf = async (file: string, seen = new Set<string>()): Promise<string> => {
-    if (!inside(output, file)) refuse(file, 'link escapes output volume');
-    await checkParents(output, path.relative(output, file));
-    if (seen.has(file)) refuse(file, 'cyclic leaf link');
-    seen.add(file);
-    const info = await maybeStat(file);
-    if (!info) return refuse(file, 'dangling leaf link');
-    if (info.isSymbolicLink()) {
-      const link = await fs.readlink(file);
-      let target: string;
-      if (path.isAbsolute(link)) {
-        if (!inside(logicalRoot, link))
-          refuse(file, 'absolute link escapes logical artifacts root');
-        target = path.join(output, path.relative(logicalRoot, link));
-      } else target = path.resolve(path.dirname(file), link);
-      return resolveLeaf(target, seen);
-    }
-    if (!info.isFile()) refuse(file, 'output leaf must resolve to a regular file');
-    return file;
   };
-  const files = new Map<string, string>();
-  const dirs = new Set<string>();
-  const snapshot = async (rel: string): Promise<void> => {
-    if (reserved(rel)) return;
-    const file = path.join(output, rel);
-    const info = await fs.lstat(file);
-    if (info.isDirectory()) {
-      dirs.add(rel);
-      for (const child of await fs.readdir(file)) await snapshot(`${rel}/${child}`);
-    } else {
-      if (protectsDescendant(rel)) refuse(rel, 'file replaces an engine parent');
-      files.set(rel, await resolveLeaf(file));
-    }
-  };
-  for (const child of await fs.readdir(output)) await snapshot(child);
+  if (publishing) return publish();
 
-  for (const dir of dirs) {
-    let current = canonical;
-    for (const part of dir.split('/')) {
-      current = path.join(current, part);
-      const info = await maybeStat(current);
-      if (info?.isSymbolicLink()) refuse(dir, 'canonical parent is a symlink');
-      if (!info?.isDirectory()) break;
-    }
-  }
+  const collect = async (): Promise<void> => {
+    const resolveLeaf = async (file: string, seen = new Set<string>()): Promise<string> => {
+      if (!inside(output, file)) refuse(file, 'link escapes output volume');
+      await checkParents(output, path.relative(output, file));
+      if (seen.has(file)) refuse(file, 'cyclic leaf link');
+      seen.add(file);
+      const info = await maybeStat(file);
+      if (!info) return refuse(file, 'dangling leaf link');
+      if (info.isSymbolicLink()) {
+        const link = await fs.readlink(file);
+        let target: string;
+        if (path.isAbsolute(link)) {
+          if (!inside(logicalRoot, link))
+            refuse(file, 'absolute link escapes logical artifacts root');
+          target = path.join(output, path.relative(logicalRoot, link));
+        } else target = path.resolve(path.dirname(file), link);
+        return resolveLeaf(target, seen);
+      }
+      if (!info.isFile()) refuse(file, 'output leaf must resolve to a regular file');
+      return file;
+    };
+    const files = new Map<string, string>();
+    const dirs = new Set<string>();
+    const snapshot = async (rel: string): Promise<void> => {
+      if (reserved(rel)) return;
+      const file = path.join(output, rel);
+      const info = await fs.lstat(file);
+      if (info.isDirectory()) {
+        dirs.add(rel);
+        for (const child of await fs.readdir(file)) await snapshot(`${rel}/${child}`);
+      } else {
+        if (protectsDescendant(rel)) refuse(rel, 'file replaces an engine parent');
+        files.set(rel, await resolveLeaf(file));
+      }
+    };
+    for (const child of await fs.readdir(output)) await snapshot(child);
 
-  const reconcile = async (rel: string): Promise<void> => {
-    if (reserved(rel)) return;
-    const file = path.join(canonical, rel);
-    const info = await fs.lstat(file);
-    const neededParent = protectsDescendant(rel);
-    if (info.isDirectory()) {
-      for (const child of await fs.readdir(file)) await reconcile(`${rel}/${child}`);
-      if (!dirs.has(rel) && !neededParent) await fs.rmdir(file);
-    } else if (!files.has(rel)) {
-      if (neededParent) refuse(rel, 'canonical engine parent is not a directory');
-      await fs.unlink(file);
+    const checkCanonicalParents = async (): Promise<void> => {
+      for (const dir of dirs) {
+        let current = canonical;
+        for (const part of dir.split('/')) {
+          current = path.join(current, part);
+          const info = await maybeStat(current);
+          if (info?.isSymbolicLink()) refuse(dir, 'canonical parent is a symlink');
+          if (!info?.isDirectory()) break;
+        }
+      }
+    };
+    await checkCanonicalParents();
+
+    const reconcile = async (rel: string): Promise<void> => {
+      if (reserved(rel)) return;
+      const file = path.join(canonical, rel);
+      const info = await fs.lstat(file);
+      const neededParent = protectsDescendant(rel);
+      if (info.isDirectory()) {
+        for (const child of await fs.readdir(file)) await reconcile(`${rel}/${child}`);
+        if (!dirs.has(rel) && !neededParent) await fs.rmdir(file);
+      } else if (!files.has(rel)) {
+        if (neededParent) refuse(rel, 'canonical engine parent is not a directory');
+        await fs.unlink(file);
+      }
+    };
+    for (const child of await fs.readdir(canonical)) await reconcile(child);
+    for (const dir of dirs) {
+      const destination = path.join(canonical, dir);
+      const info = await maybeStat(destination);
+      if (info && !info.isDirectory()) await fs.unlink(destination);
+      await mkdir(canonical, dir);
     }
+    for (const [rel, source] of files) await copy(source, canonical, rel, 0o644);
   };
-  for (const child of await fs.readdir(canonical)) await reconcile(child);
-  for (const dir of dirs) {
-    const destination = path.join(canonical, dir);
-    const info = await maybeStat(destination);
-    if (info && !info.isDirectory()) await fs.unlink(destination);
-    await mkdir(canonical, dir);
-  }
-  for (const [rel, source] of files) await copy(source, canonical, rel, 0o644);
+  await collect();
 }
 
 export function buildArtifactTransferProgram(
