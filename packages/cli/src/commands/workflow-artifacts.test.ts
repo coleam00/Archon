@@ -121,6 +121,28 @@ describe('workflowArtifactsCommand', () => {
     expect(stdout).toHaveLength(0);
   });
 
+  it('reports an unknown run, a missing path and a directory as one --json failure each', async () => {
+    mkdirSync(join(artifactsDir, 'review'), { recursive: true });
+    writeFileSync(join(artifactsDir, 'plan.md'), 'x');
+
+    const cases: [string, { path?: string }, string][] = [
+      ['nope', {}, 'Workflow run not found: nope'],
+      [RUN_ID, { path: 'missing.md' }, 'Artifact not found: missing.md'],
+      [RUN_ID, { path: 'plan.md/x' }, 'Artifact not found: plan.md/x'],
+      [RUN_ID, { path: 'review' }, 'review is a directory'],
+      [RUN_ID, { path: '.' }, '. is a directory'],
+    ];
+    for (const [runId, opts, error] of cases) {
+      stdout = [];
+      expect(
+        await workflowArtifactsCommand(hostFor(outputRoot), runId, { ...opts, json: true })
+      ).toBe(1);
+      const out = stdoutJson();
+      expect(out).toMatchObject({ ok: false, runId });
+      expect(out.error).toContain(error);
+    }
+  });
+
   it('refuses a non-UTF-8 file under --json but prints its bytes without it', async () => {
     mkdirSync(artifactsDir, { recursive: true });
     const bytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);

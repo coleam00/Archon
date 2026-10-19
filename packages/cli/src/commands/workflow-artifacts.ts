@@ -72,27 +72,30 @@ export async function workflowArtifactsCommand(
   const candidate = join(artifactsDir, path);
   // One realpath containment check covers `..`, absolute-looking input and
   // symlinks that point out of the run's directory.
-  let realCandidate: string;
+  let bytes: Buffer;
   try {
     const realDir = await realpath(artifactsDir);
-    realCandidate = await realpath(candidate);
-    if (!isPathInside(realDir, realCandidate)) {
+    const realCandidate = await realpath(candidate);
+    if (!isPathInside(realDir, realCandidate, { includeRoot: true })) {
       return failWith(`Artifact path is outside run ${run.id}'s artifacts: ${path}`, run.id);
     }
+    if ((await stat(realCandidate)).isDirectory()) {
+      return failWith(
+        `${path} is a directory; list with archon workflow artifacts ${run.id}`,
+        run.id
+      );
+    }
+    bytes = await readFile(realCandidate);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOTDIR: a path that walks through a file, such as `plan.md/x`.
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
       return failWith(`Artifact not found: ${path}`, run.id);
     }
-    throw error;
-  }
-  if ((await stat(realCandidate)).isDirectory()) {
-    return failWith(
-      `${path} is a directory; list with archon workflow artifacts ${run.id}`,
-      run.id
-    );
+    getLog().error({ err: error as Error, runId: run.id }, 'cli.workflow_artifacts_failed');
+    return failWith(`Could not read artifact ${path}: ${(error as Error).message}`, run.id);
   }
 
-  const bytes = await readFile(realCandidate);
   if (!opts.json) {
     await writeStdout(bytes);
     return 0;
