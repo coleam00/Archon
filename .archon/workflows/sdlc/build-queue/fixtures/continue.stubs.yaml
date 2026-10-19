@@ -10,6 +10,8 @@ facts:
   brief: "continue: fix the open review finding"
   rounds: []
   at_cap: false
+  source: gh
+  maintainers: [maintainer]
   policy_defaults: "/stub/policy"
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1
@@ -17,11 +19,15 @@ facts:
   blocked: []
   blocked_count: 0
 route:
+  ready_head: null
   decision: launch
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
   attention: null
+checkout: { head: null }
 ship__forge: { source: forge }
+ship__continuation: { repo: { host: github.com, path: example/repo }, number: 1 }
+ship__checkout: { head: fixturehead }
 ship__deliver__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: READY, route: deliver }
@@ -39,7 +45,7 @@ implement__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: merged the pull request's head and fixed the finding"
+  summary: "stub: fixed the finding after checkout preparation"
 pr__forge: { source: forge }
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "build/7-stub-fixture", base: "dev", existing: 1, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: continues pull request 1" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead2", base_revision: "fixturebase", maintainer_can_modify: null }

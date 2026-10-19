@@ -29,6 +29,7 @@ import {
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
@@ -51,9 +52,10 @@ interface ItemPr {
   readonly pull_request: PrRecord | null;
   readonly continues: number | null;
   readonly branch: string;
+  readonly maintainers: readonly string[];
 }
 
-const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
+const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '', maintainers: [] };
 
 function resolvePr(
   subject: QualifiedPr,
@@ -64,10 +66,11 @@ function resolvePr(
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
   const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
+  const maintainers = pr?.state === 'open' ? [...readMaintainers(subject.repo)] : [];
   if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
-    return { pull_request: pr, continues: pr.number, branch: '' };
+    return { pull_request: pr, continues: pr.number, branch: '', maintainers };
   }
-  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId) };
+  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId), maintainers };
 }
 
 function emitItem(
@@ -89,6 +92,7 @@ function emitItem(
     rounds,
     at_cap: atCap,
     policy_defaults: POLICY_DEFAULTS,
+    source: forgeSource(),
     ...itemPr,
     blocked,
     blocked_count: blocked.length,
@@ -123,6 +127,7 @@ function main(): void {
       rounds: [],
       at_cap: false,
       policy_defaults: POLICY_DEFAULTS,
+      source: forgeSource(),
       ...NO_ITEM_PR,
       blocked,
       blocked_count: blocked.length,

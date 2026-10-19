@@ -5,6 +5,7 @@ import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
   mergeConditionSchema,
   prReviewsSchema,
+  prCommentsSchema,
   prThreadsSchema,
   reviewThreadCommentSchema,
   reviewThreadSchema,
@@ -218,6 +219,16 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
+        op: z.literal('pr.comments'),
+        value: prCommentsSchema.extend({
+          comments: z.array(
+            prCommentsSchema.shape.comments.element
+              .omit({ body: true })
+              .extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
+      z.object({
         op: z.literal('pr.reviews'),
         value: prReviewsSchema.extend({
           items: z.array(
@@ -251,6 +262,20 @@ export type ForgeAuditResponse = z.infer<typeof auditResponseSchema>;
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'pr.comments')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          comments: result.value.comments.map(({ body, ...facts }) => ({
+            ...facts,
+            content: { digest: contentDigest(body), bytes: Buffer.byteLength(body) },
+          })),
+        },
+      },
+    };
   if (result.op === 'pr.reviews')
     return {
       ...response,

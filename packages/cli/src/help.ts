@@ -87,6 +87,7 @@ const forgeOperationDescriptions = {
   'pr.draft': 'Convert a pull request to draft and verify the result',
   'pr.merge': 'Merge a pull request pinned to its approved head',
   'checks.rerun': 'Rerun selected failed checks at a revision',
+  'pr.comments': 'Read pull request conversation comments',
   'pr.reviews': 'Read submitted reviews and root review comments',
   'pr.threads': 'Read every review thread with its comments and resolution',
   'pr.thread.reply': 'Reply on one review thread and verify the reply',

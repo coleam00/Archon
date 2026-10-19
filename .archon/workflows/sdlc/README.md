@@ -106,13 +106,19 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The preflight names every forge operation the pack uses, and a plugin missing any of
-them is refused before an agent spends. Keep `gh` as the default until a released
-plugin with all of them passes a real-PR check.
+The `archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` preflights
+refuse missing forge operations before their agents run. The build queue has no
+preflight before route; it requires `pr.comments` for direct Ready completion.
+Inspect capabilities before using it with
+`archon forge metadata --data '{"host":"github.com"}' --json`.
+v0.12.1 lacks `pr.comments`; select a plugin by its advertised capabilities
+rather than assuming a minimum version.
+Keep `gh` as the default until a released plugin with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: it reads the trusted
-review comment, the default branch's head and CI, and how far a head is behind it,
-and the forge contract has no read for those yet. The gate itself doesn't refuse over
+The merge queue reads through `gh` alone and refuses `forge`: it reads the default
+branch's head and CI, and how far a head is behind it,
+and the forge contract has no read for those yet. PR conversation comments are
+available through `pr.comments`. The gate itself doesn't refuse over
 threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
@@ -469,6 +475,22 @@ The predicate only saves runs; intake ignores any other label. A binding install
 
 ## Build queue
 
+Before launching ship, route can finish an open PR whose trusted canonical Archon
+review says Ready at its current full head SHA and whose CI is green with clear workflow approval evidence at that head. Pending or unreadable approval evidence asks for attention.
+Apply verifies the head, trusted review, CI and approval evidence before taking the PR out of draft,
+then rechecks the head and records ready without a delivery round or push. A triage-linked PR needs no earlier build round.
+On the forge source, the plugin must support `pr.comments` to read conversation reviews;
+install a release/plugin carrying that operation before using this path. Route-agent
+read failures ask for a setup remedy. An initial facts read failure stops the run
+with its error before route starts. Neither path falls back to another source.
+
+Build-queue continuations fetch the qualified PR head and fast-forward to that
+exact commit before ship starts. Standalone ship resolves the continuation repository
+from the target, triage and remotes, then prepares the same exact start before delivery.
+Both preserve the local branch and refuse local history that cannot fast-forward to
+the PR head. Editable forks can use their HTTPS URL without a configured remote.
+Publication still uses a normal push and refuses a subsequently advanced remote head.
+
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
@@ -506,8 +528,8 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
-  it ended and decides: `done` when the pull request's latest review says Ready at its
+- **Rounds.** Direct Ready completion records no round. One round is one included
+  `archon-ship-block` run. The `answer` agent reads how it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
@@ -524,8 +546,10 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
   defects asks the scope question instead of running another round.
-- **Writes.** The `apply` script refuses an attention item without the choice it
-  recommends, pushes the declared commits (never forcing, and reading the remote head
+- **Writes.** On direct completion, `apply` rechecks the trusted Ready review and green
+  CI with clear approval evidence at the reviewed head before draft conversion, verifies the head again, then
+  records ready and releases the claim. The `apply` script
+  refuses an attention item without the choice it recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
   conditional write. A run that asks keeps its claim while it is paused.
 - **Attention.** An unclear decision pauses the run as one `select` attention item
@@ -548,8 +572,9 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   rounds and its last twenty decisions with any maintainer's answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
-changes its checkout, so every run needs its own worktree:
+item and a continuation waits for the next run. A launch includes `archon-ship-block`,
+which changes its checkout; direct Ready completion skips it. Since a run may launch
+delivery, give every run its own worktree:
 
 ```json
 {
@@ -591,7 +616,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   `ready` and the merge queue has not settled it: it never decided it, or left it
   waiting or asking. When the build queue readies an item again after the merge queue
   returned or parked it, it waits again. The pull request is the one the build
-  queue's last round delivered. One already merged or closed is recorded without the
+  queue's last round delivered, or the triage-linked pull request when the build
+  queue finished it without a round. An enrolled maintainer PR is recorded on its
+  own work item. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). The sweep

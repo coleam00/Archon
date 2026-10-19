@@ -13,6 +13,8 @@ facts:
   brief: ""
   rounds: []
   at_cap: false
+  source: gh
+  maintainers: [maintainer]
   policy_defaults: "/stub/policy"
   pull_request: null
   continues: null
@@ -20,10 +22,12 @@ facts:
   blocked: []
   blocked_count: 0
 route:
+  ready_head: null
   decision: launch
   brief: "stub: continue PR 8"
   reason: "stub: the body is a contract"
   attention: null
+checkout: { head: null }
 ship__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: title", body: "stub: body" } }

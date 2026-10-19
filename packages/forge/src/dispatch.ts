@@ -232,6 +232,7 @@ export function matchesForgeOperationResponse(
           value.plugin.version === metadata.version)
       );
     }
+    case 'pr.comments':
     case 'pr.reviews':
     case 'pr.threads':
     case 'checks.state':
