@@ -66,6 +66,7 @@ export const providerSessionRequestSchema = z.strictObject({
   nodeConfig: configSchema.optional(),
   assistantConfig: configSchema.optional(),
   execContext: executionContextSchema.optional(),
+  containerExecCoordination: z.literal(true).optional(),
   nativeTools: z.array(nativeToolSpecSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
 });
@@ -79,7 +80,7 @@ export type RequestOptionCoverage = AssertNever<
 export type RequestOptionNames = AssertNever<
   Exclude<
     keyof ProviderSessionRequest,
-    keyof SendQueryOptions | 'prompt' | 'cwd' | 'resumeSessionId'
+    keyof SendQueryOptions | 'prompt' | 'cwd' | 'resumeSessionId' | 'containerExecCoordination'
   >
 >;
 type WireOptions = Omit<SendQueryOptions, 'nativeTools'> & {
@@ -132,6 +133,12 @@ export const toolCallRequestSchema = cancelNotificationSchema.extend({
   input: z.record(z.string(), z.json()),
 });
 export const toolCallResponseSchema = z.object({ text: z.string() });
+export const containerExecAcquireSchema = cancelNotificationSchema;
+export const containerExecLeaseSchema = z.object({ leaseId: z.string().min(1) });
+export const containerExecReleaseSchema = containerExecAcquireSchema.extend({
+  leaseId: z.string().min(1),
+  failedAdmission: z.boolean(),
+});
 export const logNotificationSchema = z.object({
   level: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']),
   msg: z.string(),
@@ -164,6 +171,9 @@ export function acpStopReason(
 }
 
 export const providerPluginWireSchemas = {
+  ProviderContainerExecAcquire: containerExecAcquireSchema,
+  ProviderContainerExecLease: containerExecLeaseSchema,
+  ProviderContainerExecRelease: containerExecReleaseSchema,
   ProviderPluginDescriptor: providerPluginDescriptorSchema,
   ProviderSessionRequest: providerSessionRequestSchema,
   ProviderInitializeRequest: initializeRequestSchema,

@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { GitFailure, type GitFailureKind } from './errors';
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir as fsMkdir } from 'fs/promises';
 import { promisify } from 'util';
@@ -191,10 +191,12 @@ export async function execFileAsync(
     windowsHide?: boolean;
     killSignal?: NodeJS.Signals;
     input?: string;
+    onSpawn?: (child: ChildProcess) => void;
   }
 ): Promise<{ stdout: string; stderr: string }> {
-  const { input, ...execOptions } = options ?? {};
+  const { input, onSpawn, ...execOptions } = options ?? {};
   const pending = promisifiedExecFile(cmd, args, { windowsHide: true, ...execOptions });
+  onSpawn?.(pending.child);
   let inputError: Error | undefined;
   if (input !== undefined) {
     pending.child.stdin?.on('error', error => {

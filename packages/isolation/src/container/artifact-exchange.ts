@@ -23,6 +23,7 @@ interface ContainerDescription {
 }
 
 export class ContainerArtifactExchange implements ArtifactExchange {
+  private admissionFailure: Error | undefined;
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -49,8 +50,16 @@ export class ContainerArtifactExchange implements ArtifactExchange {
     });
   }
 
+  failAdmission(error: Error): void {
+    this.admissionFailure = error;
+  }
+
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.tail.then(run, run);
+    const checked = (): Promise<T> => {
+      if (this.admissionFailure) throw this.admissionFailure;
+      return run();
+    };
+    const next = this.tail.then(checked, checked);
     this.tail = next;
     return next;
   }
