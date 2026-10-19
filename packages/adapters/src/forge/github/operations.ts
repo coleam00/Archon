@@ -21,14 +21,13 @@ import {
   type Fetch,
 } from './api';
 import { readWorkflowRuns } from './workflow-runs';
+import { handleGithubMutation } from './lifecycle';
+import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
 import {
-  handleGithubPrReviews,
-  handleGithubMutation,
-  handleGithubPrView,
-  handleGithubWorkItemView,
-  handleGithubWorkItemList,
   handleGithubRepoLabelsList,
-} from './lifecycle';
+  handleGithubWorkItemList,
+  handleGithubWorkItemView,
+} from './workitems';
 import { handleGithubPrThreads } from './review-threads';
 
 export const githubPluginMetadata = {

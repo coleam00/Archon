@@ -6,9 +6,10 @@
  * `facts.build` is `ready` names its pull request in its last round. The queue claims
  * them with intake's claim, so an item has one owner at a time across the three queues.
  *
- * Every forge read here goes through the GitHub CLI. The forge contract has no read of
- * a pull request's review threads, and the gate cannot be answered without one, so the
- * merge queue refuses the forge source instead of gating on less.
+ * Every forge read here goes through the GitHub CLI. The forge contract has no read yet
+ * for the trusted review comment, the default branch's head and CI, or how far a head
+ * is behind it, and the gate cannot be answered without them, so the merge queue
+ * refuses the forge source instead of gating on less.
  */
 
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
@@ -91,10 +92,12 @@ const KEPT_TEXT = 1500;
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  if (build?.status !== 'ready') return false;
+  // A maintainer's own pull request is ready for the queue from its enrollment on.
+  const readyAt = build?.status === 'ready' ? build.at : doc.facts.own_pr?.at;
+  if (readyAt === undefined) return false;
   const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
-  return build.at > merge.at;
+  return readyAt > merge.at;
 }
 
 /**
@@ -116,9 +119,10 @@ export interface MergeSettled {
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
-/** The pull request the build queue's last round delivered on the item, or null. */
+/** The pull request the build queue's last round delivered on the item, or the enrolled own pull request, or null. */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
-  const url = [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url;
+  const url =
+    [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url ?? doc.facts.own_pr?.url;
   return url === undefined ? null : prFromUrl(url);
 }
 
@@ -235,11 +239,15 @@ function graphql(host: string, query: string, fields: Record<string, string | nu
   return repository;
 }
 
-/** The merge queue reads the forge through gh; the forge source cannot answer the gate. */
+/**
+ * The merge queue reads the forge through gh. The forge contract has no read yet for
+ * the trusted review comment, the default branch's head and CI, or how far a head is
+ * behind it, so the forge source cannot answer the gate.
+ */
 export function requireGh(): void {
   if (forgeSource() !== 'gh') {
     throw new Error(
-      'the merge queue gates every merge on unresolved review threads, which the forge contract does not report; run it with ARCHON_SDLC_FORGE=gh'
+      "the merge queue reads pull-request comments, the default branch's CI and how far a head is behind it, which the forge contract does not offer yet; run it with ARCHON_SDLC_FORGE=gh"
     );
   }
 }

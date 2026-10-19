@@ -679,6 +679,75 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
+  it('starts with the run config another run was started with', async () => {
+    const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+    try {
+      const { sealWorkflowRunConfig } = await import('@archon/core/config/run-config');
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'paused-run',
+        metadata: {
+          run_config: sealWorkflowRunConfig(
+            { tiers: { large: { provider: 'pi', model: 'minimax/MiniMax-M3' } } },
+            { kind: 'cli', label: 'config.claude.yaml' }
+          ),
+        },
+      });
+      await stubWorkflow();
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'continued',
+      });
+
+      await workflowRunCommand(createTestWorkflowHost(), tempRoot, 'bench', 'go', {
+        noWorktree: true,
+        configFromRun: 'paused-run',
+      });
+
+      const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+        runConfig?: unknown;
+      };
+      expect(opts.runConfig).toEqual({
+        source: { kind: 'cli', label: 'run paused-run (config.claude.yaml)' },
+        layer: { tiers: { large: { provider: 'pi', model: 'minimax/MiniMax-M3' } } },
+      });
+    } finally {
+      if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+    }
+  });
+
+  it('refuses --config-from-run on a resume, before reading the named run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const reads = (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls.length;
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'bench', 'go', {
+        resume: true,
+        configFromRun: 'paused-run',
+      })
+    ).rejects.toThrow('--resume and --config-from-run are mutually exclusive.');
+    expect((workflowDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls).toHaveLength(reads);
+  });
+
+  it('refuses --config-from-run beside --config, and for a run that does not exist', async () => {
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), tempRoot, 'bench', 'go', {
+        configPath: join(tempRoot, 'config.yaml'),
+        configFromRun: 'paused-run',
+      })
+    ).rejects.toThrow('--config and --config-from-run are mutually exclusive.');
+
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), tempRoot, 'bench', 'go', {
+        configFromRun: 'missing-run',
+      })
+    ).rejects.toThrow("--config-from-run: no workflow run 'missing-run'.");
+  });
+
   it('refuses config on resume without trying to read the path', async () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'bench', 'go', {

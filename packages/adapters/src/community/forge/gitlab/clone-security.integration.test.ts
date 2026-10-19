@@ -54,28 +54,21 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async () => undefined),
 }));
 
-const { GitLabAdapter } = await import('./adapter');
+const readiness = await import('./repository-readiness');
 const trackTempRoot = trackTempRoots();
 
-function createAdapter(token: string, gitlabUrl: string): InstanceType<typeof GitLabAdapter> {
-  return new GitLabAdapter(token, 'webhook-secret', {} as never, gitlabUrl, 'archon');
-}
-
 function ensureRepoReady(
-  adapter: InstanceType<typeof GitLabAdapter>,
+  client: { gitlabUrl: string; token: string },
   projectPath: string,
   repoPath: string
 ): Promise<void> {
-  return (
-    adapter as unknown as {
-      ensureRepoReady(
-        projectPath: string,
-        defaultBranch: string,
-        codebase: { name: string; default_cwd: string },
-        shouldSync: boolean
-      ): Promise<void>;
-    }
-  ).ensureRepoReady(projectPath, 'main', { name: projectPath, default_cwd: repoPath }, false);
+  return readiness.ensureRepoReady(
+    client,
+    projectPath,
+    'main',
+    { name: projectPath, default_cwd: repoPath },
+    false
+  );
 }
 
 describe('GitLab clone child security boundary', () => {
@@ -127,7 +120,7 @@ describe('GitLab clone child security boundary', () => {
           return realExec(file, localArgs, options);
         });
         await ensureRepoReady(
-          createAdapter('token', 'https://gitlab.example.test'),
+          { gitlabUrl: 'https://gitlab.example.test', token: 'token' },
           'group/project',
           target
         );
@@ -149,9 +142,9 @@ describe('GitLab clone child security boundary', () => {
       const targetPath = join(root, 'clone');
       const fixture = await createRecordingGitFixture(root);
       const token = 'gitlab-adapter-token-789';
-      const adapter = createAdapter(token, 'https://gitlab.example.test:8443');
+      const client = { gitlabUrl: 'https://gitlab.example.test:8443', token };
 
-      await fixture.run(() => ensureRepoReady(adapter, 'group/project', targetPath));
+      await fixture.run(() => ensureRepoReady(client, 'group/project', targetPath));
 
       const invocations = await fixture.readInvocations();
       const clone = invocations.find(invocation => invocation.argv.includes('clone'));
@@ -174,11 +167,11 @@ describe('GitLab clone child security boundary', () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-gitlab-clone-403-')));
       const fixture = await createRecordingGitFixture(root);
       const token = 'gitlab-rejected-token-987';
-      const adapter = createAdapter(token, 'https://gitlab.example.test:8443');
+      const client = { gitlabUrl: 'https://gitlab.example.test:8443', token };
       const failure = `fatal: credential ${token} rejected: The requested URL returned error: 403\n`;
 
       const clone = fixture.run(
-        () => ensureRepoReady(adapter, 'group/project', join(root, 'clone')),
+        () => ensureRepoReady(client, 'group/project', join(root, 'clone')),
         failure
       );
 

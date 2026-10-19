@@ -26,4 +26,4 @@ Existing worktrees are reused by default. Reuse emits a `worktree_adopted` warni
 - [Provider capabilities](/reference/provider-capabilities/)
 - [Forge operations](/reference/forge/)
 - [Database](/reference/database/)
-- [Isolation](/book/isolation/)
+- [Worktrees](/guides/worktrees/)

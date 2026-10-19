@@ -15,6 +15,8 @@ facts:
   pull_request: null
   continues: null
   branch: "build/7-stub-fixture"
+  blocked: []
+  blocked_count: 0
 route:
   decision: launch
   brief: "stub-brief: deliver https://github.com/example/repo/issues/7; the issue body is the contract"
@@ -30,6 +32,7 @@ ship__triage__triage:
   urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
+  related: []
   summary: "stub: no acceptance stated"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 answer:

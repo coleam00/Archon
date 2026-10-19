@@ -73,16 +73,6 @@ export function stateAppend(name: string, path: string, value: unknown): void {
   statePatch(name, [{ op: 'append', path, value }]);
 }
 
-export function stateList(prefix: string): string[] {
-  const result = archon(['state', 'list', '--prefix', prefix]);
-  const documents = record(result.value)?.documents;
-  if (result.code !== 0 || !Array.isArray(documents)) throw failed('state list', result);
-  return documents
-    .map(record)
-    .filter(row => row?.deleted === false && typeof row.name === 'string')
-    .map(row => row?.name as string);
-}
-
 /** Every live document under the prefix with its value, in one read. */
 export function stateDocuments(prefix: string): (Stored & { readonly name: string })[] {
   const result = archon(['state', 'list', '--prefix', prefix, '--values']);

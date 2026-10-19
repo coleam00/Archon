@@ -10,6 +10,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { nodeCapabilities } from '../variants';
 import type { BuilderNode, WireDagNode } from '../types';
 import type { BuilderFlowNode } from '../flow/types';
+import { modelRefLabel } from './inspector/fields';
 
 /** First line of the node's main content, for the in-node preview. */
 export function contentPreview(node: BuilderNode): string {
@@ -92,7 +93,7 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
         ) : null}
 
         <div className="flex flex-wrap gap-1">
-          {node.base.model !== undefined ? <Pill>{node.base.model}</Pill> : null}
+          {node.base.model !== undefined ? <Pill>{modelRefLabel(node.base.model)}</Pill> : null}
           {hasWhen ? <Pill>when</Pill> : null}
           {node.base.trigger_rule !== undefined && node.base.trigger_rule !== 'all_success' ? (
             <Pill>{node.base.trigger_rule}</Pill>

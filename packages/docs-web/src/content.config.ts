@@ -40,16 +40,7 @@ export const collections = {
             'deployment',
             'reference',
             'contributing',
-            'book',
           ])
-          .optional(),
-
-        /**
-         * Book of Archon part — groups chapters into narrative sections.
-         * Only used for pages in the `book/` directory.
-         */
-        part: z
-          .enum(['orientation', 'core-workflows', 'customization', 'advanced'])
           .optional(),
 
         /**
