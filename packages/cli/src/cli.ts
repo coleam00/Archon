@@ -469,8 +469,12 @@ async function main(): Promise<number> {
       );
     }
 
-    const runConfigFlag = values.config ?? values['config-from-run'];
-    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, runConfigFlag);
+    const configOutsideRun = rejectConfigOutsideRun(
+      command,
+      subcommand,
+      values.config,
+      values['config-from-run']
+    );
     if (configOutsideRun) {
       console.error(configOutsideRun);
       return 1;
@@ -788,7 +792,11 @@ async function main(): Promise<number> {
               return await fail(jsonFlag, 'Usage: archon workflow run <name> [message]');
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            const configOnContinue = rejectConfigOnContinue(resumeFlag, runConfigFlag);
+            const configOnContinue = rejectConfigOnContinue(
+              resumeFlag,
+              values.config,
+              values['config-from-run']
+            );
             if (configOnContinue) {
               console.error(configOnContinue);
               return 1;

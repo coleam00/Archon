@@ -719,6 +719,18 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
     }
   });
 
+  it('refuses --config-from-run on a resume, before reading the named run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const reads = (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls.length;
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'bench', 'go', {
+        resume: true,
+        configFromRun: 'paused-run',
+      })
+    ).rejects.toThrow('--resume and --config-from-run are mutually exclusive.');
+    expect((workflowDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls).toHaveLength(reads);
+  });
+
   it('refuses --config-from-run beside --config, and for a run that does not exist', async () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), tempRoot, 'bench', 'go', {
