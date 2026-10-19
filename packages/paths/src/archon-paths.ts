@@ -7,7 +7,7 @@
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
  * │   │                                  #   _folder/<slug>     folder project (runs in place)
- * │   │                                  #   _cwd/v2/<basename>-<digest>    unregistered working dir
+ * │   │                                  #   @cwd/<basename>-<digest>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
@@ -769,7 +769,7 @@ export function getScopeArtifactsPath(
  * resolve. This is the *one* key the whole codebase derives output paths from:
  * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
  * folder project (`_folder/<slug>`), or an unregistered working directory
- * (`_cwd/v2/<basename>-<digest>`).
+ * (`@cwd/<basename>-<digest>`).
  *
  * It exists because the identity → storage rule was previously implemented
  * three times at three different levels of correctness (the executor handled
@@ -843,7 +843,7 @@ export function resolveProjectStorageKey(
 
 /**
  * Compose the output roots for a storage key. Every kind resolves UNDER
- * `ARCHON_HOME` — including `'cwd'`, which maps to the `_cwd` pseudo-owner.
+ * `ARCHON_HOME` — including `'cwd'`, which maps to the `@cwd` namespace.
  *
  * The `'cwd'` mapping is deliberately external: the engine used to write an
  * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
@@ -868,8 +868,8 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
       const digest = createHash('sha256').update(cwd).digest('hex');
       // Reserve 65 bytes for the separator and digest within a 255-byte directory name.
       const name = sanitizeScopeSegment(basename(cwd)).slice(0, 190);
-      // Nest new roots so no legacy single-basename root can be adopted.
-      root = join(getProjectRoot('_cwd', 'v2'), `${name}-${digest}`);
+      // @ cannot occur in registered repo owners; this also stays outside legacy _cwd trees.
+      root = getProjectRoot('@cwd', `${name}-${digest}`);
       break;
     }
   }
@@ -879,7 +879,7 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
 /**
  * True when `candidate` resolves inside `ARCHON_HOME`.
  *
- * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
+ * Every storage key kind composes under `ARCHON_HOME` — including the `@cwd`
  * pseudo-project since #2200 — so this is the trust boundary for any path that
  * did NOT come straight from {@link getProjectStoragePaths}. In practice that
  * means a persisted `workflow_runs.output_root`: the engine only ever writes an
@@ -912,7 +912,7 @@ export function resolveRunStorageRoot(
 
 /**
  * The project key a storage root is filed under: its path below the workspaces
- * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `_cwd/v2/<basename>-<digest>`).
+ * directory with `/` separators (`owner/repo`, `_folder/<slug>`, `@cwd/<basename>-<digest>`).
  * Project-scoped state documents use it as their identity, so every surface that
  * names a project derives it here. A root outside the workspaces directory has
  * no key and throws rather than yielding a `..` path.

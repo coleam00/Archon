@@ -41,7 +41,7 @@ import type { IWorkflowStore } from './store';
  * A project as the engine identifies it. `key` is the identity: the project storage key
  * state documents scope by, so `archon state --project <key>` reaches the same project.
  * `codebaseId` is null when the project has no codebase row, such as a run in an
- * unregistered directory (`_cwd/v2/<basename>-<digest>`). `name` is the codebase's name, or otherwise
+ * unregistered directory (`@cwd/<basename>-<digest>`). `name` is the codebase's name, or otherwise
  * the key's last segment.
  */
 export const projectRefSchema = z.object({

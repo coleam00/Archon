@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { afterAll, describe, expect, it, mock } from 'bun:test';
-import { basename, join } from 'path';
+import { basename, join, sep } from 'path';
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -75,7 +75,7 @@ describe('resolveProjectPaths', () => {
     expect(paths.outputRoot).toBe(wsPath('_folder', 'my-platform'));
   });
 
-  // #2304: a transient lookup fault used to drop the run onto `_cwd/v2/<basename>-<digest>` and,
+  // #2304: a transient lookup fault used to drop the run onto `@cwd/<basename>-<digest>` and,
   // because `output_root` is write-once, pin it there for the run's whole life —
   // including its `$STATE_DIR`, so a stateful workflow silently read an empty state
   // directory. Asserting the RESOLVED PATH rather than the call count: the failure is
@@ -167,7 +167,7 @@ describe('resolveProjectPaths', () => {
     expect(result.stateDir).toBe(wsPath('_local', 'workspace', 'state'));
   });
 
-  it('routes an unregistered cwd to _cwd/v2/<basename>-<digest> UNDER ARCHON_HOME, never into the repo', async () => {
+  it('routes an unregistered cwd to @cwd/<basename>-<digest> UNDER ARCHON_HOME, never into the repo', async () => {
     const store = makeStore({ getCodebase: mock(async () => null) });
     const deps = makeDeps(store);
 
@@ -180,10 +180,10 @@ describe('resolveProjectPaths', () => {
     // Positive form: asserting only `!startsWith('/some/cwd')` passes trivially
     // on win32 (where the result is backslash-separated), so assert the path is
     // actually rooted in the workspace tree.
-    expect(result.artifactsDir.startsWith(wsPath('_cwd'))).toBe(true);
+    expect(result.artifactsDir.startsWith(wsPath('@cwd'))).toBe(true);
   });
 
-  it('routes to _cwd/v2/<basename>-<digest> when no codebaseId is provided', async () => {
+  it('routes to @cwd/<basename>-<digest> when no codebaseId is provided', async () => {
     const deps = makeDeps();
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
@@ -253,6 +253,40 @@ describe('resolveProjectPaths', () => {
     expect(warn).not.toHaveBeenCalled();
     await resolveProjectPaths(makeDeps(), join(testHome, 'a', 'fresh'), 'fresh-run');
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('creates no legacy v2 notice from fresh output', async () => {
+    await resolveProjectPaths(makeDeps(), join(testHome, 'ordinary'), 'ordinary-run');
+    for (const name of ['v2', 'V2']) {
+      warn.mockClear();
+      await resolveProjectPaths(makeDeps(), join(testHome, name), `fresh-${name}`);
+      expect(
+        warn.mock.calls.filter(([, event]) => event === 'workflow.legacy_cwd_storage_detected')
+      ).toHaveLength(0);
+    }
+  });
+
+  it('keeps fresh output outside preserved legacy v2 and V2 trees', async () => {
+    for (const name of ['v2', 'V2']) {
+      const legacyRoot = wsPath('_cwd', name);
+      await mkdir(join(legacyRoot, 'state'), { recursive: true });
+      await writeFile(join(legacyRoot, 'state', 'memory.txt'), 'legacy memory');
+      const before = await readdir(legacyRoot);
+      warn.mockClear();
+      const fresh = await resolveProjectPaths(makeDeps(), join(testHome, name), `upgrade-${name}`);
+      expect(fresh.outputRoot.toLowerCase().startsWith(`${legacyRoot.toLowerCase()}${sep}`)).toBe(
+        false
+      );
+      await mkdir(fresh.stateDir, { recursive: true });
+      await writeFile(join(fresh.stateDir, 'memory.txt'), 'fresh memory');
+      expect(await readdir(legacyRoot)).toEqual(before);
+      expect(await readFile(join(legacyRoot, 'state', 'memory.txt'), 'utf8')).toBe('legacy memory');
+      const notices = warn.mock.calls.filter(
+        ([, event]) => event === 'workflow.legacy_cwd_storage_detected'
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0][0]).toMatchObject({ legacyPath: legacyRoot, newPath: fresh.outputRoot });
+    }
   });
 
   it('does not adopt legacy state whose basename matches a new storage segment', async () => {

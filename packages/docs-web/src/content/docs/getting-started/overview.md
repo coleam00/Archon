@@ -503,7 +503,7 @@ If you moved or renamed the registered checkout, repair its path with `/update-p
 
 A source-symlink error without an existing registered remote can instead mean an abandoned workspace entry. Inspect its `source` link and contents first. Preserve any state, logs and artifacts; only remove an obsolete source link after confirming no registered project uses it, then retry registration.
 
-`--no-worktree` does not bypass a failed registration or project lookup. The command stops before execution to preserve the registered project's identity and state location. Unregistered non-git directories remain supported without `--folder`; they use directory-specific `_cwd/v2/<basename>-<digest>` storage.
+`--no-worktree` does not bypass a failed registration or project lookup. The command stops before execution to preserve the registered project's identity and state location. Unregistered non-git directories remain supported without `--folder`; they use directory-specific `@cwd/<basename>-<digest>` storage.
 
 ---
 

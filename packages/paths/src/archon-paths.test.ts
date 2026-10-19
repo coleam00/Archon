@@ -693,7 +693,7 @@ describe('archon-paths', () => {
         )
       ).toBe('_folder/my-ops-folder');
       expect(projectKeyForCodebase(null, '/home/u/scratch-repo')).toBe(
-        `_cwd/v2/scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
+        `@cwd/scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
       );
     });
 
@@ -747,13 +747,12 @@ describe('archon-paths', () => {
       });
     });
 
-    test('cwd key resolves UNDER ARCHON_HOME at _cwd/v2/<basename>-<digest>, never into the repo', () => {
+    test('cwd key resolves UNDER ARCHON_HOME at @cwd/<basename>-<digest>, never into the repo', () => {
       const paths = getProjectStoragePaths({ kind: 'cwd', cwd: '/home/u/scratch-repo' });
       const root = join(
         '/custom/archon',
         'workspaces',
-        '_cwd',
-        'v2',
+        '@cwd',
         `scratch-repo-${cwdDigest('/home/u/scratch-repo')}`
       );
       expect(paths).toEqual({
@@ -767,6 +766,17 @@ describe('archon-paths', () => {
       // from the POSIX literals and a hard-coded '/custom/archon' never matches.
       expect(paths.root.startsWith(join('/custom/archon', 'workspaces'))).toBe(true);
       expect(paths.root).not.toContain(join('.archon', 'artifacts'));
+    });
+
+    test('cwd namespace cannot be a registered repo owner or a legacy cwd or folder root', () => {
+      const root = getProjectStoragePaths({ kind: 'cwd', cwd: '/a/notes' }).root;
+      const key = projectKeyForStorageRoot(root);
+      const [owner] = key.split('/');
+      expect(parseOwnerRepo(key)).toBeNull();
+      expect(owner).toBe('@cwd');
+      expect(owner).not.toBe('_cwd');
+      expect(owner).not.toBe('_folder');
+      expect(owner).not.toBe('_local');
     });
 
     test('same-basename directories and sanitization collisions have separate state', () => {
@@ -789,14 +799,13 @@ describe('archon-paths', () => {
         join(
           '/custom/archon',
           'workspaces',
-          '_cwd',
-          'v2',
+          '@cwd',
           `my_repo_v2-${cwdDigest('/home/u/my repo.v2')}`
         )
       );
       // basename('/') is '' → the `_` fallback, not an empty segment.
       expect(getProjectStoragePaths({ kind: 'cwd', cwd: '/' }).root).toBe(
-        join('/custom/archon', 'workspaces', '_cwd', 'v2', `_-${cwdDigest('/')}`)
+        join('/custom/archon', 'workspaces', '@cwd', `_-${cwdDigest('/')}`)
       );
     });
 
@@ -864,13 +873,12 @@ describe('archon-paths', () => {
       );
     });
 
-    test('resolves a cwd key under _cwd, separated by run id', () => {
+    test('resolves a cwd key under @cwd, separated by run id', () => {
       expect(getRunArtifactsDirForKey({ kind: 'cwd', cwd: '/home/u/scratch' }, 'run-1')).toBe(
         join(
           '/custom/archon',
           'workspaces',
-          '_cwd',
-          'v2',
+          '@cwd',
           `scratch-${cwdDigest('/home/u/scratch')}`,
           'artifacts',
           'runs',

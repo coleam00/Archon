@@ -3974,7 +3974,7 @@ describe('executeWorkflow', () => {
         { conversationId: 'db-conv-1' }
       );
       // Positional arg 20 = scopeArtifactsDir (after workflowPreset). Root is the
-      // unregistered-cwd project (`_cwd/v2/<basename>-<digest>`, #2200); scope = workflow name +
+      // unregistered-cwd project (`@cwd/<basename>-<digest>`, #2200); scope = workflow name +
       // conversation UUID ('conv-1' from the createWorkflowRun mock;
       // getScopeArtifactsPath is mocked to `${root}/scopes/${wf}/${scope}`).
       const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].scopeArtifactsDir;
