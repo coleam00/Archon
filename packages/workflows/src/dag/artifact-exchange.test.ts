@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import type { ArtifactExchange } from '../container-context';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -151,6 +151,38 @@ describe('artifact exchange at workflow invocation boundaries', () => {
       }
     }
   );
+
+  it('surfaces a canonical typed-artifact parent refusal after successful invocation', async () => {
+    const store = createMockStore();
+    const artifactsDir = join(root, 'canonical');
+    const outside = join(root, 'outside');
+    await mkdir(artifactsDir);
+    await mkdir(outside);
+    await writeFile(join(outside, 'produce.md'), 'untouched');
+    await symlink(outside, join(artifactsDir, 'nodes'));
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'output' };
+      yield { type: 'result' };
+    });
+    await expect(
+      executeDagWorkflow(
+        exchangeOptions({
+          deps: createMockDeps(store),
+          cwd: root,
+          artifactsDir,
+          workflowRun: makeWorkflowRun('typed-refusal', { output_root: root }),
+          artifactExchange: { async publish() {}, async collect() {} },
+          workflow: {
+            name: 'typed-refusal',
+            description: 'test',
+            nodes: [dagNodeSchema.parse({ id: 'produce', prompt: 'produce', output_type: 'text' })],
+          },
+        })
+      )
+    ).rejects.toThrow('real directory');
+    expect(await readFile(join(outside, 'produce.md'), 'utf8')).toBe('untouched');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it('carries exchange into a composed fan-out body', async () => {
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });

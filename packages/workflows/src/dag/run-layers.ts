@@ -1,3 +1,4 @@
+import { withArtifactWriteRoot } from '../artifact-writes';
 /**
  * The layer walker: runs a DAG's (or subgraph's) topological layers, deciding per node
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
@@ -547,8 +548,7 @@ async function aggregateLayerResults(
       // Typed artifact: when a node declares `output_type`, persist its output
       // as a typed sidecar so other nodes and later runs can locate it by type.
       // The writer keeps top-level node paths stable and qualifies loop body
-      // paths with ctx.loopGroupPath. Best-effort — a metadata write must never
-      // fail an otherwise-successful node.
+      // paths with ctx.loopGroupPath. Separated container failures stop the run.
       const completedNode = nodeById.get(nodeId);
       if (output.state === 'completed' && completedNode?.output_type) {
         const meta = {
@@ -565,6 +565,7 @@ async function aggregateLayerResults(
             { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
             'artifacts.write_failed'
           );
+          if (ctx.artifactExchange) throw err;
         }
         // Scope mirror (#1846): persistence-participating nodes also write their
         // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
@@ -575,8 +576,11 @@ async function aggregateLayerResults(
           ctx.scopeArtifactsDir &&
           nodeUsesPersistedScope(completedNode, ctx.workflowPersistSessions)
         ) {
+          const scopeArtifactsDir = ctx.scopeArtifactsDir;
           try {
-            await writeNodeArtifact(ctx.scopeArtifactsDir, meta, output.output);
+            await withArtifactWriteRoot(undefined, () =>
+              writeNodeArtifact(scopeArtifactsDir, meta, output.output)
+            );
           } catch (err) {
             getLog().warn(
               {

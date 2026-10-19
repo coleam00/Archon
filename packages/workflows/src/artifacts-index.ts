@@ -1,5 +1,10 @@
+import {
+  isProtectedArtifactPath,
+  prepareArtifactParent,
+  writeArtifactFile,
+} from './artifact-writes';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { NODES_SUBDIR } from './artifact-exchange';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
@@ -81,6 +86,8 @@ function sameArtifactOwner(left: ArtifactOwner, right: ArtifactOwner): boolean {
 async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | undefined> {
   let rawMetadata: string;
   try {
+    if (isProtectedArtifactPath(metaPath) && (await lstat(metaPath)).isSymbolicLink())
+      return undefined;
     rawMetadata = await readFile(metaPath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -105,8 +112,7 @@ async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | unde
  * Concurrent writers are isolated by their identity-derived paths.
  *
  * Returns the written metadata. Throws on fs failure or a sanitized-id collision
- * — callers persist artifacts best-effort and must wrap this in their own
- * try/catch so an artifact write never fails an otherwise-successful node.
+ * — host callers may persist best-effort; separated container runs surface failure.
  */
 export async function writeNodeArtifact(
   artifactsDir: string,
@@ -118,7 +124,6 @@ export async function writeNodeArtifact(
   // durable constructor before creating either sidecar.
   const parsedParams = nodeArtifactWriteParamsSchema.parse(params);
   const nodesDir = join(artifactsDir, NODES_SUBDIR);
-  await mkdir(nodesDir, { recursive: true });
   const owner: ArtifactOwner = {
     nodeId: parsedParams.nodeId,
     ...(parsedParams.loopGroupPath !== undefined
@@ -132,6 +137,7 @@ export async function writeNodeArtifact(
   // example `a.b` and `a_b`), and loop digests retain an ownership check rather
   // than assuming their hash alone is authoritative. Compare the complete
   // producer identity and fail loudly instead of overwriting another artifact.
+  await prepareArtifactParent(metaPath);
   const priorOwner = await readArtifactOwner(metaPath);
   if (priorOwner !== undefined && !sameArtifactOwner(priorOwner, owner)) {
     throw new Error(
@@ -140,7 +146,7 @@ export async function writeNodeArtifact(
   }
 
   const relPath = join(NODES_SUBDIR, `${stem}.md`);
-  await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
+  await writeArtifactFile(join(artifactsDir, relPath), outputText);
   const meta: NodeArtifact = {
     nodeId: parsedParams.nodeId,
     outputType: parsedParams.outputType,
@@ -152,7 +158,7 @@ export async function writeNodeArtifact(
     producedAt: parsedParams.producedAt,
     size: Buffer.byteLength(outputText, 'utf8'),
   };
-  await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  await writeArtifactFile(metaPath, JSON.stringify(meta, null, 2));
   return meta;
 }
 
@@ -369,8 +375,7 @@ export async function writeNodeArtifactsListing(
   const result = await readNodeArtifacts(artifactsDir, { scope: 'current-run', runId });
   const listing: NodeArtifactsListing = { runId, ...result };
   const listingDir = join(artifactsDir, LISTINGS_SUBDIR);
-  await mkdir(listingDir, { recursive: true });
   const listingPath = join(listingDir, `${randomUUID()}.json`);
-  await writeFile(listingPath, JSON.stringify(listing, null, 2), 'utf8');
+  await writeArtifactFile(listingPath, JSON.stringify(listing, null, 2));
   return listingPath;
 }
