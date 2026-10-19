@@ -11,7 +11,9 @@ import {
   buildAiProfile,
   TIER_NAMES,
   type TierName,
+  type RawAliasesConfig,
   type RawTiersConfig,
+  type ResolvedAiProfile,
 } from '@archon/workflows/model-validation';
 import { BUNDLED_VERSION, readTierNoticeState, markTierNoticeShown } from '@archon/paths';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
@@ -192,19 +194,21 @@ export async function maybePrintTierNotice(
   if (quiet) return;
 
   // Collect tier keywords used by the workflow-level default and per-node overrides.
-  // A preference list counts by its final entry: the tier it lands on when none of its
-  // aliases is configured, which is the case this notice is about.
-  const usedTiers = new Set<TierName>();
+  // A preference list counts by the ref it selects: first with no aliases, to skip the
+  // config load when no node can land on a tier, then against the configured aliases.
   const refs = [
     workflow.model,
     ...workflow.nodes.map(node => ('model' in node ? node.model : undefined)),
   ];
-  for (const ref of refs) {
-    if (ref === undefined) continue;
-    const selected = selectModelRef(ref);
-    if (isTierName(selected)) usedTiers.add(selected);
-  }
-  if (usedTiers.size === 0) return;
+  const tiersSelected = (aliases?: ResolvedAiProfile['aliases']): Set<TierName> => {
+    const tiers = new Set<TierName>();
+    for (const ref of refs) {
+      const selected = selectModelRef(ref, aliases ? { aliases } : undefined);
+      if (selected !== undefined && isTierName(selected)) tiers.add(selected);
+    }
+    return tiers;
+  };
+  if (tiersSelected().size === 0) return;
 
   // Load install config to see which tiers are explicitly configured.
   let config: Awaited<ReturnType<WorkflowDeps['loadConfig']>>;
@@ -218,16 +222,21 @@ export async function maybePrintTierNotice(
 
   // Layer in the CLI user's personal tier prefs (best-effort, non-fatal).
   let userTiers: RawTiersConfig = {};
+  let userAliases: RawAliasesConfig = {};
   let userDefaultProvider: string | undefined;
   if (cliUserId) {
     try {
       const prefs = (await host.deps.getUserAiPrefs?.(cliUserId)) ?? {};
       userTiers = prefs.tiers ?? {};
+      userAliases = prefs.aliases ?? {};
       userDefaultProvider = prefs.defaultProvider;
     } catch {
       // Non-fatal — proceed without user tier info.
     }
   }
+
+  // A list whose alias is configured runs on that alias, not on a tier.
+  const usedTiers = tiersSelected({ ...config.aliases, ...userAliases });
 
   // Only notify when at least one used tier is unconfigured (built-in default).
   const hasUnconfigured = [...usedTiers].some(t => !configuredTiers[t] && !userTiers[t]);
