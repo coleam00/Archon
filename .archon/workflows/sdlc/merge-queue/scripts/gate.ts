@@ -26,7 +26,7 @@ import {
   readPr,
   requireGh,
 } from '../../.shared/merge.ts';
-import { readMaintainers } from '../../.shared/workitem.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 
 function flag(args: readonly string[], name: string): string {
   const index = args.indexOf(name);
