@@ -426,6 +426,38 @@ nodes:
       'unresolvable.yaml'
     );
     expect(workflow).toBeNull();
-    expect(error?.error).toContain('Invalid workflow-level model');
+    expect(error?.error).toContain("must be a tier or a model id, not the alias '@implementer'");
+  });
+
+  it('treats a bare model key as no model, as it always has', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: bare
+description: bare model key
+model:
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'bare.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.model).toBeUndefined();
+  });
+
+  it('rejects a model that is neither a ref nor a list, naming both shapes', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: numeric
+description: numeric model
+model: 5
+nodes:
+  - id: only
+    prompt: "hi"
+`,
+      'numeric.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain('a model ref string or a preference list');
   });
 });
