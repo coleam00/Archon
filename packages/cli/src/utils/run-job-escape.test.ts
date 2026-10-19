@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  acceptRelayConnection,
   isDetachedLaunch,
   relayOutsideRunJob,
   RUN_JOB_ESCAPE_ENV,
@@ -57,41 +58,29 @@ describe('run job escape', () => {
     }
   });
 
-  it('keeps serving after a client dies mid-invocation', async () => {
+  it('keeps serving after one connection fails', async () => {
     const pipe = brokerPipe();
-    const server = await serveRunJobEscape(pipe);
+    let failFirst = true;
+    // A launcher killed mid-invocation surfaces on the broker as an error on its connection.
+    const server = createServer(socket => {
+      acceptRelayConnection(socket);
+      if (failFirst) {
+        failFirst = false;
+        socket.emit('error', new Error('write EPIPE'));
+      }
+    });
+    await new Promise<void>(resolveListen => server.listen(pipe, resolveListen));
     try {
-      // A launcher killed while its command still writes output leaves the broker writing
-      // to a dead connection.
-      const client = createConnection(pipe);
-      await new Promise<void>(resolveConnect => client.once('connect', resolveConnect));
-      client.write(
-        `${JSON.stringify({
-          argv: [
-            process.execPath,
-            '-e',
-            'const t = setInterval(() => console.log("x".repeat(65536)), 5); setTimeout(() => { clearInterval(t); }, 500);',
-          ],
-          cwd: process.cwd(),
-          env: { ...process.env },
-        })}\n`
-      );
-      await Bun.sleep(100);
-      client.resetAndDestroy();
-      await Bun.sleep(600);
-
-      const exit = await relayOutsideRunJob(
-        pipe,
-        {
-          argv: [process.execPath, '-e', 'process.exit(0)'],
-          cwd: process.cwd(),
-          env: { ...process.env },
-        },
-        { stdout: async () => {}, stderr: async () => {} }
-      );
-      expect(exit).toBe(0);
+      const relay = (): Promise<number> =>
+        relayOutsideRunJob(
+          pipe,
+          { argv: [process.execPath, '-e', 'process.exit(0)'], cwd: process.cwd(), env: {} },
+          { stdout: async () => {}, stderr: async () => {} }
+        );
+      await expect(relay()).rejects.toThrow();
+      expect(await relay()).toBe(0);
     } finally {
-      await server.close();
+      await new Promise<void>(resolveClose => server.close(() => resolveClose()));
     }
   });
 

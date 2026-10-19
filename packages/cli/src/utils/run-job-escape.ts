@@ -126,22 +126,25 @@ export interface RunJobEscapeServer {
   close(): Promise<void>;
 }
 
+/** Serve one broker connection: run the first invocation it sends. */
+export function acceptRelayConnection(socket: Socket): void {
+  // A launcher killed mid-invocation breaks only its own connection. Unhandled, the error
+  // would end the broker and every later --detach launch of the run. The relayed command
+  // keeps running: it may already have started a detached owner.
+  socket.on('error', () => {
+    socket.destroy();
+  });
+  let received = false;
+  onLines(socket, line => {
+    if (received) return;
+    received = true;
+    runInvocation(socket, line);
+  });
+}
+
 /** Serve relayed invocations on `pipe`. */
 export async function serveRunJobEscape(pipe: string): Promise<RunJobEscapeServer> {
-  const server = createServer(socket => {
-    // A launcher killed mid-invocation breaks only its own connection. Unhandled, the error
-    // would end the broker and every later --detach launch of the run. The relayed command
-    // keeps running: it may already have started a detached owner.
-    socket.on('error', () => {
-      socket.destroy();
-    });
-    let received = false;
-    onLines(socket, line => {
-      if (received) return;
-      received = true;
-      runInvocation(socket, line);
-    });
-  });
+  const server = createServer(acceptRelayConnection);
   await new Promise<void>((resolveListen, reject) => {
     server.once('error', reject);
     server.listen(pipe, resolveListen);
