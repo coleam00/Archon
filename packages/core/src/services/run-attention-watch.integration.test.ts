@@ -1,6 +1,12 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
-import { testTimeout } from '@archon/paths/test-utils';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
+import { executionClaim, type IWorkflowStore } from '@archon/workflows/store';
+import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { linkSync, renameSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
@@ -9,7 +15,7 @@ import { RUN_LIVE_OWNER_IPC_TIMEOUT_MS, runLiveOwnerPath } from './run-live-owne
 
 const rows = new Map<string, WorkflowRun>();
 const store = { getWorkflowRun: async (id: string) => rows.get(id) ?? null };
-const { waitForRunAttention } = await import('./run-attention-watch');
+const { waitForRunAttention, runOwnerLossWatch } = await import('./run-attention-watch');
 
 const localUid = process.getuid?.();
 const localOwner = {
@@ -190,3 +196,79 @@ describe('attention wait with a real owner endpoint', () => {
     }
   });
 });
+
+const roots = trackTempRoots();
+
+test.each([1, 2])(
+  'a resume before owner read %s cannot report the new loss under the old claim',
+  async heldRead => {
+    const files = await createFileWorkflowStore({
+      root: roots(await mkdtemp(join(tmpdir(), 'archon-owner-claim-'))),
+    });
+    const run = await files.createWorkflowRun({ workflow_name: 'wf', user_message: '' });
+    await files.claimPendingWorkflowRun(run.id);
+    await files.updateWorkflowRun(run.id, { metadata: localOwner });
+    const after = await files.getWorkflowEventHead();
+    const reading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const checked = Promise.withResolvers<void>();
+    const caughtUp = Promise.withResolvers<void>();
+    const lines: AttentionStreamLine[] = [];
+    let reads = 0;
+    let checks = 0;
+    let finished = 0;
+    let held = true;
+    const holding: IWorkflowStore = Object.create(files);
+    holding.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : files.readWorkflowEventsAfter(cursor, options);
+    const ownerLoss = runOwnerLossWatch({
+      getWorkflowRun: async id => {
+        if (++reads === heldRead) {
+          reading.resolve();
+          await release.promise;
+        }
+        return files.getWorkflowRun(id);
+      },
+    });
+    let head = after;
+    const stream = await watchAttentionQueue(
+      holding,
+      {
+        branchOf: async () => null,
+        ownerLoss: async (...args) => {
+          checks++;
+          const result = await ownerLoss(...args);
+          finished++;
+          checked.resolve();
+          return result;
+        },
+      },
+      line => {
+        lines.push(line);
+        if (line.type === 'bookmark' && line.cursor === head && !held && finished === 2)
+          caughtUp.resolve();
+      },
+      { scope: { kind: 'all' }, after, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+    );
+    try {
+      await reading.promise;
+      await files.failWorkflowRun(run.id, 'failed');
+      const resumed = await files.resumeWorkflowRun(run.id);
+      expect(executionClaim(resumed.metadata)).not.toBeNull();
+      await files.updateWorkflowRun(run.id, { metadata: { ...resumed.metadata, ...localOwner } });
+      head = await files.getWorkflowEventHead();
+      release.resolve();
+      await checked.promise;
+      held = false;
+      await caughtUp.promise;
+    } finally {
+      release.resolve();
+      await stream.close();
+    }
+    expect(checks).toBe(2);
+    expect(lines.filter(line => line.type === 'owner_lost')).toHaveLength(1);
+    expect((await files.getWorkflowRun(run.id))?.status).toBe('running');
+  }
+);
