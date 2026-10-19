@@ -497,6 +497,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
       previous: 'P'.repeat(33_000),
       current: 'C'.repeat(33_000),
     },
+    ...['', '.data'].map(field => ({
+      label: `equal consecutive values ${field || 'whole'}`,
+      field,
+      previous: 'S'.repeat(33_000),
+      current: 'S'.repeat(33_000),
+    })),
     {
       label: 'whole spilled output with trailing newlines',
       field: '',
@@ -570,7 +576,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
                 loop_group: {
                   until_bash:
                     `current=$work.output${field}; previous=$LOOP_PREV.work.output${field}; ` +
-                    'test $compare.output = done && test "$current" != "$previous"',
+                    `test $compare.output = done && test "$current" ${current === previous ? '=' : '!='} "$previous"`,
                   max_iterations: 2,
                   fresh_context: false,
                   nodes: [
@@ -612,6 +618,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
             .map(file => readFile(join(spillDir, file), 'utf8'))
         );
         expect(contents).toContain(previous);
+        if (current === previous) {
+          expect(contents.filter(content => content === previous).length).toBeGreaterThan(1);
+        }
       }
     }
   );

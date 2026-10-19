@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
-import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import { writeEngineFile } from './engine-file';
 import { getLog } from './log';
 import { NODE_OUTPUT_FILE_THRESHOLD } from './node-output';
 
@@ -14,20 +13,21 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * Write `value` to `<dir>/<filename>`, creating `dir` as needed. Returns the full
+ * Write `value` under the run engine directory, creating parents as needed. Returns the full
  * path on success, or `undefined` after logging on any failure (permission, disk
  * space, etc.) — callers own their own fallback; this never throws.
  */
-export function writeSpillFile(dir: string, filename: string, value: string): string | undefined {
-  const filePath = joinPath(dir, filename);
+export function writeSpillFile(
+  artifactsDir: string,
+  path: string,
+  value: string
+): string | undefined {
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(filePath, value);
-    return filePath;
+    return writeEngineFile(artifactsDir, path, value);
   } catch (fileErr) {
     const err = fileErr as Error;
     getLog().error(
-      { err, dir, filename, valueSize: Buffer.byteLength(value, 'utf8'), filePath },
+      { err, artifactsDir, path, valueSize: Buffer.byteLength(value, 'utf8') },
       'dag.spill_file_write_failed'
     );
     return undefined;
@@ -46,16 +46,9 @@ export function shellQuoteOrFile(
   artifactsDir: string | undefined
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
-    // Bash reads these files after all references resolve; distinct values must not overwrite.
-    const contentHash = createHash('sha256').update(value, 'utf8').digest('hex');
-    const spillDir = joinPath(
-      artifactsDir,
-      RUN_ARTIFACTS_ENGINE_SUBDIR,
-      'node-output-spills',
-      contentHash
-    );
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
-    const filePath = writeSpillFile(spillDir, filename, value);
+    const path = joinPath('node-output-spills', randomUUID(), filename);
+    const filePath = writeSpillFile(artifactsDir, path, value);
     if (filePath) {
       // Command substitution strips every trailing LF; append that suffix outside it.
       let suffixStart = value.length;

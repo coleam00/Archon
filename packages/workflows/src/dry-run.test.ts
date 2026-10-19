@@ -1610,6 +1610,38 @@ describe('dryRunWorkflow', () => {
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
   });
 
+  test.each(['literal', 'reference', 'newline reference'])(
+    'exec-code executes oversized Bash %s through run artifacts',
+    async kind => {
+      const value =
+        kind === 'newline reference'
+          ? 'A' + '\n'.repeat(600_000)
+          : 'x'.repeat(kind === 'literal' ? 3_000_000 : 600_000);
+      const workflow = makeTestWorkflow({
+        name: 'oversized-bash',
+        nodes: [
+          { id: 'producer', prompt: 'produce' },
+          {
+            id: 'code',
+            depends_on: ['producer'],
+            bash:
+              kind === 'literal'
+                ? `value='${value}'; printf '%s' "\${#value}"`
+                : `value=$producer.output; test -d "$ARTIFACTS_DIR/.archon/node-output-spills" && printf '%s' "\${#value}"`,
+          },
+        ],
+      });
+      const result = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: process.cwd(),
+        execCode: true,
+        stubs: { producer: value },
+      });
+      expect(result).toMatchObject({ outcome: 'completed', summary: String(value.length) });
+    }
+  );
+
   test('an executed code node is held to its output_format like a real run', async () => {
     const okSchema = {
       type: 'object',

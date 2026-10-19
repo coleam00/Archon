@@ -1,10 +1,9 @@
 // @archon-test-isolated
 import { bashScriptArgs } from './bash-script';
-import { createHash } from 'node:crypto';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import type { NodeOutput } from '../schemas';
@@ -466,14 +465,13 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
 describe('substituteNodeOutputRefs -- large output file substitution', () => {
   let tempDir: string;
 
-  const spillPath = (artifactsDir: string, filename: string, value: string): string =>
-    join(
-      artifactsDir,
-      '.archon',
-      'node-output-spills',
-      createHash('sha256').update(value, 'utf8').digest('hex'),
-      filename
-    );
+  const spillPath = async (artifactsDir: string, filename: string): Promise<string> => {
+    const root = join(artifactsDir, '.archon', 'node-output-spills');
+    const files = await readdir(root, { recursive: true });
+    const file = files.find(file => basename(file) === filename);
+    if (!file) throw new Error(`Missing spill ${filename}`);
+    return join(root, file);
+  };
 
   beforeEach(async () => {
     tempDir = join(tmpdir(), `archon-test-large-output-${Date.now()}`);
@@ -498,7 +496,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toContain('a.nodeoutput');
     // Verify file was written with correct content
     const { readFile: readFileAsync } = await import('fs/promises');
-    const written = await readFileAsync(spillPath(tempDir, 'a.nodeoutput', largeOutput), 'utf-8');
+    const written = await readFileAsync(await spillPath(tempDir, 'a.nodeoutput'), 'utf-8');
     expect(written).toBe(largeOutput);
   });
 
@@ -556,6 +554,29 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(stdout).toBe([value, value, value, value].join('|'));
   });
 
+  it.each(['', '.data'])(
+    'gives equal current and previous %s values separate files',
+    async field => {
+      const value = 'same'.repeat(10_000);
+      const outputs = new Map([['a', makeOutput('completed', value, { data: value })]]);
+      const script = substituteNodeOutputRefsInScopes(
+        `current=$a.output${field}; previous=$LOOP_PREV.a.output${field}; printf '%s|%s' "$current" "$previous"`,
+        outputs,
+        [{ loopPrevOutputs: outputs, outputFileDir: tempDir }],
+        true,
+        tempDir
+      );
+      const root = join(tempDir, '.archon', 'node-output-spills');
+      const files = (await readdir(root, { recursive: true })).filter(file =>
+        file.endsWith('.nodeoutput')
+      );
+      expect(files).toHaveLength(2);
+      expect(files[0]).not.toBe(files[1]);
+      const { stdout } = await execFileAsync(resolveBashPath(), bashScriptArgs(script, tempDir));
+      expect(stdout).toBe(`${value}|${value}`);
+    }
+  );
+
   it('writes large field value to file with field name in filename', async () => {
     const largeValue = 'y'.repeat(33_000);
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ data: largeValue }))]]);
@@ -563,10 +584,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toContain('$(cat ');
     expect(result).toContain('a.data.nodeoutput');
     const { readFile: readFileAsync } = await import('fs/promises');
-    const written = await readFileAsync(
-      spillPath(tempDir, 'a.data.nodeoutput', largeValue),
-      'utf-8'
-    );
+    const written = await readFileAsync(await spillPath(tempDir, 'a.data.nodeoutput'), 'utf-8');
     expect(written).toBe(largeValue);
   });
 
@@ -583,9 +601,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     );
 
     expect(await readFile(workflowArtifact, 'utf-8')).toBe('workflow-owned');
-    expect(await readFile(spillPath(tempDir, 'a.nodeoutput', largeOutput), 'utf-8')).toBe(
-      largeOutput
-    );
+    expect(await readFile(await spillPath(tempDir, 'a.nodeoutput'), 'utf-8')).toBe(largeOutput);
   });
 
   it('keeps same-node spills isolated in separate run artifact directories', async () => {
@@ -612,12 +628,12 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     );
 
     expect(runACommand).not.toBe(runBCommand);
-    expect(runACommand).toContain(spillPath(runAArtifacts, 'build.nodeoutput', runAOutput));
-    expect(runBCommand).toContain(spillPath(runBArtifacts, 'build.nodeoutput', runBOutput));
-    expect(await readFile(spillPath(runAArtifacts, 'build.nodeoutput', runAOutput), 'utf-8')).toBe(
+    expect(runACommand).toContain(await spillPath(runAArtifacts, 'build.nodeoutput'));
+    expect(runBCommand).toContain(await spillPath(runBArtifacts, 'build.nodeoutput'));
+    expect(await readFile(await spillPath(runAArtifacts, 'build.nodeoutput'), 'utf-8')).toBe(
       runAOutput
     );
-    expect(await readFile(spillPath(runBArtifacts, 'build.nodeoutput', runBOutput), 'utf-8')).toBe(
+    expect(await readFile(await spillPath(runBArtifacts, 'build.nodeoutput'), 'utf-8')).toBe(
       runBOutput
     );
   });

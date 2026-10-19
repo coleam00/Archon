@@ -1,3 +1,4 @@
+import { bashScriptArgs } from '../../dag/bash-script';
 import { mkdir } from 'node:fs/promises';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { certifyExecOutput } from '../../dag/nodes/exec/exec-output';
@@ -22,7 +23,7 @@ export async function executeCodeNode(
     let args: string[];
     if (node.runtime === 'sh') {
       command = resolveBashPath();
-      args = ['-c', code];
+      args = bashScriptArgs(code, ctx.artifactsDir);
     } else if (isInlineScript(code)) {
       if (node.runtime === 'bun') {
         command = 'bun';
