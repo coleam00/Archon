@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setLogSink } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -259,22 +260,41 @@ describe('labeling an attention wait', () => {
   });
 
   test('a lost label race stays a stale answer when the run cannot be re-read', async () => {
+    const lookupError = new Error('connection reset');
     const getWorkflowRun = mock<IWorkflowStore['getWorkflowRun']>(id => store.getWorkflowRun(id));
     const labelAttentionWait = mock<IWorkflowStore['labelAttentionWait']>(async () => {
-      getWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
+      getWorkflowRun.mockRejectedValueOnce(lookupError);
       return { labeled: false };
     });
     await setup({ getWorkflowRun, labelAttentionWait });
     const id = await paused('message');
 
-    await expect(
-      operations.labelAttentionWait(
-        id,
-        { occurrence: 'pause-1', set: { ci: 'other' }, unset: [] },
-        operator,
-        'cli'
-      )
-    ).rejects.toBeInstanceOf(StaleGateAnswerError);
+    const warnings: unknown[] = [];
+    setLogSink(line => warnings.push(JSON.parse(line)));
+    try {
+      await expect(
+        operations.labelAttentionWait(
+          id,
+          { occurrence: 'pause-1', set: { ci: 'other' }, unset: [] },
+          operator,
+          'cli'
+        )
+      ).rejects.toBeInstanceOf(StaleGateAnswerError);
+      expect(warnings).toContainEqual(
+        expect.objectContaining({
+          level: 40,
+          msg: 'operations.workflow_gate_occurrence_lookup_failed',
+          runId: id,
+          err: expect.objectContaining({
+            type: 'Error',
+            message: lookupError.message,
+            stack: lookupError.stack,
+          }),
+        })
+      );
+    } finally {
+      setLogSink(undefined);
+    }
     expect(labelAttentionWait).toHaveBeenCalledWith(id, {
       pauseId: 'pause-1',
       set: { ci: 'other' },
