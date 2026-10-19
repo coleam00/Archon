@@ -35,6 +35,12 @@ const localFields = {
   additionalDirectories: z.array(z.string()).optional(),
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
   codexBinaryPath: configStringSchema.optional(),
+  /**
+   * Models whose route rejects tools and a strict output schema in one request. On these, a
+   * node with `output_format` runs its tools without the schema, then one tool-free turn on
+   * the same thread with it. Codex multi-agent is off on their threads.
+   */
+  toolFreeStructuredOutputModels: z.array(configStringSchema).optional(),
 };
 const fields = { ...portableFields, ...localFields };
 export const configSchemas = {

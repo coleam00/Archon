@@ -308,6 +308,8 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
   async (_deps, candidate) => ({
     preCreatedRun: { ...candidate, status: 'running' },
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
+    resumeCause: candidate.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
     priorUsage: { costUsd: 0 },
     priorNodeSessions: [],
   })
@@ -315,6 +317,7 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
 export const mockInspectResumableRun = mock<typeof WorkflowRunResume.inspectResumableRun>(() =>
   Promise.resolve({
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+    priorFailedNodes: new Map(),
     priorUsage: { costUsd: 0 },
   })
 );
@@ -1015,6 +1018,7 @@ export function resetDispatchMocks(): void {
   mockInspectResumableRun.mockImplementation(() =>
     Promise.resolve({
       priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
+      priorFailedNodes: new Map(),
       priorUsage: { costUsd: 0 },
     })
   );

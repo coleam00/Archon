@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `archon workflow artifacts <run-id> [path]` lists a run's artifact files or prints one, and `archon project list` lists registered projects with the key `--project` accepts. Both take `--json` and need no running server. (#2239)
+
 ### Changed
 
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)

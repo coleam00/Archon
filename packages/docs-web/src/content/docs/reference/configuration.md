@@ -102,6 +102,7 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+    # toolFreeStructuredOutputModels: [glm-5.3]  # Optional: routes that reject tools + strict schema together
 
 # Streaming preferences per platform
 streaming:

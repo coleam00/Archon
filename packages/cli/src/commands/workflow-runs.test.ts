@@ -4,7 +4,7 @@ import {
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { workflowRunsCommand } from './workflow';
+import { workflowRunsCommand } from './workflow-query';
 import { NODE_SUMMARY_EVENT_TYPES } from './workflow-node-summaries';
 
 const EMPTY_COUNTS = {

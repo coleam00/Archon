@@ -9,26 +9,10 @@
  * workflow inputs INPUTS_REPO_HOST, INPUTS_REPO_PATH and INPUTS_RETRIAGE_AS.
  */
 
-import { dirname } from 'node:path';
 import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
-import { archonCommand } from '../../.shared/forge.ts';
-import { gitOrThrow } from '../../.shared/git.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { launchDetached } from '../../.shared/launch.ts';
 import { writeLabels } from '../../.shared/labels.ts';
-
-/** Start intake in the main checkout: this run's worktree can be cleaned up first. */
-function launchIntake(inputs: Record<string, string>): string {
-  const root = dirname(gitOrThrow('rev-parse', '--path-format=absolute', '--git-common-dir').trim());
-  const args = Object.entries(inputs).flatMap(([name, value]) => ['--input', `${name}=${value}`]);
-  const result = Bun.spawnSync(
-    [...archonCommand(), 'workflow', 'run', 'archon-intake', '--cwd', root, ...args, '--detach', '--json'],
-    { env: process.env, stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (result.exitCode !== 0) throw new Error(`archon-intake did not start: ${result.stderr.toString().trim()}`);
-  const runId = (nullableJson(result.stdout.toString()) as { runId?: unknown } | null)?.runId;
-  if (typeof runId !== 'string' || runId === '') throw new Error('archon-intake acknowledged no run id');
-  return runId;
-}
 
 function main(): void {
   const blocked = nullableJson(process.env.INPUTS_BLOCKED) as BlockedItem[];
@@ -44,7 +28,7 @@ function main(): void {
   for (const { number, reason } of judged) {
     const item = { repo, number };
     writeLabels(item, ['archon-triage'], []);
-    const intake = launchIntake({
+    const intake = launchDetached('archon-intake', {
       repo_host: repo.host,
       repo_path: repo.path,
       number: String(number),

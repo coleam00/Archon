@@ -9,6 +9,7 @@ import {
   parseWorkflowRunConfig,
   sealWorkflowRunConfig,
   unsealWorkflowRunConfig,
+  workflowRunConfigFromRun,
 } from './run-config';
 import { decodeWorkflowRunConfigHandoff } from './run-config-handoff';
 
@@ -275,6 +276,19 @@ describe('workflow run config', () => {
     expect(serialized).not.toContain('env-secret');
     expect(metadata.keys).toEqual(['assistants.pi.extensionFlags', 'env.TOKEN']);
     expect(unsealWorkflowRunConfig(metadata)).toEqual(input.layer);
+  });
+
+  it('reads the run config another run started with, naming that run as the source', () => {
+    const run_config = sealWorkflowRunConfig(
+      { assistant: 'codex' },
+      { kind: 'cli', label: 'config.claude.yaml' }
+    );
+    expect(workflowRunConfigFromRun({ id: 'r1', metadata: { run_config } })).toEqual({
+      layer: { assistant: 'codex' },
+      source: { kind: 'cli', label: 'run r1 (config.claude.yaml)' },
+    });
+    // A run started without --config ran on the install's config alone.
+    expect(workflowRunConfigFromRun({ id: 'r2', metadata: {} })).toBeUndefined();
   });
 
   it('fails explicitly when persisted ciphertext is tampered with', () => {
