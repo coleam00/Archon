@@ -294,7 +294,7 @@ nodes:
           type: boolean
         action:
           type: string
-          enum: [none, correct, replan, needs_human]
+          enum: [none, correct, replan, ask]
         findings_summary:
           type: string
         # The report the verdict rests on, as a certified artifact pointer: the
@@ -366,7 +366,7 @@ nodes:
       const verdict = JSON.parse(process.env.INPUTS_VERDICT);
       const report = JSON.parse(process.env.INPUTS_SCOPE_REPORT);
       console.log(JSON.stringify(JSON.parse(process.env.INPUTS_HEAD_MATCHES) ? verdict : {
-        ready: false, action: "needs_human",
+        ready: false, action: "ask",
         findings_summary: require("node:fs").readFileSync(require("node:path").join(process.env.ARTIFACTS_DIR, report.path), "utf8"),
         report, discoveries: [], contract_left: ["PR head mismatch prevented contract review."]
       }));
