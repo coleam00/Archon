@@ -215,6 +215,40 @@ describe('pr.thread.reply and pr.thread.resolve', () => {
     expect(github.calls.filter(call => call.query?.startsWith('mutation'))).toHaveLength(1);
   });
 
+  test('a write GitHub rejects with an errors document is refused, as authorization', async () => {
+    const github = fakeGitHub(call =>
+      call.query?.startsWith('mutation')
+        ? { errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }] }
+        : threadOwner()
+    );
+    for (const request of [
+      { operationId: 'r', op: 'pr.thread.reply' as const, ref, thread: 't1', body: 'x' },
+      { operationId: 's', op: 'pr.thread.resolve' as const, ref, thread: 't1' },
+    ]) {
+      expect(
+        await handleGithubOperation(request, { token: 'token', fetch: github.fetch })
+      ).toMatchObject({
+        ok: false,
+        error: { kind: 'authorization' },
+        mutation: { outcome: 'refused' },
+      });
+    }
+  });
+
+  test('an id that names another kind of node is refused as not a review thread', async () => {
+    const github = fakeGitHub(() => ({ data: { node: {} } }));
+    expect(
+      await handleGithubOperation(
+        { operationId: 's', op: 'pr.thread.resolve', ref, thread: 'PR_kw' },
+        { token: 'token', fetch: github.fetch }
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_request', message: expect.stringContaining('not a review thread') },
+      mutation: { outcome: 'refused' },
+    });
+  });
+
   test('a resolve that does not read back resolved is a verification failure', async () => {
     const github = fakeGitHub(call =>
       call.query?.startsWith('mutation')
