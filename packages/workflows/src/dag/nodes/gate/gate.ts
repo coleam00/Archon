@@ -15,7 +15,7 @@ import { isApprovalContext } from '../../../schemas';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { requireTerminalStatusWrite } from '../../../terminal-status-write';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
-import { safeSendMessage } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import { substituteNodeOutputRefs } from '../../references';

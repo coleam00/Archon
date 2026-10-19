@@ -5,7 +5,6 @@ facts:
   item: null
   target: ""
   decision: null
-  seen: null
 outcome:
   path: idle
   item: null
@@ -14,7 +13,6 @@ outcome:
   promoted: false
   labels: []
   summary: "stub: No item waits for intake."
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "9" }
   expect: completed

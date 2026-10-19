@@ -19,7 +19,7 @@
  * - INPUTS_REVIEW_CONTRACT_LEFT / INPUTS_REREVIEW_CONTRACT_LEFT / INPUTS_PREVIOUS_CONTRACT_LEFT:
  *   what the deciding review's contract coverage did not mark met, carried from the
  *   previous round when this round ran no review.
- * - INPUTS_CI / INPUTS_CI_RERUN: the CI agent's state, and whether it re-ran failed jobs.
+ * - INPUTS_CI: the CI agent's state.
  * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
  *   ended; "null" when the threads node did not run (the forge source, or no pull request).
  * - INPUTS_SETTLE_NEEDS_HUMAN: whether settle-threads found a thread only a person can settle.
@@ -51,7 +51,6 @@ const reviewReady = text(rereviewed ? process.env.INPUTS_REREVIEW_READY : proces
 const reviewAction = text(rereviewed ? process.env.INPUTS_REREVIEW_ACTION : process.env.INPUTS_REVIEW_ACTION);
 const reviewSummary = rereviewed ? process.env.INPUTS_REREVIEW_SUMMARY : process.env.INPUTS_REVIEW_SUMMARY;
 const ci = text(process.env.INPUTS_CI);
-const ciRerun = text(process.env.INPUTS_CI_RERUN);
 const prUrl = text(process.env.INPUTS_PR_URL);
 const threadsOpen = text(process.env.INPUTS_THREADS_OPEN);
 const contractLeft = nullableJson(
@@ -96,11 +95,9 @@ emit({
   // A correction for CI gets a light review: the code lens alone, on the delta.
   light_review: reason === 'ci_pr_caused',
   // A round whose CI agent never ran re-ran nothing.
-  ci_rerun: ciRerun === 'null' ? 'none' : ciRerun,
   prior_report:
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  threads_checked: threadsOpen !== 'null' && threadsOpen !== '',
   summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(summary)}`,
 });

@@ -10,13 +10,9 @@ import { recordNodeState } from '../../../node-event-write';
 import { resolveBashPath } from '@archon/git';
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
-import {
-  currentAdoptedRunDir,
-  substituteWorkflowVariables,
-  formatSubprocessFailure,
-  safeSendMessage,
-  type SendMessageContext,
-} from '../../../executor-shared';
+import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
+import { formatSubprocessFailure } from '../../../executor-shared';
+import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, observeNodeCheckout, type RunLayersContext } from '../../run-context';
 import { nodeTemplateReferences, buildNodeShellEnvironment } from '../../references';

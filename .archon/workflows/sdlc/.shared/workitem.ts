@@ -49,9 +49,7 @@ export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
 export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** The `mode` and `trust` inputs. No trust input is `maintainer`, so no input can raise trust. */
-export const INTAKE_MODES = ['live', 'eval'] as const;
-export type IntakeMode = (typeof INTAKE_MODES)[number];
+/** The `trust` input. No value is `maintainer`, so no input can raise trust. */
 export const TRUST_INPUTS = ['auto', 'outside'] as const;
 export type TrustInput = (typeof TRUST_INPUTS)[number];
 
@@ -65,11 +63,6 @@ function oneOf<const Values extends readonly string[]>(
     throw new Error(`${name} must be one of ${values.join(', ')}, not "${value}"`);
   }
   return value as Values[number];
-}
-
-/** The `mode` input; empty means `live`. */
-export function parseMode(text: string): IntakeMode {
-  return oneOf('mode', INTAKE_MODES, text);
 }
 
 /** The `trust` input; empty means `auto`. */

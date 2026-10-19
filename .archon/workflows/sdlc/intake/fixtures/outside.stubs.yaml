@@ -14,7 +14,6 @@ facts:
     labels: []
     waiting: []
     notes: []
-  seen: null
 outcome:
   path: outside
   item: 8
@@ -23,7 +22,6 @@ outcome:
   promoted: false
   labels: [archon-needs-maintainer]
   summary: "stub: Issue 8: needs_maintainer"
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "8" }
   expect: completed

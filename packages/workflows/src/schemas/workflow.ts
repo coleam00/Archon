@@ -381,7 +381,7 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
 /**
  * Result of loading a command prompt - discriminated union for specific error handling
  *
- * On success, `content` is non-empty (enforced at load time in executor-shared.ts, not by the type).
+ * On success, `content` is non-empty (enforced at load time in load-command-prompt.ts, not by the type).
  */
 export type LoadCommandResult =
   | { success: true; content: string }

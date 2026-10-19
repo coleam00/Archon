@@ -17,16 +17,17 @@ import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import {
   aggregateProviderFailure,
-  substituteWorkflowVariables,
   detectCompletionSignal,
   stripCompletionTags,
-  safeSendMessage,
 } from '../../../executor-shared';
+import { substituteWorkflowVariables } from '../../../workflow-variables';
+import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { sumTokenUsage } from '../../usage';
 import type { RunLayersContext } from '../../run-context';
-import { nodeTemplateReferences, loopBodyScope, type LoopBodyScope } from '../../references';
+import { nodeTemplateReferences } from '../../references';
+import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
