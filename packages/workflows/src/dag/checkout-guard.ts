@@ -90,8 +90,9 @@ export async function snapshotCheckout(
       }
     }
     return snapshot;
-  } catch {
+  } catch (error) {
     // A partial observation cannot establish that the checkout stayed unchanged.
+    getLog().warn({ cwd, err: error }, 'dag_checkout_snapshot_unavailable');
     return undefined;
   }
 }

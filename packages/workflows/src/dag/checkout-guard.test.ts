@@ -18,6 +18,7 @@ import {
   mockSendQueryDag,
   mockGetAgentProviderDag,
   mockClaudeCapabilities,
+  mockLogFn,
 } from './test-utils';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
 
     mockSendQueryDag.mockClear();
     mockGetAgentProviderDag.mockClear();
+    mockLogFn.mockClear();
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'DAG AI response' };
@@ -244,13 +246,16 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
   );
 
   it('preserves literal filenames and consumes NUL rename source records', async () => {
-    const source = 'old -> 日本語.txt';
-    const destination = 'new -> 日本語.txt';
+    const source = 'old - 日本語.txt';
+    const destination = 'new - 日本語.txt';
     await writeFile(join(testDir, source), 'content');
     await initRepo(testDir);
     await git.execFileAsync('git', ['mv', source, destination], { cwd: testDir });
     await writeFile(join(testDir, destination), 'dirty!!');
-    const names = process.platform === 'win32' ? ['unicode-å.txt'] : ['tab\t.txt', 'line\n.txt'];
+    const names =
+      process.platform === 'win32'
+        ? ['unicode-å.txt']
+        : ['arrow ->.txt', 'tab\t.txt', 'line\n.txt'];
     for (const name of names) await writeFile(join(testDir, name), name);
     const before = await snapshotCheckout(testDir, []);
     expect(before).toBeDefined();
@@ -300,11 +305,14 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
   );
 
   it('returns unavailable on Git failure', async () => {
-    const exec = spyOn(git, 'execFileAsync').mockRejectedValue(
-      new git.GitFailure('unclassified', 'failed')
-    );
+    const error = new git.GitFailure('unclassified', 'failed');
+    const exec = spyOn(git, 'execFileAsync').mockRejectedValue(error);
     try {
       expect(await snapshotCheckout(testDir, [])).toBeUndefined();
+      expect(mockLogFn).toHaveBeenCalledWith(
+        { cwd: testDir, err: error },
+        'dag_checkout_snapshot_unavailable'
+      );
     } finally {
       exec.mockRestore();
     }
@@ -338,6 +346,13 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
           expect.objectContaining({ event_type: 'node_completed', step_name: 'guarded' })
         );
         expect(deps.store.completeWorkflowRun).toHaveBeenCalled();
+        expect(mockLogFn).toHaveBeenCalledWith(
+          {
+            cwd: testDir,
+            err: expect.objectContaining({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
+          },
+          'dag_checkout_snapshot_unavailable'
+        );
       } finally {
         exec.mockRestore();
       }
@@ -361,10 +376,15 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     await writeFile(join(testDir, 'second'), 'two');
     const stat = spyOn(fsPromises, 'lstat');
     stat.mockResolvedValueOnce(await fsPromises.stat(join(testDir, 'first')));
-    stat.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    const error = Object.assign(new Error('denied'), { code: 'EACCES' });
+    stat.mockRejectedValueOnce(error);
     try {
       expect(await snapshotCheckout(testDir, [])).toBeUndefined();
       expect(stat).toHaveBeenCalledTimes(2);
+      expect(mockLogFn).toHaveBeenCalledWith(
+        { cwd: testDir, err: error },
+        'dag_checkout_snapshot_unavailable'
+      );
     } finally {
       stat.mockRestore();
     }
