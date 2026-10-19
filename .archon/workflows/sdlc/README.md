@@ -32,15 +32,14 @@ a preflight node before review, the ready flip, and prose inside the correction
 prompt for an agent to honour. Three copies, two languages, one of them dependent
 on a model's diligence.
 
-None of it was load-bearing. The engine gives a run its worktree, and the pull
-request is created in that worktree, so the invariant holds by construction.
-Nothing had ever gone wrong — the alarm that prompted the work was investigated
-and closed invalid. And the copies did not even cover the steps that would have
-suffered most from a drifted checkout: `impl` writes code to that checkout without
-checking, and `validate` runs the project's tests against it without checking.
+For a pull request created by the run, the engine gives the run its worktree
+and the PR is created from that checkout. The former checks duplicated that
+construction, and all three copies are gone.
 
-The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
-could ever run. All three copies are gone.
+An existing PR does require preparation: build-queue and standalone ship
+continuations fetch its head and fast-forward the checkout to that exact commit
+before delivery. Their checkout dependencies are necessary; delivery must not
+start from the base branch or divergent local history.
 
 CI is the project's full validation; implementers run only focused checks. Whether
 CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run

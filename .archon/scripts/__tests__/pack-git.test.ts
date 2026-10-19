@@ -158,6 +158,28 @@ describe.each(['build-queue', 'ship'])('%s continuation checkout', entry => {
   });
 });
 
+describe('head operation transport', () => {
+  it.each(['build-queue/scripts/checkout', 'ship/scripts/checkout', '../../scripts/__tests__/push-pr-head'])('refuses credentialed HTTP before %s', script => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'push', '-q', 'upstream', 'feature');
+    const before = git(cwd, 'rev-parse', 'HEAD');
+    const url = `http://user:secret@${PR.repo.host}/${PR.repo.path}.git`;
+    const bare = git(cwd, 'remote', 'get-url', 'upstream');
+    git(cwd, 'config', `url.${bare}.insteadOf`, url);
+    git(cwd, 'remote', 'set-url', 'upstream', url);
+    const run = runPackScript(script, { cwd, inputs: {
+      INPUTS_ITEM: JSON.stringify(PR), INPUTS_CONTINUES: String(PR.number),
+      INPUTS_REF: JSON.stringify(PR), INPUTS_PULL_REQUEST: String(PR.number),
+      INPUTS_PR: JSON.stringify(forgePrRecord()),
+    } });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('requires encrypted transport');
+    expect(run.stderr).not.toContain('secret');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(before);
+    expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(before);
+  });
+});
+
 describe('standalone continuation identity', () => {
   it('refuses a different resolved number before reading the forge', () => {
     const run = runPackScript('ship/scripts/checkout', { inputs: {

@@ -96,8 +96,13 @@ export function headDestination(target: {
   readonly head_repo: Repo;
 }): string {
   const headRepo = target.head_repo;
-  if (sameRepo(headRepo, target.repo)) return remoteFor(headRepo);
-  return findRemote(headRepo) ?? `https://${headRepo.host}/${headRepo.path}.git`;
+  const remote = sameRepo(headRepo, target.repo) ? remoteFor(headRepo) : findRemote(headRepo);
+  if (remote === undefined) return `https://${headRepo.host}/${headRepo.path}.git`;
+  const urls = gitOrThrow('config', '--get-all', `remote.${remote}.url`).split('\n');
+  if (urls.some(url => /^http:\/\//i.test(url.trim()))) {
+    throw new Error(`head remote ${remote} requires encrypted transport; use HTTPS or SSH`);
+  }
+  return remote;
 }
 
 /**
