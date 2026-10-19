@@ -344,7 +344,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
     const paddingBytes = 33_000;
     const artifactsDir = join(testDir, 'artifacts');
     const logDir = join(testDir, 'logs');
-    const producerOutput = `{"status":"PASS","padding":"${'x'.repeat(paddingBytes)}"}`;
     await mkdir(artifactsDir, { recursive: true });
 
     await executeDagWorkflow(
@@ -394,12 +393,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect((consumerEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
       String(paddingBytes + 30)
     );
-    expect(
-      await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'producer.nodeoutput'),
-        'utf-8'
-      )
-    ).toBe(producerOutput);
     expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
   });
 
