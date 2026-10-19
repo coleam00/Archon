@@ -161,7 +161,7 @@ To run the adapter against a self-hosted GitHub Enterprise Server, set its base 
 GITHUB_URL=https://github.example.com
 ```
 
-With `GITHUB_URL` set, the adapter calls `https://github.example.com/api/v3`, clones from `https://github.example.com/<owner>/<repo>.git`, and `GH_TOKEN`/`GITHUB_TOKEN` authenticate HTTPS clones of that exact scheme, host and port. Leave it unset for github.com. A value with a path, query or credentials fails startup.
+With `GITHUB_URL` set, the adapter calls `https://github.example.com/api/v3`, clones from `https://github.example.com/<owner>/<repo>.git`, and `GH_TOKEN`/`GITHUB_TOKEN` authenticate HTTPS clones of that exact scheme, host and port. Leave it unset for github.com. A value with a path, query or credentials is rejected: the adapter fails startup and clones fail.
 
 - **Webhook:** create it on the Enterprise repository or organization, pointing at the same `/webhooks/github` endpoint with the same secret (Step 3).
 - **GitHub App mode:** register the App on the Enterprise instance (**Settings → Developer settings → GitHub Apps**) with the permissions listed in [GitHub App Setup](/adapters/github-app-setup/). The App's API calls and installation tokens go to the Enterprise instance.

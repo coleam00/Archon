@@ -58,6 +58,12 @@ describe('detectForge', () => {
     expect(info.apiBase).toBe('https://github.corp.com/api/v3');
   });
 
+  test('rejects an invalid GITHUB_URL instead of ignoring it', async () => {
+    process.env.GITHUB_URL = 'https://github.corp.com/api/v3';
+    getRemoteUrlSpy.mockResolvedValue('https://github.corp.com/owner/repo.git');
+    await expect(detectForge(testRepo)).rejects.toThrow('GITHUB_URL');
+  });
+
   test('detects Gitea when GITEA_URL env matches remote hostname', async () => {
     process.env.GITEA_URL = 'https://gitea.example.com';
     getRemoteUrlSpy.mockResolvedValue('https://gitea.example.com/owner/repo.git');

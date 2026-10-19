@@ -12,6 +12,7 @@
  * TOKEN_ENCRYPTION_KEY see every per-user code path as a no-op.
  */
 import { createPrivateKey } from 'node:crypto';
+import { resolveGitHubHost } from '@archon/git';
 import { loadAppPrivateKey } from './private-key';
 import { AppPrivateKeyError } from './errors';
 import type { GitHubAppConfig } from './types';
@@ -31,59 +32,6 @@ export function resolveGitHubTokenFromEnv(
   env: NodeJS.ProcessEnv = process.env
 ): string | undefined {
   return GITHUB_PAT_KEYS.map(key => env[key]).find(value => Boolean(value));
-}
-
-/** The GitHub host Archon talks to: github.com, or the GitHub Enterprise Server at `GITHUB_URL`. */
-export interface GitHubHost {
-  /** Lowercased authority (`host[:port]`) of the web URL. */
-  host: string;
-  /** Web root without a trailing slash, e.g. `https://github.com`. */
-  webUrl: string;
-  /** REST API root: `https://api.github.com`, or `<GITHUB_URL>/api/v3` on GHES. */
-  apiBaseUrl: string;
-}
-
-const GITHUB_COM_HOST: GitHubHost = {
-  host: 'github.com',
-  webUrl: 'https://github.com',
-  apiBaseUrl: 'https://api.github.com',
-};
-
-/**
- * Resolve the GitHub host from `GITHUB_URL` (GitHub Enterprise Server only).
- * Unset, empty, or github.com means github.com. A value that is not a bare
- * http(s) origin throws, so a typo fails startup instead of silently sending
- * every call to api.github.com.
- */
-export function resolveGitHubHost(env: NodeJS.ProcessEnv = process.env): GitHubHost {
-  const raw = env.GITHUB_URL?.trim();
-  if (!raw) return GITHUB_COM_HOST;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw invalidGitHubUrl(raw);
-  }
-  if (
-    (url.protocol !== 'https:' && url.protocol !== 'http:') ||
-    url.username ||
-    url.password ||
-    url.pathname !== '/' ||
-    url.search ||
-    url.hash
-  ) {
-    throw invalidGitHubUrl(raw);
-  }
-  if (url.hostname === 'github.com') return GITHUB_COM_HOST;
-  const host = url.host.toLowerCase();
-  const webUrl = `${url.protocol}//${host}`;
-  return { host, webUrl, apiBaseUrl: `${webUrl}/api/v3` };
-}
-
-function invalidGitHubUrl(raw: string): Error {
-  return new Error(
-    `GITHUB_URL must be the base URL of a GitHub Enterprise Server, e.g. https://github.example.com (got "${raw}").`
-  );
 }
 
 export function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): GitHubAppConfig | null {

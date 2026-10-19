@@ -15,9 +15,8 @@ import {
   onConversationClosed,
   type ConversationLockManager,
   DeliveryDeduplicator,
-  resolveGitHubHost,
-  type GitHubHost,
 } from '@archon/core';
+import { resolveGitHubHost, type GitHubHost } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as userDb from '@archon/core/db/users';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';

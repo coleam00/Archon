@@ -1,7 +1,7 @@
 /**
  * Clone credentials for a forge URL, resolved from environment tokens.
  */
-import { githubTokenCredentials, type CloneCredentials } from '@archon/git';
+import { githubTokenCredentials, resolveGitHubHost, type CloneCredentials } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
@@ -98,33 +98,33 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   //    A hostname that merely looks like a forge (gitlab.attacker.example) gets no
   //    token, because anyone who can submit a clone URL controls that hostname.
   const URL_FORGE: {
-    urlEnvVar: string;
+    resolveUrl: () => string | undefined;
     resolveToken: () => string | undefined;
     buildCredentials: BuildForgeCredentials;
   }[] = [
     {
-      urlEnvVar: 'GITHUB_URL',
+      resolveUrl: () => resolveGitHubHost().webUrl,
       resolveToken: resolveGitHubTokenFromEnv,
       buildCredentials: githubTokenCredentials,
     },
     {
-      urlEnvVar: 'GITEA_URL',
+      resolveUrl: () => process.env.GITEA_URL,
       resolveToken: () => process.env.GITEA_TOKEN,
       buildCredentials: tokenAsUsername,
     },
     {
-      urlEnvVar: 'GITLAB_URL',
+      resolveUrl: () => process.env.GITLAB_URL,
       resolveToken: () => process.env.GITLAB_TOKEN,
       buildCredentials: tokenAsOAuth2Password,
     },
     {
-      urlEnvVar: 'FORGEJO_URL',
+      resolveUrl: () => process.env.FORGEJO_URL,
       resolveToken: () => process.env.GITEA_TOKEN,
       buildCredentials: tokenAsUsername,
     },
   ];
   for (const entry of URL_FORGE) {
-    const forgeUrl = process.env[entry.urlEnvVar];
+    const forgeUrl = entry.resolveUrl();
     if (forgeUrl) {
       const forgeParsed = safeParseUrl(forgeUrl);
       if (forgeParsed?.host.toLowerCase() === authority) {

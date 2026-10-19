@@ -4,7 +4,6 @@ import {
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
   assertEncryptionKeyAtBoot,
-  resolveGitHubHost,
   resolveGitHubTokenFromEnv,
 } from './config';
 
@@ -21,53 +20,6 @@ describe('github-auth/config', () => {
     [{ GH_TOKEN: '', GITHUB_TOKEN: '' }, undefined],
   ])('resolves GH_TOKEN before GITHUB_TOKEN: %j', (env, expected) => {
     expect(resolveGitHubTokenFromEnv(env)).toBe(expected);
-  });
-
-  describe('resolveGitHubHost', () => {
-    const githubCom = {
-      host: 'github.com',
-      webUrl: 'https://github.com',
-      apiBaseUrl: 'https://api.github.com',
-    };
-
-    test.each([{}, { GITHUB_URL: '' }, { GITHUB_URL: 'https://github.com' }])(
-      'resolves github.com for %j',
-      env => {
-        expect(resolveGitHubHost(env)).toEqual(githubCom);
-      }
-    );
-
-    test.each([
-      [
-        'https://github.example.com/',
-        {
-          host: 'github.example.com',
-          webUrl: 'https://github.example.com',
-          apiBaseUrl: 'https://github.example.com/api/v3',
-        },
-      ],
-      [
-        'http://GHE.internal:8080',
-        {
-          host: 'ghe.internal:8080',
-          webUrl: 'http://ghe.internal:8080',
-          apiBaseUrl: 'http://ghe.internal:8080/api/v3',
-        },
-      ],
-    ])('resolves the Enterprise host for GITHUB_URL=%s', (value, expected) => {
-      expect(resolveGitHubHost({ GITHUB_URL: value })).toEqual(expected);
-    });
-
-    test.each([
-      'not a url',
-      'github.example.com',
-      'ftp://github.example.com',
-      'https://github.example.com/api/v3',
-      'https://user:pass@github.example.com',
-      'https://github.example.com/?x=1',
-    ])('rejects GITHUB_URL=%s', value => {
-      expect(() => resolveGitHubHost({ GITHUB_URL: value })).toThrow('GITHUB_URL');
-    });
   });
 
   describe('isPerUserGitHubEnabled', () => {

@@ -20,6 +20,7 @@ import {
   type CloneCredentials,
   githubTokenCredentials,
   findRepoRoot,
+  resolveGitHubHost,
   trustRegisteredPath,
   inspectRemoteBranches,
   validateBranchName,
@@ -60,7 +61,6 @@ import {
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
-import { resolveGitHubHost } from '../github-auth/config';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { installCredentialHelper } from '../github-auth/credential-helper-install';
 import { resolveForgeAuth, safeParseUrl } from './forge-auth';
