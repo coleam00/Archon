@@ -10,7 +10,6 @@ import {
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
-  workflowRunCommand,
   workflowGetCommand,
   workflowResumeCommand,
   workflowAbandonCommand,
@@ -18,6 +17,7 @@ import {
   workflowRejectCommand,
   workflowEventEmitCommand,
 } from './workflow';
+import { workflowRunCommand } from './workflow-run-owned';
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
   const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';

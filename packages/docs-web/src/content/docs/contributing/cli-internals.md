@@ -18,7 +18,8 @@ packages/cli/
 ├── src/
 │   ├── cli.ts              # Entry point, argument parsing, routing
 │   ├── commands/
-│   │   ├── workflow.ts     # workflow list/run/runs/get (approve/reject/status/resume/abandon delegate to @archon/core/operations)
+│   │   ├── workflow.ts     # workflow list/runs/get (approve/reject/status/resume/abandon delegate to @archon/core/operations)
+│   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
@@ -139,64 +140,51 @@ Repository env normally overrides home env. The CLI preserves the user-scope `GH
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ archon workflow run <name> [message] [--branch X] [--from X] [--no-worktree]│
+│ archon workflow run <name> [message] [--branch X] [--detach] …  │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ workflow.ts:78-92  Discover & find workflow by name             │
-│                    Error if not found (lists available)         │
+│ selectRunWorkflow()                                             │
+│ - Locate the run a continuation resumes                         │
+│ - Capture the workflow source, then discover from the capture   │
+│ - Find the workflow by name (error lists available)             │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ workflow.ts:99  Create CLIAdapter for stdout                    │
+│ admitRunExecution()   (--dry-run stops before this)             │
+│ - Flag, worktree policy, input and capability gates             │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ workflow.ts:104-133  Database setup                             │
-│ - Create conversation: cli-{timestamp}-{random}                 │
-│ - Lookup codebase from directory (warn if fails)                │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
                     ┌─────────────┴─────────────┐
                     │                           │
-             no --branch                   --branch
+                --detach                    (default)
                     │                           │
                     ▼                           ▼
 ┌───────────────────────────┐   ┌───────────────────────────────────┐
-│ Use cwd as-is             │   │ workflow.ts:152-168                │
-│                           │   │ Auto-detect git repo               │
-│                           │   │ Auto-register codebase if needed   │
-└─────────────┬─────────────┘   └───────────────┬───────────────────┘
-              │                                 │
-              │                   ┌─────────────┴─────────────┐
-              │                   │                           │
-              │            --no-worktree               (default)
-              │                   │                           │
-              │                   ▼                           ▼
-              │   ┌─────────────────────────┐ ┌─────────────────────────┐
-              │   │ workflow.ts:171-175     │ │ workflow.ts:177-219     │
-              │   │ git.checkout(cwd, branch)│ │ Check existing worktree │
-              │   │                         │ │ If healthy → reuse      │
-              │   │                         │ │ Else → provider.create()│
-              │   │                         │ │ Track in DB             │
-              │   └────────────┬────────────┘ └────────────┬────────────┘
-              │                │                           │
-              └────────────────┴─────────────┬─────────────┘
-                                             │
-                                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ workflow.ts:235-243  executeWorkflow()                          │
-│ - Pass adapter, conversation, workflow, cwd, message            │
-│ - Stream AI responses to stdout                                 │
-│ - Return success/failure                                        │
-└─────────────────────────────────────────────────────────────────┘
+│ launchDetachedOwnedRun()  │   │ prepareForegroundLaunch()         │
+│ Pre-flight, write the run │   │ Destination, project, adoption    │
+│ row, fork the child       │   │ lane, --resume binding, AI config │
+└───────────────────────────┘   └───────────────┬───────────────────┘
+                                                │
+                                                ▼
+                                ┌───────────────────────────────────┐
+                                │ provisionWorkspace()              │
+                                │ Folder seam, reused --branch      │
+                                │ worktree, or a new worktree       │
+                                └───────────────┬───────────────────┘
+                                                │
+                                                ▼
+                                ┌───────────────────────────────────┐
+                                │ executeOwnedRun()                 │
+                                │ Signal guard, progress, engine    │
+                                │ submit or resume, wait, teardown, │
+                                │ result                            │
+                                └───────────────────────────────────┘
 ```
 
-**Code:** `packages/cli/src/commands/workflow.ts:72-251`
+**Code:** `workflowRunCommand` in `packages/cli/src/commands/workflow-run-owned.ts`, which owns the captured source and the durable-wait loop. The phases live in `workflow-run-admission.ts`, `workflow-run-launch.ts` and `workflow-run-execution.ts` beside it.
 
 **Worktree Provider:** `packages/isolation/src/providers/worktree.ts`
 
@@ -423,7 +411,7 @@ When `--branch` is provided:
 
 Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
 
-**Code:** `packages/cli/src/commands/workflow.ts:177-219`
+**Code:** `provisionWorktree` in `packages/cli/src/commands/workflow-run-launch.ts`
 
 ---
 

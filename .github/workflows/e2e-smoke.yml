@@ -47,7 +47,8 @@ jobs:
               - 'scripts/build-runner-image.sh'
               # The smoke exercises the CLI --container/--folder dispatch + teardown
               # and the Claude container-exec spawn, so changes there must trigger it.
-              - 'packages/cli/src/commands/workflow.ts'
+              - 'packages/cli/src/commands/workflow-run-launch.ts'
+              - 'packages/cli/src/commands/workflow-run-execution.ts'
               - 'packages/cli/src/commands/workflow-isolation.ts'
               - 'packages/providers/src/claude/container-*'
               - '.github/workflows/e2e-smoke.yml'
