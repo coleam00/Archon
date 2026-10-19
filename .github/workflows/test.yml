@@ -90,7 +90,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         # @archon/cli runs on its own runner: with every package on one 4-vCPU Windows
         # runner the packages step took about 19 minutes, and cli finished last (#4430).
-        shard: [cli, packages]
+        # @archon/core has its own runner for the same reason: sharing one with the other
+        # packages, it finished last on every green Windows leg (8.4-9.4 min of a ~9 min step),
+        # about a minute behind @archon/workflows.
+        shard: [cli, core, packages]
     runs-on: ${{ matrix.os }}
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
     # every other PR queues behind it.
@@ -131,6 +134,10 @@ jobs:
         if: runner.os == 'Linux' && matrix.shard == 'cli'
         run: bun run validate --only cli-tests
 
+      - name: Validate (Linux, core)
+        if: runner.os == 'Linux' && matrix.shard == 'core'
+        run: bun run validate --only core-tests
+
       - name: Validate (Linux, packages)
         if: runner.os == 'Linux' && matrix.shard == 'packages'
         run: bun run validate --only package-tests
@@ -157,6 +164,15 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only cli-tests
+
+      - name: Validate (Windows, core)
+        if: runner.os == 'Windows' && matrix.shard == 'core'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only core-tests
 
       - name: Validate (Windows, packages)
         if: runner.os == 'Windows' && matrix.shard == 'packages'
