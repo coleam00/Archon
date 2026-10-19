@@ -528,7 +528,7 @@ async function installProjectSkill(
 }
 
 /** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
-async function configureDocsPath(repoPath: string): Promise<void> {
+export async function configureDocsPath(repoPath: string): Promise<void> {
   const wantsDocsPath = await confirm({
     message: 'Configure a non-default docs directory? (default: docs/)',
     initialValue: false,
@@ -546,7 +546,10 @@ async function configureDocsPath(repoPath: string): Promise<void> {
         mkdirSync(archonDir, { recursive: true });
         const configPath = join(archonDir, 'config.yaml');
         const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        if (!existing.includes('docs:')) {
+        const parsed: unknown = Bun.YAML.parse(existing);
+        const hasDocs =
+          typeof parsed === 'object' && parsed !== null && Object.hasOwn(parsed, 'docs');
+        if (!hasDocs) {
           const escaped = docsPath.trim().replace(/"/g, '\\"');
           writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
         } else {
