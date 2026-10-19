@@ -19,7 +19,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
-import type { DagResumeSnapshot, PersistedNodeOutput } from '../store';
+import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
 import type { ExecutionContext, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
@@ -200,6 +200,11 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /**
+   * Failures a run continued after a pause had already moved past (top-level only):
+   * those nodes replay their failure instead of running again. Undefined on a retry.
+   */
+  replayedFailures?: ReadonlyMap<string, PriorFailedNode>;
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
   namedResumeSourceIds?: ReadonlySet<string>;
   bodySessionCursors?: Map<string, SessionCursor>;

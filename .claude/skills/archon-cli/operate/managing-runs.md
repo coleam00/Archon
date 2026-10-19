@@ -51,6 +51,9 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run's status/error | `archon workflow get <run-id> --json` |
 | One run with per-node detail | `archon workflow get <run-id> --verbose --json` |
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
+| List a run's artifact files | `archon workflow artifacts <run-id> --json` |
+| Read one artifact | `archon workflow artifacts <run-id> <path>` |
+| List registered projects (and their `--project` keys) | `archon project list --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
