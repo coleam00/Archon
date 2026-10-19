@@ -2533,6 +2533,47 @@ export function describeWorkflowStoreConformance(
       });
       expect(harness.terminalReports()).toEqual([pending.id, pending.id, paused.id, completed.id]);
     });
+    test.each(['operator', 'fan_out'] as const)(
+      '%s cancellation preserves settled runs and cancels eligible runs',
+      async mode => {
+        const cancel = (id: string) =>
+          mode === 'operator'
+            ? store.cancelWorkflowRun(id)
+            : store.cancelFanOutRun(id, 'fan_out_orphan');
+        for (const status of [
+          'pending',
+          'running',
+          'paused',
+          'failed',
+          'completed',
+          'cancelled',
+        ] as const) {
+          const run = await create(store);
+          if (status === 'completed') {
+            await store.updateWorkflowRun(run.id, { status: 'running' });
+            await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+          } else if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
+          else if (status === 'cancelled') await store.cancelWorkflowRun(run.id);
+          else if (status !== 'pending') await store.updateWorkflowRun(run.id, { status });
+          const before = await store.getWorkflowRun(run.id);
+          const events = await store.listWorkflowEvents(run.id);
+          const reports = harness.terminalReports();
+          const settled = status === 'completed' || status === 'cancelled';
+          expect(await cancel(run.id)).toEqual({ cancelled: !settled });
+          if (settled) {
+            expect(await store.getWorkflowRun(run.id)).toEqual(before);
+            expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+            expect(harness.terminalReports()).toEqual(reports);
+          } else {
+            expect((await store.getWorkflowRun(run.id))?.status).toBe('cancelled');
+            expect((await store.listWorkflowEvents(run.id)).at(-1)?.event_type).toBe(
+              'workflow_cancelled'
+            );
+          }
+        }
+        expect(await cancel(crypto.randomUUID())).toEqual({ cancelled: false });
+      }
+    );
     test('fan-out recovery retracts only engine cancellations', async () => {
       for (const reason of FAN_OUT_CANCEL_REASONS) {
         const recovered = await running(store);

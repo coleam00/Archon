@@ -1,4 +1,5 @@
 import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   CAPACITY_WAIT_METADATA_KEY,
   SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -702,7 +703,7 @@ export function createTransactionView(
     },
     cancelWorkflowRun: async (id, details) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
       await terminal(run, {
@@ -718,7 +719,7 @@ export function createTransactionView(
     },
     cancelFanOutRun: async (id, reason) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;

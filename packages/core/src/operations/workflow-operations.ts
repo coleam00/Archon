@@ -28,6 +28,7 @@ import { recordSurfaceSchema, type RecordSurface } from '@archon/workflows/schem
 import { createLogger, captureApprovalResolved } from '@archon/paths';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   isWorkflowWaitContext,
@@ -1200,7 +1201,6 @@ export function createWorkflowOperations({
   ): Promise<{ failures: number; runs: WorkflowRun[] }> {
     const queue: string[] = [rootId];
     const seen = new Set<string>([rootId]);
-    const settledStatuses: WorkflowRun['status'][] = ['completed', 'cancelled'];
     let processed = 0;
     const runs: WorkflowRun[] = [];
     let failures = 0;
@@ -1220,14 +1220,14 @@ export function createWorkflowOperations({
         if (seen.has(child.id)) continue;
         seen.add(child.id);
         queue.push(child.id); // traverse deeper even under an already-terminal child
-        if (settledStatuses.includes(child.status)) continue;
+        if (CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(child.status)) continue;
         try {
           const result = await cancelRun(child.id);
           if (result.cancelled) {
             runs.push(child);
           } else {
             const current = await store.getWorkflowRun(child.id);
-            if (current && settledStatuses.includes(current.status)) continue;
+            if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status)) continue;
             getLog().warn(
               { childId: child.id },
               'operations.workflow_abandon_cascade_cancel_failed'
@@ -1249,7 +1249,7 @@ export function createWorkflowOperations({
       try {
         const { total } = await store.listWorkflowRuns({
           parentRunIds: queue,
-          excludeLeafStatuses: settledStatuses,
+          excludeLeafStatuses: [...CANCELLATION_NOOP_WORKFLOW_STATUSES],
           limit: 0,
         });
         if (total > 0) {

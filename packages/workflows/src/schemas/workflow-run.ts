@@ -327,6 +327,10 @@ export function isTerminalRunStatus(status: WorkflowRunStatus): status is RunTer
   return TERMINAL_STATUS_TUPLE.some(terminal => terminal === status);
 }
 
+/** Cancellation leaves these statuses untouched; failed runs remain cancellable because they can resume. */
+export const CANCELLATION_NOOP_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] =
+  workflowRunStatusSchema.extract(['completed', 'cancelled']).options;
+
 /** Statuses that allow a user to resume execution. */
 export const RESUMABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'failed',
