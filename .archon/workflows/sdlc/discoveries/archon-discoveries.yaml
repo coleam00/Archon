@@ -9,8 +9,7 @@ description: |
   after the agent perform only the writes it declared and read them back. Each
   drained run's state document records the refs decided for it and any question
   asked with its answer, so a record is decided once; a filed issue carries its
-  key's marker, so filing a key again recovers that issue. With mode eval the run
-  writes nothing and returns every decision as its output.
+  key's marker, so filing a key again recovers that issue.
 
   Use when: an operator drains discoveries by hand, or a schedule binding the
   operator installed starts it (see the SDLC pack README, "Discoveries"). The pack
@@ -23,13 +22,6 @@ inputs:
     description: The forge host of the repository the runs worked on, such as github.com.
   repo_path:
     description: The owner/name path of that repository.
-  mode:
-    default: "live"
-    description: >-
-      live or eval. Eval writes no state document,
-      issue or comment, ignores which runs earlier passes drained, and returns every
-      decision and every check that would have refused it as the outcome's
-      evaluation. Any other value refuses the run at facts, before anything is read.
   since:
     default: ""
     description: Drain only runs that finished at or after this ISO-8601 time; empty is unbounded.
@@ -43,7 +35,7 @@ inputs:
 returns: outcome
 
 nodes:
-  # Builds the queue, and in live mode claims the queued runs.
+  # Builds the queue and claims the queued runs.
   - id: facts
     script: facts
     runtime: bun
@@ -147,7 +139,6 @@ nodes:
     output_format:
       type: object
       properties:
-        mode: { type: string, enum: [live, eval] }
         summary: { type: string }
         # Issues filed or recovered, and issues a discovery is tracked by (the
         # evidence comment's URL when one was posted).
@@ -171,15 +162,7 @@ nodes:
         asked: { type: array, items: { type: string } }
         # The asked items, numbered with their recommendations; empty when none.
         question: { type: string }
-        # Null in live. In eval: every decision, and every check that would have
-        # refused the pass before a write. The queued runs are in drain/queue.json.
-        evaluation:
-          type: [object, 'null']
-          properties:
-            decisions: { type: array, items: { type: object } }
-            problems: { type: array, items: { type: string } }
-          required: [decisions, problems]
-      required: [mode, summary, written, dropped, asked, question, evaluation]
+      required: [summary, written, dropped, asked, question]
 
   # One attention item per pass, whatever the number of questions. A paused run
   # gives its resource slot back, so the next scheduled pass is not blocked.

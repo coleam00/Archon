@@ -42,8 +42,4 @@ A maintainer reads each without opening the run, so each field stands alone:
 - `if_unanswered`: whether the pull request waits, blocks others, or goes stale as the default branch moves.
 - `links`: the pull request, its review comment, the failing runs, and this run.
 
-## Eval
-
-In eval, `$INPUTS.gate` is empty, `base` is null, and each item has `recorded`: when the decision was made and the facts recorded then, in place of `facts`. Write nothing anywhere: no push, no rerun, no merge, no review. Decide each pull request as of `recorded.at` from `recorded.facts`, reading its diff for what it changes, and declare what a live sweep would have done: `merged` means it would merge now. `review_url` and `review_prior` are empty, `dev.state` is `unchecked` and `dev.attention` is null.
-
 Declare `summary`: what this sweep merged, synced, sent back and asked, in a few lines.

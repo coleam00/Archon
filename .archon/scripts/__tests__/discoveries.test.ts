@@ -167,7 +167,6 @@ function listing(at: Install, ids: string[]): string {
 interface Pass {
   readonly runId: string;
   readonly runs: string[];
-  readonly mode?: 'live' | 'eval';
   readonly statuses?: Record<string, string>;
   readonly issues?: GhIssue[];
   readonly subject?: { state: 'open' | 'closed' };
@@ -188,7 +187,6 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
       RUN_LISTING: listing(at, pass.runs),
       INPUTS_REPO_HOST: REPO.host,
       INPUTS_REPO_PATH: REPO.path,
-      INPUTS_MODE: pass.mode ?? 'live',
       INPUTS_SINCE: '',
       INPUTS_UNTIL: '',
       INPUTS_LIMIT: '20',
@@ -375,21 +373,9 @@ describe('the discoveries scripts', () => {
     expect(readFileSync(join(next.artifacts, 'drain/queue.json'), 'utf8')).toContain('Out of scope.');
   }, 60_000);
 
-  test('eval writes no state document, issue or comment, decides settled records again, and returns every decision', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
-    ok(decide(at, { runId: 'pass-1', runs: [RUN] }, fileIt('new-defect')).outcome);
-    const before = documents(at);
-    const { facts, outcome } = decide(at, { runId: 'eval-1', runs: [RUN], mode: 'eval' }, fileIt('new-defect'));
-    expect(queued(facts)).toEqual([`${RUN}:review#0`]);
-    expect(ok(outcome).evaluation).toEqual({ decisions: [expect.objectContaining({ outcome: 'file', key: 'new-defect' })], problems: [] });
-    expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
-    expect(documents(at)).toEqual(before);
-  }, 60_000);
-
   test('an input outside its vocabulary refuses before anything is read', () => {
     const at = install();
-    const refused: Record<string, string>[] = [{ INPUTS_MODE: 'dry' }, { INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
+    const refused: Record<string, string>[] = [{ INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
     for (const inputs of refused) {
       const result = script(at, 'facts', { runId: 'pass-1', runs: [] }, inputs);
       expect(result.code).toBe(1);

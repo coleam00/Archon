@@ -6,18 +6,13 @@
  * workflows, then judge the result with the engine's own validator, schemas and naming.
  */
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { expandWorkflowIncludes } from '../packages/workflows/src/include-expander';
-import { parseWorkflow } from '../packages/workflows/src/loader';
 import { nodeCostScope } from '../packages/workflows/src/node-record-serialization';
-import type { WorkflowDefinition } from '../packages/workflows/src/schemas';
 import { EFFORT_LEVELS } from '../packages/workflows/src/schemas/effort';
 import {
   type ModelAliasPreset,
@@ -57,11 +52,6 @@ import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.s
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
 import { claimDisposition } from '../.archon/workflows/sdlc/.shared/state';
-import {
-  bindingStubs,
-  TRIAGE_VERDICT_NODE,
-  triageNodeId,
-} from '../.archon/workflows/sdlc/intake/scripts/bench/runner';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -85,11 +75,6 @@ function admitted(run: ScriptRun, workflow: string, nodeId: string): Record<stri
   const output = JSON.parse(run.stdout) as Record<string, unknown>;
   expect(validateStructuredOutput(output, outputFormat(workflow, nodeId))).toEqual({ valid: true });
   return output;
-}
-
-function git(cwd: string, ...args: string[]): void {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
 }
 
 /** A checkout with its own state store, read and written through the host CLI. */
@@ -277,86 +262,12 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
 });
 
 describe('intake', () => {
-  const INTAKE = 'intake/archon-intake.yaml';
-
   test("a claim is released only when its run's status is one the engine calls terminal", () => {
     for (const status of workflowRunStatusSchema.options)
       expect(claimDisposition(status)).toBe(
         TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
       );
     expect(claimDisposition(null)).toBe('hold');
-  });
-
-  test('an eval pass emits facts and an outcome their nodes admit', () => {
-    const at = install('archon-intake-home-');
-    git(at.checkout, 'checkout', '-q', 'dev');
-    git(at.checkout, 'checkout', '-q', '-b', 'policy');
-    mkdirSync(join(at.checkout, '.archon/sdlc/policy'), { recursive: true });
-    writeFileSync(join(at.checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
-    git(at.checkout, 'add', '.archon/sdlc/policy/maintainers.json');
-    git(at.checkout, 'commit', '-q', '-m', 'maintainers');
-    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
-    git(at.checkout, 'checkout', '-q', 'feature');
-    const evalRun = (script: 'facts' | 'outcome', inputs: Record<string, string> = {}): ScriptRun =>
-      runPackScript(`intake/scripts/${script}`, {
-        cwd: at.checkout,
-        source: 'gh',
-        forge: { kind: 'fake' },
-        gh: {
-          issue: {
-            number: 7,
-            author: 'Maintainer',
-            title: 'A title',
-            body: 'A body',
-            history: { createdBody: 'A body', createdTitle: 'A title' },
-          },
-          issueLabels: ['archon-ready'],
-          repositoryLabels: [],
-        },
-        inputs: {
-          ...at.env,
-          WORKFLOW_ID: 'eval-run',
-          INPUTS_REPO_HOST: PR.repo.host,
-          INPUTS_REPO_PATH: PR.repo.path,
-          INPUTS_NUMBER: '7',
-          INPUTS_KIND: 'issue',
-          INPUTS_ACTION: 'opened',
-          INPUTS_LABEL: '',
-          INPUTS_LABEL_ACTOR: '',
-          INPUTS_ORDER: '',
-          INPUTS_MODE: 'eval',
-          ...inputs,
-        },
-      });
-
-    const decided = admitted(evalRun('facts'), INTAKE, 'facts');
-    expect(decided.path).toBe('triage');
-    admitted(
-      evalRun('outcome', {
-        INPUTS_PATH: String(decided.path),
-        INPUTS_ITEM: JSON.stringify(decided.item),
-        INPUTS_DECISION: JSON.stringify(decided.decision),
-        INPUTS_SEEN: JSON.stringify(decided.seen),
-        INPUTS_TRUST: '',
-        INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
-        INPUTS_BLOCKED_REASON: '',
-        INPUTS_BLOCKED_BY: '[]',
-        INPUTS_CONTRACT: 'READY',
-        INPUTS_ROUTE: 'deliver',
-        INPUTS_PULL_REQUEST: 'null',
-        INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-        INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-        INPUTS_COMPLEXITY: '{"value":"low","reason":"clear"}',
-        INPUTS_IMPORTANCE: '{"value":"high","reason":"on direction"}',
-        INPUTS_URGENCY: '{"value":"soon","reason":"next release"}',
-        INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
-        INPUTS_SUMMARY: 'Ready to deliver',
-        INPUTS_CLOSURE: 'null',
-        INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
-      }),
-      INTAKE,
-      'outcome'
-    );
   });
 });
 
@@ -445,7 +356,6 @@ describe('discoveries', () => {
           ),
           INPUTS_REPO_HOST: PR.repo.host,
           INPUTS_REPO_PATH: PR.repo.path,
-          INPUTS_MODE: 'live',
           INPUTS_SINCE: '',
           INPUTS_UNTIL: '',
           INPUTS_LIMIT: '20',
@@ -519,42 +429,6 @@ describe('discoveries', () => {
       'answer'
     );
   }, 60_000);
-});
-
-describe('the intake bench', () => {
-  test('the judge node id is the agent node of archon-triage, alone and as intake includes it', () => {
-    const definitions = new Map<string, WorkflowDefinition>();
-    for (const file of ['intake/archon-intake.yaml', 'triage/archon-triage-block.yaml']) {
-      const parsed = parseWorkflow(readFileSync(join(PACK, file), 'utf8'), file, providerRegistry);
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      definitions.set(parsed.workflow.name, parsed.workflow);
-    }
-    const { workflows, errors } = expandWorkflowIncludes(
-      definitions,
-      new Map([['triage', 'Triage.']])
-    );
-    expect(errors).toEqual([]);
-    const agentIds = (name: string) =>
-      (workflows.get(name)?.nodes ?? []).filter(node => node.kind === 'agent').map(node => node.id);
-    expect(agentIds('archon-triage-block')).toEqual([triageNodeId('triage')]);
-    expect(agentIds('archon-intake')).toEqual([triageNodeId('intake')]);
-    expect(TRIAGE_VERDICT_NODE).toBe(
-      `triage__${String(definitions.get('archon-triage-block')?.returns)}`
-    );
-  });
-
-  test('the dry-run stand-ins satisfy archon-triage as the pack declares it', () => {
-    const root = join(import.meta.dir, '..');
-    const workflowPath = '.archon/workflows/sdlc/triage/archon-triage-block.yaml';
-    const stubs = bindingStubs(root, workflowPath);
-    for (const [id, stub] of Object.entries(stubs)) {
-      expect(
-        validateStructuredOutput(stub, outputFormat('triage/archon-triage-block.yaml', id))
-      ).toEqual({ valid: true });
-    }
-    // The policy and verdict scripts run for real.
-    expect(Object.keys(stubs)).toEqual(['triage']);
-  });
 });
 
 describe('the review bench', () => {

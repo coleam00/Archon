@@ -12,7 +12,6 @@ facts:
       facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
       prior_report: "/stub/merge/42/review/report.md"
-      recorded: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
@@ -46,7 +45,6 @@ record:
   options: [{ id: merge, label: "stub: merge it" }, { id: park, label: "stub: park it" }]
   class: pr
   asked: { by: pr, attention: {} }
-  evaluation: null
 ask: { decision: merge, text: "" }
 ruling:
   decision: merge

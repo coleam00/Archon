@@ -5,10 +5,9 @@
  * A run's records become final when the run reaches a terminal status, so only
  * terminal runs are queued, oldest first. A record is settled once its run's
  * `discoveries/runs/<id>` document lists it as decided. Every run document is read in
- * one call. In live mode each queued run is claimed with a conditional write on its
- * document, so two passes never decide the same run; a claim is released only when the
- * claiming run is terminal. Eval mode writes nothing and claims nothing: it decides
- * every record in the window, settled or not.
+ * one call. Each queued run is claimed with a conditional write on its document, so two
+ * passes never decide the same run; a claim is released only when the claiming run is
+ * terminal.
  *
  * Writes `$ARTIFACTS_DIR/drain/queue.json`: the queued records, each run with the
  * questions earlier passes asked about it, for the agent and the outcome.
@@ -17,7 +16,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  parseDrainMode,
   parseRunDocument,
   type QueuedRun,
   type RunDocument,
@@ -49,10 +47,9 @@ function parseTime(name: string, value: string): number | undefined {
   return at;
 }
 
-/** Every drained run's document, by run id, in one read; none in eval, which decides settled records again. */
-function readRunDocuments(mode: string): Map<string, RunDocument> {
+/** Every drained run's document, by run id, in one read. */
+function readRunDocuments(): Map<string, RunDocument> {
   const documents = new Map<string, RunDocument>();
-  if (mode !== 'live') return documents;
   for (const { name, value } of stateDocuments(RUNS_PREFIX)) {
     const document = parseRunDocument(name, value);
     if (document !== null) documents.set(name.slice(RUNS_PREFIX.length), document);
@@ -103,18 +100,17 @@ function undecided<R extends { ref: string }>(records: readonly R[], document: R
 function claimUndecided<R extends { ref: string }>(
   id: string,
   all: readonly R[],
-  pass: { mode: string; self: string; at: string; snapshot: RunDocument | undefined }
+  pass: { self: string; at: string; snapshot: RunDocument | undefined }
 ): { records: R[]; questions: NonNullable<RunDocument['questions']> } | null {
   if (undecided(all, pass.snapshot).length === 0) return null;
-  const document = pass.mode === 'live' ? claimRun(id, pass.self, pass.at) : (pass.snapshot ?? null);
-  if (pass.mode === 'live' && document === null) return null;
-  const records = undecided(all, document ?? undefined);
-  return records.length === 0 ? null : { records, questions: document?.questions ?? [] };
+  const document = claimRun(id, pass.self, pass.at);
+  if (document === null) return null;
+  const records = undecided(all, document);
+  return records.length === 0 ? null : { records, questions: document.questions ?? [] };
 }
 
 function main(): void {
   // Every input is validated before anything is read or written.
-  const mode = parseDrainMode(trimmed(process.env.INPUTS_MODE));
   const since = parseTime('since', trimmed(process.env.INPUTS_SINCE));
   const until = parseTime('until', trimmed(process.env.INPUTS_UNTIL));
   const limit = Number(trimmed(process.env.INPUTS_LIMIT));
@@ -129,7 +125,7 @@ function main(): void {
 
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
-  const documents = readRunDocuments(mode);
+  const documents = readRunDocuments();
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
@@ -168,7 +164,7 @@ function main(): void {
       continue;
     }
     const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
-    const claimed = claimUndecided(id, all, { mode, self, at, snapshot: documents.get(id) });
+    const claimed = claimUndecided(id, all, { self, at, snapshot: documents.get(id) });
     if (claimed === null) continue;
     queue.push({
       id,
@@ -183,7 +179,7 @@ function main(): void {
   mkdirSync(drain, { recursive: true });
   writeFileSync(
     join(drain, 'queue.json'),
-    `${JSON.stringify({ mode, base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
+    `${JSON.stringify({ base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
   );
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',

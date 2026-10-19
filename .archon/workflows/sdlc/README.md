@@ -332,8 +332,7 @@ too — a `gh` update notice merged into a read becomes the value.
 ## Intake
 
 [`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
-Trigger bindings start it on issue events; only an eval run (below) is started by
-hand. Each issue has a work item, the state document `work/<number>` in the
+Trigger bindings start it on issue events. Each issue has a work item, the state document `work/<number>` in the
 project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
 document is the item's state: its trust, stage, triage fields, promotion, claim and
 a short history. The issue's pack labels mirror it, and a label a person adds is a
@@ -386,7 +385,7 @@ request, never the state.
   comment, so a repeated run edits it rather than adding another. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
-  it again; one closed for another reason fails the run before any comment. A demoted item, an eval run and every other verdict close nothing.
+  it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer
@@ -399,23 +398,9 @@ request, never the state.
   list says. It only lowers trust a run decides: an item whose trust is already
   recorded as a maintainer's refuses the run, since recorded trust never changes.
   There is no `maintainer` value; `facts` refuses any value but `auto` and
-  `outside`, and any `mode` but `live` and `eval`, before it reads or writes
-  anything.
-- **Eval mode.** `mode: eval` runs intake on the issue named by `number` and
-  writes nothing: no request, claim, work item, label or comment. It reads the
-  maintainer list and the issue, and decides the issue as a fresh item as it was
-  opened, unlabelled and open. Triage is shown only the title and body at creation,
-  recovered from GitHub's edit history, without the issue's number, state or links.
-  The `forge` source has no edit history and shows the current text; the outcome's
-  `evaluation.seen.body_from` says which one triage saw. The outcome returns the
-  whole decision as `evaluation`: the trust input, what triage saw, the label delta
-  live would write, this run's history entries, and triage's verdict with its five
-  fields and, for `NO_ACTION`, the closure live would perform. The triage agent
-  keeps its read tools and can still look the issue up, and it reads the run's
-  message too, so launch an eval run without a message that names the issue.
+  `outside` before it reads or writes anything.
 
-The pack installs no binding, and none should be installed on a repository until the
-backlog bench passes. Two bindings in the GitHub source plugin's configuration start
+The pack installs no binding. Two bindings in the GitHub source plugin's configuration start
 it; both share one resource so runs queue rather than overlap:
 
 ```json
@@ -452,93 +437,6 @@ The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 "in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
 The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
-
-### The backlog bench
-
-[`intake/scripts/bench/bench.ts`](intake/scripts/bench/bench.ts) compares intake and
-triage versions on issues whose outcome is already known. Run it with `bun` from a
-checkout of the repository; the set, the dispositions file and the output directory
-are the operator's and stay outside the pack and the repository.
-
-- **Set.** `select` pins issues closed as duplicates (with the issue they duplicate),
-  closed by a merged pull request, closed as not planned, open with a human type
-  label, and open issues the operator dispositioned (`--dispositions`, a JSON array
-  of `{number, contract, route?, note?}`), each with its title and body at creation.
-  It also pins which workflow judges each row: a listed maintainer's issue runs
-  through intake in eval mode; an outside author's runs through `archon-triage-block`
-  directly on the same creation text with `publish=false`, because eval intake never
-  triages an outside item; and some maintainer issues get a second `trust: outside`
-  row, which must take the outside path with no agent node. A group that finds
-  fewer issues than its count pins nothing.
-- **Versions.** A version file is `{label, pack_sha}` for the baseline, the model
-  triage's tier resolves to today, plus `provider` and `model` for any other. Every
-  version runs with a config layer pinning that tier, with the baseline's effort, so
-  versions differ only in the model. The binding is resolved by a dry run on the
-  pack's own `triage/fixtures/deliver.stubs.yaml` at `pack_sha`. A version that
-  cannot be resolved refuses the batch before any run.
-- **Batches.** `run` takes the set's n-th five rows and runs every version on them,
-  one ordinary run each at one base commit. Each run has its own worktree of the
-  checkout, so `--concurrency` never puts two runs on one checkout. Every run
-  appends one line, labelled with its version, to `samples.jsonl`. The batch then
-  fails if any batch issue or state document of the repository changed, if a
-  `trust: outside` row ran an agent node, if text outside a declared live closure was posted (`posted_text`), or if a run was
-  cancelled, did not finish, or failed before any agent ran; a failed batch is
-  reported before anyone evaluates it. A run that failed after its agent ran is the
-  version's result, not a batch failure. A `trust: auto`
-  run that returns no triage verdict, or a verdict whose transcript is missing so no
-  leak check ran, is recorded as failed: it counts against the bars as not right.
-  Eval batches are cheap dry checks that the bench works, not fair scored
-  comparisons: an eval run can read the issue's current state, including its outcome.
-- **Live batches.** Use live batches on scratch copies for scored comparisons.
-  `copy` opens copies of a batch's issues and each duplicate's canonical issue in scratch repositories
-  the operator prepared, one per version, and `run --live` runs intake for real
-  there, reading each verdict from the copy's work item. `posted_text` permits only
-  the exact comments of that run's declared closure on scratch copies, including
-  a duplicate's backlink to that row's mapped canonical copy. A duplicate destination
-  elsewhere fails the check. The bench snapshots all issues and issue comments in the
-  source and scratch repositories, so concurrent changes there can invalidate a batch.
-  Any other new or edited comment in those monitored repositories fails `posted_text`;
-  eval permits no posted text there. Posts to other repositories are outside the bench's view.
-  Recorded batches retain their recorded check values and
-  need a rerun to measure this behavior. The work item keeps no
-  summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's. Its remote
-  default branch and local checkout must both be at the batch base before `run --live`.
-  An empty repository is refused before any run. From the scratch checkout, publish
-  the base with `git push origin <base>:refs/heads/bench-base`, then set it with
-  `gh repo edit <host/owner/repo> --default-branch bench-base` (use the scratch
-  remote's name if it is not `origin`). The preflight prints the repair commands. Each row copy holds
-  the pinned creation text, and canonical copies use their creation-time title and
-  body. If creation text cannot be recovered, `copy` refuses it. Duplicate text is
-  unchanged: intake finds the canonical by searching the scratch repository. Each live line records
-  merged pull requests on the base that reference the original issue, for scoring.
-  If that evidence is incomplete, the row does not run and its line says why;
-  reference histories exceeding the first 100 events are refused. Rows with
-  references also require a complete source history: unshallow the source checkout
-  before rerunning. Complete empty reference responses need no history check. Older
-  live lines without collected evidence keep close proposals pending until rerun or
-  marked right or wrong.
-- **Evaluation.** `page` serves one batch's page on the loopback interface: each
-  row's versions side by side with the verdict, the five fields, any close proposal
-  or maintainer recommendation with its links, cost, time and the triage report. The
-  operator marks each run right, wrong or partly right, and marks land in
-  `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
-  expected answer for false closes and dispositions, not for `type`. The score uses
-  these marks; the page shows the selected mark and any note.
-- **Score.** `score` prints one column per version from each version's latest line
-  per row, with live lines in their own `<label> (live)` column: which workflow
-  judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
-  the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed or marked the run right; a wrong
-  mark overrides a close disposition. A merged pull request on the base that only
-  references the issue leaves the close bar pending until the operator marks the
-  run right or wrong),
-  dispositions matched (a right or wrong mark decides), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a command, fetch or search that
-  looked up the judged issue, left out of the accuracy numbers), cost over the runs in
-  which an agent ran (`unreported` when no provider reported one) and wall time, and
-  which versions got each disagreement right. A bar with no applicable rows reads
-  `not applicable`. It does not choose a winner.
 
 ## Build queue
 
@@ -597,12 +495,6 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
 - **Record.** The work item's `facts.build` holds the item's status (`next`,
   `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
   rounds and its last twenty decisions with any maintainer's answer.
-- **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
-  issue named by `number`: with an empty `replay` it makes the route decision, and
-  otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
-  are its history), reading the issue body as it was at `as_of`. The agents keep
-  their read tools, so they can still see the pull request and comments as they are
-  now.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
 item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
@@ -710,9 +602,6 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue; `park` stops working it until the build queue readies it
   again. Any other ask waits for a later sweep, which decides it again.
-- **Eval mode.** `mode: eval` claims, pushes, reruns and merges nothing. It decides
-  the pull requests named in `replay`, each from the facts recorded with it, and
-  returns the decisions as the record's `evaluation`.
 
 The pack installs no binding. A schedule sweeps the queue; each run changes its
 checkout when it syncs a pull request, so it needs its own worktree, and one sweep at a
@@ -780,10 +669,6 @@ terminal report lists.
   `discoveries: question`. The answer is stored on the asking run's document. The runs
   those records came from stay claimed by the asking run until it ends, so no other
   pass asks again; the next pass then decides them with the answer beside the records.
-- **Eval mode.** `mode: eval` writes nothing: no state document, issue or comment. It
-  ignores which runs earlier passes drained, so it decides the window's runs as
-  unhandled, and returns every decision, and every check that would have refused the
-  pass, as the outcome's `evaluation`.
 
 The pack installs no binding, so the workflow runs only when started by hand until an
 operator adds one. A native schedule starts a pass every few hours; `overlap: skip`

@@ -10,11 +10,8 @@
  * with an asked record: it stays claimed by this run until the question is answered and
  * the run ends.
  *
- * In eval mode the checks run and nothing is written; the decisions and every check
- * that would have refused the pass return as `evaluation`.
- *
  * Bound inputs: INPUTS_PATH from facts; INPUTS_DECISIONS and INPUTS_SUMMARY from the
- * agent, `null` when it did not run; the workflow's INPUTS_MODE, INPUTS_REPO_HOST and
+ * agent, `null` when it did not run; the workflow's INPUTS_REPO_HOST and
  * INPUTS_REPO_PATH.
  */
 
@@ -24,7 +21,6 @@ import {
   type AgentDecision,
   checkDecisions,
   discoveryMarker,
-  parseDrainMode,
   parseRunDocument,
   type Question,
   type Queue,
@@ -56,10 +52,9 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 }
 
 function main(): void {
-  const mode = parseDrainMode(trimmed(process.env.INPUTS_MODE));
   const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
   if (idle) {
-    emit({ mode, summary: IDLE, written: [], dropped: [], asked: [], question: '', evaluation: null });
+    emit({ summary: IDLE, written: [], dropped: [], asked: [], question: '' });
     return;
   }
   const repo = {
@@ -95,18 +90,6 @@ function main(): void {
     (decision): decision is AgentDecision & { outcome: 'ask' } => decision.outcome === 'ask'
   );
 
-  if (mode === 'eval') {
-    emit({
-      mode,
-      summary,
-      written: [],
-      dropped,
-      asked: [],
-      question: '',
-      evaluation: { decisions, problems },
-    });
-    return;
-  }
   if (problems.length > 0) throw new Error(`nothing was written: ${problems.join('; ')}`);
 
   // The public writes first. Each is found again by its marker, so a pass run again
@@ -167,7 +150,6 @@ function main(): void {
     }
   }
   emit({
-    mode,
     summary,
     written,
     dropped,
@@ -178,7 +160,6 @@ function main(): void {
           `${String(index + 1)}. ${decision.key}: ${decision.question}\n   Recommended: ${decision.recommendation}`
       )
       .join('\n'),
-    evaluation: null,
   });
 }
 

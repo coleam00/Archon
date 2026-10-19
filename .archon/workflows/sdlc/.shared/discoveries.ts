@@ -109,14 +109,6 @@ export function parseRunDocument(name: string, value: unknown): RunDocument | nu
 
 // --- one pass -------------------------------------------------------------------
 
-export const DRAIN_MODES = ['live', 'eval'] as const;
-export type DrainMode = (typeof DRAIN_MODES)[number];
-
-export function parseDrainMode(value: string): DrainMode {
-  if ((DRAIN_MODES as readonly string[]).includes(value)) return value as DrainMode;
-  throw new Error(`mode must be one of ${DRAIN_MODES.join(', ')}, not "${value}"`);
-}
-
 /** One queued run and its undecided records, each ref qualified as `<run-id>:<ref>`. */
 export interface QueuedRun {
   readonly id: string;
@@ -129,7 +121,6 @@ export interface QueuedRun {
 }
 
 export interface Queue {
-  readonly mode: DrainMode;
   readonly base: { readonly branch: string; readonly sha: string };
   readonly runs: readonly QueuedRun[];
 }
