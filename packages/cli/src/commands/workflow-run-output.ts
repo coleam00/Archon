@@ -4,7 +4,15 @@ import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event'
 import { providerEventEnvelopeSchema } from '@archon/workflows/schemas/provider-event';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { deadlineWaitCursor, resumeCursorMatches } from '@archon/workflows/store';
+import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { CLIAdapter } from '../adapters/cli-adapter';
+import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatSkipCause } from './workflow-node-summaries';
+import { getLog, type RunDestination } from './workflow-shared';
+import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
 
 /**
  * Tool calls this subscription saw start and not yet close, keyed by attempt and call id,
@@ -117,5 +125,136 @@ export function workflowEventLine(
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       return undefined;
+  }
+}
+
+/** What a settled foreground run reports, and where. */
+export interface RunResultPresentation {
+  host: WorkflowHost;
+  workflow: ResolvedWorkflow;
+  result: WorkflowExecutionResult;
+  adapter: CLIAdapter;
+  conversationId: string;
+  destination: RunDestination;
+  detachedProcessOwner: boolean;
+}
+
+/**
+ * Report a settled run: its pause, its completion with a result card, or its failure,
+ * which throws. Returns the continuation when the run paused on a wait whose deadline
+ * this process owns.
+ */
+export async function presentRunResult(
+  input: RunResultPresentation
+): Promise<PendingWaitContinuation | undefined> {
+  const { host, workflow, result, adapter, conversationId, destination, detachedProcessOwner } =
+    input;
+  const presentRunFacts = await readRunFactsPresenter(host, workflow, result);
+
+  // Check result and exit appropriately
+  if (result.success && 'paused' in result && result.paused) {
+    // A durable wait with a deadline (time, event or usage limit) is this process's own
+    // cursor to wake; a gate or `attention` pause has no deadline and stays with whoever resolves it.
+    if (result.waitCursor !== undefined) {
+      return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
+    }
+    if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
+      console.log('\nWorkflow paused — waiting for approval.');
+    }
+  } else if (result.success) {
+    // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
+    // Paused workflows are handled in the branch above and intentionally do not get a result card.
+    if ('summary' in result && result.summary) {
+      await sendResultCard(
+        adapter,
+        conversationId,
+        workflow.name,
+        result.workflowRunId,
+        result.summary
+      );
+    }
+    if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
+      console.log('\nWorkflow completed successfully.');
+    }
+  } else {
+    presentRunFacts('\nWorkflow finished.', 'failed');
+    throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
+  }
+  return undefined;
+}
+
+/**
+ * Read the persisted run when the workflow authors an outcome, and return the printer
+ * for its status and outcome. The printer returns false when it printed nothing.
+ */
+async function readRunFactsPresenter(
+  host: WorkflowHost,
+  workflow: ResolvedWorkflow,
+  result: WorkflowExecutionResult
+): Promise<(lead: string, executionStatus: WorkflowRunStatus) => boolean> {
+  let presentedRun: WorkflowRun | null = null;
+  let outcomeReadUnavailable = false;
+  if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
+    try {
+      presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+      outcomeReadUnavailable = presentedRun === null;
+    } catch (error) {
+      outcomeReadUnavailable = true;
+      getLog().warn(
+        { err: error as Error, workflowRunId: result.workflowRunId },
+        'cli.workflow_outcome_lookup_failed'
+      );
+    }
+  }
+  return (lead: string, executionStatus: WorkflowRunStatus): boolean => {
+    if (outcomeReadUnavailable) {
+      console.log(
+        `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
+      );
+      return true;
+    }
+    if (presentedRun?.outcome == null) return false;
+    console.log(
+      `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
+    );
+    return true;
+  };
+}
+
+async function presentDurableWait(
+  host: WorkflowHost,
+  runId: string,
+  waitCursor: ReturnType<typeof deadlineWaitCursor>,
+  destination: RunDestination
+): Promise<PendingWaitContinuation | undefined> {
+  const pausedRun = await host.deps.store.getWorkflowRun(runId);
+  if (pausedRun === null || !resumeCursorMatches(pausedRun, waitCursor)) return;
+  const wait = pendingDurableWait(pausedRun);
+  if (wait === undefined) return;
+  console.log(
+    `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.cursor.resumeAt}; ` +
+      'this process resumes the run at its deadline.'
+  );
+  return { run: pausedRun, wait: { ...wait, cursor: waitCursor }, destination };
+}
+
+async function sendResultCard(
+  adapter: CLIAdapter,
+  conversationId: string,
+  workflowName: string,
+  runId: string,
+  summary: string
+): Promise<void> {
+  try {
+    await adapter.sendMessage(conversationId, summary, {
+      category: 'workflow_result',
+      segment: 'new',
+      workflowResult: { workflowName, runId },
+    });
+  } catch (surfaceError) {
+    getLog().warn(
+      { err: surfaceError as Error, conversationId },
+      'cli.workflow_result_surface_failed'
+    );
   }
 }

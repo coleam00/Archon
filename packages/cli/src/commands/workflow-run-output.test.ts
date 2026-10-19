@@ -588,3 +588,223 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
   });
 });
+
+describe('workflowRunCommand — dispatch and result cards', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.info.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it('sends dispatch message before executeWorkflow with correct metadata', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const { CLIAdapter } = await import('../adapters/cli-adapter');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+
+    const callOrder: string[] = [];
+    const sendMessage = spyOn(CLIAdapter.prototype, 'sendMessage').mockImplementation(
+      async (_id, message) => {
+        callOrder.push(message);
+      }
+    );
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementation(async () => {
+      callOrder.push('executeWorkflow');
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+      noWorktree: true,
+    });
+
+    // Dispatch assistant message fires before executeWorkflow
+    expect(callOrder[0]).toContain('Dispatching workflow');
+    expect(callOrder[1]).toBe('executeWorkflow');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      'Dispatching workflow: **assist**',
+      expect.objectContaining({
+        category: 'workflow_dispatch_status',
+        workflowDispatch: expect.objectContaining({ workflowName: 'assist' }),
+      })
+    );
+    sendMessage.mockRestore();
+  });
+
+  it('sends result card when executeWorkflow returns a summary', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const { CLIAdapter } = await import('../adapters/cli-adapter');
+    const sendMessage = spyOn(CLIAdapter.prototype, 'sendMessage').mockResolvedValue(undefined);
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-42',
+      summary: 'All steps completed. Branch pushed.',
+    });
+
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+      noWorktree: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      'All steps completed. Branch pushed.',
+      expect.objectContaining({
+        category: 'workflow_result',
+        workflowResult: { workflowName: 'assist', runId: 'run-42' },
+      })
+    );
+    sendMessage.mockRestore();
+  });
+
+  it('does not send result card when executeWorkflow has no summary', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-1',
+      // no summary field
+    });
+    (messagesDb.addMessage as ReturnType<typeof mock>).mockClear();
+
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+      noWorktree: true,
+    });
+
+    // Only dispatch addMessage call, no result card
+    const resultCalls = (messagesDb.addMessage as ReturnType<typeof mock>).mock.calls.filter(
+      (args: unknown[]) => {
+        const meta = args[3] as Record<string, unknown> | undefined;
+        return meta?.category === 'workflow_result';
+      }
+    );
+    expect(resultCalls).toHaveLength(0);
+  });
+
+  it('does not throw and continues to executeWorkflow when dispatch sendMessage fails', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-1',
+    });
+    // First addMessage (user message persist) succeeds, second (dispatch) fails
+    (messagesDb.addMessage as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(undefined) // user message persist succeeds
+      .mockRejectedValueOnce(new Error('DB gone')); // dispatch fails (caught inside CLIAdapter)
+
+    // Should not throw — dispatch failure must not block workflow execution
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+        noWorktree: true,
+      })
+    ).resolves.toBeUndefined();
+
+    // executeWorkflow was still called despite dispatch failure
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send result card when workflow is paused even with summary', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-paused',
+      paused: true,
+      summary: 'Steps completed so far.',
+    });
+    (messagesDb.addMessage as ReturnType<typeof mock>).mockClear();
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+        noWorktree: true,
+      });
+
+      // Paused guard fires before summary check — no result card despite having a summary
+      const resultCalls = (messagesDb.addMessage as ReturnType<typeof mock>).mock.calls.filter(
+        (args: unknown[]) => {
+          const meta = args[3] as Record<string, unknown> | undefined;
+          return meta?.category === 'workflow_result';
+        }
+      );
+      expect(resultCalls).toHaveLength(0);
+
+      // Confirm paused message was printed
+      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});

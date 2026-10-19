@@ -419,7 +419,12 @@ describe('discoveries', () => {
     );
     expect(outcome.asked).toEqual(['unclear-scope']);
     admitted(
-      script('answer', [], { INPUTS_KEYS: '["unclear-scope"]', INPUTS_TEXT: 'Out of scope.' }),
+      script(
+        'answer',
+        [],
+        { INPUTS_KEYS: '["unclear-scope"]', INPUTS_TEXT: 'Out of scope.' },
+        { 'drain/queue.json': queue }
+      ),
       DISCOVERIES,
       'answer'
     );

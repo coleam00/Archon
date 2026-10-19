@@ -1,27 +1,25 @@
 /**
- * Build this pass's queue: the finished runs with records no decision settled yet,
- * every decision made so far, and the base commit claims are checked against.
+ * Build this pass's queue: the finished runs with records no pass decided yet, and the
+ * base commit claims are checked against.
  *
  * A run's records become final when the run reaches a terminal status, so only
- * terminal runs are queued, oldest first. A record is settled once a decision record
- * that is not `asked` lists it. Each queued run is claimed with a conditional write
- * on its `discoveries/runs/<id>` document, so two passes never decide the same run;
- * a claim is released only when the claiming run is terminal.
+ * terminal runs are queued, oldest first. A record is settled once its run's
+ * `discoveries/runs/<id>` document lists it as decided. Every run document is read in
+ * one call. Each queued run is claimed with a conditional write on its document, so two
+ * passes never decide the same run; a claim is released only when the claiming run is
+ * terminal.
  *
- * Writes `$ARTIFACTS_DIR/drain/queue.json` (the queued records, for the agent and the
- * outcome) and `$ARTIFACTS_DIR/drain/discovery-decisions.md` (every stored decision).
+ * Writes `$ARTIFACTS_DIR/drain/queue.json`: the queued records, each run with the
+ * questions earlier passes asked about it, for the agent and the outcome.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DECISIONS_PREFIX,
-  type DecisionRecord,
-  decidedRefs,
-  parseDecisionRecord,
-  parseRunClaim,
+  parseRunDocument,
   type QueuedRun,
-  renderDecisions,
+  type RunDocument,
+  RUNS_PREFIX,
   runName,
 } from '../../.shared/discoveries.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
@@ -49,23 +47,66 @@ function parseTime(name: string, value: string): number | undefined {
   return at;
 }
 
-function readDecisions(): DecisionRecord[] {
-  return stateDocuments(DECISIONS_PREFIX).map(({ name, value }) => parseDecisionRecord(name, value));
+/** Every drained run's document, by run id, in one read. */
+function readRunDocuments(): Map<string, RunDocument> {
+  const documents = new Map<string, RunDocument>();
+  for (const { name, value } of stateDocuments(RUNS_PREFIX)) {
+    const document = parseRunDocument(name, value);
+    if (document !== null) documents.set(name.slice(RUNS_PREFIX.length), document);
+  }
+  return documents;
 }
 
-/** Claim the run for this pass: false when another pass holds it or won the write. */
-function claimRun(runId: string, self: string, at: string): boolean {
+/** The refs a pass already decided for a run; every ref when the run was drained before runs kept their own memory. */
+function settledOf(document: RunDocument | undefined): ((ref: string) => boolean) {
+  if (document === undefined) return () => false;
+  if (document.decided === undefined) return () => document.claim === null;
+  const decided = new Set(document.decided);
+  return ref => decided.has(ref);
+}
+
+/**
+ * Claim the run for this pass and return the document as claimed, or null when another pass
+ * holds it or won the write. Callers decide from this document, not an earlier snapshot, so a
+ * pass that settled the run in between is seen.
+ */
+function claimRun(runId: string, self: string, at: string): RunDocument | null {
   const name = runName(runId);
   const stored = stateGet(name);
-  const held = parseRunClaim(name, stored.value)?.claim ?? null;
+  const current = parseRunDocument(name, stored.value);
+  const held = current?.claim ?? null;
   if (held !== null && held.run_id !== self) {
     const status = runStatus(held.run_id);
     if (claimDisposition(status) === 'hold') {
       if (status === null) note(`${name} stays claimed: the engine reports no status for run ${held.run_id}`);
-      return false;
+      return null;
     }
   }
-  return statePut(name, { version: 1, claim: { run_id: self, at } }, stored.revision) === 'ok';
+  const claimed: RunDocument = { ...(current ?? { version: 1 }), claim: { run_id: self, at } };
+  return statePut(name, claimed, stored.revision) === 'ok' ? claimed : null;
+}
+
+/** The run's undecided records and its questions, from the document this pass decides against. */
+function undecided<R extends { ref: string }>(records: readonly R[], document: RunDocument | undefined): R[] {
+  const settled = settledOf(document);
+  return records.filter(record => !settled(record.ref));
+}
+
+/**
+ * The run's undecided records and questions once this pass holds it, or null when nothing is
+ * left to decide or another pass holds it. The snapshot only skips a claim that could not
+ * matter; what is queued comes from the document as claimed.
+ */
+function claimUndecided<R extends { ref: string }>(
+  id: string,
+  all: readonly R[],
+  pass: { self: string; at: string; snapshot: RunDocument | undefined }
+): { records: R[]; questions: NonNullable<RunDocument['questions']> } | null {
+  if (undecided(all, pass.snapshot).length === 0) return null;
+  const document = claimRun(id, pass.self, pass.at);
+  if (document === null) return null;
+  const records = undecided(all, document);
+  return records.length === 0 ? null : { records, questions: document.questions ?? [] };
 }
 
 function main(): void {
@@ -84,8 +125,7 @@ function main(): void {
 
   const base = fetchDefaultBranch(repo);
   const sha = gitOrThrow('rev-parse', base.ref);
-  const decisions = readDecisions();
-  const settled = decidedRefs(decisions);
+  const documents = readRunDocuments();
   const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
@@ -123,17 +163,15 @@ function main(): void {
       note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
       continue;
     }
-    const records = relayed.records
-      .map(record => ({ ...record, ref: `${id}:${record.ref}` }))
-      .filter(record => !settled.has(record.ref));
-    if (records.length === 0) continue;
-    if (!claimRun(id, self, at)) continue;
+    const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
+    const claimed = claimUndecided(id, all, { self, at, snapshot: documents.get(id) });
+    if (claimed === null) continue;
     queue.push({
       id,
       workflow: typeof run.workflow_name === 'string' ? run.workflow_name : '',
       completed_at: run.completed_at as string,
       artifacts,
-      records,
+      ...claimed,
     });
   }
 
@@ -143,7 +181,6 @@ function main(): void {
     join(drain, 'queue.json'),
     `${JSON.stringify({ base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
   );
-  writeFileSync(join(drain, 'discovery-decisions.md'), renderDecisions(decisions));
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
     base: { branch: base.branch, sha },

@@ -6,9 +6,10 @@ description: |
   and with earlier decisions, and decides each one: file an issue with a full brief,
   track it on the open issue that already covers it (with a marked evidence comment
   only when it adds something), drop it with a reason, or ask a maintainer. The nodes
-  after the agent perform only the writes it declared and read them back. Every
-  decision is stored as a state document, so a discovery is decided once, a key with
-  an issue never gets a second one, and a maintainer's answer is remembered.
+  after the agent perform only the writes it declared and read them back. Each
+  drained run's state document records the refs decided for it and any question
+  asked with its answer, so a record is decided once; a filed issue carries its
+  key's marker, so filing a key again recovers that issue.
 
   Use when: an operator drains discoveries by hand, or a schedule binding the
   operator installed starts it (see the SDLC pack README, "Discoveries"). The pack
@@ -34,7 +35,7 @@ inputs:
 returns: outcome
 
 nodes:
-  # Builds the queue and the decisions dump, and claims the queued runs.
+  # Builds the queue and claims the queued runs.
   - id: facts
     script: facts
     runtime: bun

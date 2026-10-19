@@ -22,8 +22,6 @@ emit(
     ready: false,
     reason: 'failed',
     pr_url: publishedPrUrl(artifactsDir(), options),
-    ci_rerun: 'none',
-    threads_checked: false,
     summary: failed(artifactsDir(), options),
   }
 );

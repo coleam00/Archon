@@ -19,7 +19,6 @@ export type BuildAttention = Attention<BuildEffect>;
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
 export const ROUTE_DECISIONS = ['launch', 'ask'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
-export const GIVE_UP_DECISIONS = ['continue', 'ask'] as const;
 export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
 /** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
@@ -87,7 +86,7 @@ export function buildWaits(doc: WorkItem): boolean {
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
 /**
- * The rounds that count toward the give-up decision: those since the item's scope last
+ * The rounds that count toward the round cap: those since the item's scope last
  * changed, by a re-triage or a person's answer.
  */
 export function countedRounds(doc: WorkItem): number {

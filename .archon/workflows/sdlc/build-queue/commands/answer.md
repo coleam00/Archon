@@ -22,6 +22,10 @@ Read the report's `reason` and summary, then the artifact that explains it: the 
 
 When the round left commits that are on the checkout but not on its pull request's head, declare that pull request in `push` with its repository and number, whatever you decide; otherwise `push` is null. Compare `git rev-parse HEAD` with the pull request's head commit to know.
 
+## At the round cap
+
+`$INPUTS.at_cap` is true when the queue has run several rounds on this item since its scope last changed. Then, before you `continue`, compare the rounds' review findings: read each earlier round's `review/report.md`. Continue when the work converges: the findings shrink, repeat a defect being fixed, or are corrections of one kind the next round can finish. Ask the scope question instead when each round's review found new defects the round before did not have, such as regressions the corrections introduced or one problem class surfacing in place after place: another round spends more without settling it. The scope question's attention item says how many rounds ran, the scope question in plain words, what another round costs, and what narrowing or re-planning would change; its evidence names the rounds' new findings by report path, and a choice's `ruling` can carry a narrower acceptance or a design constraint.
+
 ## The brief
 
 On continue, `brief` is the target the next `archon-ship` run starts from cold. It names the issue by URL and says the issue body, including its dated scope sections, is the contract. Then it names the open pull request by URL and branch, says why this round stopped, and says what the next round does about it: the findings to correct with their report path, the answer to the stop with its source, or the steps that follow a false blocker. It does not restate or widen the contract. On ask, `brief` is what the next round starts from if the maintainer chooses to continue. On done it is empty.
