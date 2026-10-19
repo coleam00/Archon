@@ -1692,6 +1692,7 @@ describe('ContainerBackend separated artifact storage', () => {
     { version: 2, artifacts: null },
     { version: 1 },
     { version: 1, artifacts: {} },
+    { version: 1, artifacts: { root, volume: outputVolume }, finalCollection: false },
     { version: 1, artifacts: { root, volume: '/host/path' } },
     { version: 1, artifacts: { root: 'relative', volume: outputVolume } },
     { version: 1, artifacts: { root: '/arbitrary/host', volume: outputVolume } },
@@ -1912,6 +1913,67 @@ describe('ContainerBackend separated artifact storage', () => {
     expect(f.volumes.size).toBe(2);
     expect(f.row.status).toBe('active');
     expect(f.docker.calls.some(args => args[0] === 'create')).toBe(false);
+  });
+
+  test.each(['upper-removal', 'status-write'] as const)(
+    'destroy retries after output deletion and %s failure, including a fresh backend',
+    async phase => {
+      const f = environment();
+      if (phase === 'status-write') {
+        spyOn(f.store, 'updateStatus').mockRejectedValueOnce(new Error('status unavailable'));
+      } else {
+        f.setFailure(args =>
+          args[0] === 'volume' && args[1] === 'rm' && args.at(-1) === 'archon-res-1-upper'
+            ? new Error('upper busy')
+            : undefined
+        );
+      }
+      await expect(f.backend.destroy(f.row.id)).rejects.toThrow(
+        phase === 'status-write' ? 'status unavailable' : 'upper busy'
+      );
+      expect(f.row.status).toBe('active');
+      expect(f.volumes.has(outputVolume)).toBe(false);
+      f.setFailure(() => undefined);
+      const retry = new ContainerBackend({
+        config: CONFIG,
+        store: f.store,
+        dockerRunner: f.docker,
+      });
+      await retry.destroy(f.row.id);
+      expect(f.row.status).toBe('destroyed');
+      expect(f.volumes.size).toBe(0);
+      expect(f.docker.calls.filter(args => args[0] === 'create')).toHaveLength(1);
+    }
+  );
+
+  test('failed final-collection checkpoint retains its source and retries collection', async () => {
+    const f = environment();
+    spyOn(f.store, 'updateMetadata').mockRejectedValueOnce(new Error('checkpoint unavailable'));
+    await expect(f.backend.destroy(f.row.id)).rejects.toThrow('checkpoint unavailable');
+    expect(f.volumes.has(outputVolume)).toBe(true);
+    expect(f.row.metadata.artifactExchange).not.toHaveProperty('finalCollection');
+    await f.backend.destroy(f.row.id);
+    expect(f.row.status).toBe('destroyed');
+    expect(f.docker.calls.filter(args => args[0] === 'create')).toHaveLength(2);
+  });
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s refuses missing output before final collection',
+    async operation => {
+      const f = environment();
+      f.volumes.delete(outputVolume);
+      await expect(f.backend[operation](f.row.id)).rejects.toThrow('Artifact collect failed');
+      expect(f.row.metadata.artifactExchange).not.toHaveProperty('finalCollection');
+      expect(f.row.status).toBe('active');
+      expect(f.volumes.has('archon-res-1-upper')).toBe(true);
+    }
+  );
+
+  test('resume refuses an environment whose final collection has completed', async () => {
+    const f = environment();
+    f.row.metadata.artifactExchange = { ...layout, finalCollection: true };
+    await expect(f.backend.resumeEnv(f.row.id)).rejects.toThrow('retry destruction');
+    expect(f.docker.calls).toHaveLength(0);
   });
 
   test('failed output removal preserves the tracking row and upper volume', async () => {

@@ -80,7 +80,11 @@ export function currentHostIdentity(): HostIdentity | undefined {
 }
 
 type ArtifactStorage = { root: string; volume: string };
-type ArtifactExchangeMetadata = { version: 1; artifacts: ArtifactStorage | null };
+type ArtifactExchangeMetadata = {
+  version: 1;
+  artifacts: ArtifactStorage | null;
+  finalCollection?: true;
+};
 
 /** Archon-owned paths exposed at the same logical paths inside the container. */
 interface HostMounts {
@@ -183,8 +187,12 @@ function readArtifactExchange(
     value.version === 1 &&
     'artifacts' in value
   ) {
+    if ('finalCollection' in value && value.finalCollection !== true) {
+      throw new Error('Invalid persisted artifactExchange finalCollection metadata.');
+    }
+    const finalCollection = 'finalCollection' in value ? { finalCollection: true as const } : {};
     const artifacts = value.artifacts;
-    if (artifacts === null) return { version: 1, artifacts: null };
+    if (artifacts === null) return { version: 1, artifacts: null, ...finalCollection };
     if (
       typeof artifacts === 'object' &&
       'root' in artifacts &&
@@ -195,7 +203,11 @@ function readArtifactExchange(
       typeof artifacts.volume === 'string' &&
       /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(artifacts.volume)
     ) {
-      return { version: 1, artifacts: { root: artifacts.root, volume: artifacts.volume } };
+      return {
+        version: 1,
+        artifacts: { root: artifacts.root, volume: artifacts.volume },
+        ...finalCollection,
+      };
     }
   }
   throw new Error('Invalid persisted artifactExchange metadata; refusing legacy fallback.');
@@ -395,8 +407,14 @@ export class ContainerBackend implements IIsolationBackend {
         const failure = await this.removeIgnoringNotFound(['rm', '-f', handle]);
         if (failure)
           throw new Error(`Failed to remove the isolation container '${handle}': ${failure}`);
-        await collect();
         const layout = readArtifactExchange(meta);
+        if (!layout?.finalCollection) {
+          await collect();
+          // Persist before deleting the only source of uncollected output.
+          await this.store.updateMetadata(envId, {
+            artifactExchange: { ...layout, finalCollection: true },
+          });
+        }
         for (const volume of [layout?.artifacts?.volume, meta.volume]) {
           if (!volume) continue;
           const failure = await this.removeIgnoringNotFound(['volume', 'rm', '-f', volume]);
@@ -525,6 +543,11 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
     const layout = readArtifactExchange(meta);
+    if (layout?.finalCollection) {
+      throw new Error(
+        `Cannot resume container env '${envId}': final collection completed; retry destruction.`
+      );
+    }
     const mounts: HostMounts = layout
       ? { source: meta.sourceMount, output: layout.artifacts ?? undefined }
       : { source: meta.sourceMount, artifacts: meta.artifactsMount };
