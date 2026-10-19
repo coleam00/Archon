@@ -778,6 +778,42 @@ describe('the intake scripts', () => {
       summary: expect.stringContaining('run-1, which ended failed'),
     });
   }, 60_000);
+  function idleOutcome(at: Install, event: Event): string {
+    // A skipped document is noted on stderr as well, so only the exit codes are pinned.
+    const picked = run(at, 'facts', event);
+    expect(picked.code).toBe(0);
+    expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'idle', item: null });
+    const result = run(at, 'outcome', event, { INPUTS_PATH: 'idle', INPUTS_ITEM: 'null', INPUTS_DECISION: 'null' });
+    expect(result.code).toBe(0);
+    return (JSON.parse(result.stdout) as { summary: string }).summary;
+  }
+
+  test('an idle pass names a stored item that does not parse instead of reporting an empty queue', () => {
+    const at = install();
+    inProcess(at, () => statePut('work/3', { not: 'a work item' }, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(summary).not.toBe('No item waits for intake.');
+    expect(summary).toContain('work/3');
+  }, 60_000);
+
+  test('a claim held by a run with no status stays held, and the idle pass names it and the run', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(stored(at).value.claim?.run_id).toBe('ghost-run');
+    expect(summary).toContain('work/7');
+    expect(summary).toContain('ghost-run');
+  }, 60_000);
+
+  test('an idle pass with only live claims still reports an empty queue', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'live-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const event = { runId: 'run-1', kind: 'pr', statuses: { 'live-run': 'running' } };
+    expect(idleOutcome(at, event)).toBe('No item waits for intake.');
+  }, 60_000);
+
   test('pickup reads every stored work item in one state call, not one per item', () => {
     const at = install();
     inProcess(at, () => {

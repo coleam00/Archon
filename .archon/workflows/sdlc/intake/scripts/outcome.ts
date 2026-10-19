@@ -12,6 +12,7 @@ import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts'
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import {
   type Contract,
   type LabelVerdict,
@@ -126,7 +127,7 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: 'No item waits for intake.',
+      summary: idleSummary('No item waits for intake.', stuckItems(text(process.env.WORKFLOW_ID))),
     });
     return;
   }
