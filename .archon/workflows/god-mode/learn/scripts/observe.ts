@@ -15,6 +15,7 @@
  * prefix a pack chose.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { cli, cliJson, stateGet } from '../../.shared/archon.ts';
 import { emit, run } from '../../.shared/io.ts';
 import { LESSONS_DOC, type LessonsDoc } from '../../.shared/lessons.ts';
@@ -93,6 +94,41 @@ function lastWord(transcript: string): string {
   return '';
 }
 
+interface TrackerRow {
+  number: number;
+  title: string;
+  labels?: { name: string }[];
+  mergedAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * The tracker as context: merged pull requests and open issues in the window, as
+ * pointers. They tell the learner which classes are already fixed or tracked, and
+ * where a symptom's cause was found. The project's own forge CLI reads them; a
+ * project without one gets a note instead of a guess.
+ */
+function tracker(since: string): string {
+  const read = (args: string[]): TrackerRow[] | string => {
+    const proc = spawnSync('gh', args, { encoding: 'utf8' });
+    if (proc.error || proc.status !== 0) return `unavailable (${proc.error?.message ?? oneLine(proc.stderr ?? '', 120)})`;
+    return JSON.parse(proc.stdout) as TrackerRow[];
+  };
+  const line = (r: TrackerRow, when: string | undefined): string =>
+    `- #${r.number} ${when ?? ''} ${oneLine(r.title, 110)}${r.labels?.length ? ` [${r.labels.map((l) => l.name).join(', ')}]` : ''}`;
+  const day = since.slice(0, 10);
+  const merged = read(['pr', 'list', '--state', 'merged', '--search', `merged:>=${day}`, '--limit', '150', '--json', 'number,title,labels,mergedAt']);
+  const issues = read(['issue', 'list', '--state', 'open', '--search', `updated:>=${day}`, '--limit', '150', '--json', 'number,title,labels,updatedAt']);
+  return [
+    `## Tracker since ${day}`,
+    'Read a body with `gh pr view <n>` or `gh issue view <n> --comments`. A merged pull request may already fix a class; an open issue may already track one.',
+    `### Merged pull requests${typeof merged === 'string' ? `: ${merged}` : ` (${merged.length})`}`,
+    typeof merged === 'string' ? '' : merged.map((r) => line(r, r.mergedAt?.slice(0, 16))).join('\n') || 'none',
+    `### Open issues updated in the window${typeof issues === 'string' ? `: ${issues}` : ` (${issues.length})`}`,
+    typeof issues === 'string' ? '' : issues.map((r) => line(r, r.updatedAt?.slice(0, 16))).join('\n') || 'none',
+  ].join('\n');
+}
+
 function runLine(r: RunRow, full: boolean): string {
   const id = r.id ?? '?';
   const root = r.output_root ?? '';
@@ -164,6 +200,8 @@ run('learn observe', () => {
     'Each line: id, workflow, status, start, duration, cost, inputs, parent run, and the last thing the run said (its error, or its last script output). This list is where to start reading, not what happened.',
     `A run's transcript is \`<root>/logs/<id>.jsonl\` (node_start, node_complete, exec_output with each script's stdout, provider_event with the agents' turns, workflow_error) and its artifacts are \`<root>/artifacts/runs/<id>/\` (reports, briefs, node outputs under nodes/). Roots: ${roots.join(', ') || 'none'}.${fullPath ? ` The same list with full paths: ${fullPath}.` : ''}`,
     runs.map((r) => runLine(r, false)).join('\n') || 'none',
+    '',
+    tracker(runs.map((r) => r.started_at ?? '').filter((v) => v !== '').sort()[0] ?? new Date().toISOString()),
     '',
     `## State documents (${documents.length})`,
     listing.code === 0

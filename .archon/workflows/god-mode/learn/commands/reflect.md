@@ -28,6 +28,13 @@ decide anything:
   it was used? How many paid rounds ended without moving the work forward?
 - When the record points into a pack, read that pack's README and constitution
   before you judge it.
+- Read the tracker section: merged pull requests and open issues in the window. Open
+  the ones that touch a class you are judging. A merged pull request may already fix
+  it: a class whose last occurrence predates its fix is history, not a proposal. An
+  open issue may already track it: say so in `fix` instead of proposing it again. A
+  symptom in a run (a refusal, an error message) often has its cause named in an
+  issue or fixed in a pull request elsewhere in the stack; trace it there before you
+  blame the prompt that printed it.
 
 Spend the time this takes. Opening a few dozen transcripts is expected.
 
@@ -49,7 +56,9 @@ waiting, that response is the class.
 Fill `classes` with every class you found, ranked by cost, most costly first. For
 each: a short `name`, its `cost` (paid rounds, minutes or attention, with numbers
 where you have them), the `evidence` (run ids, item numbers, the reasons you read),
-the `cause` as you understand it, and the `fix` you would make and where. A class
+the `cause` as you understand it, and the `fix` you would make and where. When a
+merged pull request or open issue already covers the class, name it in `fix` and
+rank the class by what it still costs. A class
 outside `.archon/` (the engine, a provider, the platform) still belongs in the list;
 say so in `fix`.
 
