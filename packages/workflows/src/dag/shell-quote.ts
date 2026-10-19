@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
@@ -46,7 +47,8 @@ export function shellQuoteOrFile(
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
     const spillDir = joinPath(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'node-output-spills');
-    const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
+    // Unique per write: $X.output and $LOOP_PREV.X.output in one script must not share a file.
+    const filename = `${randomUUID()}.${nodeId}${field ? `.${field}` : ''}.nodeoutput`;
     const filePath = writeSpillFile(spillDir, filename, value);
     if (filePath) return `$(cat ${shellQuote(filePath)})`;
     return shellQuote(value); // fallback: inline (pre-file-spill behavior)

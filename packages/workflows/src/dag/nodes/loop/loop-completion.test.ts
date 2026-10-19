@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -213,12 +213,10 @@ describe('loop node completion channels', () => {
     );
 
     expect(calls).toBe(1);
-    expect(
-      await readFile(
-        join(artifactsDir, '.archon', 'node-output-spills', 'producer.nodeoutput'),
-        'utf-8'
-      )
-    ).toBe(largeOutput);
+    const spillDir = join(artifactsDir, '.archon', 'node-output-spills');
+    const spills = (await readdir(spillDir)).filter(file => file.endsWith('.producer.nodeoutput'));
+    expect(spills).toHaveLength(1);
+    expect(await readFile(join(spillDir, spills[0]), 'utf-8')).toBe(largeOutput);
     expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
   });
 

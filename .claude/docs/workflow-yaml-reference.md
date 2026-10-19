@@ -254,7 +254,7 @@ when: "$classify.output.complexity != 'trivial'"
 | `$nodeId.output` | Full output string from completed node |
 | `$nodeId.output.field` | JSON field value from structured output |
 
-For bash node scripts, substituted values are shell-quoted for safety.
+In `bash:` and `until_bash:`, small output references are single-quoted inline; large outputs use an unquoted file-read substitution. Assign each reference to a variable, then quote that variable when using it. See the [assignment-then-quote examples](../../packages/docs-web/src/content/docs/reference/variables.md#shell-quoting-in-bash-vs-script).
 
 ---
 
