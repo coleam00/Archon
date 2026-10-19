@@ -188,6 +188,7 @@ import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import type { IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
+import { captureWorkflowSource } from './workflow-source';
 
 // --- Helpers ---
 
@@ -1071,6 +1072,134 @@ describe('executeWorkflow', () => {
         expect(sent.some(text => text.includes('continuation scan'))).toBe(false);
       }
     );
+  });
+
+  describe('source setup failure boundary', () => {
+    for (const failureSite of ['release', 'lookup'] as const) {
+      it(`preserves a successor when source ${failureSite} rejects`, async () => {
+        const root = await mkdtemp(join(tmpdir(), 'archon-source-release-'));
+        try {
+          const sourceError = new Error(`${failureSite} store unavailable`);
+          const run = makeRun({
+            status: 'running',
+            metadata: {
+              workflow_source: {
+                version: 1,
+                root: join(root, 'missing'),
+                origin: root,
+                captured_at: new Date().toISOString(),
+                digest: 'unread',
+                file_count: 0,
+                byte_count: 0,
+              },
+            },
+          });
+          const successor = makeRun({
+            status: 'running',
+            metadata: { execution_claim: 'new-owner' },
+          });
+          const store = makeStore({
+            releaseRunForUnreadableSource: mock(async () => {
+              if (failureSite === 'release') throw sourceError;
+              return { released: false };
+            }),
+            getWorkflowRun: mock(async () => {
+              throw sourceError;
+            }),
+            getWorkflowRunStatus: mock(async () => successor.status),
+            failWorkflowRun: mock(async () => {
+              successor.status = 'failed';
+              return { failed: true };
+            }),
+          });
+          const platform = makePlatform();
+          await expect(
+            executeWorkflow(
+              makeDeps(store),
+              platform,
+              'conv-1',
+              '/tmp/ops',
+              makeWorkflow(),
+              'msg',
+              { conversationId: 'db-conv-1' },
+              { preCreatedRun: run, priorCompletedNodes: new Map() }
+            )
+          ).rejects.toBe(sourceError);
+          expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+          expect(store.getWorkflowRun).toHaveBeenCalledTimes(failureSite === 'lookup' ? 1 : 0);
+          expect(successor.status).toBe('running');
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+          expect(mockEmitter.emit).not.toHaveBeenCalled();
+          expect(sentMessages(platform).some(message => message.includes('Workflow failed'))).toBe(
+            false
+          );
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+          expect(keepAwake.activeCount()).toBe(0);
+        } finally {
+          await removeTempTree(root);
+        }
+      });
+    }
+
+    it('fails an admitted resumed run when pinning its source config rejects', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'archon-source-pin-'));
+      try {
+        const sourceRoot = join(root, 'source');
+        await mkdir(sourceRoot);
+        const capture = await captureWorkflowSource({
+          sourceRoot,
+          captureRoot: join(root, 'capture'),
+        });
+        const run = makeRun({
+          status: 'running',
+          metadata: {
+            workflow_source: {
+              version: 1,
+              root: capture.anchor.root,
+              origin: capture.origin,
+              captured_at: capture.manifest.captured_at,
+              digest: capture.manifest.digest,
+              file_count: capture.manifest.file_count,
+              byte_count: capture.manifest.byte_count,
+            },
+          },
+        });
+        const pinError = new Error('source config pin rejected');
+        const store = makeStore({
+          updateWorkflowRun: mock(async (_id, update) => {
+            if (update.metadata?.workflow_source) throw pinError;
+          }),
+          getWorkflowRunStatus: mock(async () => run.status),
+          failWorkflowRun: mock(async (_id, error) => {
+            run.status = 'failed';
+            run.metadata.error = error;
+            return { failed: true };
+          }),
+        });
+        const result = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-1',
+          '/tmp/ops',
+          makeWorkflow(),
+          'msg',
+          { conversationId: 'db-conv-1' },
+          { preCreatedRun: run, priorCompletedNodes: new Map() }
+        );
+        expect(result).toEqual({ success: false, workflowRunId: run.id, error: pinError.message });
+        expect(run.status).toBe('failed');
+        expect(run.metadata.error).toBe(pinError.message);
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, pinError.message, {
+          exitReason: 'unhandled_error',
+        });
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        expect(keepAwake.activeCount()).toBe(0);
+      } finally {
+        await removeTempTree(root);
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

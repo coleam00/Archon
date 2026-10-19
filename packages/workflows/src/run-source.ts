@@ -403,6 +403,14 @@ export async function prepareWorkflowSource(
   };
 }
 
+/** A release failure leaves execution ownership unconfirmed, so terminal recovery is unsafe. */
+export class RunSourceReleaseError extends Error {
+  constructor(cause: unknown) {
+    super('Could not confirm workflow source release', { cause });
+    this.name = 'RunSourceReleaseError';
+  }
+}
+
 /**
  * Freeze the workflow's own commands and scripts into this run's artifacts, and
  * resolve them from there for the rest of the run. Two things follow: the target
@@ -477,45 +485,49 @@ export async function establishRunSource(
           { workflowRunId: workflowRun.id, path, err: error },
           'workflow.source_restore_unreadable'
         );
-        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-          claimId: executionClaim(workflowRun.metadata),
-          nodeId: 'workflow-source',
-          path,
-          error: error instanceof Error ? error.message : String(error),
-          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-        });
-        if (released) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            sourceReleaseNotice(platform, workflowRun.id, {
-              path,
-              container: isContainerRun(workflowRun),
-            })
-          );
+        try {
+          const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
+            claimId: executionClaim(workflowRun.metadata),
+            nodeId: 'workflow-source',
+            path,
+            error: error instanceof Error ? error.message : String(error),
+            retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+          });
+          if (released) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              sourceReleaseNotice(platform, workflowRun.id, {
+                path,
+                container: isContainerRun(workflowRun),
+              })
+            );
+            return {
+              stopped: true,
+              result: { success: true, paused: true, workflowRunId: workflowRun.id },
+            };
+          }
+          const current = await deps.store.getWorkflowRun(workflowRun.id);
+          if (current?.status === 'paused') {
+            return {
+              stopped: true,
+              result: { success: true, paused: true, workflowRunId: workflowRun.id },
+            };
+          }
+          if (current?.status === 'completed') {
+            return { stopped: true, result: { success: true, workflowRunId: workflowRun.id } };
+          }
           return {
             stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
+            result: {
+              success: false,
+              workflowRunId: workflowRun.id,
+              error: 'Workflow status changed before source release',
+            },
           };
+        } catch (releaseError) {
+          throw new RunSourceReleaseError(releaseError);
         }
-        const current = await deps.store.getWorkflowRun(workflowRun.id);
-        if (current?.status === 'paused') {
-          return {
-            stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
-          };
-        }
-        if (current?.status === 'completed') {
-          return { stopped: true, result: { success: true, workflowRunId: workflowRun.id } };
-        }
-        return {
-          stopped: true,
-          result: {
-            success: false,
-            workflowRunId: workflowRun.id,
-            error: 'Workflow status changed before source release',
-          },
-        };
       }
       return await failRunOnSource(
         `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +

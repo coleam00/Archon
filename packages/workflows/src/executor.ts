@@ -19,6 +19,7 @@ import {
   type PreparedRunAiConfiguration,
 } from './run-preflight';
 import {
+  RunSourceReleaseError,
   establishRunSource,
   prepareWorkflowSource,
   type CapturedSourceOwner,
@@ -807,6 +808,10 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
+    if (error instanceof RunSourceReleaseError) {
+      sourceExecutionStopped = true;
+      throw error.cause;
+    }
     if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
