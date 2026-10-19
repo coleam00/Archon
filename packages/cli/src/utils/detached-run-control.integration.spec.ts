@@ -179,6 +179,40 @@ function stubOwner(pid: number, leaseMs?: number): Server {
   });
 }
 
+/**
+ * Start `fixtures/windows-run-owner.ts` as a real detached run owner and wait until it is
+ * ready. Its fixture directory's name is on the command line of every process in its tree.
+ */
+async function startWindowsRunOwner(
+  mode: 'orphan' | 'spawner'
+): Promise<{ runId: string; dir: string; marker: string }> {
+  const runId = `windows-${mode}-${crypto.randomUUID()}`;
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), `archon-windows-${mode}-`)));
+  const fixturePath = join(import.meta.dir, 'fixtures', 'windows-run-owner.ts');
+  const owner = spawn(process.execPath, [fixturePath, runId, dir, mode], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
+  owner.unref();
+  await waitForFixtureProcess(() => existsSync(join(dir, 'ready')));
+  return { runId, dir, marker: basename(dir) };
+}
+
+/** Kill whatever `marker` still names, after a test that may have left survivors. */
+async function killWindowsProcessesNaming(
+  marker: string,
+  listed: number[] | undefined
+): Promise<void> {
+  for (const pid of listed ?? (await windowsProcessesNaming(marker))) {
+    try {
+      process.kill(pid);
+    } catch {
+      // Already gone: the test's own assertion reports a survivor.
+    }
+  }
+}
+
 describe('detached run control integration', () => {
   beforeAll(async (): Promise<void> => {
     // A fresh marker names no process; only the query's cost matters here.
@@ -313,6 +347,33 @@ describe('detached run control integration', () => {
       }
     },
     STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'stops a Windows grandchild whose parent exited before the stop',
+    async () => {
+      // #3492: the owner started a child that started a grandchild and exited, so no
+      // live process links the grandchild to the owner by parent PID. The grandchild is
+      // detached, which takes it out of the runtime's own kill-on-close job.
+      if (process.platform !== 'win32') return;
+
+      const { runId, dir, marker } = await startWindowsRunOwner('orphan');
+      let survivors: number[] | undefined;
+      try {
+        const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
+        // The premise, asserted rather than assumed: the orphan is alive before the stop.
+        expect(await windowsProcessesNaming(marker)).toContain(grandchild);
+
+        const target = await requestDetachedRunStop(runId);
+        await target.stop();
+
+        survivors = await windowsProcessesNaming(marker);
+        expect(survivors).toEqual([]);
+      } finally {
+        await killWindowsProcessesNaming(marker, survivors);
+      }
+    },
+    RACING_STOP_TEST_TIMEOUT_MS
   );
 
   it(
