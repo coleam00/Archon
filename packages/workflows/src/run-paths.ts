@@ -3,7 +3,8 @@ import { createLogger } from '@archon/paths';
 import { mkdir } from 'fs/promises';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import { sendCriticalMessage, type RunPhase } from './executor-shared';
+import { sendCriticalMessage } from './platform-messages';
+import { type RunPhase } from './executor-shared';
 import {
   RUN_METADATA_KEYS,
   persistScopeKey,

@@ -15,7 +15,8 @@ import {
   resolveIncludeOutputAliases,
   type LoopWithCompiledCommand,
 } from '../../../compiled-command';
-import { describeUnmetCompletion, safeSendMessage } from '../../../executor-shared';
+import { describeUnmetCompletion } from '../../../executor-shared';
+import { safeSendMessage } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';

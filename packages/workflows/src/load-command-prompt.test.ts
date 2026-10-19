@@ -60,7 +60,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import type { WorkflowDeps } from './deps';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
