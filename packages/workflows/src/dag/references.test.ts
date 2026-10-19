@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { bashScriptArgs } from './bash-script';
 import { createHash } from 'node:crypto';
 import { expect, beforeEach, afterEach, describe, it } from 'bun:test';
 import { join } from 'path';
@@ -536,6 +537,7 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     { label: '40,000 bytes without newline', value: 'é'.repeat(20_000) },
     { label: '40,001 bytes with newline', value: 'é'.repeat(20_000) + '\n' },
     { label: '40,002 bytes with two newlines', value: 'é'.repeat(20_000) + '\n\n' },
+    { label: 'spilled output with a long newline suffix', value: 'A' + '\n'.repeat(600_000) },
     { label: 'spilled output with newline', value: 'é'.repeat(33_000) + '\n' },
     { label: 'spilled output with two newlines', value: 'é'.repeat(33_000) + '\n\n' },
   ])('delivers $label exactly through all four shell output references', async ({ value }) => {
@@ -548,7 +550,9 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
       true,
       tempDir
     );
-    const { stdout } = await execFileAsync(resolveBashPath(), ['-c', script]);
+    const args = bashScriptArgs(script, tempDir);
+    expect(Buffer.byteLength(args.join(''), 'utf8')).toBeLessThan(100_000);
+    const { stdout } = await execFileAsync(resolveBashPath(), args, { maxBuffer: 4_000_000 });
     expect(stdout).toBe([value, value, value, value].join('|'));
   });
 

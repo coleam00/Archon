@@ -164,56 +164,59 @@ describe('loop node completion channels', () => {
     expect(await Bun.file(markerPath).exists()).toBe(false);
   });
 
-  it('reads oversized upstream output in until_bash from the run-owned spill directory', async () => {
-    const artifactsDir = join(testDir, 'loop-until-artifacts');
-    const logDir = join(testDir, 'loop-until-logs');
-    let calls = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      calls++;
-      yield { type: 'agent_message_chunk', text: 'working' };
-      yield { type: 'result', sessionId: 's-1' };
-    });
+  it.each([0, 600_000])(
+    'reads oversized upstream output with %i trailing newlines in until_bash',
+    async suffixLength => {
+      const artifactsDir = join(testDir, 'loop-until-artifacts');
+      const logDir = join(testDir, 'loop-until-logs');
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: 'working' };
+        yield { type: 'result', sessionId: 's-1' };
+      });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('loop-large-until-bash');
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-large-until-bash');
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'dag-loop-large-until-bash',
-          nodes: [
-            {
-              id: 'producer',
-              kind: 'exec',
-              runtime: 'sh',
-              script: 'head -c 33000 /dev/zero | tr "\\0" x',
-            },
-            {
-              id: 'my-loop',
-              kind: 'loop',
-              loop: {
-                fresh_context: false,
-                prompt: 'Keep working.',
-                max_iterations: 2,
-                until_bash: 'value=$producer.output; test "${#value}" -eq 33000',
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          cwd: testDir,
+          workflow: {
+            name: 'dag-loop-large-until-bash',
+            nodes: [
+              {
+                id: 'producer',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `head -c 33000 /dev/zero | tr "\\0" x; head -c ${suffixLength + 1} /dev/zero | tr "\\0" '\\n'`,
               },
-              depends_on: ['producer'],
-            },
-          ],
-        },
-        workflowRun,
-        artifactsDir,
-        logDir,
-      })
-    );
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Keep working.',
+                  max_iterations: 2,
+                  until_bash: `value=$producer.output; test "\${#value}" -eq ${33_000 + suffixLength}`,
+                },
+                depends_on: ['producer'],
+              },
+            ],
+          },
+          workflowRun,
+          artifactsDir,
+          logDir,
+        })
+      );
 
-    expect(calls).toBe(1);
-    expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
-  });
+      expect(calls).toBe(1);
+      expect(await Bun.file(join(logDir, 'producer.nodeoutput')).exists()).toBe(false);
+    }
+  );
 
   it('does not complete a loop with no until when the model emits a sentinel-shaped string', async () => {
     // The whole point of making `until` optional: with no signal declared there is

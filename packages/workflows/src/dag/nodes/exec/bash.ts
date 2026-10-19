@@ -1,3 +1,4 @@
+import { bashScriptArgs } from '../../bash-script';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -27,7 +28,7 @@ import {
 
 /**
  * Execute a bash (shell script) DAG node.
- * Runs the script via `bash -c`, captures stdout as node output.
+ * Runs the script with Bash, captures stdout as node output.
  * No AI session is created — bash nodes are free/deterministic.
  */
 export async function executeBashNode(
@@ -114,7 +115,7 @@ export async function executeBashNode(
       node.id,
       execContext,
       bashPath,
-      ['-c', finalScript],
+      bashScriptArgs(finalScript, artifactsDir),
       {
         cwd,
         timeout: node.timeout,

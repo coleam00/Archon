@@ -510,6 +510,18 @@ describe('executeDagWorkflow -- loop_group node', () => {
       current: 'A'.repeat(33_000) + '\n\n',
     },
     {
+      label: 'whole spilled output with a long newline suffix',
+      field: '',
+      previous: 'A' + '\n'.repeat(600_000),
+      current: 'B' + '\n'.repeat(600_001),
+    },
+    {
+      label: 'spilled field with a long newline suffix',
+      field: '.data',
+      previous: 'A' + '\n'.repeat(600_000),
+      current: 'B' + '\n'.repeat(600_001),
+    },
+    {
       label: 'whole multibyte output',
       field: '',
       previous: 'é'.repeat(20_000) + '\n',

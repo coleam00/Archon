@@ -1,3 +1,4 @@
+import { bashScriptArgs } from '../../bash-script';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
@@ -345,7 +346,7 @@ async function runUntilBash(
       node.id,
       execContext,
       loopBashPath,
-      ['-c', substitutedBash],
+      bashScriptArgs(substitutedBash, artifactsDir),
       {
         cwd: ctx.cwd,
         timeout: node.timeout,

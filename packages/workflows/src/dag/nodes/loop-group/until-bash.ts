@@ -1,3 +1,4 @@
+import { bashScriptArgs } from '../../bash-script';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
@@ -30,7 +31,7 @@ export async function runGroupUntilBash(
       node.id,
       ctx.execContext,
       bash.path,
-      ['-c', bash.script()],
+      bashScriptArgs(bash.script(), artifactsDir),
       {
         cwd: ctx.cwd,
         timeout: node.timeout,
