@@ -126,9 +126,9 @@ export function readNodeRecordEvent(
     const lifecycle = lifecycleFor(eventType, data);
     if (lifecycle === undefined) throw new Error('Node execution lifecycle is invalid');
     metadata = nodeExecutionMetadataSchema.parse({
+      ...raw,
       runId: envelope.workflow_run_id,
       path: envelope.step_name,
-      ...nodeExecutionMetadataPayloadSchema.parse(raw),
       lifecycle,
     });
   }

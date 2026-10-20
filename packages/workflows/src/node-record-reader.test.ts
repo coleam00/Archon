@@ -48,7 +48,14 @@ describe('readNodeRecordEvent', () => {
       workflow_run_id: 'run-1',
       step_name: 'group.build',
       event_type: 'node_completed',
-      data: { ...metadata, node_output: 'done', tokens: 'bad' },
+      data: {
+        ...metadata,
+        runId: 'spoofed-run',
+        path: 'spoofed-path',
+        lifecycle: { status: 'failed', error: 'spoofed failure' },
+        node_output: 'done',
+        tokens: 'bad',
+      },
     });
     expect(record?.metadata).toMatchObject({
       runId: 'run-1',
@@ -56,6 +63,8 @@ describe('readNodeRecordEvent', () => {
       lifecycle: { status: 'completed' },
     });
     expect(record?.data.node_output).toBe('done');
+    expect(record?.metadata).not.toHaveProperty('node_output');
+    expect(record?.metadata).not.toHaveProperty('tokens');
     expect(record?.data.tokens).toBeUndefined();
     expect(record?.rawUsage.tokens).toBe('bad');
   });
