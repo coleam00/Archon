@@ -28,8 +28,9 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `ratchet`, `format`, `installer` (POSIX only),
-`package-tests`, `cli-tests`, `core-tests`, and `script-tests`.
+`generated-files`, `variables-rule`, `type-check`, `lint`, `ratchet`, `format`,
+`installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
+`script-tests`.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
@@ -78,10 +79,11 @@ touching only prose or files no check reads skips the test, service and binary j
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
 `.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
 the Markdown a test names, bundled skills, generated docs, and the docs manifest. One check
-reads past that list: the user-controlled variable rule's guard reads every page of the docs
-site and the bundled skill, so it runs on every pull request
-(`bun run validate --only variables-rule`) rather than through this list, and a page that
-starts stating the rule is caught on the pull request that adds it. A conformance test
+reads past that list: the user-controlled variable rule's guard reads every Markdown page
+of the docs site and the bundled skill, so it runs on every push and on every pull request
+that is not a draft (`bun run validate --only variables-rule`) rather than only when this
+list names a changed file. A page that starts stating the rule is caught by that check.
+A conformance test
 requires every tracked Markdown path with a directory named in a test file to run the suite,
 even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
 `INERT_PATHS`
