@@ -404,15 +404,12 @@ export async function cancelWorkflowRun(
         [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
+        const { step_name, ...data } = event ?? {};
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
-          step_name: event?.step_name,
-          data: {
-            ...(event?.reason === undefined ? {} : { reason: event.reason }),
-            ...(event?.warnings === undefined ? {} : { warnings: event.warnings }),
-            ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
-          },
+          step_name,
+          data,
         });
       }
       return update;

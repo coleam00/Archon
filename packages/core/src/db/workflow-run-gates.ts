@@ -186,15 +186,12 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
+        const { step_name, ...data } = cancellation;
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
-          step_name: cancellation.step_name,
-          data: {
-            cancel_reason: 'approval_rejected',
-            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
-            ...(cancellation.warnings === undefined ? {} : { warnings: cancellation.warnings }),
-          },
+          step_name,
+          data: { ...data, cancel_reason: 'approval_rejected' },
         });
       }
       return { resolved };

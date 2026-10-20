@@ -1224,6 +1224,9 @@ this host:
   when owner-stop warnings report held output, including descendant checkouts and
   their root. Warnings learned after cancellation during descendant cleanup or
   conversation reset are appended to that run as `workflow_cleanup_warning` events.
+  If writing a warning event fails, cleanup continues and the command reports the
+  persistence failure with the cleanup warnings. Keep that command result: those
+  warnings may be missing from the run history.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:

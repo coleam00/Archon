@@ -673,17 +673,14 @@ export function createTransactionView(
       const run = structuredClone(runs.get(id));
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = cancellation;
       await terminal(
         run,
         {
           workflow_run_id: id,
           event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
-          step_name: cancellation.step_name,
-          data: {
-            cancel_reason: 'approval_rejected',
-            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
-            ...(cancellation.warnings === undefined ? {} : { warnings: cancellation.warnings }),
-          },
+          step_name,
+          data: { ...data, cancel_reason: 'approval_rejected' },
         },
         gateEvents.map(event => ({ ...event, workflow_run_id: id }))
       );
