@@ -52,35 +52,19 @@ export const mockCaptureWorkflowTerminal = mock<
 >(_props => undefined);
 
 const realGetProjectStoragePaths = realStorage.getProjectStoragePaths;
+const realGetStoragePathsForRoot = realStorage.getStoragePathsForRoot;
 const realGetArchonWorkspacesPath = realStorage.getArchonWorkspacesPath;
 /** Root of the fake workspace tree, this suite's ARCHON_HOME; joined so win32 separators match. */
 export const WS = join('/tmp', 'ws');
 
-function fakeStoragePathsForRoot(root: string): {
-  root: string;
-  artifactsRoot: string;
-  logsDir: string;
-  stateRoot: string;
-  workflowSourceRoot: string;
-} {
-  // join(), not template literals — production composes these with join(), so a
-  // forward-slash fake would never match on Windows.
-  return {
-    root,
-    artifactsRoot: join(root, 'artifacts'),
-    logsDir: join(root, 'logs'),
-    stateRoot: join(root, 'state'),
-    workflowSourceRoot: join(root, 'workflow-source'),
-  };
-}
 function fakeGetProjectStoragePaths(
   key: realStorage.ProjectStorageKey
-): ReturnType<typeof fakeStoragePathsForRoot> {
+): ReturnType<typeof realGetStoragePathsForRoot> {
   const root = join(
     WS,
     relative(realGetArchonWorkspacesPath(), realGetProjectStoragePaths(key).root)
   );
-  return fakeStoragePathsForRoot(root);
+  return realGetStoragePathsForRoot(root);
 }
 /** A path under the storage root of an unregistered `cwd`. */
 export function cwdPath(cwd: string, ...segments: string[]): string {
@@ -96,7 +80,7 @@ mock.module('@archon/paths', () => ({
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
   resolveProjectStorageKey: mock(realStorage.resolveProjectStorageKey),
   getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
-  getStoragePathsForRoot: mock(fakeStoragePathsForRoot),
+  getStoragePathsForRoot: mock(realGetStoragePathsForRoot),
   isInsideArchonHome: mock((candidate: string) => candidate.startsWith(WS)),
   slugifyFolderName: mock((name: string) => name),
   getFolderRunArtifactsPath: mock(
