@@ -18,23 +18,35 @@ export async function workflowEndTurnCommand(
   json = false,
   cwd?: string
 ): Promise<number> {
-  const runId = await resolveRunIdArg(host, runIdArg, cwd);
-  const run = await host.deps.store.getWorkflowRun(runId);
-  const plan = run ? planEndTurn(run) : ({ kind: 'refused', reason: 'not_found' } as const);
-  if (plan.kind === 'refused') {
-    const error = `${REFUSALS[plan.reason]}: ${runId}`;
-    if (json) await writeJsonLine({ ok: false, runId, action: 'end_turn', error: plan.reason });
-    else console.error(error);
+  let runId = runIdArg;
+  try {
+    runId = await resolveRunIdArg(host, runIdArg, cwd);
+    const run = await host.deps.store.getWorkflowRun(runId);
+    const plan = run ? planEndTurn(run) : ({ kind: 'refused', reason: 'not_found' } as const);
+    if (plan.kind === 'refused') {
+      const error = `${REFUSALS[plan.reason]}: ${runId}`;
+      if (json) await writeJsonLine({ ok: false, runId, action: 'end_turn', error: plan.reason });
+      else console.error(error);
+      return 1;
+    }
+    await host.deps.store.updateWorkflowRun(runId, { metadata: plan.metadata });
+    const nodes = [...new Set(plan.calls.map(call => call.nodeId))];
+    if (json) {
+      await writeJsonLine({ ok: true, runId, action: 'end_turn', requestRecorded: true, nodes });
+    } else {
+      console.log(
+        `Recorded an end-turn request for ${nodes.join(', ')}. A live owner ends the observed stall if it is still active at its next status check. Use archon workflow wait ${runId} to check progress or detect owner_lost.`
+      );
+    }
+    return 0;
+  } catch (error) {
+    if (!json) throw error;
+    await writeJsonLine({
+      ok: false,
+      runId,
+      action: 'end_turn',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return 1;
   }
-  await host.deps.store.updateWorkflowRun(runId, { metadata: plan.metadata });
-  const nodes = [...new Set(plan.calls.map(call => call.nodeId))];
-  if (json) {
-    await writeJsonLine({ ok: true, runId, action: 'end_turn', requestRecorded: true, nodes });
-  } else {
-    console.log(
-      `Recorded an end-turn request for ${nodes.join(', ')}. A live owner ends the observed stall if it is still active at its next status check. Use archon workflow wait ${runId} to check progress or detect owner_lost.`
-    );
-  }
-  return 0;
 }

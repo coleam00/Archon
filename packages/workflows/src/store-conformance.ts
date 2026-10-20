@@ -1,5 +1,5 @@
 import { createRunToolCallAttention } from './tool-call-attention';
-import { planEndTurn } from './end-turn-request';
+import { isEndTurnRequested, planEndTurn } from './end-turn-request';
 import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
@@ -36,6 +36,7 @@ import {
   pendingWorkflowWaitDeadline,
   queuedRunAttention,
   runAttention,
+  toolCallAttentionArraySchema,
   readCapacityWait,
   readSourceRelease,
   workflowWaitContextSchema,
@@ -280,7 +281,7 @@ export function describeWorkflowStoreConformance(
       await harness?.close();
     });
 
-    test('resume preserves a live stalled sibling and permits end-turn', async () => {
+    test('resume discards stale attention and live siblings republish for end-turn', async () => {
       const run = await store.createWorkflowRun({ workflow_name: 'test', user_message: '' });
       await store.claimPendingWorkflowRun(run.id);
       let now = Date.parse('2026-10-20T00:00:00.000Z');
@@ -297,15 +298,31 @@ export function describeWorkflowStoreConformance(
       now += 100;
       await stream.refresh();
       expect(stream.stall()).toBeDefined();
+      const paused = await store.getWorkflowRun(run.id);
+      const calls = toolCallAttentionArraySchema.parse(paused?.metadata.tool_call_attention);
+      await store.setToolCallAttention(run.id, 'dead-stream', [
+        { ...calls[0], streamId: 'dead-stream', nodeId: 'dead' },
+      ]);
+      const beforeResume = await store.getWorkflowRun(run.id);
+      if (!beforeResume) throw new Error('Missing paused run');
+      expect(planEndTurn(beforeResume)).toMatchObject({ kind: 'request' });
       const resumed = await store.resumeWorkflowRun(run.id);
+      expect(runAttention(resumed)).toBeNull();
+      expect(planEndTurn(resumed)).toEqual({ kind: 'refused', reason: 'nothing_stalled' });
       await stream.refresh();
       const current = await store.getWorkflowRun(run.id);
       if (!current) throw new Error('Missing resumed run');
-      expect(runAttention(resumed)).toMatchObject({
+      expect(runAttention(current)).toMatchObject({
         kind: 'stalled_tool_calls',
         calls: [{ nodeId: 'ci', stalledForMs: expect.any(Number) }],
       });
-      expect(planEndTurn(current)).toMatchObject({ kind: 'request' });
+      const plan = planEndTurn(current);
+      if (plan.kind !== 'request') throw new Error(plan.reason);
+      expect(plan.calls.map(call => call.nodeId)).toEqual(['ci']);
+      await store.updateWorkflowRun(run.id, { metadata: plan.metadata });
+      const stall = stream.stall();
+      if (!stall) throw new Error('Missing republished stall');
+      expect(await isEndTurnRequested(store, run.id, stall)).toBe(true);
       await stream.clear();
       expect((await store.getWorkflowRun(run.id))?.metadata.tool_call_attention).toBeUndefined();
     });

@@ -1284,6 +1284,8 @@ run's primary attention. The attention queue carries the same sibling calls. A p
 wait with no primary attention reports `stalled_tool_calls` with `status: "paused"`.
 For a parent blocked on children, wait and queue views report its stalled siblings
 before following the children; `workflow get` retains the child pointers.
+Resume clears the previous execution's stall attention. A live sibling republishes its
+still-active stall at its next status check; attention from an owner that exited stays cleared.
 
 Exit `0` means the request was recorded, not that an owner accepted it or that the run
 progressed. The owner might exit or the run might finish before it reads the request.
@@ -1295,7 +1297,9 @@ Exit `1` refuses an unknown run, a run outside `running` or `paused`, no stalled
 or unreadable attention. `--json` prints
 `{ ok: true, runId, action: "end_turn", requestRecorded: true, nodes }`, or
 `{ ok: false, runId, action: "end_turn", error }` with `error` one of `not_found`,
-`not_running`, `nothing_stalled`, and `unreadable_attention`.
+`not_running`, `nothing_stalled`, and `unreadable_attention`. Thrown failures use the same
+failure envelope with the error message; `runId` is the resolved id, or the supplied argument
+if resolution failed.
 
 ### `workflow respond`
 

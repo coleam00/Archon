@@ -129,25 +129,35 @@ function createToolCallAttention(
     return calls;
   }
 
+  async function storedSnapshotMatches(snapshot: string): Promise<boolean> {
+    const run = await options.store.getWorkflowRun(options.runId);
+    const stored = toolCallAttentionArraySchema.safeParse(
+      run?.metadata[TOOL_CALL_ATTENTION_METADATA_KEY]
+    );
+    return (
+      (run?.status === 'running' || run?.status === 'paused') &&
+      stored.success &&
+      JSON.stringify(stored.data.filter(call => call.streamId === streamId)) === snapshot
+    );
+  }
+
   async function persist(): Promise<boolean> {
     const calls = stalledCalls();
     const raisedAt = calls.map(call => call.raisedAt).sort()[0];
     if (stall?.raisedAt !== raisedAt) stall = undefined;
     const snapshot = JSON.stringify(toolCallAttentionArraySchema.parse(calls));
-    if (snapshot === persisted) return true;
+    if (snapshot === persisted && calls.length === 0) return true;
     try {
+      // Resume clears old attention; only streams still alive can publish it again.
+      if (snapshot === persisted) {
+        if (await storedSnapshotMatches(snapshot)) return true;
+        stall = undefined;
+      }
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
       let confirmed = changed || calls.length === 0;
       if (!confirmed) {
         // A lost COMMIT response can reject a write the database already committed.
-        const run = await options.store.getWorkflowRun(options.runId);
-        const stored = toolCallAttentionArraySchema.safeParse(
-          run?.metadata[TOOL_CALL_ATTENTION_METADATA_KEY]
-        );
-        confirmed =
-          (run?.status === 'running' || run?.status === 'paused') &&
-          stored.success &&
-          JSON.stringify(stored.data.filter(call => call.streamId === streamId)) === snapshot;
+        confirmed = await storedSnapshotMatches(snapshot);
       }
       if (confirmed) {
         persisted = snapshot;

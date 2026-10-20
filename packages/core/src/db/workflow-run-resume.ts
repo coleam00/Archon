@@ -121,7 +121,7 @@ function clearedResumeMetadata(
       undefined;
   return {
     ...(usageLimitWait ? { wait: null } : {}),
-    ...(prior?.status === 'paused' ? {} : { [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+    [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
     error: null,
     [RUN_STOP_REASON_METADATA_KEY]: null,
     continuation_retry_at: null,

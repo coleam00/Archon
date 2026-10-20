@@ -1,4 +1,5 @@
 import { describe, it, expect, mock, spyOn, afterEach } from 'bun:test';
+import * as stdout from '../utils/stdout';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
@@ -20,15 +21,19 @@ const stalledCall = {
 
 function hostWith(run: Partial<WorkflowRun> | null) {
   const updateWorkflowRun = mock(async () => undefined);
+  const getWorkflowRun = mock(async () => (run ? ({ id: RUN_ID, ...run } as WorkflowRun) : null));
+  const findWorkflowRunsByIdPrefix = mock(async () => [{ id: RUN_ID }]);
   const host = {
+    records: { codebases: { findCodebaseByDefaultCwd: async () => ({ id: 'project' }) } },
     deps: {
       store: {
-        getWorkflowRun: async () => (run ? ({ id: RUN_ID, ...run } as WorkflowRun) : null),
+        getWorkflowRun,
+        findWorkflowRunsByIdPrefix,
         updateWorkflowRun,
       },
     },
   } as unknown as WorkflowHost;
-  return { host, updateWorkflowRun };
+  return { host, updateWorkflowRun, getWorkflowRun, findWorkflowRunsByIdPrefix };
 }
 
 describe('workflow end-turn', () => {
@@ -52,6 +57,56 @@ describe('workflow end-turn', () => {
         },
       },
     });
+  });
+
+  it.each(['resolution', 'lookup', 'update'] as const)(
+    'keeps the end-turn envelope when %s throws in JSON mode',
+    async failure => {
+      const output = spyOn(stdout, 'writeJsonLine').mockResolvedValue(undefined);
+      const h = hostWith({ status: 'running', metadata: { tool_call_attention: [stalledCall] } });
+      const input = failure === 'resolution' ? RUN_ID.slice(0, 8) : RUN_ID;
+      if (failure === 'resolution') {
+        h.findWorkflowRunsByIdPrefix.mockResolvedValue([{ id: RUN_ID }, { id: 'other-run' }]);
+      } else if (failure === 'lookup') {
+        h.getWorkflowRun.mockRejectedValue(new Error('lookup failed'));
+      } else {
+        h.updateWorkflowRun.mockRejectedValue(new Error('update failed'));
+      }
+      expect(await workflowEndTurnCommand(h.host, input, true, process.cwd())).toBe(1);
+      expect(output).toHaveBeenCalledTimes(1);
+      expect(output.mock.calls[0]?.[0]).toEqual({
+        ok: false,
+        runId: input,
+        action: 'end_turn',
+        error:
+          failure === 'resolution'
+            ? expect.stringContaining('matches more than one run')
+            : `${failure} failed`,
+      });
+      if (failure !== 'update') expect(h.updateWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps the resolved id when an update after prefix resolution throws', async () => {
+    const output = spyOn(stdout, 'writeJsonLine').mockResolvedValue(undefined);
+    const h = hostWith({ status: 'running', metadata: { tool_call_attention: [stalledCall] } });
+    h.updateWorkflowRun.mockRejectedValue(new Error('update failed'));
+    expect(await workflowEndTurnCommand(h.host, RUN_ID.slice(0, 8), true, process.cwd())).toBe(1);
+    expect(output).toHaveBeenCalledWith({
+      ok: false,
+      runId: RUN_ID,
+      action: 'end_turn',
+      error: 'update failed',
+    });
+  });
+
+  it('preserves thrown errors outside JSON mode', async () => {
+    const output = spyOn(stdout, 'writeJsonLine').mockResolvedValue(undefined);
+    const h = hostWith({ status: 'running' });
+    const error = new Error('lookup failed');
+    h.getWorkflowRun.mockRejectedValue(error);
+    await expect(workflowEndTurnCommand(h.host, RUN_ID)).rejects.toBe(error);
+    expect(output).not.toHaveBeenCalled();
   });
 
   it.each([
