@@ -1,8 +1,8 @@
 # Merge queue policy
 
-This is the SDLC pack's default policy for the merge queue. A project replaces it whole
-with its own `.archon/sdlc/policy/merge.md`, which may be nothing more than a pointer to
-documents the project already has.
+This is the SDLC pack's default policy for the merge queue. A project adds to it with
+its own `.archon/sdlc/policy/merge.md`: the queue reads this default first and the
+project's file after it, and where the two conflict, the project's line wins.
 
 The queue merges on its own when the case is clear, and asks a maintainer when it is
 not. The gate is not policy: no pull request merges unless its trusted review verdict

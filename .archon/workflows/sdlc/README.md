@@ -273,8 +273,11 @@ A project's policy for a decision the pack makes, such as what triage accepts, i
 one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
 a default for each policy document a prompt names, in
 [`.shared/policy/`](.shared/policy). A project's own file replaces its default
-whole; with no project file, the default applies. To change one, copy the default
-to `.archon/sdlc/policy/` and reword it. A policy document may be only a pointer to
+whole, except `merge.md`, which layers: the merge queue reads the default and then the
+project's file, whose lines add to it and win where they conflict. With no project
+file, the default applies. To change one, copy the default
+to `.archon/sdlc/policy/` and reword it; for `merge.md`, write only the lines to add or
+override. A policy document may be only a pointer to
 documents the project already has, and the agent reads what it points to. A prompt
 names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
@@ -584,7 +587,8 @@ resource, with intake's label selector narrowed to the route labels intake write
 the build queue finished, and stops only for decisions that belong to a person. It
 merges on its own when a case is clear and asks when it is not; the default policy for
 which is which is [`.shared/policy/merge.md`](.shared/policy/merge.md), which a project
-replaces with its own `.archon/sdlc/policy/merge.md`.
+extends with its own `.archon/sdlc/policy/merge.md`: the sweep reads the default and
+then the project's file, whose lines win where the two conflict.
 
 - **Pickup.** A run claims every waiting item, up to `limit` (default 10), with
   intake's claim and order. An item waits for the merge queue when its build record is
