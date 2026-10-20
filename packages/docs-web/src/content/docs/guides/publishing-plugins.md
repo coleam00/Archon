@@ -116,7 +116,7 @@ Remove provider plugins before downgrading to a release without provider-plugin 
 Slack is the maintained in-repository example in
 [`packages/chat-slack`](https://github.com/coleam00/Archon/tree/dev/packages/chat-slack).
 It uses `@archon/chat-contract` and Slack Bolt, without engine types or database access.
-Install it from an Archon release that publishes the Slack asset:
+Outside Docker, install it from an Archon release that publishes the Slack asset:
 
 ```sh
 archon plugin add coleam00/Archon/plugins/chat-slack
@@ -134,7 +134,9 @@ It authorizes inbound traffic and run actions, resolves Archon users, and pushes
 run events. The plugin renders progress, decisions, reactions and cost footers.
 `/archon connect github` points to the Web UI or `archon auth github`; it does not run a
 GitHub device flow. The server has no bundled Slack adapter: without this plugin Slack is
-off, and a set `SLACK_BOT_TOKEN` makes startup log the install command.
+off, and outside Docker a set `SLACK_BOT_TOKEN` makes startup log the install command.
+Docker images provision their shipped Slack release offline when `SLACK_BOT_TOKEN` is
+configured; upgrading needs no manual plugin installation.
 
 The plugin declares `attentionNotices`. A route's `destination` is a channel id the bot
 has joined, or `channel:thread_ts` to post inside an existing thread. Each notice offers
@@ -232,7 +234,9 @@ no process and registers no platform policy; the server logs its path. Run
 `archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed
 platform supersedes its bundled adapter, and the server logs that replacement. Without a
 matching receipt, bundled adapters continue to work as before. Slack has no bundled adapter:
-without the `chat-slack` plugin, Slack stays off.
+without the `chat-slack` plugin, Slack stays off. In Docker, configured Slack bot tokens
+reinstall the image-provided plugin on restart. To keep Slack removed, clear its tokens
+from every effective configuration source as well as removing the plugin.
 
 The host enforces the descriptor's allowlist for messages and run actions before creating
 an Archon identity. Run actions require the run's starter or an admin. Run events go only

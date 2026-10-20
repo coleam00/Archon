@@ -280,7 +280,7 @@
     "src/errors.test.ts": 0.3,
     "src/pr-state.test.ts": 0.2,
     "src/providers/worktree-real-git.test.ts": 170.1,
-    "src/providers/worktree.test.ts": 1.9,
+    "src/providers/worktree-create.test.ts": 1.9,
     "src/resolver.test.ts": 0.3
   },
   "@archon/paths": {
