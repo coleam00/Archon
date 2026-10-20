@@ -146,6 +146,16 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    // Share cleanup's registration lock before deciding whether this checkout is usable.
+    await query(
+      `SELECT e.id FROM remote_agent_isolation_environments e
+       WHERE e.provider = 'worktree' AND EXISTS (
+         SELECT 1 FROM remote_agent_workflow_runs r
+         WHERE r.id = $1 AND r.codebase_id = e.codebase_id
+           AND e.working_path = COALESCE(r.working_path, CAST($2 AS TEXT))
+       ) ORDER BY e.id${getDialect().rowLock()}`,
+      [id, workingPath ?? null]
+    );
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},

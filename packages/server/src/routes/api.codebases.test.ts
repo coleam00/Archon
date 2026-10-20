@@ -18,6 +18,7 @@ import {
 } from '@archon/git';
 import {
   markWorktreeDestroyed,
+  withWorktreeRegistration,
   create as realCreateEnvironment,
   getById as realGetEnvironment,
   listByCodebase as realListEnvironments,
@@ -55,6 +56,7 @@ const realEnvironmentStore = {
   getById: realGetEnvironment,
   listByCodebase: realListEnvironments,
   markWorktreeDestroyed,
+  withWorktreeRegistration,
 };
 const realCodebaseStore = {
   createCodebase: realCreateCodebase,
@@ -109,6 +111,13 @@ const mockRegisterFolder = mock(async (_path: string) => ({
 const mockFindRepoRoot = mock(async (p: string) => p as string | null);
 const mockListByCodebase = mock(async (_id: string) => [] as unknown[]);
 const mockRemoveWorktree = mock<typeof realRemoveWorktree>(async () => {});
+const mockWithWorktreeRegistration = mock<typeof withWorktreeRegistration>(
+  async (observed, remove) =>
+    remove(
+      () => mockMarkWorktreeDestroyed(observed),
+      async () => null
+    )
+);
 const mockMarkWorktreeDestroyed = mock<typeof markWorktreeDestroyed>(async () => {});
 const mockIsWorktreeRegistered = mock<typeof realIsWorktreeRegistered>(async () => false);
 
@@ -218,6 +227,8 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mockListByCodebase,
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
+  withWorktreeRegistration: (...args: Parameters<typeof withWorktreeRegistration>) =>
+    mockWithWorktreeRegistration(...args),
 }));
 
 mock.module('@archon/core/db/workflows', () => ({
@@ -1284,22 +1295,20 @@ describe('DELETE /api/codebases/:id', () => {
         mockIsWorktreeRegistered.mockImplementation(checkRealRegistration);
         mockRemoveWorktree.mockImplementation(removeRealWorktree);
         mockDeleteCodebase.mockImplementationOnce(realCodebaseStore.deleteCodebase);
-        mockMarkWorktreeDestroyed.mockImplementationOnce(async observed => {
+        mockMarkWorktreeDestroyed.mockImplementation(realEnvironmentStore.markWorktreeDestroyed);
+        mockWithWorktreeRegistration.mockImplementationOnce(async (observed, remove) => {
           if (scenario === 'same-ID re-registration') {
-            expect(await checkRealRegistration(toRepoPath(repo), checkout)).toBe(false);
-            git('-C', repo, 'worktree', 'add', checkout, 'checkout');
             const replacement = await realEnvironmentStore.create(registration);
             expect(replacement.id).toBe(original.id);
             expect(replacement.metadata).not.toEqual(original.metadata);
           }
-          await realEnvironmentStore.markWorktreeDestroyed(observed);
+          return realEnvironmentStore.withWorktreeRegistration(observed, remove);
         });
         const response = await makeApp().request(`/api/codebases/${project.id}`, {
           method: 'DELETE',
         });
         expect(response.status).toBe(expectedStatus);
         if (scenario === 'unregistered file ancestor') {
-          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(original);
           expect(await realCodebaseStore.getCodebase(project.id)).toBeNull();
           expect(await realEnvironmentStore.getById(original.id)).toBeNull();
         } else {
@@ -1307,6 +1316,8 @@ describe('DELETE /api/codebases/:id', () => {
           expect((await realEnvironmentStore.getById(original.id))?.status).toBe('active');
           expect(await checkRealRegistration(toRepoPath(repo), checkout)).toBe(true);
           expect(mockDeleteCodebase).not.toHaveBeenCalled();
+          if (scenario === 'same-ID re-registration')
+            expect(mockRemoveWorktree).not.toHaveBeenCalled();
           if (scenario === 'registered file ancestor') {
             expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
             expect(mockRemoveWorktree).not.toHaveBeenCalled();

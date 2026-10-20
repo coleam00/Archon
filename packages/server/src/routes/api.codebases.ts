@@ -396,23 +396,25 @@ export function registerCodebaseRoutes(
       }
       for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
-          const exists = await stat(env.working_path).then(
-            () => true,
-            (error: NodeJS.ErrnoException) => {
-              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
-              throw error;
-            }
-          );
-          if (exists) {
-            await removeWorktree(
-              toRepoPath(codebase.default_cwd),
-              toWorktreePath(env.working_path)
+          await isolationEnvDb.withWorktreeRegistration(env, async markDestroyed => {
+            const exists = await stat(env.working_path).then(
+              () => true,
+              (error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+                throw error;
+              }
             );
-          }
-          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
-            throw new Error('Checkout is still registered with Git');
-          }
-          await isolationEnvDb.markWorktreeDestroyed(env);
+            if (exists) {
+              await removeWorktree(
+                toRepoPath(codebase.default_cwd),
+                toWorktreePath(env.working_path)
+              );
+            }
+            if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
+              throw new Error('Checkout is still registered with Git');
+            }
+            await markDestroyed();
+          });
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
           if (wtErr instanceof WorktreeRegistrationChangedError) {

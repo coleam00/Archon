@@ -47,6 +47,14 @@ export interface IIsolationStore {
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
+  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  withWorktreeRegistration<T>(
+    observed: IsolationEnvironmentRow,
+    remove: (
+      markDestroyed: () => Promise<void>,
+      getLiveRun: () => Promise<{ id: string; status: string } | null>
+    ) => Promise<T>
+  ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }
 

@@ -64,6 +64,11 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         branch_name: env.branch_name,
       }),
     updateStatus: async () => undefined,
+    withWorktreeRegistration: async (observed, remove) =>
+      remove(
+        () => overrides?.markWorktreeDestroyed?.(observed) ?? Promise.resolve(),
+        async () => null
+      ),
     markWorktreeDestroyed: async () => undefined,
     updateMetadata: async () => undefined,
     countActiveByCodebase: async () => 0,

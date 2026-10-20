@@ -255,20 +255,21 @@ async function removeWorktree(
 
     // Use isolation provider for removal (pass the working path, not UUID)
     const provider = getIsolationProvider();
-    const result = await provider.destroy(isolationEnv.working_path, {
-      force: forceFlag,
-      canonicalRepoPath: toRepoPath(mainPath),
-      creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
-    });
-    if (!result.worktreeRemoved || !result.directoryClean) {
-      return {
-        success: false,
-        message: `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`,
-      };
-    }
+    if (isolationEnv.status === 'active')
+      await isolationEnvDb.withWorktreeRegistration(isolationEnv, async markDestroyed => {
+        const result = await provider.destroy(isolationEnv.working_path, {
+          force: forceFlag,
+          canonicalRepoPath: toRepoPath(mainPath),
+          creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
+        });
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          throw new Error(
+            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+          );
+        }
 
-    // Update database record status
-    await isolationEnvDb.markWorktreeDestroyed(isolationEnv);
+        await markDestroyed();
+      });
 
     // Clear isolation reference, set cwd to main repo
     await db.updateConversation(conversation.id, {

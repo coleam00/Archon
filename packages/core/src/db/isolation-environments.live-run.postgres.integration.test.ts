@@ -13,11 +13,13 @@
  * creates and drops its own scratch database; the database named in the URL is
  * only used to reach the server.
  */
-import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 import { randomUUID } from 'node:crypto';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -111,6 +113,33 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
     const remove = mock(async () => undefined);
     await expect(withWorktreeRegistration(env, remove)).rejects.toThrow('changed during cleanup');
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  test('run claims wait for cleanup ownership and cannot start in a retired checkout', async () => {
+    const env = await createEnv('pg-run-cleanup-lock');
+    const { rows } = await db.query<{ id: string }>(
+      `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, user_message, status, codebase_id, working_path)
+       VALUES ('test', 'test', 'pending', $1, $2) RETURNING id`,
+      [env.codebase_id, env.working_path]
+    );
+    const { claimPendingWorkflowRun } = await import('./workflow-run-transitions');
+    const transaction = db.withTransaction.bind(db);
+    const timedTransaction: typeof db.withTransaction = fn =>
+      transaction(async query => {
+        await query("SET LOCAL lock_timeout = '20ms'");
+        return fn(query);
+      });
+    const timed = spyOn(db, 'withTransaction').mockImplementation(timedTransaction);
+    try {
+      await withWorktreeRegistration(env, async markDestroyed => {
+        await expect(claimPendingWorkflowRun(rows[0].id)).rejects.toMatchObject({ code: '55P03' });
+        await markDestroyed();
+      });
+      expect(await claimPendingWorkflowRun(rows[0].id)).toBeNull();
+    } finally {
+      timed.mockRestore();
+    }
   });
 
   test('legacy conditional adoption rejects a metadata-only replacement and accepts the fresh snapshot', async () => {

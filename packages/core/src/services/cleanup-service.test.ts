@@ -345,6 +345,9 @@ describe('reclaimContainerEnv', () => {
         throw new Error('Unexpected create');
       },
       updateStatus: async () => {},
+      withWorktreeRegistration: async () => {
+        throw new Error('Unexpected worktree removal');
+      },
       markWorktreeDestroyed: async () => {},
       updateMetadata: async () => undefined,
       countActiveByCodebase: async () => 0,

@@ -364,6 +364,14 @@ export const mockMarkWorktreeDestroyed = mock<typeof IsolationEnvironmentDb.mark
   () => Promise.resolve()
 );
 
+export const mockWithWorktreeRegistration = mock<
+  typeof IsolationEnvironmentDb.withWorktreeRegistration
+>(async (observed, remove) =>
+  remove(
+    () => mockMarkWorktreeDestroyed(observed),
+    async () => null
+  )
+);
 export const mockCountActiveByCodebase = mock<typeof IsolationEnvironmentDb.countActiveByCodebase>(
   () => Promise.resolve(0)
 );
@@ -373,6 +381,7 @@ mock.module('../../db/isolation-environments', () => ({
   getByWorkingPath: mock(() => Promise.resolve(null)),
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
+  withWorktreeRegistration: mockWithWorktreeRegistration,
   markDestroyed: mock(() => Promise.resolve()),
   getActiveByCodebase: mock(() => Promise.resolve([])),
   getActiveEnvironments: mock(() => Promise.resolve([])),

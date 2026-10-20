@@ -1438,20 +1438,15 @@ async function reclaimOwnedWorktree(
   }
   if (env.status === 'destroyed')
     return refuse('a path exists for an already destroyed environment');
-  let marked = false;
-  try {
+  return store.withWorktreeRegistration(env, async (markDestroyed, getLiveRun) => {
     const result = await getIsolationProvider().destroy(path, {
       canonicalRepoPath: repo,
       guardedRemoval: {
         creationId: proof.creationId,
-        // The record is marked destroyed before the claimant check, so a run that
-        // reused it after this point fails claimPendingWorkflowRun instead of
-        // starting in a checkout that is about to disappear.
         beforeRemove: async () => {
           await verify?.(env, repo);
-          await store.markWorktreeDestroyed(env);
-          marked = true;
-          const user = await readers.getLiveRunOwningEnv(env.id);
+          await markDestroyed();
+          const user = await getLiveRun();
           if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
         },
       },
@@ -1459,24 +1454,7 @@ async function reclaimOwnedWorktree(
     if (!result.worktreeRemoved || !result.directoryClean)
       return refuse('filesystem removal incomplete');
     return { released: { path, branch: env.branch_name }, warnings: result.warnings };
-  } catch (err) {
-    if (marked) {
-      try {
-        if (await pathExists()) await store.updateStatus(env.id, 'active', env);
-      } catch (recoveryError) {
-        getLog().error(
-          { err: recoveryError, isolationEnvId: env.id },
-          'worktree_reclaim_recovery_failed'
-        );
-        throw new AggregateError(
-          [err, recoveryError],
-          `${err instanceof Error ? err.message : String(err)}; registration recovery failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
-          { cause: err }
-        );
-      }
-    }
-    throw err;
-  }
+  });
 }
 
 /**

@@ -41,6 +41,14 @@ const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>
   Promise.resolve()
 );
 
+const mockWithWorktreeRegistration = mock<typeof IsolationDb.withWorktreeRegistration>(
+  async (observed, remove) =>
+    remove(
+      () => mockMarkWorktreeDestroyed(observed),
+      async () => null
+    )
+);
+
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   listActive: mockListActive,
@@ -49,6 +57,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
+  withWorktreeRegistration: mockWithWorktreeRegistration,
 }));
 
 const mockLoadRepoConfig = mock<typeof Core.loadRepoConfig>(() => Promise.resolve({}));
@@ -1184,6 +1193,18 @@ describe('isolationCleanupCommand', () => {
       expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(0);
     }
   );
+
+  it('refuses a changed stale registration before destruction', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    mockWithWorktreeRegistration.mockRejectedValueOnce(
+      new WorktreeRegistrationChangedError(mockEnv.id)
+    );
+    await isolationCleanupCommand(7);
+    expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function));
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('changed during cleanup'));
+  });
 
   it('rejects before reconciliation or destruction when the initial list rejects a legacy path', async () => {
     const { InvalidCodebaseDefaultCwdError } = await import('@archon/core/db/codebases');

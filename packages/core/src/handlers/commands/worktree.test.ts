@@ -21,6 +21,7 @@ import {
   mockIsolationEnvDbCreate,
   mockIsolationEnvDbGet,
   mockMarkWorktreeDestroyed,
+  mockWithWorktreeRegistration,
   mockCountActiveByCodebase,
   mockIsolationCreate,
   mockIsolationDestroy,
@@ -378,32 +379,36 @@ describe('CommandHandler', () => {
           });
           const result = await handleCommand(conversation, '/worktree remove', operator);
           expect(result.success).toBe(true);
-          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(destroyed);
+          expect(mockIsolationDestroy).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).toHaveBeenCalledWith(conversation.id, {
             isolation_env_id: null,
             cwd: '/workspace/my-repo',
           });
         });
 
-        test('keeps the conversation on a registration recreated during removal', async () => {
-          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetActiveSession.mockResolvedValue(null);
-          mockMarkWorktreeDestroyed.mockRejectedValueOnce(
-            new WorktreeRegistrationChangedError(featXEnv.id)
-          );
-
-          const result = await handleCommand(
-            makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
-            '/worktree remove',
-            operator
-          );
-
-          expect(result).toEqual({
-            success: false,
-            message: expect.stringContaining('changed during cleanup'),
-          });
-          expect(mockUpdateConversation).not.toHaveBeenCalled();
-        });
+        test.each([false, true])(
+          'refuses a changed registration before destruction (force=%s)',
+          async force => {
+            mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+            mockWithWorktreeRegistration.mockRejectedValueOnce(
+              new WorktreeRegistrationChangedError(featXEnv.id)
+            );
+            const result = await handleCommand(
+              makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
+              `/worktree remove${force ? ' --force' : ''}`,
+              operator
+            );
+            expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(
+              featXEnv,
+              expect.any(Function)
+            );
+            expect(result.success).toBe(false);
+            expect(result.message).toContain('changed during cleanup');
+            expect(mockIsolationDestroy).not.toHaveBeenCalled();
+            expect(mockUpdateConversation).not.toHaveBeenCalled();
+          }
+        );
 
         test('should deactivate session with worktree-removed reason', async () => {
           const convWithWorktree = makeConversation({

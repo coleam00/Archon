@@ -273,6 +273,37 @@ test('file host retires only the observed worktree registration', async () => {
   );
 });
 
+test('file cleanup validates the selected registration before invoking removal', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const store = (await createFileWorkflowHost(join(home, 'store'))).records.isolation;
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  };
+  const original = await store.create(input);
+  const replacement = await store.create(input);
+  let removed = false;
+  await expect(
+    store.withWorktreeRegistration(original, async mark => {
+      removed = true;
+      await mark();
+    })
+  ).rejects.toThrow('changed during cleanup');
+  expect(removed).toBe(false);
+  expect(await store.getById(replacement.id)).toEqual(replacement);
+  await store.withWorktreeRegistration(replacement, async (mark, getLiveRun) => {
+    expect(await getLiveRun()).toBeNull();
+    await mark();
+  });
+  expect((await store.getById(replacement.id))?.status).toBe('destroyed');
+});
+
 test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'legacy-adoption-')));
   process.env.ARCHON_HOME = home;

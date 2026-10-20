@@ -327,12 +327,12 @@ export async function markWorktreeDestroyed(
 /**
  * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
  * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
- * The callback must use the supplied retirement function, not the pooled connection.
+ * The callback must use the supplied retirement and live-run readers, not the pooled connection.
  */
-export async function withWorktreeRegistration<T>(
-  observed: IsolationEnvironmentRow,
-  remove: (markDestroyed: () => Promise<void>) => Promise<T>
-): Promise<T> {
+export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
+  observed,
+  remove
+) => {
   const predicate = observedRegistrationPredicate(observed, 2);
   return getDatabase().withTransaction(
     async query => {
@@ -342,11 +342,14 @@ export async function withWorktreeRegistration<T>(
         [observed.id, ...predicate.params]
       );
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
-      return remove(() => markWorktreeDestroyed(observed, query));
+      return remove(
+        () => markWorktreeDestroyed(observed, query),
+        () => getLiveRunOwningEnv(observed.id, undefined, undefined, query)
+      );
     },
     { retryOnBusy: false }
   );
-}
+};
 
 /**
  * Update environment metadata (merge with existing)
@@ -433,7 +436,8 @@ export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays:
 export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
-  excludeRunId?: string
+  excludeRunId?: string,
+  query: typeof pool.query = pool.query.bind(pool)
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
@@ -468,7 +472,7 @@ export async function getLiveRunOwningEnv(
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
   const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
-  const result = await pool.query<{ id: string; status: string }>(
+  const result = await query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
@@ -622,6 +626,7 @@ export function createIsolationStore(): IIsolationStore {
     updateStatus,
     updateMetadata,
     markWorktreeDestroyed,
+    withWorktreeRegistration,
     countActiveByCodebase,
   };
 }

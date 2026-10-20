@@ -167,23 +167,25 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         continue;
       }
 
-      const result = await provider.destroy(env.working_path, {
-        // A stale environment's branch is deleted only when the environment created it;
-        // an existing branch it checked out may hold commits that exist nowhere else.
-        branchName:
-          env.branch_name && readWorktreeBranchCreated(env.metadata)
-            ? toBranchName(env.branch_name)
-            : undefined,
-        canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
-        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-      });
+      await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
+        const result = await provider.destroy(env.working_path, {
+          // A stale environment's branch is deleted only when the environment created it;
+          // an existing branch it checked out may hold commits that exist nowhere else.
+          branchName:
+            env.branch_name && readWorktreeBranchCreated(env.metadata)
+              ? toBranchName(env.branch_name)
+              : undefined,
+          canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+          creationId: readWorktreeCreationId(env.metadata) ?? undefined,
+        });
 
-      if (!result.worktreeRemoved || !result.directoryClean) {
-        throw new Error(
-          `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
-        );
-      }
-      await isolationDb.markWorktreeDestroyed(env);
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          throw new Error(
+            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+          );
+        }
+        await markDestroyed();
+      });
       console.log(
         lock.kind === 'released'
           ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`

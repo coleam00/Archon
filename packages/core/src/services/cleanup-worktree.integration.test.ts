@@ -277,80 +277,40 @@ async function useSymlinkedBase(): Promise<void> {
 }
 
 for (const persistence of ['sql', 'file'] as const) {
-  for (const replacement of ['same-row', 'other-path', 'restore-failure'] as const) {
-    test(`${persistence}: reclaim recovery preserves the failure and fences ${replacement}`, async () => {
-      const target =
-        persistence === 'sql'
-          ? store
-          : (
-              await (
-                await import('../workflows/file-host')
-              ).createFileWorkflowHost(join(root, 'store'))
-            ).records.isolation;
-      if (persistence === 'file') {
-        env = await target.create({
-          codebase_id: codebaseId,
-          workflow_type: 'task',
-          workflow_id: 'release',
-          working_path: env.working_path,
-          branch_name: toBranchName(env.branch_name),
-          metadata: env.metadata,
-        });
-        run.metadata = {
-          owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
-        };
-      }
-      const original = new Error('original claimant lookup failed');
-      let newer: IsolationEnvironmentRow | undefined;
-      const racing = {
-        ...target,
-        updateStatus: async (...args: Parameters<IIsolationStore['updateStatus']>) => {
-          if (replacement === 'restore-failure') throw new Error('restore failed');
-          return target.updateStatus(...args);
-        },
-      };
-      const attempt = reclaimRunWorktree(run, racing, {
-        getCodebase: (await import('../db/codebases')).getCodebase,
-        getLiveRunOwningEnv: async () => {
-          if (replacement !== 'restore-failure') {
-            newer = await target.create({
-              codebase_id: codebaseId,
-              workflow_type: 'task',
-              workflow_id: 'release',
-              working_path:
-                replacement === 'same-row' ? env.working_path : join(root, 'replacement'),
-              branch_name: toBranchName(env.branch_name),
-              metadata: { adopted: true },
-            });
-          }
-          throw original;
-        },
+  test(`${persistence}: reclaim failure rolls back retirement and preserves its evidence`, async () => {
+    const target =
+      persistence === 'sql'
+        ? store
+        : (
+            await (
+              await import('../workflows/file-host')
+            ).createFileWorkflowHost(join(root, 'store'))
+          ).records.isolation;
+    if (persistence === 'file') {
+      env = await target.create({
+        ...env,
+        branch_name: toBranchName(env.branch_name),
+        created_by_platform: undefined,
+        created_by_user_id: undefined,
       });
-      const error = await attempt.then(
-        () => {
-          throw new Error('Expected reclaim failure');
-        },
-        (err: unknown) => err
-      );
-      expect(error).toBeInstanceOf(Error);
-      if (!(error instanceof Error)) throw new Error('Expected error');
-      expect(error.message).toContain('original claimant lookup failed');
-      if (replacement !== 'same-row') {
-        expect(error.cause).toBeInstanceOf(AggregateError);
-        if (!(error.cause instanceof AggregateError)) throw new Error('Expected recovery evidence');
-        expect(error.cause.cause).toBe(original);
-        expect(error.cause.errors[0]).toBe(original);
-        expect(error.message).toContain('registration recovery failed');
-      }
-      if (newer) {
-        expect(await target.getById(newer.id)).toEqual(newer);
-        expect((await target.listActive()).filter(row => row.codebase_id === codebaseId)).toEqual([
-          newer,
-        ]);
-      }
-      expect(existsSync(env.working_path)).toBe(true);
-    });
-  }
+      run.metadata = {
+        owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
+      };
+    }
+    await expect(
+      reclaimRunWorktree(run, {
+        ...target,
+        withWorktreeRegistration: (observed, remove) =>
+          target.withWorktreeRegistration(observed, mark =>
+            remove(mark, async () => {
+              throw new Error('claimant lookup failed');
+            })
+          ),
+      })
+    ).rejects.toThrow('claimant lookup failed');
+    expect((await target.getById(env.id))?.status).toBe('active');
+    expect(existsSync(env.working_path)).toBe(true);
+  });
 }
 
 describe('owned worktree release', () => {
@@ -500,56 +460,66 @@ describe('owned worktree release', () => {
   });
 
   test('a detached adoption row without a path cannot claim the checkout once release begins', async () => {
-    // `run --detach --adopt` pre-creates its row with no working_path and claims it
-    // before stamping the inherited checkout, so the claim must carry the path.
     const adopter = await seedRunAt(null, 'pending');
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
     const originalExec = gitModule.execFileAsync;
-    let claimed: unknown;
     const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
       async (file, args, options) => {
-        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
-          claimed = await claimPendingWorkflowRun(adopter, env.working_path);
+        if (file === 'git' && args.includes('worktree') && args.includes('remove')) {
+          entered.resolve();
+          await finish.promise;
+        }
         return originalExec(file, args, options);
       }
     );
+    const release = reclaimRunWorktree(run, store);
     try {
-      await reclaimRunWorktree(run, store);
+      await entered.promise;
+      const claim = claimPendingWorkflowRun(adopter, env.working_path);
+      finish.resolve();
+      await release;
+      expect(await claim).toBeNull();
     } finally {
+      finish.resolve();
+      await release.catch(() => {});
       exec.mockRestore();
     }
-    expect(claimed).toBeNull();
     expect(existsSync(env.working_path)).toBe(false);
   });
 
   test('a run that reuses the checkout during removal can neither start nor adopt it', async () => {
     const originalExec = gitModule.execFileAsync;
-    let lateRun: string | undefined;
-    let claimed: unknown;
-    let adoption: unknown;
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
     const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
       async (file, args, options) => {
         if (file === 'git' && args.includes('worktree') && args.includes('remove')) {
-          // Past the final claimant check: the record still names this path, so a
-          // concurrent start that read it earlier inserts its run now.
-          lateRun = await seedRunAt(env.working_path, 'pending');
-          claimed = await claimPendingWorkflowRun(lateRun);
-          adoption = await provider.create(request()).catch((err: unknown) => err);
+          entered.resolve();
+          await finish.promise;
         }
         return originalExec(file, args, options);
       }
     );
+    const release = reclaimRunWorktree(run, store);
     try {
-      await reclaimRunWorktree(run, store);
+      await entered.promise;
+      const lateRun = seedRunAt(env.working_path, 'pending');
+      const adoption = await provider.create(request()).catch((err: unknown) => err);
+      expect(String(adoption)).toContain('an abandoned run is removing it');
+      if (!(adoption instanceof Error)) throw new Error('expected adoption refusal');
+      expect(classifyIsolationError(adoption)).toBe(
+        '**Error:** Refused to adopt an existing directory at the worktree path. ' +
+          'Remove it or choose a different branch/codebase registration.'
+      );
+      finish.resolve();
+      await release;
+      expect(await claimPendingWorkflowRun(await lateRun)).toBeNull();
     } finally {
+      finish.resolve();
+      await release.catch(() => {});
       exec.mockRestore();
     }
-    expect(claimed).toBeNull();
-    expect(String(adoption)).toContain('an abandoned run is removing it');
-    if (!(adoption instanceof Error)) throw new Error('expected adoption refusal');
-    expect(classifyIsolationError(adoption)).toBe(
-      '**Error:** Refused to adopt an existing directory at the worktree path. ' +
-        'Remove it or choose a different branch/codebase registration.'
-    );
     expect(existsSync(env.working_path)).toBe(false);
 
     // Once a fresh checkout is registered at the path again, runs there start normally.
@@ -941,7 +911,7 @@ describe('cleanup retires only the registration it observed', () => {
       metadata: env.metadata,
     });
 
-  /** A real store that re-registers the environment just before its first retire write. */
+  /** Re-register at the claim or retirement boundary, using real conditional writes. */
   function racingStore(): {
     store: IIsolationStore;
     afterRetire: () => IsolationEnvironmentRow | null | undefined;
@@ -962,6 +932,14 @@ describe('cleanup retires only the registration it observed', () => {
     return {
       store: {
         ...real,
+        withWorktreeRegistration: async (observed, remove) => {
+          if (!replacement) replacement = await reRegister();
+          try {
+            return await real.withWorktreeRegistration(observed, remove);
+          } finally {
+            after = await isolationDb.getById(replacement.id);
+          }
+        },
         updateStatus: (id, next) =>
           next === 'destroyed'
             ? race(() => real.updateStatus(id, next))
@@ -1026,6 +1004,40 @@ describe('cleanup retires only the registration it observed', () => {
     expectReplacementActive(await isolationDb.getById(env.id), replacement);
     expect(existsSync(env.working_path)).toBe(true);
     expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
+  });
+
+  test('conversation close refuses a registration replaced after selection', async () => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+      (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+      VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    const readLiveRun = isolationDb.getLiveRunOwningEnv;
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racing = spyOn(isolationDb, 'getLiveRunOwningEnv').mockImplementation(async (...args) => {
+      replacement ??= await reRegister();
+      return readLiveRun(...args);
+    });
+    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    try {
+      await expect(onConversationClosed('github', conversationId)).rejects.toThrow(
+        'changed during cleanup'
+      );
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      racing.mockRestore();
+      destroy.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
+    const { rows } = await db.query<{ isolation_env_id: string; cwd: string }>(
+      'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+      [conversationId]
+    );
+    expect(rows[0]).toEqual({ isolation_env_id: env.id, cwd: env.working_path });
   });
 
   test('scheduled missing-path cleanup refuses a registration replaced after selection', async () => {
@@ -1096,9 +1108,16 @@ describe('cleanup retires only the registration it observed', () => {
 
   test('guarded run reclaim keeps the checkout', async () => {
     const { store: racing, afterRetire, replacement } = racingStore();
-    await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    try {
+      await expect(reclaimRunWorktree(run, racing)).rejects.toThrow('changed during cleanup');
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      destroy.mockRestore();
+    }
     expectReplacementActive(afterRetire(), replacement());
     expect(existsSync(env.working_path)).toBe(true);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
   });
 
   for (const lookup of ['existing', 'workflow', 'linked'] as const) {
@@ -1143,7 +1162,15 @@ describe('cleanup retires only the registration it observed', () => {
     });
     if (created.status !== 'resolved') throw new Error('Expected creation');
     env = created.env;
-    await resolver.releaseUnlinked(created);
+    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    try {
+      await resolver.releaseUnlinked(created);
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      destroy.mockRestore();
+    }
     expectReplacementActive(afterRetire(), replacement());
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
   });
 });

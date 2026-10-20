@@ -122,12 +122,16 @@ With `store: database` (the default), **omit `DATABASE_URL`** from your `.env` f
 
 Every Archon process on a machine shares one SQLite file, and SQLite lets one writer at a
 time hold its lock. When another process holds the lock past the 5-second busy timeout,
-Archon keeps waiting instead of failing: a single statement retries, and a transaction
-rolls back and reruns from the start, with a growing pause of up to 2 seconds between
+replayable operations keep waiting instead of failing: a single statement retries, and a
+transaction rolls back and reruns from the start, with a growing pause of up to 2 seconds between
 attempts. There is no deadline, so a run whose write is waiting stays alive until the lock
 clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every 30
 seconds. A repeating warning points at a process that is holding the lock. Other SQLite
 errors still fail right away.
+
+Worktree cleanup transactions do not retry automatically: they include filesystem deletion,
+which cannot safely be replayed. If cleanup fails with `SQLITE_BUSY`, resolve the contention
+and explicitly retry cleanup.
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

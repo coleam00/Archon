@@ -72,6 +72,9 @@ function fakeStore(): IIsolationStore & {
       const row = rows.get(id);
       if (row) row.status = status;
     },
+    withWorktreeRegistration: async () => {
+      throw new Error('Unexpected worktree removal');
+    },
     async markWorktreeDestroyed() {
       throw new Error('Unexpected worktree retirement');
     },
