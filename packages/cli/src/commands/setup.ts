@@ -198,10 +198,14 @@ async function openSetupTerminal(options: SetupOptions): Promise<void> {
   if (result.success) {
     console.log('Setup wizard opened. Complete the setup in the new terminal window.');
   } else {
+    const directory =
+      process.platform === 'win32'
+        ? `"${options.repoPath}"`
+        : `'${options.repoPath.replaceAll("'", "'\"'\"'")}'`;
     console.log('');
     console.log('Next step: run the setup wizard in a separate terminal.');
     console.log('');
-    console.log(`    cd ${options.repoPath} && ${setupLaunchCommand(options)}`);
+    console.log(`    cd ${directory} && ${setupLaunchCommand(options)}`);
     console.log('');
     console.log(
       'Come back here and let me know when you finish so I can verify your configuration.'

@@ -134,21 +134,21 @@ describe('setup terminal spawning', () => {
     expect(
       await setupCommand({
         spawn: true,
-        repoPath: '/repo',
+        repoPath,
         providers: ['codex'],
         scope: 'project',
         force: true,
       })
     ).toBe(0);
     const command = 'archon setup --providers=codex --scope=project --force';
-    expect(spawn.mock.calls[0]?.[1]).toEqual(['-d', '/repo', 'cmd', '/k', command]);
+    expect(spawn.mock.calls[0]?.[1]).toEqual(['-d', repoPath, 'cmd', '/k', command]);
     if (successAt !== 0) {
       expect(spawn.mock.calls[1]?.[1]).toEqual([
         '/c',
         'start',
         '""',
         '/D',
-        '/repo',
+        repoPath,
         'cmd',
         '/k',
         command,
@@ -157,13 +157,25 @@ describe('setup terminal spawning', () => {
     const output = log.mock.calls.map(call => call.join(' ')).join('\n');
     if (successAt === -1) {
       expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
-      expect(output).toContain(`cd /repo && ${command}`);
+      expect(output).toContain(`cd "${repoPath}" && ${command}`);
       expect(output).not.toContain('Setup wizard opened.');
     } else {
       expect(output).toContain('Setup wizard opened.');
       expect(output).not.toContain('Next step:');
     }
   });
+
+  it.each(['darwin', 'linux'] as const)(
+    '%s: manual guidance quotes the repository path for the shell',
+    async platform => {
+      usePlatform(platform);
+      terminalSpawns(-1);
+      const log = spyOn(console, 'log').mockImplementation(() => undefined);
+      expect(await setupCommand({ spawn: true, repoPath: "/repo's path with spaces" })).toBe(0);
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain(`cd '/repo'"'"'s path with spaces' && archon setup`);
+    }
+  );
 
   it.each([false, true])(
     'setup handles real missing executables with fallback available: %s',
@@ -184,7 +196,7 @@ describe('setup terminal spawning', () => {
       if (fallbackAvailable) {
         expect(output).toContain('Setup wizard opened.');
       } else {
-        expect(output).toContain('cd /repo && archon setup');
+        expect(output).toContain('cd "/repo" && archon setup');
         expect(output).not.toContain('Setup wizard opened.');
       }
     }
