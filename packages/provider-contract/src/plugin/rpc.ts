@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 export const PLUGIN_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 
 export interface PluginIO {
-  readable: ReadableStream<Uint8Array>;
+  readable: ReadableStream<Uint8Array> | NodeReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
 }
 
