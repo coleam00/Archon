@@ -1814,7 +1814,7 @@ describe('dryRunWorkflow', () => {
               until_bash: 'exit 1',
               interactive: true,
               gate_message: 'Please decide',
-              nodes: [{ id: 'check', bash: 'echo done' }],
+              nodes: [{ id: 'task', bash: 'echo done' }],
             },
           },
         ],
@@ -1844,25 +1844,37 @@ describe('dryRunWorkflow', () => {
               },
             },
           ],
-          [
-            `recursive ${name}`,
-            {
-              loop_group: {
-                max_iterations: 1,
-                until_bash: 'exit 1',
-                nodes: [
-                  {
-                    id: 'nested',
-                    loop_group: {
-                      max_iterations: 1,
-                      until_bash: 'exit 1',
-                      nodes: [{ id: 'check', ...sink }],
-                    },
+          ...['sole sink', 'before exec', 'beside exec'].map(
+            topology =>
+              [
+                `recursive ${name} ${topology}`,
+                {
+                  loop_group: {
+                    max_iterations: 1,
+                    until_bash: 'exit 1',
+                    nodes: [
+                      {
+                        id: 'nested',
+                        loop_group: {
+                          max_iterations: 1,
+                          until_bash: 'exit 1',
+                          nodes: [{ id: 'check', ...sink }],
+                        },
+                      },
+                      ...(topology === 'sole sink'
+                        ? []
+                        : [
+                            {
+                              id: 'finish',
+                              bash: 'echo done',
+                              depends_on: topology === 'before exec' ? ['nested'] : [],
+                            },
+                          ]),
+                    ],
                   },
-                ],
-              },
-            },
-          ],
+                },
+              ] as const
+          ),
         ] as const
     ),
   ] as const) {

@@ -129,6 +129,7 @@ export {
   loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isInteractiveSink,
+  canSuspend,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,

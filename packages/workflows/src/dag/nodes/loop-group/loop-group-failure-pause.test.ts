@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { validateDagStructure } from '../../../loader/dag-structure';
 import { createFileWorkflowStore } from '../../../file-store/store';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { listAttentionQueue } from '../../../attention-queue';
@@ -35,7 +36,7 @@ for (const [name, suspension] of [
         until_bash: 'exit 1',
         interactive: true,
         gate_message: 'Please decide',
-        nodes: [{ id: 'check', bash: 'echo done' }],
+        nodes: [{ id: 'task', bash: 'echo done' }],
       },
     },
   ],
@@ -62,7 +63,7 @@ for (const [name, suspension] of [
             until_bash: 'exit 1',
             interactive: true,
             gate_message: 'Please decide',
-            nodes: [{ id: 'check', bash: 'echo done' }],
+            nodes: [{ id: 'task', bash: 'echo done' }],
           },
         },
       ],
@@ -79,27 +80,38 @@ for (const [name, suspension] of [
         },
       ],
     ] as const
-  ).map(
-    ([name, sink]) =>
-      [
-        `recursive ${name}`,
-        {
-          loop_group: {
-            max_iterations: 1,
-            until_bash: 'exit 1',
-            nodes: [
-              {
-                id: 'nested',
-                loop_group: {
-                  max_iterations: 1,
-                  until_bash: 'exit 1',
-                  nodes: [{ id: 'check', ...sink }],
+  ).flatMap(([name, sink]) =>
+    ['sole sink', 'before exec', 'beside exec'].map(
+      topology =>
+        [
+          `recursive ${name} ${topology}`,
+          {
+            loop_group: {
+              max_iterations: 1,
+              until_bash: 'exit 1',
+              nodes: [
+                {
+                  id: 'nested',
+                  loop_group: {
+                    max_iterations: 1,
+                    until_bash: 'exit 1',
+                    nodes: [{ id: 'check', ...sink }],
+                  },
                 },
-              },
-            ],
+                ...(topology === 'sole sink'
+                  ? []
+                  : [
+                      {
+                        id: 'finish',
+                        bash: 'echo done',
+                        depends_on: topology === 'before exec' ? ['nested'] : [],
+                      },
+                    ]),
+              ],
+            },
           },
-        },
-      ] as const
+        ] as const
+    )
   ),
 ] as const) {
   for (const failed of 'wait' in suspension || name === 'gate' ? [true, false] : [true]) {
@@ -119,49 +131,51 @@ for (const [name, suspension] of [
         });
         const run = await store.claimPendingWorkflowRun(created.id, root);
         if (!run) throw new Error('Claim failed');
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform: createMockPlatform(),
-            cwd: root,
-            workflowRun: run,
-            workflow: {
-              name: 'failed-pause',
-              nodes: [
-                dagNodeSchema.parse({ id: 'pause', bash: 'exit 8' }),
-                dagNodeSchema.parse({
-                  id: 'cycle',
-                  depends_on: ['pause'],
-                  trigger_rule: 'all_done',
-                  loop_group: {
-                    max_iterations: 2,
-                    until_bash: 'exit 1',
-                    nodes: [
-                      { id: 'work', prompt: 'Work' },
-                      {
-                        id: 'broken',
-                        bash: failed ? 'exit 7' : 'echo success',
-                        depends_on: ['work'],
-                      },
-                      {
-                        id: 'cleanup',
-                        bash: 'echo cleaned',
-                        depends_on: ['broken'],
-                        trigger_rule: 'all_done',
-                      },
-                      {
-                        id: 'pause',
-                        ...suspension,
-                        depends_on: ['cleanup'],
-                        trigger_rule: 'all_done',
-                      },
-                    ],
-                  },
-                }),
-              ],
-            },
-          })
-        );
+        const offChain = name.includes('before exec') || name.includes('beside exec');
+        const outerId = offChain ? 'outer-pause' : 'pause';
+        const options = dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: root,
+          workflowRun: run,
+          workflow: {
+            name: 'failed-pause',
+            nodes: [
+              dagNodeSchema.parse({ id: outerId, bash: 'exit 8' }),
+              dagNodeSchema.parse({
+                id: 'cycle',
+                depends_on: [outerId],
+                trigger_rule: 'all_done',
+                loop_group: {
+                  max_iterations: 2,
+                  until_bash: 'exit 1',
+                  nodes: [
+                    { id: 'work', prompt: 'Work' },
+                    {
+                      id: 'broken',
+                      bash: failed ? 'exit 7' : 'echo success',
+                      depends_on: ['work'],
+                    },
+                    {
+                      id: 'cleanup',
+                      bash: 'echo cleaned',
+                      depends_on: ['broken'],
+                      trigger_rule: 'all_done',
+                    },
+                    {
+                      id: 'pause',
+                      ...suspension,
+                      depends_on: ['cleanup'],
+                      trigger_rule: 'all_done',
+                    },
+                  ],
+                },
+              }),
+            ],
+          },
+        });
+        if (offChain) expect(validateDagStructure(options.workflow.nodes)).toBeNull();
+        await executeDagWorkflow(options);
         const persisted = await store.getWorkflowRun(run.id);
         const events = await store.listWorkflowEvents(run.id);
         const bodyError = events.find(

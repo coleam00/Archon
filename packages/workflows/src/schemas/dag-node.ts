@@ -2142,6 +2142,16 @@ export function loopGroupSoleTerminalSink<T extends { id: string; depends_on?: r
   return sinks.length === 1 ? sinks[0] : undefined;
 }
 
+export function canSuspend(node: DagNode | IncludeDirective): boolean {
+  if (isIncludeDirective(node)) return false;
+  if (isGateNode(node) || isWaitNode(node) || isWorkflowNode(node)) return true;
+  if (isLoopNode(node) && node.loop.interactive) return true;
+  return (
+    isLoopGroupNode(node) &&
+    (node.loop_group.interactive === true || node.loop_group.nodes.some(canSuspend))
+  );
+}
+
 export function isInteractiveSink(node: DagNode | IncludeDirective): boolean {
   if (isIncludeDirective(node)) return false;
   if (isGateNode(node)) return true;

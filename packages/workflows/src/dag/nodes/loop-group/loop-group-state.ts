@@ -12,7 +12,7 @@ import type {
 } from '../../../schemas';
 import {
   isGateNode,
-  isInteractiveSink,
+  canSuspend,
   loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
 } from '../../../schemas';
@@ -127,7 +127,7 @@ export function findLoopGroupTerminalInteraction(
   bodyNodes: readonly DagNode[]
 ): DagNode | undefined {
   const sink = loopGroupSoleTerminalSink(bodyNodes);
-  return sink !== undefined && (sink.kind === 'wait' || isInteractiveSink(sink)) ? sink : undefined;
+  return sink !== undefined && canSuspend(sink) ? sink : undefined;
 }
 
 /** An iteration's output: the first completed, non-empty one among its output nodes. */
