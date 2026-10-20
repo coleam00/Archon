@@ -724,6 +724,30 @@ describe('completed run worktree release', () => {
     });
   });
 
+  test.each(['uncommitted_changes', 'unpushed_commits'] as const)(
+    'work arriving before the registration claim is checked under the worktree lock (%s)',
+    async reason => {
+      const real = store;
+      const racing: IIsolationStore = {
+        ...real,
+        withWorktreeRegistration: async (observed, remove) => {
+          await writeFile(join(env.working_path, 'late'), 'late work');
+          if (reason === 'unpushed_commits') {
+            await git(env.working_path, 'add', 'late');
+            await git(env.working_path, 'commit', '-qm', 'late work');
+          }
+          return real.withWorktreeRegistration(observed, remove);
+        },
+      };
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, racing, readers())
+      ).rejects.toThrow(`no longer releasable: ${reason}`);
+      expect(await readFile(join(env.working_path, 'late'), 'utf8')).toBe('late work');
+      expect(await status()).toBe('active');
+      expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+    }
+  );
+
   test('work that appears after the assessment refuses the release', async () => {
     const completed = { ...run, status: 'completed' as const };
     expect(await assessCompletedRunWorktree(completed, store, readers())).toEqual({

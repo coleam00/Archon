@@ -1350,12 +1350,7 @@ async function resolveOwnedWorktree(
   return { env, repo: toRepoPath(codebase.default_cwd) };
 }
 
-/**
- * Whether a completed run's worktree can go without losing work: clean, every commit
- * on a remote, and the branch never published. A published branch waits for the merged
- * sweep, which also deletes it; releasing it here would destroy the record that sweep reads.
- */
-async function judgeCompletedWorktree(
+async function judgeLocalCompletedWorktree(
   env: IsolationEnvironmentRow,
   repo: RepoPath
 ): Promise<WorktreeDisposition> {
@@ -1371,6 +1366,13 @@ async function judgeCompletedWorktree(
       detail: `${String(commits)} commit(s) on no remote`,
     };
   }
+  return { disposition: 'release' };
+}
+
+async function judgePublishedBranch(
+  env: IsolationEnvironmentRow,
+  repo: RepoPath
+): Promise<WorktreeDisposition> {
   // Ask the remote: a push by URL or refspec need not leave a remote-tracking ref.
   const remote = configuredRemote(await loadRepoConfig(repo));
   const advertised = await inspectRemoteBranches({ kind: 'local', repoPath: repo, remote });
@@ -1408,7 +1410,8 @@ export async function assessCompletedRunWorktree(
         detail: `run ${user.id} (${user.status})`,
       };
     }
-    return await judgeCompletedWorktree(env, repo);
+    const local = await judgeLocalCompletedWorktree(env, repo);
+    return local.disposition === 'release' ? await judgePublishedBranch(env, repo) : local;
   } catch (err) {
     getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
     return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
@@ -1417,18 +1420,26 @@ export async function assessCompletedRunWorktree(
 
 /**
  * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
- * Rechecks disposition before claiming the selected registration for removal.
+ * Remote inspection precedes the registration claim; local checks run under the worktree lock.
  */
 export async function releaseCompletedRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders
 ): Promise<void> {
-  const result = await reclaimOwnedWorktree(run, store, readers, async (env, repo) => {
-    const disposition = await judgeCompletedWorktree(env, repo);
-    if (disposition.disposition !== 'release') {
-      throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
-    }
+  const result = await reclaimOwnedWorktree(run, store, readers, {
+    beforeClaim: async (env, repo) => {
+      const disposition = await judgePublishedBranch(env, repo);
+      if (disposition.disposition !== 'release') {
+        throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
+      }
+    },
+    beforeRemove: async (env, repo) => {
+      const disposition = await judgeLocalCompletedWorktree(env, repo);
+      if (disposition.disposition !== 'release') {
+        throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
+      }
+    },
   });
   if (result.warnings.length > 0) {
     getLog().warn(
@@ -1442,7 +1453,10 @@ async function reclaimOwnedWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders,
-  verify?: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>
+  verify?: {
+    beforeClaim: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>;
+    beforeRemove: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>;
+  }
 ): Promise<RunWorktreeRelease> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof) {
@@ -1479,7 +1493,7 @@ async function reclaimOwnedWorktree(
   }
   if (env.status === 'destroyed')
     return refuse('a path exists for an already destroyed environment');
-  await verify?.(env, repo);
+  await verify?.beforeClaim(env, repo);
   const user = await readers.getLiveRunOwningEnv(env.id);
   if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
   return store.withWorktreeRegistration(env, async markDestroyed => {
@@ -1487,7 +1501,10 @@ async function reclaimOwnedWorktree(
       canonicalRepoPath: repo,
       guardedRemoval: {
         creationId: proof.creationId,
-        beforeRemove: markDestroyed,
+        beforeRemove: async () => {
+          await verify?.beforeRemove(env, repo);
+          await markDestroyed();
+        },
       },
     });
     if (!result.worktreeRemoved || !result.directoryClean)
