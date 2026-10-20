@@ -237,6 +237,29 @@ describe('isolationCompleteCommand', () => {
     consoleWarnSpy.mockRestore();
   });
 
+  it('checks open PRs in the selected repository rather than the process cwd', async () => {
+    mockListActive.mockResolvedValueOnce([mockEnv]);
+    expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
+    mockExecFileAsync.mockImplementation(async (cmd, _args, options) => ({
+      stdout:
+        cmd === 'gh'
+          ? JSON.stringify(
+              options?.cwd === mockEnv.codebase_default_cwd
+                ? [{ number: 42, title: 'target repository PR' }]
+                : []
+            )
+          : '',
+      stderr: '',
+    }));
+
+    await expect(isolationCompleteCommand(['feature-branch'], {})).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ open PR #42 — "target repository PR"');
+  });
+
   it('completes a branch when env is found and all checks pass', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockRemoveEnvironment.mockResolvedValueOnce({

@@ -323,7 +323,7 @@ async function checkCompletionPullRequests(branch: string, blockers: string[]): 
     const ghResult = await execFileAsync(
       'gh',
       ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,title'],
-      { timeout: 15000 }
+      { timeout: 15000, cwd: env.codebase_default_cwd }
     );
     const prs = JSON.parse(ghResult.stdout) as { number: number; title: string }[];
     for (const pr of prs) {
@@ -464,7 +464,7 @@ async function getCompletionBlockers(
   // Collect every blocker in safety-check order before attempting removal.
   await checkCompletionWorktree(env, branch, blockers);
   await checkCompletionLiveRun(env, branch, blockers);
-  await checkCompletionPullRequests(branch, blockers);
+  await checkCompletionPullRequests(env, branch, blockers);
   await checkCompletionCommits(env, branch, blockers);
   return blockers;
 }
