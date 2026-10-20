@@ -2428,10 +2428,25 @@ describe('workflow node capabilities', () => {
   });
 
   test('strict MCP passes exactly the workflow-declared server map', async () => {
+    mockQuery.mockImplementation(() =>
+      Object.assign(
+        (async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        })(),
+        {
+          initializationResult: async () => ({}),
+          mcpServerStatus: async () => [{ name: 'declared', status: 'connected' }],
+          close: () => {},
+        }
+      )
+    );
     const mcpPath = join(workflowCwd, 'mcp.json');
     writeFileSync(mcpPath, JSON.stringify({ declared: { command: 'node', args: ['server.mjs'] } }));
 
-    const options = await workflowOptions({ nodeConfig: { nodeId: 'mcp-node', mcp: mcpPath } });
+    await chunksOf('test', workflowCwd, undefined, {
+      nodeConfig: { nodeId: 'mcp-node', mcp: mcpPath },
+    });
+    const options = sdkOptions();
 
     expect(options.strictMcpConfig).toBe(true);
     expect(Object.keys(options.mcpServers ?? {})).toEqual(['declared']);
@@ -2909,6 +2924,42 @@ describe('typed failures (#1797, #3524)', () => {
       const failure = result.failure as { class: string; evidence: string };
       expect(failure.class).toBe('transient');
       expect(failure.evidence).toContain('produced no output within 50ms');
+    } finally {
+      if (original !== undefined) process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS = original;
+      else delete process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
+    }
+  });
+
+  test('a CLI that never initializes its MCP servers hits the same first-event timeout', async () => {
+    const root = tempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-silent-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    let statusReads = 0;
+    mockQuery.mockImplementation(() =>
+      Object.assign(
+        (async function* () {
+          await new Promise(() => {});
+        })(),
+        {
+          initializationResult: () => new Promise(() => {}),
+          mcpServerStatus: async () => {
+            statusReads++;
+            return [];
+          },
+          close: () => {},
+        }
+      )
+    );
+    const original = process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
+    process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS = '50';
+    try {
+      const result = onlyResult(
+        await collect(client.sendQuery('test', root, undefined, { nodeConfig: { mcp } }))
+      );
+      const failure = result.failure as { class: string; evidence: string };
+      expect(failure.class).toBe('transient');
+      expect(failure.evidence).toContain('produced no output within 50ms');
+      expect(statusReads).toBe(0);
     } finally {
       if (original !== undefined) process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS = original;
       else delete process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
@@ -3446,3 +3497,146 @@ describe('provider contract', () => {
     }
   });
 });
+
+describe('required MCP admission', () => {
+  test('rejects before yielding SDK input, including container and resumed queries', async () => {
+    const root = tempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-ready-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'missing' } }));
+    for (const container of [false, true]) {
+      let inputs = 0;
+      let closed = false;
+      let inputTask: Promise<void> | undefined;
+      mockQuery.mockImplementation(params => {
+        const stream = (async function* () {
+          if (typeof params.prompt !== 'string') {
+            for await (const _input of params.prompt) {
+              inputs++;
+              break;
+            }
+          }
+        })();
+        return Object.assign(stream, {
+          initializationResult: async () => {
+            inputTask = (async () => {
+              if (typeof params.prompt !== 'string')
+                for await (const _input of params.prompt) {
+                  inputs++;
+                  break;
+                }
+            })();
+          },
+          mcpServerStatus: async () => [
+            { name: 'declared', status: 'failed', error: 'spawn ENOENT' },
+          ],
+          close: () => {
+            closed = true;
+          },
+        });
+      });
+      const chunks = await Array.fromAsync(
+        (container ? overStreams(createProvider, descriptor) : new ClaudeProvider()).sendQuery(
+          'hi',
+          root,
+          'existing',
+          {
+            nodeConfig: { mcp },
+            ...(container
+              ? {
+                  execContext: {
+                    kind: 'container' as const,
+                    containerId: 'fixture',
+                    execUser: 'user',
+                  },
+                }
+              : {}),
+          }
+        )
+      );
+      await inputTask;
+      expect(inputs).toBe(0);
+      expect(closed).toBe(true);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'result',
+          failure: {
+            class: 'misconfigured',
+            evidence: expect.stringContaining('declared'),
+          },
+        })
+      );
+      expect(JSON.stringify(chunks)).toContain('spawn ENOENT');
+    }
+  });
+});
+
+for (const mode of ['success', 'abort', 'return'] as const) {
+  test(`required MCP ${mode} preserves input ordering and cleanup`, async () => {
+    const root = tempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-gate-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    const controller = new AbortController();
+    let inputs = 0;
+    let reads = 0;
+    let closed = false;
+    let inputTask: Promise<void> | undefined;
+    const connected = Promise.withResolvers<void>();
+    mockQuery.mockImplementation(params => {
+      const source = params.prompt;
+      const stream = (async function* () {
+        await inputTask;
+        yield { type: 'result', subtype: 'success', session_id: 'session', is_error: false };
+      })();
+      return Object.assign(stream, {
+        initializationResult: async () => {
+          inputTask = (async () => {
+            if (typeof source !== 'string')
+              for await (const _input of source) {
+                inputs++;
+                expect(reads).toBeGreaterThan(1);
+                break;
+              }
+          })();
+        },
+        mcpServerStatus: async () => {
+          reads++;
+          if (reads > 1) await connected.promise;
+          return [{ name: 'declared', status: reads === 1 ? 'pending' : 'connected' }];
+        },
+        close: () => {
+          closed = true;
+        },
+      });
+    });
+    const stream = new ClaudeProvider().sendQuery('hi', root, undefined, {
+      nodeConfig: { mcp },
+      abortSignal: controller.signal,
+      nativeTools: [
+        {
+          name: 'internal',
+          description: 'test',
+          inputSchema: { properties: {}, required: [] },
+          handler: async () => '',
+        },
+      ],
+    });
+    expect((await stream.next()).value).toEqual({
+      type: 'mcp_server_status',
+      server: 'declared',
+      status: 'pending',
+    });
+    expect(inputs).toBe(0);
+    if (mode === 'abort') {
+      controller.abort();
+      await expect(stream.next()).rejects.toThrow('Query aborted');
+    } else if (mode === 'return') {
+      await stream.return(undefined);
+    } else {
+      connected.resolve();
+      await Array.fromAsync(stream);
+    }
+    await inputTask;
+    expect(inputs).toBe(mode === 'success' ? 1 : 0);
+    expect(closed).toBe(true);
+  });
+}

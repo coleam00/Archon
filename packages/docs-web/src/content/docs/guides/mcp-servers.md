@@ -77,9 +77,9 @@ The node's `node_started` and terminal rows record `mcp_unavailable` with the de
 `path`, the `reason`, and the server names when the file was readable, and the chat
 shows a warning such as
 `Node 'intel' runs without its optional MCP servers (.archon/mcp/posthog.json): MCP config file not found: '.archon/mcp/posthog.json'. Tried: /repo/.archon/mcp/posthog.json.`
-A server that reaches the provider but fails to connect is recorded as an
-`mcp_server_status` provider event, as described under
-[Connection Failure Handling](#connection-failure-handling).
+`optional: true` covers only a missing file or a provider without MCP. Once the file
+loads, its servers are declared like any other, and one that fails to connect fails
+the node as described under [Connection Failure Handling](#connection-failure-handling).
 
 The engine adds nothing to the prompt. The agent sees which servers loaded from its own
 tool list, so write the prompt to check for the `mcp__<server>__*` tools, as above.
@@ -282,16 +282,24 @@ is enforced for Claude nodes but not Codex nodes.
 
 ## Connection Failure Handling
 
-MCP server connections are established when the node starts executing. If a
-server the **workflow** configured via `mcp:` fails to connect, you'll see a
-message like:
+MCP server connections are established when the node starts executing. A node that
+declares an MCP server needs it, so every declared server is required. On Claude and
+Codex the node waits for its declared servers to connect before the first model turn.
+If one fails to connect, needs authentication, or is disabled, you'll see a message like:
 
 ```
 MCP server connection failed: github (failed)
 ```
 
-The node continues executing but without the tools from the failed server.
+and the node fails as `misconfigured` before any model call, with an error that names
+the server and its reported cause:
+
+```
+Required MCP server "github" could not connect (failed): spawn ENOENT
+```
+
 Check your config file path, server command, and environment variables if this happens.
+Copilot still reports the failure as a warning and runs the node without that server's tools.
 
 Claude, Codex, and Copilot report each server's status as an `mcp_server_status`
 provider event, which the run record keeps with the server name and the vendor's error.
@@ -503,7 +511,7 @@ bun run cli workflow run my-workflow "Review PR #123"
 | `MCP config file is not valid JSON` | Syntax error in JSON | Validate with `cat .archon/mcp/config.json \| python3 -m json.tool` |
 | `MCP config must be a JSON object` | Top-level value is array or string | Wrap in `{ "server-name": { ... } }` |
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
-| `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
+| `MCP server connection failed` / `Required MCP server ... could not connect` | Server process crashed, URL unreachable, or authentication needed | Check command/URL, test the server standalone |
 | Plugin MCP missing from workflow output | User-level plugin MCPs are filtered out of workflow warnings | Run with `--verbose` and look for provider MCP debug logs |
 | `allowed_tools` ignored with Codex | Codex provider does not support Archon's tool restrictions yet | Do not rely on `allowed_tools: []` for Codex sandboxing |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
