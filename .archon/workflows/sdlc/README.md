@@ -528,6 +528,15 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
   conditional write. A run that asks keeps its claim while it is paused.
+  When route finds the pull request already reviewed at its current head, apply
+  checks that head before and after taking it out of draft. A changed read-back
+  head fails readiness and, unless already draft, triggers one draft correction
+  through the selected forge source. The failure reports the observed head, state
+  and draft status; a failed correction preserves its error and attempts one
+  diagnostic read. If verification fails, inspect the PR, restore draft if still
+  open and ready, and review its current head before readiness. These observations
+  cannot prevent another actor changing it afterwards. The merge queue still owns
+  exact-head review and merge checks.
 - **Attention.** An unclear decision pauses the run as one `select` attention item
   labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
   is, why it matters, the agent's recommendation with its evidence, confidence and
