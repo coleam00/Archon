@@ -9,7 +9,12 @@
  * @archon/paths process-wide.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { SessionConfig, SessionEvent } from '@github/copilot-sdk';
+import type { CopilotSession, SessionConfig, SessionEvent } from '@github/copilot-sdk';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+const trackTempRoot = trackTempRoots();
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -25,6 +30,7 @@ mock.module('@archon/paths', () => ({
 // Minimal fake session. Records prompt, exposes the listener so tests can
 // fire events synthetically, and resolves sendAndWait when `resolveSend()` is called.
 interface FakeSession {
+  rpc: { mcp: Pick<CopilotSession['rpc']['mcp'], 'list'> };
   sessionId: string;
   prompt?: string;
   sendTimeout?: number;
@@ -44,6 +50,7 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
     rejectSend = reject;
   });
   const fake: FakeSession = {
+    rpc: { mcp: { list: async () => ({ servers: [] }) } },
     sessionId,
     prompt: undefined,
     aborted: false,
@@ -103,7 +110,9 @@ const resumeSessionSpy = mock((_id: string, _opts: unknown): Promise<FakeSession
 });
 
 let lastClientOpts: Record<string, unknown> | undefined;
+const stopSpy = mock(async () => []);
 class FakeCopilotClient {
+  stop = stopSpy;
   createSession = createSessionSpy;
   resumeSession = resumeSessionSpy;
   constructor(opts: Record<string, unknown>) {
@@ -745,3 +754,161 @@ describe('CopilotProvider.sendQuery', () => {
     expect(chunks.at(-1)).toEqual({ type: 'settled' });
   });
 });
+
+describe('Copilot MCP admission', () => {
+  test('startup failure blocks required input; optional emits its snapshot and sends', async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'copilot-mcp-ready-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'missing' } }));
+    for (const required of [true, false]) {
+      const session = makeFakeSession();
+      session.rpc.mcp.list = async () => ({
+        servers: [{ name: 'declared', status: 'needs-auth', error: 'MCP authentication required' }],
+      });
+      nextCreateSessionResult = session;
+      session.resolveSend();
+      stopSpy.mockClear();
+      const chunks = await collect(
+        new CopilotProvider().sendQuery('hi', dir, undefined, {
+          nodeConfig: { mcp },
+          ...(required ? { requireMcpConnections: true } : {}),
+        })
+      );
+      expect(session.prompt).toBe(required ? undefined : 'hi');
+      expect(session.disconnected).toBe(true);
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(chunks).toContainEqual({
+        type: 'mcp_server_status',
+        server: 'declared',
+        status: 'needs_auth',
+        error: 'MCP authentication required',
+      });
+      if (required)
+        expect(chunks).toContainEqual(
+          expect.objectContaining({
+            type: 'result',
+            failure: { class: 'misconfigured', evidence: expect.stringContaining('declared') },
+          })
+        );
+    }
+  });
+});
+
+for (const required of [true, false]) {
+  test(`Copilot ${required ? 'required' : 'optional'} snapshot read failure and cancellation`, async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'copilot-mcp-snapshot-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    for (const abort of [false, true]) {
+      const controller = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const session = makeFakeSession();
+      session.rpc.mcp.list = async () => {
+        entered.resolve();
+        if (abort) return new Promise(() => {});
+        throw new Error('snapshot transport failed');
+      };
+      session.resolveSend();
+      nextCreateSessionResult = session;
+      stopSpy.mockClear();
+      const pending = collect(
+        new CopilotProvider().sendQuery('hi', dir, undefined, {
+          nodeConfig: { mcp },
+          abortSignal: controller.signal,
+          ...(required ? { requireMcpConnections: true } : {}),
+        })
+      );
+      await entered.promise;
+      if (abort) {
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      } else {
+        const chunks = await pending;
+        if (required)
+          expect(chunks).toContainEqual(expect.objectContaining({ type: 'result', isError: true }));
+        else
+          expect(chunks).toContainEqual({
+            type: 'warning',
+            code: 'copilot.mcp_status_unavailable',
+            message: 'Could not observe optional MCP connections: snapshot transport failed',
+          });
+      }
+      expect(session.prompt).toBe(!abort && !required ? 'hi' : undefined);
+      expect(session.disconnected).toBe(true);
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+    }
+  });
+}
+
+test('a resumed Copilot session waits for its declared MCP connection before sending', async () => {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'copilot-mcp-connected-')));
+  const mcp = join(dir, 'mcp.json');
+  await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+  const session = makeFakeSession('resumed');
+  let reads = 0;
+  session.rpc.mcp.list = async () => {
+    expect(session.prompt).toBeUndefined();
+    return { servers: [{ name: 'declared', status: ++reads === 1 ? 'pending' : 'connected' }] };
+  };
+  session.resolveSend();
+  nextResumeSessionResult = session;
+  const chunks = await collect(
+    new CopilotProvider().sendQuery('hi', dir, 'resumed', {
+      requireMcpConnections: true,
+      nodeConfig: { mcp },
+    })
+  );
+  expect(reads).toBe(2);
+  expect(chunks.slice(0, 2)).toEqual([
+    { type: 'mcp_server_status', server: 'declared', status: 'pending' },
+    { type: 'mcp_server_status', server: 'declared', status: 'connected' },
+  ]);
+  expect(session.prompt).toBe('hi');
+});
+
+for (const required of [true, false]) {
+  test(`Copilot retains a ${required ? 'required' : 'optional'} failure after its snapshot`, async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'copilot-mcp-gap-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    const session = makeFakeSession();
+    session.rpc.mcp.list = async () => ({ servers: [{ name: 'declared', status: 'connected' }] });
+    session.resolveSend();
+    nextCreateSessionResult = session;
+    const chunks = [];
+    for await (const chunk of new CopilotProvider().sendQuery('hi', dir, undefined, {
+      nodeConfig: { mcp },
+      ...(required ? { requireMcpConnections: true } : {}),
+    })) {
+      chunks.push(chunk);
+      if (chunk.type === 'mcp_server_status' && chunk.status === 'connected') {
+        session.fire({
+          id: 'failure',
+          ephemeral: true,
+          timestamp: new Date().toISOString(),
+          parentId: null,
+          type: 'session.mcp_server_status_changed',
+          data: { serverName: 'declared', status: 'failed', error: 'lost connection' },
+        });
+      }
+    }
+    expect(chunks).toContainEqual({
+      type: 'mcp_server_status',
+      server: 'declared',
+      status: 'failed',
+      error: 'lost connection',
+    });
+    expect(session.prompt).toBe(required ? undefined : 'hi');
+    expect(session.disconnected).toBe(true);
+    expect(chunks).toContainEqual(
+      expect.objectContaining(
+        required
+          ? {
+              type: 'result',
+              failure: { class: 'misconfigured', evidence: expect.stringContaining('declared') },
+            }
+          : { type: 'result', sessionId: 'sess-1' }
+      )
+    );
+  });
+}

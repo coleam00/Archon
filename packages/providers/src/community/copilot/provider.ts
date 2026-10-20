@@ -18,6 +18,7 @@ import { createLogger } from '@archon/paths';
 import { sessionPreview } from '@archon/provider-contract';
 import type {
   CopilotClientOptions,
+  CopilotClient,
   CopilotSession,
   CustomAgentConfig,
   MCPServerConfig,
@@ -41,7 +42,7 @@ import { clampEffort } from '@archon/provider-contract';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
-import { failureClassOfThrown, failureResult } from '../../shared/failure';
+import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -356,6 +357,7 @@ function isModelAccessError(errorMessage: string): boolean {
  * model-access / auth detail while the thrown error is generic.
  */
 function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): Error {
+  if (error instanceof ClassifiedProviderError) return error;
   const thrownMessage =
     error instanceof Error && error.message ? error.message : safeErrorString(error);
   const parts = [thrownMessage, lastSessionError].filter(
@@ -562,53 +564,54 @@ export class CopilotProvider implements IAgentProvider {
         session = await client.createSession(sessionConfig);
       }
     } catch (err) {
-      // Can't connect / create — surface a friendly error and stop the client.
-      try {
-        await client.stop();
-      } catch (stopErr) {
-        log.debug({ err: stopErr }, 'copilot.client_stop_failed_after_session_error');
-      }
+      await stopCopilotClient(client);
       throw buildFriendlyCopilotError(err);
     }
 
-    if (resumeFailed) {
-      yield {
-        type: 'warning',
-        code: 'copilot.resume_failed',
-        message: 'Could not resume Copilot session — starting a fresh conversation.',
-      };
-    } else if (forkedToFresh) {
-      yield {
-        type: 'warning',
-        code: 'copilot.fork_unsupported',
-        message:
-          'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
-      };
-    }
-
-    log.info(
-      {
-        sessionIdPreview: sessionPreview(session.sessionId),
-        model: sessionConfig.model,
-        cwd,
-        reasoningEffort: sessionConfig.reasoningEffort,
-        hasSystemMessage: sessionConfig.systemMessage !== undefined,
-        mcpServers: sessionConfig.mcpServers ? Object.keys(sessionConfig.mcpServers).length : 0,
-        skills: sessionConfig.skillDirectories?.length ?? 0,
-        agents: sessionConfig.customAgents?.length ?? 0,
-        tokenSource,
-        resumed: resumeSessionId !== undefined && !resumeFailed,
-      },
-      'copilot.session_started'
-    );
-
+    let bridgeStarted = false;
     try {
+      if (resumeFailed) {
+        yield {
+          type: 'warning',
+          code: 'copilot.resume_failed',
+          message: 'Could not resume Copilot session — starting a fresh conversation.',
+        };
+      } else if (forkedToFresh) {
+        yield {
+          type: 'warning',
+          code: 'copilot.fork_unsupported',
+          message:
+            'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
+        };
+      }
+
+      log.info(
+        {
+          sessionIdPreview: sessionPreview(session.sessionId),
+          model: sessionConfig.model,
+          cwd,
+          reasoningEffort: sessionConfig.reasoningEffort,
+          hasSystemMessage: sessionConfig.systemMessage !== undefined,
+          mcpServers: sessionConfig.mcpServers ? Object.keys(sessionConfig.mcpServers).length : 0,
+          skills: sessionConfig.skillDirectories?.length ?? 0,
+          agents: sessionConfig.customAgents?.length ?? 0,
+          tokenSource,
+          resumed: resumeSessionId !== undefined && !resumeFailed,
+        },
+        'copilot.session_started'
+      );
+
+      bridgeStarted = true;
       yield* closeOpenToolCalls(
         bridgeSession(
           session,
           effectivePrompt,
           requestOptions?.abortSignal,
-          wantsStructured ? outputFormat.schema : undefined
+          wantsStructured ? outputFormat.schema : undefined,
+          {
+            names: Object.keys(sessionConfig.mcpServers ?? {}),
+            requireMcpConnections: requestOptions?.requireMcpConnections,
+          }
         ),
         { resultEndsTurn: true }
       );
@@ -620,16 +623,26 @@ export class CopilotProvider implements IAgentProvider {
       );
       throw buildFriendlyCopilotError(err);
     } finally {
-      // Stop the client so its CLI subprocess shuts down; bridgeSession already
-      // handled session.abort() + session.disconnect() in its own finally.
-      try {
-        const stopErrors = await client.stop();
-        if (stopErrors.length > 0) {
-          log.warn({ errors: stopErrors.map(e => e.message) }, 'copilot.client_stop_errors');
+      if (!bridgeStarted) {
+        try {
+          await session.disconnect();
+        } catch (error) {
+          log.debug({ err: error }, 'copilot.preflight_disconnect_failed');
         }
-      } catch (stopErr) {
-        log.debug({ err: stopErr }, 'copilot.client_stop_threw');
       }
+      await stopCopilotClient(client);
     }
+  }
+}
+
+async function stopCopilotClient(client: CopilotClient): Promise<void> {
+  const log = getLog();
+  try {
+    const stopErrors = await client.stop();
+    if (stopErrors.length > 0) {
+      log.warn({ errors: stopErrors.map(e => e.message) }, 'copilot.client_stop_errors');
+    }
+  } catch (stopErr) {
+    log.debug({ err: stopErr }, 'copilot.client_stop_threw');
   }
 }

@@ -3,10 +3,17 @@
  * thread, start the turn, and map its notifications into MessageChunks until the
  * parent turn completes and the background work it started has drained.
  */
+import { requireMcpConnections, type McpStatus } from '../mcp/readiness';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
-import type { MessageChunk, ProviderEvent, ResultChunk, TokenUsage } from '../types';
-import { failureResult } from '../shared/failure';
+import type {
+  MessageChunk,
+  ProviderEvent,
+  ResultChunk,
+  SendQueryOptions,
+  TokenUsage,
+} from '../types';
+import { ClassifiedProviderError, failureResult } from '../shared/failure';
 import type { AppServerConnection, ParamsOf } from './app-server';
 import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
 import { toolResponse, type buildCodexNativeTools } from './native-tools';
@@ -18,7 +25,13 @@ import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
 import type { Turn } from './protocol/v2/Turn';
 import type { TurnError } from './protocol/v2/TurnError';
-import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
+import {
+  applyNodeScope,
+  checkThreadMcpScope,
+  declaredServers,
+  readCodexInventory,
+  readThreadMcpStatuses,
+} from './scope';
 import {
   MANAGED_CHATGPT_TOKEN_REJECTED,
   classifyTurnError,
@@ -217,7 +230,7 @@ function codexHomeOf(initializeResponse: unknown): string {
   return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
 }
 
-export interface TurnRequest {
+export interface TurnRequest extends Pick<SendQueryOptions, 'requireMcpConnections'> {
   abortSignal: AbortSignal | undefined;
   tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;
@@ -279,6 +292,42 @@ interface TurnObservation {
 export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection } = request;
   const threadId = await openThread(request);
+  if (request.requireMcpConnections) {
+    const names = Object.keys(declaredServers(request.threadParams.config ?? {}));
+    yield* requireMcpConnections(
+      names,
+      async () =>
+        (await readThreadMcpStatuses(connection, threadId))
+          .filter(server => names.includes(server.name))
+          .map(server => {
+            const states = {
+              notStarted: 'pending',
+              starting: 'pending',
+              connected: 'connected',
+              authenticationRequired: 'needs_auth',
+              failed: 'failed',
+              cancelled: 'failed',
+              disabled: 'disabled',
+            } as const satisfies Record<
+              NonNullable<typeof server.runtimeStatus>,
+              McpStatus['status']
+            >;
+            if (server.runtimeStatus === null) {
+              throw new ClassifiedProviderError(
+                'misconfigured',
+                `Cannot establish connection readiness for MCP server "${server.name}": unknown runtime status`
+              );
+            }
+            return {
+              type: 'mcp_server_status' as const,
+              server: server.name,
+              status: states[server.runtimeStatus],
+              ...(server.toolsError !== null ? { error: server.toolsError } : {}),
+            };
+          }),
+      request.abortSignal
+    );
+  }
   const observation: TurnObservation = {
     parentCompleted: false,
     startedToolIds: new Set(),

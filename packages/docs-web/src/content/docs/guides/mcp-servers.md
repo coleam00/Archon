@@ -290,7 +290,9 @@ message like:
 MCP server connection failed: github (failed)
 ```
 
-The node continues executing but without the tools from the failed server.
+A required declaration fails the node before its first paid turn if any declared server
+cannot connect. The error names the server and its reported cause. An `optional: true`
+declaration warns and continues without the failed server's tools.
 Check your config file path, server command, and environment variables if this happens.
 
 Claude, Codex, and Copilot report each server's status as an `mcp_server_status`

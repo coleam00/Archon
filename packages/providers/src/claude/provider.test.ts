@@ -4777,3 +4777,148 @@ test('Claude diagnostic hook uses configured binary resolution over streams', as
     resolver.mockRestore();
   }
 });
+
+describe('required MCP admission', () => {
+  test('rejects before yielding SDK input, including container and resumed queries', async () => {
+    const root = backgroundTempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-ready-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'missing' } }));
+    for (const container of [false, true]) {
+      let inputs = 0;
+      let closed = false;
+      let inputTask: Promise<void> | undefined;
+      mockQuery.mockImplementation(params => {
+        const stream = (async function* () {
+          if (typeof params.prompt !== 'string') {
+            for await (const _input of params.prompt) {
+              inputs++;
+              break;
+            }
+          }
+        })();
+        return Object.assign(stream, {
+          initializationResult: async () => {
+            inputTask = (async () => {
+              if (typeof params.prompt !== 'string')
+                for await (const _input of params.prompt) {
+                  inputs++;
+                  break;
+                }
+            })();
+          },
+          mcpServerStatus: async () => [
+            { name: 'declared', status: 'failed', error: 'spawn ENOENT' },
+          ],
+          close: () => {
+            closed = true;
+          },
+        });
+      });
+      const chunks = await Array.fromAsync(
+        (container ? overStreams(createProvider, descriptor) : new ClaudeProvider()).sendQuery(
+          'hi',
+          root,
+          'existing',
+          {
+            requireMcpConnections: true,
+            nodeConfig: { mcp },
+            ...(container
+              ? {
+                  execContext: {
+                    kind: 'container' as const,
+                    containerId: 'fixture',
+                    execUser: 'user',
+                  },
+                }
+              : {}),
+          }
+        )
+      );
+      await inputTask;
+      expect(inputs).toBe(0);
+      expect(closed).toBe(true);
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'result',
+          failure: {
+            class: 'misconfigured',
+            evidence: expect.stringContaining('declared'),
+          },
+        })
+      );
+      expect(JSON.stringify(chunks)).toContain('spawn ENOENT');
+    }
+  });
+});
+
+for (const mode of ['success', 'abort', 'return'] as const) {
+  test(`required MCP ${mode} preserves input ordering and cleanup`, async () => {
+    const root = backgroundTempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-gate-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    const controller = new AbortController();
+    let inputs = 0;
+    let reads = 0;
+    let closed = false;
+    let inputTask: Promise<void> | undefined;
+    const connected = Promise.withResolvers<void>();
+    mockQuery.mockImplementation(params => {
+      const source = params.prompt;
+      const stream = (async function* () {
+        await inputTask;
+        yield { type: 'result', subtype: 'success', session_id: 'session', is_error: false };
+      })();
+      return Object.assign(stream, {
+        initializationResult: async () => {
+          inputTask = (async () => {
+            if (typeof source !== 'string')
+              for await (const _input of source) {
+                inputs++;
+                expect(reads).toBeGreaterThan(1);
+                break;
+              }
+          })();
+        },
+        mcpServerStatus: async () => {
+          reads++;
+          if (reads > 1) await connected.promise;
+          return [{ name: 'declared', status: reads === 1 ? 'pending' : 'connected' }];
+        },
+        close: () => {
+          closed = true;
+        },
+      });
+    });
+    const stream = new ClaudeProvider().sendQuery('hi', root, undefined, {
+      requireMcpConnections: true,
+      nodeConfig: { mcp },
+      abortSignal: controller.signal,
+      nativeTools: [
+        {
+          name: 'internal',
+          description: 'test',
+          inputSchema: { properties: {}, required: [] },
+          handler: async () => '',
+        },
+      ],
+    });
+    expect((await stream.next()).value).toEqual({
+      type: 'mcp_server_status',
+      server: 'declared',
+      status: 'pending',
+    });
+    expect(inputs).toBe(0);
+    if (mode === 'abort') {
+      controller.abort();
+      await expect(stream.next()).rejects.toThrow('Query aborted');
+    } else if (mode === 'return') {
+      await stream.return(undefined);
+    } else {
+      connected.resolve();
+      await Array.fromAsync(stream);
+    }
+    await inputTask;
+    expect(inputs).toBe(mode === 'success' ? 1 : 0);
+    expect(closed).toBe(true);
+  });
+}

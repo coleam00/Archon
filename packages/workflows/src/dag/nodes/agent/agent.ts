@@ -265,6 +265,7 @@ function attemptQueryOptions(
     ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
+    ...(nodeMcp.kind === 'load' && !nodeMcp.optional ? { requireMcpConnections: true } : {}),
     abortSignal: abortController.signal,
     ...(resumeIntent === 'owner-continuation'
       ? { forkSession: false }

@@ -27,7 +27,13 @@ import type {
 
 import { sessionPreview, truncateToolOutput } from '@archon/provider-contract';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import {
+  assertMcpUsable,
+  readMcpStatuses,
+  requireMcpConnections,
+  type McpStatus,
+} from '../../mcp/readiness';
+import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -170,7 +176,7 @@ const MCP_STATUS = {
   not_configured: 'failed',
 } as const satisfies Record<CopilotMcpStatus, McpServerStatusChunk['status']>;
 
-function mcpServerStatusOf(
+export function mcpServerStatusOf(
   server: string,
   status: CopilotMcpStatus,
   error: string | undefined
@@ -318,10 +324,13 @@ export async function* bridgeSession(
   session: CopilotSession,
   prompt: string,
   abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>
+  jsonSchema?: Record<string, unknown>,
+  mcp?: { names: readonly string[] } & Pick<SendQueryOptions, 'requireMcpConnections'>
 ): AsyncGenerator<MessageChunk> {
   const log = getLog();
   const queue = new AsyncQueue<BridgeQueueItem>();
+  const mcpChanges: McpStatus[] = [];
+  let preparing = mcp !== undefined;
   let capturedTokens: TokenUsage | undefined;
   let errorMessage: string | undefined;
 
@@ -346,7 +355,8 @@ export async function* bridgeSession(
         if (wantsStructured && chunk.type === 'agent_message_chunk') {
           assistantBuffer += chunk.text;
         }
-        queue.push({ kind: 'chunk', chunk });
+        if (preparing && chunk.type === 'mcp_server_status') mcpChanges.push(chunk);
+        else queue.push({ kind: 'chunk', chunk });
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
@@ -361,29 +371,6 @@ export async function* bridgeSession(
       );
     });
   };
-  // `addEventListener('abort', ...)` is a no-op on an already-aborted signal,
-  // so short-circuit before handing the 24-hour sendAndWait path a signal
-  // that will never fire. Caller's caller (the executor) treats AbortError
-  // as a clean cancellation. Clean up listeners + queue first so the throw
-  // doesn't leak resources.
-  if (abortSignal?.aborted) {
-    onAbort();
-    queue.close();
-    try {
-      unsubscribe();
-    } catch (err) {
-      log.debug({ err }, 'copilot.unsubscribe_failed');
-    }
-    try {
-      await session.disconnect();
-    } catch (err) {
-      log.debug(
-        { err, sessionIdPreview: sessionPreview(session.sessionId) },
-        'copilot.disconnect_failed'
-      );
-    }
-    throw new DOMException('Copilot sendQuery aborted before start', 'AbortError');
-  }
   if (abortSignal) {
     abortSignal.addEventListener('abort', onAbort, { once: true });
   }
@@ -391,18 +378,28 @@ export async function* bridgeSession(
   // Kick off sendAndWait; it resolves on `session.idle`. The explicit
   // timeout overrides the SDK's 60s default — see SEND_AND_WAIT_TIMEOUT_MS.
   let sendResult: AssistantMessageEvent | undefined;
-  const sendPromise = session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS).then(
-    (r: AssistantMessageEvent | undefined) => {
-      sendResult = r;
-      queue.push({ kind: 'done' });
-    },
-    (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
-    }
-  );
-
-  let sawAssistantContent = false;
+  let sendPromise: Promise<void> | undefined;
   try {
+    abortSignal?.throwIfAborted();
+    // Generator completion can receive another notification; drain it before sending input.
+    if (mcp) {
+      do {
+        yield* prepareMcp(session, mcp, abortSignal, mcpChanges);
+      } while (mcpChanges.length > 0);
+    }
+    preparing = false;
+    abortSignal?.throwIfAborted();
+    sendPromise = session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS).then(
+      (r: AssistantMessageEvent | undefined) => {
+        sendResult = r;
+        queue.push({ kind: 'done' });
+      },
+      (err: unknown) => {
+        queue.push({ kind: 'error', error: err as Error });
+      }
+    );
+
+    let sawAssistantContent = false;
     for await (const item of queue) {
       if (item.kind === 'done') break;
       if (item.kind === 'error') throw item.error;
@@ -488,8 +485,57 @@ export async function* bridgeSession(
     }
     // Let the SDK's sendPromise settle so we don't leave a dangling promise.
     // Any error was already pushed to the queue.
-    await sendPromise.catch(() => {
+    await sendPromise?.catch(() => {
       /* already surfaced via queue */
     });
+  }
+}
+
+async function* prepareMcp(
+  session: CopilotSession,
+  mcp: NonNullable<Parameters<typeof bridgeSession>[4]>,
+  abortSignal: AbortSignal | undefined,
+  changes: McpStatus[]
+): AsyncGenerator<MessageChunk> {
+  const { names } = mcp;
+  const readStatuses = async () =>
+    (await session.rpc.mcp.list()).servers
+      .filter(server => names.includes(server.name))
+      .map(server => mcpServerStatusOf(server.name, server.status, server.error));
+  if (mcp.requireMcpConnections) {
+    yield* requireMcpConnections(names, readStatuses, abortSignal);
+  } else if (names.length > 0) {
+    yield* await optionalMcpStatuses(readStatuses, abortSignal);
+  }
+  while (changes.length > 0) {
+    const change = changes.shift();
+    if (!change) break;
+    if (!names.includes(change.server)) continue;
+    yield change;
+    if (mcp.requireMcpConnections) {
+      assertMcpUsable(change);
+      if (change.status === 'pending') {
+        yield* requireMcpConnections(names, readStatuses, abortSignal);
+      }
+    }
+  }
+  abortSignal?.throwIfAborted();
+}
+
+async function optionalMcpStatuses(
+  readStatuses: () => Promise<readonly McpStatus[]>,
+  abortSignal: AbortSignal | undefined
+): Promise<readonly MessageChunk[]> {
+  try {
+    return await readMcpStatuses(readStatuses, abortSignal);
+  } catch (error) {
+    abortSignal?.throwIfAborted();
+    return [
+      {
+        type: 'warning',
+        code: 'copilot.mcp_status_unavailable',
+        message: `Could not observe optional MCP connections: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
   }
 }
