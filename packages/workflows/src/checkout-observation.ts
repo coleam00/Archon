@@ -13,10 +13,11 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { lstat, mkdir, readlink, writeFile } from 'node:fs/promises';
+import { lstat, readlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
+import { prepareArtifactParent } from './artifact-writes';
 import { ARTIFACT_POINTER_TYPE } from './schemas/artifact-pointer';
 import {
   CHECKOUT_MANIFEST_VERSION,
@@ -662,7 +663,8 @@ export async function recordCheckoutSample(
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const relativePath = `${MANIFEST_DIR}/${sha256}.json`;
   const absolute = join(run.artifactsDir, ...relativePath.split('/'));
-  await mkdir(dirname(absolute), { recursive: true });
+  // `wx` never follows an existing leaf, so only the parents need the artifact check.
+  await prepareArtifactParent(absolute);
   try {
     await writeFile(absolute, bytes, { flag: 'wx' });
   } catch (error) {
