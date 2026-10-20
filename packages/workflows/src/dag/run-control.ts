@@ -70,12 +70,11 @@ export async function runSubprocessUntilRunStops(
   ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
 ): ReturnType<typeof runSubprocess> {
   const controller = new AbortController();
-  let reading = false;
+  let pendingRead: Promise<void> | undefined;
   let statusFailure: WorkflowStatusReadError | undefined;
   const poll = setInterval(() => {
-    if (reading) return;
-    reading = true;
-    store
+    if (pendingRead) return;
+    pendingRead = store
       .getWorkflowRunStatus(runId)
       .then(status => {
         if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
@@ -100,13 +99,16 @@ export async function runSubprocessUntilRunStops(
         );
       })
       .finally(() => {
-        reading = false;
+        pendingRead = undefined;
       });
   }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
   try {
     const result = await runSubprocess(execContext, cmd, args, {
       ...options,
       abortSignal: controller.signal,
+    }).finally(async () => {
+      clearInterval(poll);
+      await pendingRead;
     });
     if (statusFailure) throw statusFailure;
     return result;
@@ -115,8 +117,6 @@ export async function runSubprocessUntilRunStops(
       getLog().error({ workflowRunId: runId, nodeId }, 'dag.status_error_subprocess_tree_survived');
     }
     throw statusFailure ?? error;
-  } finally {
-    clearInterval(poll);
   }
 }
 

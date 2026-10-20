@@ -235,20 +235,13 @@ export async function executeWorkflowNode(
       { status: 'suspended', point: 'child_workflow' },
       { output: { text: '' }, ...usage, diagnostics: { childRunId } }
     );
-    let paused: Awaited<ReturnType<typeof pauseGateRespectingExternalTransition>>;
-    try {
-      paused = await pauseGateRespectingExternalTransition(
-        deps,
-        parentRun.id,
-        { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
-        { event: serializeNodeStateRecord(suspended) }
-      );
-    } catch (error) {
-      if (error instanceof WorkflowStatusReadError) {
-        await persistUnsettledNodeUsage(deps.store, execution, usage);
-      }
-      throw error;
-    }
+    await persistUnsettledNodeUsage(deps.store, execution, usage);
+    const paused = await pauseGateRespectingExternalTransition(
+      deps,
+      parentRun.id,
+      { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
+      { event: serializeNodeStateRecord(suspended) }
+    );
     if (!paused) return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
     await safeSendMessage(

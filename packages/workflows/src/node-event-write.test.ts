@@ -244,6 +244,28 @@ it.each(
   }
 );
 
+it('retains paid checkpoint measurements omitted by a later terminal record', async () => {
+  const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
+  const { persistUnsettledNodeUsage } = await import('./node-event-write');
+  const { serializeNodeStateRecord } = await import('./node-record-serialization');
+  const events: import('./dag-resume-snapshot').DagResumeEvent[] = [];
+  const store = {
+    persistWorkflowEvent: async (event: import('./store').DurableNodeEventInput) => {
+      events.push(event);
+    },
+  };
+  const record = completedRecord();
+  record.node = { id: 'build', kind: 'workflow' };
+  await persistUnsettledNodeUsage(store, record, { costUsd: 0.37, tokensUnknown: true });
+  record.spend.costUsd = { source: 'unavailable', reason: 'not_reported' };
+  record.spend.tokens = { source: 'unavailable', reason: 'not_reported' };
+  events.push(serializeNodeStateRecord(record));
+  const result = await foldDagResumeSnapshot(events, record.runId);
+  expect(result.costUsd).toBeCloseTo(0.37);
+  expect(result.tokensUnknown).toBe(true);
+  expect(result.tokens).toBeUndefined();
+});
+
 it('keeps paid loop attempts that replay the same gate separate from its continuation', async () => {
   const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
   const { persistUnsettledNodeUsage } = await import('./node-event-write');

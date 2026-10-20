@@ -517,7 +517,7 @@ describe('terminal failure writes', () => {
     const cause = new Error('Unsupported persisted status');
     const store = makeStore({
       getWorkflowRun: mock(async () => {
-        throw cause;
+        throw new WorkflowStatusReadError('corrupt', cause);
       }),
     });
     const platform = makePlatform();

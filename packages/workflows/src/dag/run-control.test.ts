@@ -142,6 +142,43 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
     }
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'awaits an in-flight status check before settling subprocess output',
+    async () => {
+      const store = createMockStore();
+      const failure = new WorkflowStatusReadError('slow-read', new Error('Unsupported status'));
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (existsSync(join(testDir, 'started'))) {
+          await new Promise(resolve => setTimeout(resolve, 400));
+          throw failure;
+        }
+        return 'running';
+      });
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('slow-read'),
+            workflow: {
+              name: 'slow-read',
+              nodes: [
+                dagNodeSchema.parse({ id: 'work', bash: 'touch started; sleep 1.2; echo done' }),
+              ],
+            },
+          })
+        )
+      ).rejects.toBe(failure);
+      expect(
+        store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'node_completed'
+        )
+      ).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   // Each case starts a background job that would write `leaked` after the cancel.
   it.skipIf(process.platform === 'win32').each([
     [

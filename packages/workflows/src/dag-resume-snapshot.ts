@@ -479,12 +479,20 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   if (isAuthoritativeInstanceUsage) fold.authoritativeInstanceScopes.add(row.step_name);
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
-  if (row.event_type !== 'node_skipped_prior_success') {
-    if (foldLoopUsage(fold, row.step_name, record.data, record.rawUsage)) return;
-    const checkpoint = usageCheckpointKey(row.step_name, record.data);
-    if (checkpoint) fold.unsettledUsage.delete(checkpoint);
-    addUsage(fold, row.step_name, record.rawUsage);
-  }
+  if (row.event_type === 'node_skipped_prior_success') return;
+  if (foldLoopUsage(fold, row.step_name, record.data, record.rawUsage)) return;
+  const checkpoint = usageCheckpointKey(row.step_name, record.data);
+  const prior = checkpoint ? fold.unsettledUsage.get(checkpoint) : undefined;
+  if (checkpoint) fold.unsettledUsage.delete(checkpoint);
+  if (prior) {
+    const settled = readUsage(fold.runId, row.step_name, record.rawUsage);
+    fold.usageContributions.push({
+      ...prior,
+      ...settled,
+      tokensUnknown:
+        settled?.tokensUnknown || (settled?.tokens === undefined && prior.tokensUnknown),
+    });
+  } else addUsage(fold, row.step_name, record.rawUsage);
 }
 
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {

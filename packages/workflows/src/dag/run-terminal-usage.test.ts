@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import * as runControl from './run-control';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -1653,7 +1654,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
         persistedEvents(store).some(e => e.event_type === 'node_failed') &&
         ++readsAfterFailure === 2
       ) {
-        throw new Error('store unavailable');
+        throw new WorkflowStatusReadError('budget-run', new Error('Unsupported status'));
       }
       return 'running';
     });
