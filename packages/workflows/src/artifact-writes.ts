@@ -7,7 +7,7 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-  type Stats,
+  type BigIntStats,
 } from 'node:fs';
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -62,9 +62,9 @@ function makeDirectory(path: string): void {
   }
 }
 
-function lstatIfPresent(path: string): Stats | undefined {
+function lstatIfPresent(path: string): BigIntStats | undefined {
   try {
-    return lstatSync(path);
+    return lstatSync(path, { bigint: true });
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return undefined;
     throw error;
@@ -125,7 +125,7 @@ async function readContainedArtifactFile(path: string): Promise<string | undefin
     throw error;
   }
   try {
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (!opened.isFile()) {
       throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
     }

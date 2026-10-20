@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
 import { closeSync, constants, openSync, writeSync } from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import {
@@ -176,6 +177,69 @@ describe('in a container-mounted artifacts directory', () => {
         expect(read).toBe(false);
       } finally {
         intercepted.mockRestore();
+      }
+    }
+  );
+
+  test.each(['dev', 'ino'] as const)(
+    'compares exact %s values beyond the safe integer range before reading metadata',
+    async field => {
+      const path = join(root, 'probe.meta.json');
+      const metadata = JSON.stringify({ nodeId: 'probe' });
+      await writeFile(path, metadata);
+      const identity = 2n ** 53n;
+      expect(Number(identity)).toBe(Number(identity + 1n));
+      let openedIdentity = identity;
+      const realLstat = fs.lstatSync;
+      const statFs: {
+        lstatSync: (...args: Parameters<typeof realLstat>) => ReturnType<typeof realLstat>;
+      } = fs;
+      const inspected = spyOn(statFs, 'lstatSync').mockImplementation((...args) => {
+        const entry = realLstat(...args);
+        if (entry !== undefined && args[0] === path) {
+          Object.defineProperty(entry, field, {
+            value: typeof entry[field] === 'bigint' ? identity : Number(identity),
+          });
+        }
+        return entry;
+      });
+      const realOpen = fsPromises.open;
+      let assertUnreadAndClosed: () => void = () => {
+        throw new Error('metadata was not opened');
+      };
+      const intercepted = spyOn(fsPromises, 'open').mockImplementation(
+        async (file, _flags, mode) => {
+          const handle = await realOpen(file, constants.O_RDONLY, mode);
+          const realStat = handle.stat.bind(handle);
+          const statHandle: {
+            stat: (...args: Parameters<typeof realStat>) => ReturnType<typeof realStat>;
+          } = handle;
+          spyOn(statHandle, 'stat').mockImplementation(async (...args) => {
+            const entry = await realStat(...args);
+            Object.defineProperty(entry, field, {
+              value: typeof entry[field] === 'bigint' ? openedIdentity : Number(openedIdentity),
+            });
+            return entry;
+          });
+          const read = spyOn(handle, 'readFile');
+          const closed = spyOn(handle, 'close');
+          assertUnreadAndClosed = () => {
+            expect(read).not.toHaveBeenCalled();
+            expect(closed).toHaveBeenCalledTimes(1);
+          };
+          return handle;
+        }
+      );
+      try {
+        expect(await contained(() => readArtifactFile(path))).toBe(metadata);
+        openedIdentity = identity + 1n;
+        await expect(contained(() => readArtifactFile(path))).rejects.toThrow(
+          'changed during open'
+        );
+        assertUnreadAndClosed();
+      } finally {
+        intercepted.mockRestore();
+        inspected.mockRestore();
       }
     }
   );
