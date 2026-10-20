@@ -345,7 +345,7 @@ describe('node record serializers', () => {
     expect(JSON.stringify(started)).not.toContain('private');
   });
 
-  it('keeps unavailable measurements absent instead of turning them into zero', () => {
+  it('keeps unavailable tokens absent and exact cost unknown instead of turning them into zero', () => {
     const source = record();
     source.spend.tokens = { source: 'unavailable', reason: 'not_reported' };
     source.spend.costUsd = { source: 'unavailable', reason: 'unsupported' };
@@ -356,7 +356,24 @@ describe('node record serializers', () => {
     expect(serializeNodeTranscript(source)).not.toHaveProperty('duration_ms');
     expect(serializeNodeEmitter(source)).not.toHaveProperty('duration');
     expect(serializeNodeOutput(source)).not.toHaveProperty('tokens');
-    expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
+    expect(serializeNodeOutput(source).costUsd).toBeNull();
+  });
+
+  it.each([
+    'unsupported',
+    'not_reported',
+    'unknown',
+    'invalid',
+    'incomplete',
+    'not_applicable',
+  ] as const)('reads %s cost consistently for terminal and deferred usage', reason => {
+    const source = record();
+    source.spend.costUsd = { source: 'unavailable', reason };
+    const expected = reason === 'not_applicable' ? undefined : null;
+    expect(readNodeRecordEvent(serializeNodeStateRecord(source))?.rawUsage.costUsd).toBe(expected);
+    expect(readDeferredNodeUsageEvent(serializeDeferredNodeUsage(source))?.rawUsage.costUsd).toBe(
+      expected
+    );
   });
 
   it('marks a partially reported cost as a floor without changing its value', () => {

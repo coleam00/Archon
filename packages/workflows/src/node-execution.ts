@@ -246,9 +246,9 @@ export function executionMetadata(record: NodeExecutionRecord): NodeExecutionMet
   return nodeExecutionMetadataSchema.parse(record);
 }
 
-/** Null distinguishes a known incomplete cost from an unreported measurement. */
+/** Only not_applicable rules out provider spend; other unavailable costs invalidate totals. */
 export function exactExecutionCost(spend: NodeExecutionRecord['spend']): number | null | undefined {
   const cost = spend.costUsd;
   if (cost.source === 'provider') return cost.partial ? null : cost.value;
-  return cost.reason === 'incomplete' ? null : undefined;
+  return cost.reason === 'not_applicable' ? undefined : null;
 }

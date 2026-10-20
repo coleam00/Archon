@@ -660,6 +660,79 @@ describe('interactive loop node', () => {
     ]);
   });
 
+  it.each([false, true])(
+    'retains a partial cost floor through approval (feedback=%s)',
+    async feedback => {
+      const nodes: DagNode[] = [
+        {
+          id: 'refine',
+          kind: 'loop',
+          loop: {
+            fresh_context: false,
+            prompt: 'Refine',
+            until: 'APPROVED',
+            max_iterations: 3,
+            interactive: true,
+            gate_message: 'Review',
+          },
+        },
+      ];
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'APPROVED' };
+        yield { type: 'result', sessionId: 's', cost: 0.2 };
+        yield { type: 'result', sessionId: 's' };
+      });
+      const pausingDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: pausingDeps,
+          cwd: testDir,
+          workflow: { name: 'partial-loop', nodes },
+          workflowRun: makeWorkflowRun('partial-loop'),
+        })
+      );
+      const approval = pausingDeps.store.pauseWorkflowRun.mock.calls[0][1];
+      expect(approval.execution?.spend.costUsd).toEqual({
+        source: 'provider',
+        value: 0.2,
+        partial: true,
+      });
+      expect(runUsageWrites(pausingDeps.store).at(-1)?.total_cost_usd).toBeNull();
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'APPROVED' };
+        yield { type: 'result', sessionId: 's', cost: 0.3 };
+      });
+      const resumingDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: resumingDeps,
+          cwd: testDir,
+          workflow: { name: 'partial-loop', nodes },
+          workflowRun: makeWorkflowRun('partial-loop', {
+            metadata: {
+              approval,
+              loop_user_input: feedback ? 'Improve' : 'Approved',
+              loop_feedback_given: feedback,
+            },
+          }),
+        })
+      );
+      const completed = persistedEvents(resumingDeps.store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'refine'
+      );
+      expect(completed?.data?.spend).toMatchObject({
+        costUsd: {
+          source: 'provider',
+          value: feedback ? 0.5 : 0.2,
+          partial: true,
+        },
+      });
+      expect(runUsageWrites(resumingDeps.store).at(-1)?.total_cost_usd).toBeNull();
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(feedback ? 1 : 0);
+    }
+  );
+
   it('carries the structured payload across the gate: pause persists it, bare-approve finalize re-emits it (#2637)', async () => {
     // Round trip, writer to reader. Without `signaledStructuredOutput` the finalize
     // row loses the payload a natural completion would persist, so a resume AFTER

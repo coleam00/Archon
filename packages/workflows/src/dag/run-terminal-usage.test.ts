@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { nodeExecutionMetadataPayloadSchema } from '../schemas/node-execution';
 import * as runControl from './run-control';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -1776,6 +1777,47 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(persistedEvents(store).filter(e => e.event_type === 'node_started')).toHaveLength(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(refusals(store)).toHaveLength(0);
+  });
+
+  it.each([
+    'unsupported',
+    'not_reported',
+    'unknown',
+    'invalid',
+    'incomplete',
+    'not_applicable',
+    'bad raw',
+  ] as const)('keeps historical %s cost truthful through resume', async reason => {
+    providerCosts(undefined);
+    const prior = ai('prior');
+    const store = await run({ name: 'historical-cost', nodes: [prior] });
+    const event = persistedEvents(store).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'prior'
+    )!;
+    const data = event.data as Record<string, unknown>;
+    if (reason === 'bad raw') {
+      for (const key of nodeExecutionMetadataPayloadSchema.keyof().options) delete data[key];
+      data.cost_usd = 'broken';
+    } else {
+      const spend = data.spend as Record<string, unknown>;
+      spend.costUsd = { source: 'unavailable', reason };
+    }
+    const resume = await resumeOptions(store);
+    if (reason === 'bad raw') {
+      expect(
+        mockLogFn.mock.calls.some(call => call[1] === 'db.workflow_dag_node_cost_invalid_ignored')
+      ).toBe(true);
+    }
+    store.updateWorkflowRun.mockClear();
+    providerCosts(0.3);
+    await run(
+      { name: 'historical-cost', nodes: [prior, ai('remaining', ['prior'])] },
+      store,
+      resume
+    );
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(
+      reason === 'not_applicable' ? 0.3 : null
+    );
   });
 
   it.each([

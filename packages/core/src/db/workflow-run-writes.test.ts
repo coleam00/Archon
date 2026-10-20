@@ -66,6 +66,23 @@ describe('workflow run writes', () => {
       ]);
     });
 
+    test('preserves JSON null for unknown exact cost alongside normal metadata deletion', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await updateWorkflowRun('workflow-run-123', {
+        status: 'running',
+        metadata: { total_cost_usd: null, stale: null },
+      });
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain(
+        "jsonb_set(metadata || $2::jsonb, '{total_cost_usd}', 'null'::jsonb, true)"
+      );
+      expect(params).toEqual([
+        'running',
+        JSON.stringify({ total_cost_usd: null, stale: null }),
+        'workflow-run-123',
+      ]);
+    });
+
     test('updates authored outcome without touching lifecycle columns', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 

@@ -16,10 +16,19 @@ import {
   type WorkflowRunOutcome,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDialect, pool } from './connection';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
+
+function mergeRunMetadata(metadata: Record<string, unknown>, paramIndex: number): string {
+  const merged = getDialect().jsonMerge('metadata', paramIndex);
+  // JSON merge uses null to delete keys; unknown exact cost must remain JSON null.
+  if (metadata.total_cost_usd !== null) return merged;
+  return getDatabaseType() === 'postgresql'
+    ? `jsonb_set(${merged}, '{total_cost_usd}', 'null'::jsonb, true)`
+    : `json_set(${merged}, '$.total_cost_usd', NULL)`;
+}
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
@@ -101,7 +110,6 @@ export async function updateWorkflowRun(
     working_path?: string;
   }
 ): Promise<void> {
-  const dialect = getDialect();
   const setClauses: string[] = [];
   const values: unknown[] = [];
   const requestedStatus: WorkflowRunStatus | undefined = updates.status;
@@ -119,7 +127,7 @@ export async function updateWorkflowRun(
     // Use dialect helper for JSON merge - need to calculate the param index
     const paramIndex = values.length + 1;
     values.push(JSON.stringify(updates.metadata));
-    setClauses.push(`metadata = ${dialect.jsonMerge('metadata', paramIndex)}`);
+    setClauses.push(`metadata = ${mergeRunMetadata(updates.metadata, paramIndex)}`);
   }
   if (updates.outcome !== undefined) {
     values.push(updates.outcome);

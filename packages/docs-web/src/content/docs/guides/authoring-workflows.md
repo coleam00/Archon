@@ -2289,7 +2289,8 @@ Read cost from `cost_usd`, not from the token counts. Because `input` is gross, 
 node by hand means getting four axes and the cache rates right; `cost_usd` is the number the
 provider itself reported. A row reports it as its own only when the row's `accounting` is
 `node`, and no row restates another row's spend, so summing the cost the transcript's rows
-report as their own reproduces the run's own cost. Count error rows in that sum: a retried
+report as their own gives the reported spend. That sum is an exact run cost only when
+every contributing provider call reported complete cost. Count error rows in that sum: a retried
 attempt that already spent reports on its own `node_error` row. A row that restates spend its
 scope already reports elsewhere in the same run — a `loop_group` roll-up over its body rows, a
 composed fan-out wrapper over its instances, an instance terminal over its own leaves — omits
@@ -2300,8 +2301,10 @@ carry that spend, except a composed-instance terminal, which the resume keeps as
 authoritative source for its scope (#3508). JSONL `workflow_complete`
 carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
 `workflow_error` carries the same aggregate when work reported usage before failure. These
-match run metadata `total_cost_usd` and `total_tokens_*`, except that an incomplete token
-count leaves `tokens` off both rows (see below). On a row that reports its own spend,
+match run metadata `total_cost_usd` and `total_tokens_*` when those totals are complete.
+An incomplete exact cost is stored as `total_cost_usd: null` and omitted from terminal
+transcript rows; CLI completion and `archon workflow get <run-id>` show it as unknown.
+An incomplete token count leaves `tokens` off both rows (see below). On a row that reports its own spend,
 an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
 it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
 rows that row names. Claude reports a session's running total, so Archon subtracts the source
@@ -2328,8 +2331,13 @@ carries no `tokens`. Every total containing that node, through retries, loops, f
 composed instances, child runs, and resume, is incomplete too: the containing rows omit
 `tokens`, and run metadata sets `total_tokens_unknown: true` with `total_tokens_in`,
 `total_tokens_out`, `total_cache_read_tokens`, `total_cache_write_tokens`, and
-`total_cache_partial` set to `null`. Cost totals keep summing every reported cost. Do not
-sum `tokens` across rows as a run total when any row is incomplete.
+`total_cache_partial` set to `null`. Cost is accounted independently: reported row spend
+is retained even when another contribution is unpriced. A numeric cost measurement with
+`partial: true` is a floor, not an exact total. If any counted provider spend has unknown
+or incomplete cost, the run's exact `total_cost_usd` is `null`, including through child
+runs and resume. Reported zero remains zero. Do not treat the sum of reported row costs
+as exact when any cost contribution is unknown, or sum `tokens` across rows as a run
+total when any token count is incomplete.
 A run that spent nothing on AI, such as a bash-only workflow, carries no `cost_usd` rather
 than `0`. Governance nodes do not yet have complete terminal
 transcript-row coverage, so read usage from the rows that exist rather than treating

@@ -158,6 +158,7 @@ export async function executeLoopNode(
         : undefined,
     resolvedModel: undefined,
     costUsd: resume.costUsd,
+    costPartial: resume.costPartial,
     tokens: resume.tokens,
     tokensUnknown:
       savedExecution?.spend.tokens.source === 'unavailable' &&
@@ -415,11 +416,12 @@ function readLoopResume(
         ? Math.max(node.loop.max_iterations, startIteration)
         : node.loop.max_iterations,
     costUsd:
-      savedExecution && exactExecutionCost(savedExecution.spend) === null
-        ? null
+      savedExecution?.spend.costUsd.source === 'provider'
+        ? savedExecution.spend.costUsd.value
         : gate !== undefined
           ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
           : undefined,
+    costPartial: savedExecution !== undefined && exactExecutionCost(savedExecution.spend) === null,
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
@@ -468,6 +470,7 @@ async function finalizeOnBareApprove(
     finalizeOutput,
     {
       ...(resume.costUsd !== undefined ? { costUsd: resume.costUsd } : {}),
+      costPartial: resume.costPartial,
       ...(resume.tokens !== undefined ? { tokens: resume.tokens } : {}),
     },
     finalizeStructured ?? undefined,

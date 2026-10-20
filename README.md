@@ -33,7 +33,7 @@ Archon turns your process into a workflow you own. The workflow fixes the steps,
 
 - **The same process every time.** Plan, implement, review, validate, open the PR, in the order you wrote down.
 - **Human on the loop, not in it.** Queues take work forward on their own. When a run reaches a decision it can't make, it pauses as one attention item: what it is, why it matters, a recommendation and the choices. You answer and it carries on.
-- **Governance built in.** Approval gates, a full event log and transcript for every run, and the cost of every run, all stored in your own database.
+- **Governance built in.** Approval gates, a full event log and transcript for every run, and provider-reported usage, all stored in your own database.
 - **Your agents, your subscriptions.** Archon is not another coding agent. It runs Claude Code, Codex and Pi through their own CLIs and SDKs, with the accounts and project guidance you already have.
 - **Self-hosted.** One install on your machine or server. SQLite by default, PostgreSQL if you want it.
 

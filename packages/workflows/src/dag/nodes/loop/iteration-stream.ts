@@ -18,7 +18,7 @@ import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { sumReportedCost, sumTokenUsage } from '../../usage';
+import { sumTokenUsage } from '../../usage';
 import { resolveRunInputs, nodeTemplateReferences } from '../../references';
 import { shouldContinueStreamingForStatus, CANCEL_CHECK_INTERVAL_MS } from '../../run-control';
 import { failLoopNode, loopSpend, type LoopRun, type LoopState } from './loop-state';
@@ -95,7 +95,8 @@ export interface StreamedAttempt {
  */
 interface AttemptUsage {
   providerCalled: boolean;
-  cost: number | null | undefined;
+  cost: number | undefined;
+  costPartial: boolean;
   tokens: TokenUsage | undefined;
   numTurns: number | undefined;
   folded: boolean;
@@ -285,6 +286,7 @@ async function streamIterationAttempt(
   const usage: AttemptUsage = {
     providerCalled: false,
     cost: undefined,
+    costPartial: false,
     tokens: undefined,
     numTurns: undefined,
     folded: false,
@@ -331,10 +333,8 @@ async function streamIterationAttempt(
 function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: string): void {
   if (usage.folded) return;
   usage.folded = true;
-  state.costUsd = sumReportedCost([
-    { costUsd: state.costUsd },
-    { costUsd: usage.cost === undefined && usage.providerCalled ? null : usage.cost },
-  ]);
+  if (usage.cost !== undefined) state.costUsd = (state.costUsd ?? 0) + usage.cost;
+  state.costPartial ||= usage.costPartial || (usage.providerCalled && usage.cost === undefined);
   if (!state.tokensUnknown && usage.tokens !== undefined) {
     state.tokens = sumTokenUsage(
       [...(state.tokens !== undefined ? [state.tokens] : []), usage.tokens],
@@ -601,16 +601,16 @@ function addResultUsage(
   const nodeId = run.node.id;
   if (msg.cost !== undefined) {
     if (Number.isFinite(msg.cost)) {
-      usage.cost = sumReportedCost([{ costUsd: usage.cost }, { costUsd: msg.cost }]);
+      usage.cost = (usage.cost ?? 0) + msg.cost;
     } else {
-      usage.cost = null;
+      usage.costPartial = true;
       getLog().warn(
         { nodeId, iteration: i, costUsd: msg.cost },
         'loop_node.usage_cost_non_finite_ignored'
       );
     }
   } else {
-    usage.cost = null;
+    usage.costPartial = true;
   }
   state.tokensUnknown ||= msg.tokensUnknown === true;
   if (state.tokensUnknown) {

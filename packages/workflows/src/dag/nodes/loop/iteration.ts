@@ -494,6 +494,7 @@ async function completeLoop(
         tokens: state.tokens,
         tokensUnknown: state.tokensUnknown,
         costUsd: state.costUsd,
+        costPartial: state.costPartial,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,
@@ -551,6 +552,7 @@ async function pauseAtLoopGate(
       tokens: state.tokens,
       tokensUnknown: state.tokensUnknown,
       costUsd: state.costUsd,
+      costPartial: state.costPartial,
       stopReason: state.stopReason,
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
@@ -583,12 +585,7 @@ async function pauseAtLoopGate(
     // snapshotting both forms preserves resume determinism after source deletion.
     commandSnapshot: run.promptTemplate,
   };
-  const deferredLoopOutput: NodeExecutionResult = {
-    ...serializeNodeOutput(state.execution),
-    ...(state.costUsd !== undefined ? { costUsd: state.costUsd } : {}),
-    ...(state.tokens !== undefined ? { tokens: state.tokens } : {}),
-    ...(state.tokensUnknown ? { tokensUnknown: true } : {}),
-  };
+  const deferredLoopOutput = serializeNodeOutput(suspended);
   const paused = await pauseGateRespectingExternalTransition(
     deps,
     workflowRun.id,
@@ -596,7 +593,12 @@ async function pauseAtLoopGate(
     { event: serializeNodeStateRecord(suspended) }
   );
   if (!paused) {
-    if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
+    if (
+      state.costUsd !== undefined ||
+      state.costPartial ||
+      state.tokens !== undefined ||
+      state.tokensUnknown
+    ) {
       await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
     }
     return deferredLoopOutput;

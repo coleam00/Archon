@@ -27,6 +27,7 @@ import {
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { providerEventEnvelopeSchema } from '../../../schemas/provider-event';
 import type { DagNode } from '../../../schemas';
@@ -929,19 +930,24 @@ describe('loop node execution', () => {
     expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.4);
   });
 
-  it.each(['same attempt', 'iterations', 'retry', 'no result'] as const)(
-    'keeps unpriced loop work unknown across %s',
-    async boundary => {
+  it.each(
+    (['same attempt', 'iterations', 'retry', 'no result'] as const).flatMap(boundary =>
+      [false, true].map(pricedFirst => [boundary, pricedFirst] as const)
+    )
+  )(
+    'keeps unpriced loop work unknown across %s (priced first=%s)',
+    async (boundary, pricedFirst) => {
       const store = createMockStore();
       let calls = 0;
       mockSendQueryDag.mockImplementation(async function* () {
         calls++;
         if (calls === 1) {
           yield { type: 'agent_message_chunk', text: 'working' };
-          if (boundary === 'no result') return;
+          if (boundary === 'no result' && !pricedFirst) return;
           yield {
             type: 'result',
             sessionId: 's1',
+            ...(pricedFirst ? { cost: 0.2 } : {}),
             ...(boundary === 'retry'
               ? {
                   isError: true,
@@ -953,7 +959,8 @@ describe('loop node execution', () => {
           if (boundary !== 'same attempt') return;
         }
         yield { type: 'agent_message_chunk', text: 'Done. <promise>COMPLETE</promise>' };
-        yield { type: 'result', sessionId: 's2', cost: 0.2 };
+        if (boundary === 'no result' && pricedFirst) return;
+        yield { type: 'result', sessionId: 's2', ...(!pricedFirst ? { cost: 0.2 } : {}) };
       });
       await executeDagWorkflow(
         dagOptions({
@@ -980,6 +987,15 @@ describe('loop node execution', () => {
       );
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+      const completed = persistedEvents(store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'mixed'
+      );
+      expect(completed?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.2, partial: true },
+      });
+      expect(
+        (await foldDagResumeSnapshot(persistedEvents(store), 'loop-mixed-cost')).costUsd
+      ).toBeNull();
     }
   );
 
@@ -1029,6 +1045,11 @@ describe('loop node execution', () => {
         (call[0] as { step_name: string }).step_name === 'my-loop'
     );
     expect(completedEvent).toBeDefined();
+    expect(
+      persistedEvents(store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'my-loop'
+      )?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'provider', value: 0.1, partial: true } });
     expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(

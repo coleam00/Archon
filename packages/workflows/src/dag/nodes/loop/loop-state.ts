@@ -26,7 +26,8 @@ export interface LoopResume {
   feedbackGiven: boolean;
   iterationLimit: number;
   /** Usage consumed through the gate, which the resumed loop's totals start from. */
-  costUsd: number | null | undefined;
+  costUsd: number | undefined;
+  costPartial: boolean;
   tokens: TokenUsage | undefined;
 }
 
@@ -63,7 +64,8 @@ export interface LoopState {
    * iteration's report is the node's report.
    */
   resolvedModel: ResolvedModel | undefined;
-  costUsd: number | null | undefined;
+  costUsd: number | undefined;
+  costPartial: boolean;
   tokens: TokenUsage | undefined;
   tokensUnknown: boolean;
   /**
@@ -89,7 +91,8 @@ export interface LoopFailureExtras {
   failureKind: NodeFailureKind;
   providerFailure?: ProviderFailure;
   output?: string;
-  costUsd?: number | null;
+  costUsd?: number;
+  costPartial?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   loopIterations?: number;
@@ -128,6 +131,7 @@ export async function failLoopNode(
             execution.spend.tokens.reason === 'incomplete') ||
           extras.tokensUnknown,
         costUsd: extras.costUsd,
+        costPartial: extras.costPartial,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,
@@ -141,9 +145,10 @@ export async function failLoopNode(
 /** The usage the loop has consumed so far, as a failure record reports it. */
 export function loopSpend(
   state: LoopState
-): Pick<LoopFailureExtras, 'costUsd' | 'tokens' | 'tokensUnknown'> {
+): Pick<LoopFailureExtras, 'costUsd' | 'costPartial' | 'tokens' | 'tokensUnknown'> {
   return {
     costUsd: state.costUsd,
+    costPartial: state.costPartial,
     ...(state.tokens !== undefined ? { tokens: state.tokens } : {}),
     ...(state.tokensUnknown ? { tokensUnknown: true } : {}),
   };

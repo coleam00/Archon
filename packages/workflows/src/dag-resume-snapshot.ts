@@ -194,14 +194,14 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
   return normalized;
 }
 
-function readCost(runId: string, stepName: string, costUsd: unknown): number | null | undefined {
+function readCost(runId: string, stepName: string, costUsd: unknown): number | null {
   // Same guard shape as tokens: a non-finite value from a provider must not
   // silently poison the total (NaN > 0 is false, which would drop the run's
   // cost from the persisted metadata with no trace).
   if (costUsd === null) return null;
   if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
   getLog().warn({ runId, stepName, costUsd }, 'db.workflow_dag_node_cost_invalid_ignored');
-  return undefined;
+  return null;
 }
 
 function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
@@ -214,8 +214,7 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     if (tokens !== undefined) contribution.tokens = tokens;
   }
   if (rawUsage.costUsd !== undefined) {
-    const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
-    if (costUsd !== undefined) contribution.costUsd = costUsd;
+    contribution.costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
   }
   if (
     contribution.tokensUnknown ||
