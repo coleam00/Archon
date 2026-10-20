@@ -162,6 +162,26 @@ export interface ReusableCheckout {
   workingPath: string;
 }
 
+function checkoutKeys(
+  launch: PreparedWorkflowLaunch | undefined,
+  workingPath: string | null | undefined,
+  reusable: readonly ReusableCheckout[]
+): Set<string> {
+  const keys = new Set(
+    [
+      launch ? launchCheckout(launch) : undefined,
+      workingPath ? checkoutPath(workingPath) : undefined,
+    ].filter((key): key is string => key !== undefined)
+  );
+  for (const checkout of reusable)
+    if (keys.has(checkoutBranch(checkout.codebaseId, checkout.branch)))
+      keys.add(checkoutPath(checkout.workingPath));
+  for (const checkout of reusable)
+    if (keys.has(checkoutPath(checkout.workingPath)))
+      keys.add(checkoutBranch(checkout.codebaseId, checkout.branch));
+  return keys;
+}
+
 /** Oldest-first holders contribute launch identities, paths and registered branch aliases. */
 export function heldCheckouts(
   live: Iterable<{ id: string; working_path?: string | null; launch?: PreparedWorkflowLaunch }>,
@@ -169,19 +189,8 @@ export function heldCheckouts(
 ): Map<string, string> {
   const held = new Map<string, string>();
   for (const run of live) {
-    const keys = new Set(
-      [
-        run.launch ? launchCheckout(run.launch) : undefined,
-        run.working_path ? checkoutPath(run.working_path) : undefined,
-      ].filter((key): key is string => key !== undefined)
-    );
-    for (const checkout of reusable)
-      if (keys.has(checkoutBranch(checkout.codebaseId, checkout.branch)))
-        keys.add(checkoutPath(checkout.workingPath));
-    for (const checkout of reusable)
-      if (keys.has(checkoutPath(checkout.workingPath)))
-        keys.add(checkoutBranch(checkout.codebaseId, checkout.branch));
-    for (const key of keys) if (!held.has(key)) held.set(key, run.id);
+    for (const key of checkoutKeys(run.launch, run.working_path, reusable))
+      if (!held.has(key)) held.set(key, run.id);
   }
   return held;
 }
