@@ -236,7 +236,15 @@ describe('executor capability ownership', () => {
           source: 'unavailable',
           reason: reports ? 'not_reported' : 'unsupported',
         } as const;
-        expect(record?.metadata?.spend.costUsd).toEqual(unavailable);
+        const started = persistedEvents(store).find(event => event.event_type === 'node_started');
+        expect(started).toBeDefined();
+        const startRecord = started && readNodeRecordEvent({ ...started, data: started.data });
+        expect(startRecord?.metadata?.spend.costUsd).toEqual(unavailable);
+        expect(record?.metadata?.spend.costUsd).toEqual({
+          source: 'unavailable',
+          reason: 'incomplete',
+        });
+        expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
         expect(record?.metadata?.spend.tokens).toEqual(unavailable);
         expect(record?.metadata?.spend.numTurns).toEqual(unavailable);
         expect(record?.metadata?.spend.stopReason).toEqual(unavailable);

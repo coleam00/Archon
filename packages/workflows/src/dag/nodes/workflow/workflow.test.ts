@@ -1,5 +1,5 @@
-import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 // @archon-test-isolated
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
