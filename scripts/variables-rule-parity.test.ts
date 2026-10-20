@@ -26,6 +26,13 @@
  *
  * A copy is read as the names it promises and the claims it makes about them. Every check asks
  * the engine what is true and holds the copy to that answer.
+ *
+ * The engine's own stance on a name it does not provide decides the scope of the promise
+ * check. An exec node receives the engine's own bag, and the engine's scanner treats a name
+ * outside that bag as a warning rather than a failure, because the project's configured
+ * environment reaches the subprocess too (`exec-input-validation.ts`). The guard holds the
+ * class's delivery — the names the engine itself delivers for the user-controlled variables —
+ * to the engine's bag, and leaves the process environment to the engine's warning.
  */
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -170,7 +177,7 @@ describe('the user-controlled variable rule', () => {
     }
   });
 
-  test('every environment variable a copy promises is one the exec node delivers', () => {
+  test('every environment variable a copy promises for the class is one the exec node delivers', () => {
     for (const copy of copies) assertPromisedNamesAreDelivered(copy);
   });
 
@@ -218,16 +225,37 @@ describe('the user-controlled variable rule', () => {
     const document: Document = {
       file: 'a synthetic copy',
       statements: statementsOf(
-        'A `script:` node reads the trigger message from the environment variable `process.env.NOT_A_REAL_VAR`.'
+        'A `script:` node reads the user-controlled `$USER_MESSAGE` from the environment variable `process.env.NOT_A_REAL_VAR`.'
       ),
     };
     expect(() => assertPromisedNamesAreDelivered(document)).toThrow(/NOT_A_REAL_VAR/);
   });
+
+  test('the guard rejects a copy that claims a variable is substituted when the engine does not', () => {
+    const document: Document = {
+      file: 'a synthetic copy',
+      statements: statementsOf('A `script:` node substitutes `$LOG_DIR` into its source.'),
+    };
+    expect(() => assertNamedVariablesAreSubstituted(document)).toThrow(/LOG_DIR/);
+  });
+
+  test('the guard accepts a copy that reads a variable from the process environment', () => {
+    const document: Document = {
+      file: 'a synthetic copy',
+      statements: statementsOf('A `bash:` node reads "$GITHUB_TOKEN" from the environment.'),
+    };
+    expect(() => assertNamedVariablesAreSubstituted(document)).not.toThrow();
+  });
 });
 
-/** Every environment variable a copy promises must be one the exec node delivers. */
+/**
+ * Every environment variable a copy promises for the class must be one the exec node
+ * delivers. The engine's own bag is the authority for the class: the engine delivers
+ * exactly these names for the user-controlled variables, and a copy that promises another
+ * one sends a reader after a value the engine never sets.
+ */
 function assertPromisedNamesAreDelivered(document: Document): void {
-  for (const statement of ruleStatements(document)) {
+  for (const statement of classStatements(document)) {
     for (const name of promisedNames(statement)) {
       if (EXEC_NODE_ENVIRONMENT_NAMES.has(name)) continue;
       if (isBindingName(name)) continue;
@@ -243,6 +271,10 @@ function assertNamedVariablesAreSubstituted(document: Document): void {
   for (const statement of document.statements) {
     for (const name of namedVariables(statement.text)) {
       if (isBindingName(name)) continue;
+      // A name the copy shows being read from the environment is not a substitution claim:
+      // the engine passes the project's configured environment to the subprocess, so the
+      // engine's own scanner warns about such a name rather than failing it.
+      if (readsFromEnvironment(statement, name)) continue;
       if (substitutes(name, false)) continue;
       throw new Error(
         `${document.file} names the variable $${name}, which the engine does not substitute`
@@ -506,6 +538,20 @@ function userControlledNames(): Set<string> {
   return names;
 }
 
+/**
+ * Whether a copy reads a name from the environment rather than claiming the engine splices
+ * it into a source. The engine's own scanner treats such a name as a warning, because the
+ * project's configured environment reaches the subprocess too.
+ */
+function readsFromEnvironment(statement: Statement, name: string): boolean {
+  const promised = promisedEnvironment(statement);
+  if (promised.shell.has(name)) return true;
+  for (const runtimeNames of promised.accessor.values()) {
+    if (runtimeNames.has(name)) return true;
+  }
+  return false;
+}
+
 /** Whether the engine splices `$name` into a source. */
 function substitutes(name: string, shellSafe: boolean): boolean {
   const { prompt } = substituteWorkflowVariables(
@@ -637,6 +683,15 @@ function mentionsKind(statement: Statement, kind: ExecKind): boolean {
 /** Whether a text talks about the environment channel an exec node delivers values in. */
 function speaksAboutEnvironment(text: string): boolean {
   return PROMISES_ENVIRONMENT.test(text);
+}
+
+/**
+ * The statements of a document that speak about the user-controlled class. The class's
+ * delivery is the engine's own bag, so these are the statements whose promises the guard
+ * holds to it.
+ */
+function classStatements(document: Document): Statement[] {
+  return document.statements.filter(statement => speaksAboutClass(statement.text));
 }
 
 /**
