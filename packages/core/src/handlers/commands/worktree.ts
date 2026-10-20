@@ -404,14 +404,22 @@ async function cleanupWorktrees(
       }
     }
 
-    // Show updated count
-    const count = await isolationEnvDb.countActiveByCodebase(codebaseId);
-    msg += `\nActive worktrees: ${String(count)}`;
+    msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
 
     return { success: true, message: msg.trim() };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');
     return { success: false, message: `Failed to cleanup: ${err.message}` };
+  }
+}
+
+async function activeWorktreeCountMessage(codebaseId: string): Promise<string> {
+  try {
+    const count = await isolationEnvDb.countActiveByCodebase(codebaseId);
+    return `Active worktrees: ${String(count)}`;
+  } catch (err) {
+    getLog().warn({ err, codebaseId }, 'cmd.worktree_cleanup_count_failed');
+    return `Active worktrees: unavailable (${(err as Error).message})`;
   }
 }

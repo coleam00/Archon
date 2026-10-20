@@ -569,6 +569,34 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Active worktrees: 3');
         });
 
+        test.each(['merged', 'stale'] as const)(
+          'preserves completed %s cleanup warnings when the count query fails',
+          async cleanupType => {
+            const cleanup =
+              cleanupType === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
+            cleanup.mockResolvedValueOnce({
+              ...emptyCleanup(),
+              removed: ['feat-done'],
+              warnings: [
+                { branchName: 'feat-done', message: "Remote branch retained 'feat-done'" },
+              ],
+            });
+            mockCountActiveByCodebase.mockRejectedValueOnce(new Error('count query failed'));
+            const result = await handleCommand(
+              conversationWithCodebase,
+              `/worktree cleanup ${cleanupType}`,
+              operator
+            );
+            expect(result.success).toBe(true);
+            expect(result.message).toContain(`Cleaned up 1 ${cleanupType} worktree(s)`);
+            expect(result.message).toContain(
+              "Warning: feat-done: Remote branch retained 'feat-done'"
+            );
+            expect(result.message).toContain('Active worktrees: unavailable');
+            expect(result.message).toContain('count query failed');
+          }
+        );
+
         test('should report when no stale worktrees to clean up', async () => {
           mockCleanupStaleWorktrees.mockResolvedValueOnce(emptyCleanup());
           mockCountActiveByCodebase.mockResolvedValueOnce(1);
