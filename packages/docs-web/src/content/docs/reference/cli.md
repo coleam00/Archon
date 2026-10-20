@@ -1592,8 +1592,10 @@ in the repository settings if you want merged pull requests' branches removed au
 If the ref belongs to a replacement registration or ownership is uncertain, leave
 it alone. To remove a ref manually, first ensure no one is reusing or publishing
 that branch. From the surviving primary checkout, verify that the branch still
-belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`)
-and the branch reported by cleanup. First check for service overrides or a transport helper:
+belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`).
+The branch reported by cleanup is the local branch; a published remote ref can have
+a different name. Identify the completed tip from that surviving local branch or a
+recorded commit OID before proceeding. First check for service overrides or a transport helper:
 
 ```bash
 remote='<remote>'
@@ -1621,7 +1623,6 @@ leading or trailing spaces, into `push_url`. Run these commands in Bash:
 
 ```bash
 push_url='<push-url>'
-branch='<branch>'
 endpoint="archon-cleanup-$$-$RANDOM:"
 git_at_endpoint() (
     config_index=${GIT_CONFIG_COUNT:-0}
@@ -1632,16 +1633,31 @@ git_at_endpoint() (
     export GIT_CONFIG_COUNT=$((config_index + 2))
     git "$@"
 )
-git_at_endpoint ls-remote --refs -- "$endpoint" "refs/heads/$branch"
+git_at_endpoint ls-remote --symref -- "$endpoint" HEAD 'refs/heads/*'
 ```
 
-Inspect the advertised OID and verify that commit belongs to the completed work.
-An empty result means the ref is already absent. Keep the same `push_url`, `branch`
-and `endpoint`, then enter the verified OID:
+Inspect all advertised branch names and OIDs. Check both the local branch's name
+and differently named non-default refs containing the completed tip. For example,
+local `topic` may have been published as `refs/heads/review-name`; an empty query
+for `refs/heads/topic` proves only that exact ref is absent. The default branch
+normally contains merged work and is not a cleanup target merely for containing
+the completed tip.
+
+For each candidate, verify ancestry with `git merge-base --is-ancestor <completed-tip-oid> <advertised-oid>`
+(exit 0 means it contains the completed tip; exit 1 means it does not). If commits
+are missing, fetch the candidate from the same verified endpoint with
+`git_at_endpoint fetch --no-tags -- "$endpoint" '<full-remote-ref>'`, re-read the
+advertisement and repeat the check. A failed inspection or unknown ancestry does
+not prove absence. Ancestry alone does not prove ownership: confirm that the ref
+belongs to the completed work and is no longer in use before deleting it.
+
+Keep the same `push_url` and `endpoint`. Enter the verified full remote ref name
+and its advertised OID, independently of the local branch name:
 
 ```bash
+remote_ref='refs/heads/<verified-remote-branch>'
 verified_oid='<verified-oid>'
-git_at_endpoint push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
+git_at_endpoint push --force-with-lease="$remote_ref:$verified_oid" -- "$endpoint" ":$remote_ref"
 ```
 
 The temporary alias maps directly to the resolved URL for both commands, preventing
