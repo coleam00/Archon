@@ -16,7 +16,7 @@ This guide explains how to create workflows that orchestrate multiple commands i
 A workflow is a **YAML file** that defines a directed acyclic graph (DAG) of commands to execute. Workflows enable:
 
 - **Multi-step automation**: Chain multiple AI agents together
-- **Parallel execution**: Independent nodes run concurrently
+- **Parallel execution**: Independent nodes normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 - **Conditional branching**: Route to different paths based on node output
 - **Artifact passing**: Output from one node becomes input for downstream nodes
 - **Iterative loops**: Loop nodes repeat until a declared completion condition is met
@@ -106,7 +106,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
 ```
 
-Nodes without `depends_on` run immediately. Nodes in the same topological layer run concurrently via `Promise.allSettled`. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
+Nodes without `depends_on` enter the first topological layer. Nodes in the same layer normally run concurrently. [Loop bodies settle ordinary work before interactions](/guides/loop-nodes/#how-it-works), and mixed checkout-guard layers run sequentially. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
 
 > **Note:** The `steps:` (sequential) format has been removed. All workflows use `nodes:` (DAG) format exclusively.
 
@@ -461,7 +461,7 @@ nodes:
 | `all_success` | Run only if all upstream deps completed successfully (default) |
 | `one_success` | Run if at least one upstream dep completed successfully |
 | `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
-| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
+| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped), except an interaction in a loop body after a body failure (see [loop failure behavior](/guides/loop-nodes/#how-it-works)) |
 
 `none_failed_min_one_success` blocks failure-cascade skips by default, including
 across dependency chains and includes. The skipped join retains the original failed
@@ -979,7 +979,7 @@ Archon sorts a failed attempt into one of three buckets before deciding whether 
 
 A `quota_exhausted` failure is never retried in the same window, but when the provider reports when the limit resets, the run [waits until that reset](/reference/configuration/#workflow-attention-and-continuation-settings) instead of failing.
 
-`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable checkout or provider MCP config file. Fix the configuration and run again. A host-local read failure in captured home MCP config pauses the existing run for continuation on a host that can read it; see [MCP servers](/guides/mcp-servers/).
+`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable checkout or provider MCP config file, or a declared MCP server that cannot connect. Fix the configuration and run again. A host-local read failure in captured home MCP config pauses the existing run for continuation on a host that can read it; see [MCP servers](/guides/mcp-servers/).
 
 Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule, including a loop policy with zero delay. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter; once a rate limit occurs, that larger budget remains for the rest of the iteration or node attempt sequence. A rate limit that still refuses the node after those retries does not fail the run: the run pauses on the provider-limit wait (attention queue kind [`usage_limit`](/guides/attention-queue/)) and continues from that node by itself.
 
@@ -989,8 +989,8 @@ Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overload
 
 Every built-in provider reports a typed class:
 
-- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
-- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
+- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a declared MCP server cannot connect, when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`. That includes a used-up usage limit: a Pi run that hits one fails instead of waiting for the reset.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
@@ -2368,10 +2368,14 @@ for it:
   table](/reference/cli/#base-branch-precedence): `worktree.baseBranch` in
   `.archon/config.yaml`, else the codebase's stored default branch, else git
   auto-detection. Level 1 is missing on purpose — **the per-dispatch `--base` / `--from`
-  overrides apply only to the run they were passed to and do not reach its sub-run
-  children**, so `archon workflow run parent --base release/2.0` still cuts every isolated
-  child from the repo's configured base. An isolated child therefore sees neither the
-  parent's uncommitted edits **nor the commits the parent made on its own branch**.
+  overrides do not change an isolated child's cut-from**, so
+  `archon workflow run parent --base release/2.0` still cuts every isolated child from the
+  repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. If the branch
+  is reused without a surviving child run record, its original base is unavailable and
+  `$BASE_BRANCH` stays unresolved. Fresh shared-checkout children (`inherit` or omitted) instead inherit the parent's
+  resolved `$BASE_BRANCH`, including `--base`. Existing child runs retain their recorded
+  base on resume. An isolated child therefore sees neither the parent's uncommitted edits
+  **nor the commits the parent made on its own branch**.
   Everything the child needs has to arrive through `input:`, artifacts, or the repo's base
   branch.
 - **Nothing merges it back.** The child's commits stay on the child's branch. Landing them
@@ -3365,7 +3369,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$ARGUMENTS` / `$USER_MESSAGE` | The user's input message that triggered the workflow |
 | `$WORKFLOW_ID` | Unique ID for this workflow run |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
-| `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch; see [resolution and child inheritance rules](/reference/variables/#workflow-variables) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$CONTEXT` | GitHub issue/PR context (if available) |
 | `$nodeId.output` | Output of a completed upstream node |
@@ -3765,7 +3769,7 @@ Before deploying a workflow:
 2. **`nodes:` define the graph** — each node runs a command, inline prompt, bash script, or loop
 3. **Artifacts are the glue** — commands communicate via files, not in-memory context
 4. **`context: fresh`** — forces a fresh AI session for a node (works from artifacts only)
-5. **Parallel by default** — nodes in the same topological layer run concurrently
+5. **Parallel by default** — nodes in the same topological layer normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from an AI node, or from a `bash:`/`script:` node's stdout, for reliable branching
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)

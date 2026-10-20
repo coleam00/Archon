@@ -14,9 +14,11 @@ import {
   ActiveWorktreeEnvironmentsError,
   WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
+import { assertAbsoluteDefaultCwd } from '@archon/core/db/codebase-path';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
+import { remoteIdentity } from '@archon/core/services/project-registration-identity';
 import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
 import {
   ConfiguredBaseBranchNotFoundError,
@@ -54,7 +56,7 @@ const listCodebasesRoute = createRoute({
   method: 'get',
   path: '/api/codebases',
   tags: ['Codebases'],
-  summary: 'List registered codebases',
+  summary: 'List codebases with the newest representative of each resolved repository remote',
   responses: {
     200: {
       content: { 'application/json': { schema: codebaseListResponseSchema } },
@@ -243,18 +245,28 @@ export function registerCodebaseRoutes(
   // GET /api/codebases - List codebases
   registerOpenApiRoute(listCodebasesRoute, async c => {
     try {
-      const codebases = await codebaseDb.listCodebases();
+      const codebases = await codebaseDb.listCodebaseClaims();
 
-      // Deduplicate by repository_url (keep most recently updated)
-      const normalizeUrl = (url: string): string => url.replace(/\.git$/, '');
       const seen = new Map<string, (typeof codebases)[number]>();
       const deduped: (typeof codebases)[number][] = [];
       for (const cb of codebases) {
-        if (!cb.repository_url) {
+        let key: string;
+        try {
+          assertAbsoluteDefaultCwd(cb.default_cwd, cb.name);
+          if (cb.kind === 'folder' || !cb.repository_url) {
+            deduped.push(cb);
+            continue;
+          }
+          key = await remoteIdentity(cb.repository_url, cb.default_cwd);
+        } catch (error) {
+          getLog().warn(
+            { err: error, codebaseId: cb.id, codebaseName: cb.name },
+            'list_codebases_remote_identity_unavailable'
+          );
+          // Unknown identity cannot establish equality and must not hide a project.
           deduped.push(cb);
           continue;
         }
-        const key = normalizeUrl(cb.repository_url);
         const existing = seen.get(key);
         if (!existing || cb.updated_at > existing.updated_at) {
           seen.set(key, cb);

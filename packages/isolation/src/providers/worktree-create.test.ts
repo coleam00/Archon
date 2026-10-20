@@ -352,6 +352,7 @@ describe('task branches', () => {
     expect(adoptionWarnings()).toHaveLength(1);
     // Adoption continues an existing branch; it never claims a cut-from commit.
     expect(Object.hasOwn(env.metadata, 'cutFromCommit')).toBe(false);
+    expect(env.resolvedBaseBranch).toBeUndefined();
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     expect(execSpy).toHaveBeenCalledWith(
       'git',
@@ -390,6 +391,7 @@ describe('task branches', () => {
       existingLivePr.canonicalRepoPath
     );
     expect(env.workingPath).toBe('/external/worktrees/feature-live-pr');
+    expect(env.resolvedBaseBranch).toBeUndefined();
     expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
     expect(adoptionWarnings()).toHaveLength(1);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
@@ -419,6 +421,7 @@ describe('adopting an existing checkout', () => {
     try {
       const env = await withConfig({ copyFiles: ['.env'] }).create(issueRequest);
 
+      expect(env.resolvedBaseBranch).toBeUndefined();
       expect(env.metadata).toHaveProperty('adopted', true);
       expect(env.workingPath).toContain('issue-42');
       expect(adoptionWarnings()).toHaveLength(1);
@@ -497,6 +500,7 @@ describe('adopting an existing checkout', () => {
       const env = await provider.create(prRequest(false));
 
       expect(env.workingPath).toBe('/workspace/worktrees/repo/feature-auth');
+      expect(env.resolvedBaseBranch).toBeUndefined();
       expect(env.metadata).toHaveProperty('adopted', true);
       expect(env.metadata).toHaveProperty('adoptedFrom', 'branch');
       expect(adoptionWarnings()).toHaveLength(1);
@@ -1038,31 +1042,44 @@ describe('base branch and remote', () => {
     cutFrom('origin/develop');
   });
 
+  test('returns the base selected by sync rather than the request hint', async () => {
+    syncWorkspaceSpy.mockResolvedValueOnce(syncResult('detected-release'));
+
+    const env = await withConfig({}).create(issueRequest);
+
+    expect(env.resolvedBaseBranch).toBe('detected-release');
+    cutFrom('origin/detected-release');
+  });
+
   test('uses configured baseBranch over request baseBranch when both are set', async () => {
-    await provider.create({ ...issueRequest, baseBranch: git.toBranchName('develop') });
+    const env = await provider.create({ ...issueRequest, baseBranch: git.toBranchName('develop') });
+
+    expect(env.resolvedBaseBranch).toBe('main');
 
     baseSynced('main');
   });
 
   test('uses request baseOverride over configured baseBranch and request baseBranch', async () => {
-    await provider.create({
+    const env = await provider.create({
       ...issueRequest,
       baseBranch: git.toBranchName('develop'),
       baseOverride: git.toBranchName('epic/foo'),
     });
 
+    expect(env.resolvedBaseBranch).toBe('main');
     // --base (baseOverride) is the top precedence level.
     baseSynced('epic/foo');
   });
 
   test("a task's fromBranch is its start point, never the synced base", async () => {
-    await withConfig({}).create({
+    const env = await withConfig({}).create({
       ...issueRequest,
       workflowType: 'task',
       identifier: 'test-feature',
       taskBranch: { kind: 'new', fromBranch: git.toBranchName('dev') },
     });
 
+    expect(env.resolvedBaseBranch).toBe('main');
     baseSynced(undefined);
   });
 
