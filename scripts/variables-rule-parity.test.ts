@@ -153,6 +153,12 @@ describe('the user-controlled variable rule', () => {
   const promisedNames = (copy: { file: string; items: string[] }): Set<string> =>
     new Set(copy.items.flatMap(promisedEnvironment));
 
+  /** The user-controlled class: the variables the copies that name it name. */
+  const theClass = (): string[] => {
+    const classCopies = copies.filter(copy => copy.names === 'the class');
+    return [...namedVariables(classCopies[0])].sort();
+  };
+
   test('every copy states the rule for both exec node kinds', () => {
     for (const copy of copies) {
       for (const kind of EXEC_KINDS) {
@@ -208,9 +214,8 @@ describe('the user-controlled variable rule', () => {
   });
 
   test('the copies that name the class agree on it', () => {
-    const classCopies = copies.filter(copy => copy.names === 'the class');
-    const expected = [...namedVariables(classCopies[0])].sort();
-    for (const copy of classCopies) {
+    const expected = theClass();
+    for (const copy of copies.filter(copy => copy.names === 'the class')) {
       const names = [...namedVariables(copy)].sort();
       if (names.join(', ') !== expected.join(', ')) {
         throw new Error(
@@ -221,7 +226,7 @@ describe('the user-controlled variable rule', () => {
   });
 
   test('a copy that names examples names examples of the class', () => {
-    const expected = [...namedVariables(copies.find(copy => copy.names === 'the class')!)].sort();
+    const expected = theClass();
     for (const copy of copies.filter(copy => copy.names !== 'the class')) {
       for (const name of namedVariables(copy)) {
         if (!expected.includes(name)) {
