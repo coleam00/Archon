@@ -93,8 +93,7 @@ function parseWorkflowHeader(
     return "Missing required field 'description'";
   }
 
-  // Reject legacy steps-based workflows
-  if (Array.isArray(raw.steps) && raw.steps.length > 0) {
+  if (Object.hasOwn(raw, 'steps')) {
     return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/guides/authoring-workflows/ for the workflow language reference.';
   }
 

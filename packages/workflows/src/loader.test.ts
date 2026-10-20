@@ -88,25 +88,30 @@ nodes:
     expect(workflow.nodes[1].id).toBe('implement');
   });
 
-  it('should reject workflow with steps: and provide clear error message', () => {
-    const result = parseWorkflow(
-      `name: legacy-workflow
+  it.each(
+    ['[one]', '[]', '{}', 'null', 'legacy', '0', 'false'].flatMap(steps =>
+      [false, true].map(hasNodes => [steps, hasNodes] as const)
+    )
+  )(
+    'rejects steps: %s with nodes present: %s and provides migration guidance',
+    (steps, hasNodes) => {
+      const result = parseWorkflow(
+        `name: legacy-workflow
 description: Uses deprecated steps format
-steps:
-  - command: plan
-  - command: implement
-`,
-      'legacy.yaml'
-    );
-    expect(result.workflow).toBeNull();
-    expect(result.error?.errorType).toBe('validation_error');
-    expect(result.error?.error).toContain('steps:');
-    expect(result.error?.error).toContain('has been removed');
-    expect(result.error?.error).toContain('nodes:');
-    expect(result.error?.error).toContain('https://archon.diy/guides/authoring-workflows/');
-    expect(result.error?.error).not.toContain('docs/sequential-dag-migration-guide.md');
-    expect(result.error?.error).not.toContain('claude');
-  });
+steps: ${steps}
+${hasNodes ? 'nodes:\n  - id: work\n    prompt: work\n' : ''}`,
+        'legacy.yaml'
+      );
+      expect(result.workflow).toBeNull();
+      expect(result.error?.errorType).toBe('validation_error');
+      expect(result.error?.error).toContain('steps:');
+      expect(result.error?.error).toContain('has been removed');
+      expect(result.error?.error).toContain('nodes:');
+      expect(result.error?.error).toContain('https://archon.diy/guides/authoring-workflows/');
+      expect(result.error?.error).not.toContain('docs/sequential-dag-migration-guide.md');
+      expect(result.error?.error).not.toContain('claude');
+    }
+  );
 
   it('should reject unknown provider at load time', () => {
     const result = parseWorkflow(
