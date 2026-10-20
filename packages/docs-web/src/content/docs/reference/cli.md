@@ -37,7 +37,7 @@ Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non
 
 ## Projects
 
-`archon project list` lists every registered project in the install, from any directory, without a server.
+`archon project list` lists every registered project in the install without collapsing duplicate remotes, from any directory, without a server, provided all stored checkout paths validate. An invalid stored checkout path makes the command fail; repair that path before listing projects.
 
 ```bash
 archon project list          # ID, KIND, NAME, KEY and PATH per project
