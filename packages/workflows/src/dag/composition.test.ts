@@ -924,7 +924,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
             e => e.step_name === 'cycle.work' && e.event_type === 'node_completed'
           )
         ) {
-          rejectedSpill = event.data.node_output_spill_path;
+          rejectedSpill = String(event.data?.node_output_spill_path);
           throw new Error('completion rejected after spill write');
         }
         await persist(event);
@@ -948,7 +948,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
       expect(completions).toHaveLength(1);
       expect(completions[0]?.data?.node_output_original_bytes).toBe(40_000);
       expect(String(completions[0]?.data?.node_output)).toStartWith('a');
-      expect(rejectedSpill).toBe(completions[0]?.data?.node_output_spill_path);
+      expect(rejectedSpill).toBe(String(completions[0]?.data?.node_output_spill_path));
       expect(await readFile(String(rejectedSpill), 'utf8')).toBe('b'.repeat(40_000));
       expect(
         eventList(deps).filter(e => e.step_name === 'cycle.work' && e.event_type === 'node_started')
