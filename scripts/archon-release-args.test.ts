@@ -31,6 +31,8 @@ function parseArgsBody(): string {
   throw new Error('archon-release.yaml has no parse-args script node');
 }
 
+const BODY = parseArgsBody();
+
 /**
  * Runs the node's body with the given run message, the way the engine runs it: the
  * message arrives in the environment, because a `script:` body never substitutes it
@@ -40,7 +42,7 @@ function runParseArgs(message: string | undefined): unknown {
   const env: Record<string, string | undefined> = { ...process.env };
   if (message === undefined) delete env.ARGUMENTS;
   else env.ARGUMENTS = message;
-  const result = Bun.spawnSync([process.execPath, '--no-env-file', '-e', parseArgsBody()], {
+  const result = Bun.spawnSync([process.execPath, '--no-env-file', '-e', BODY], {
     cwd: REPO,
     env,
     stdout: 'pipe',
