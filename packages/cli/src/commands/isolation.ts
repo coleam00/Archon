@@ -535,16 +535,20 @@ function reportCompletionResult(
   return 'completed';
 }
 
+class CompletionRefusal extends Error {}
+
 async function resolveCompletionEnvironment(branch: string): Promise<CompletionEnvironment | null> {
   const matches = (await isolationDb.listActive()).filter(
     candidate => candidate.branch_name === branch
   );
   if (matches.length > 1) {
-    throw new Error('multiple active environments match this branch; refusing ambiguous deletion');
+    throw new CompletionRefusal(
+      'multiple active environments match this branch; refusing ambiguous deletion'
+    );
   }
   const selected = matches[0];
   if (selected && selected.provider !== 'worktree') {
-    throw new Error('not a worktree environment');
+    throw new CompletionRefusal('not a worktree environment');
   }
   const env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
   // Hydration adds codebase fields; legacy registration identity compares the whole row.
@@ -554,7 +558,7 @@ async function resolveCompletionEnvironment(branch: string): Promise<CompletionE
     codebase_name: env?.codebase_name,
   };
   if (env && observed && !sameWorktreeRegistration(env, observed)) {
-    throw new Error('environment changed during lookup; refusing ambiguous deletion');
+    throw new CompletionRefusal('environment changed during lookup; refusing ambiguous deletion');
   }
   return env;
 }
@@ -568,6 +572,10 @@ async function completeBranch(
     env = await resolveCompletionEnvironment(branch);
   } catch (error) {
     const err = error as Error;
+    if (err instanceof CompletionRefusal) {
+      console.error(`  Failed: ${branch} — ${err.message}`);
+      return 'failed';
+    }
     getLog().error({ err, branch }, 'isolation.lookup_failed');
     console.error(`  Failed: ${branch} — DB lookup error: ${err.message}`);
     return 'failed';

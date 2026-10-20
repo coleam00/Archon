@@ -296,7 +296,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(mockFindActiveByBranchName).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('multiple active environments')
+      '  Failed: feature-branch — multiple active environments match this branch; refusing ambiguous deletion'
     );
   });
 
@@ -319,7 +319,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(mockWorktreeExists).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('environment changed during lookup')
+      '  Failed: feature-branch — environment changed during lookup; refusing ambiguous deletion'
     );
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
@@ -357,7 +357,7 @@ describe('isolationCompleteCommand', () => {
       expect(mockLoadRepoConfig).not.toHaveBeenCalled();
       expect(mockGetUniqueCommitCount).not.toHaveBeenCalled();
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('environment changed during lookup')
+        '  Failed: feature-branch — environment changed during lookup; refusing ambiguous deletion'
       );
       expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
     }
@@ -401,7 +401,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('not a worktree environment')
+      '  Failed: feature-branch — not a worktree environment'
     );
   });
 
