@@ -723,25 +723,33 @@ describe('completed run worktree release', () => {
     }
   );
 
-  test.each(['published', 'unavailable'] as const)(
-    'completion inspects every push destination: %s',
-    async outcome => {
+  test.each(
+    ['published', 'unavailable'].flatMap(outcome =>
+      ['pushurls', 'alias-pushurl'].map(configuration => ({ outcome, configuration }))
+    )
+  )(
+    'completion inspects every push destination (outcome=$outcome, configuration=$configuration)',
+    async ({ outcome, configuration }) => {
       const empty = join(root, 'empty.git');
-      const destination = join(root, 'push=one.git ');
+      const destination = join(
+        root,
+        process.platform === 'win32' ? 'push= one.git' : 'push=one.git '
+      );
       await git(root, 'init', '--bare', '-q', empty);
       await git(root, 'init', '--bare', '-q', destination);
       await git(repo, 'push', '-q', destination, `HEAD:refs/heads/${env.branch_name}`);
       await git(repo, 'remote', 'set-url', '--push', 'upstream', empty);
-      await git(
-        repo,
-        'remote',
-        'set-url',
-        '--add',
-        '--push',
-        'upstream',
-        outcome === 'published' ? destination : join(root, 'missing.git')
+      const checked = outcome === 'published' ? destination : join(root, 'missing.git');
+      if (configuration === 'alias-pushurl') {
+        await git(repo, 'config', '--unset-all', 'remote.upstream.url');
+        await git(repo, 'config', `url.${checked}.pushInsteadOf`, 'upstream');
+      } else {
+        await git(repo, 'remote', 'set-url', '--add', '--push', 'upstream', checked);
+      }
+      expect(await git(repo, 'remote', 'get-url', '--push', '--all', 'upstream')).toBe(
+        `${empty}\n${checked}`.trim()
       );
-      expect(await git(repo, 'ls-remote', 'upstream', `refs/heads/${env.branch_name}`)).toBe('');
+      expect(await git(repo, 'ls-remote', empty, `refs/heads/${env.branch_name}`)).toBe('');
       expect(await assess()).toMatchObject({
         disposition: 'retained',
         reason: outcome === 'published' ? 'published_branch' : 'check_failed',

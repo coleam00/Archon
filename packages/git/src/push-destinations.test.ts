@@ -25,6 +25,47 @@ const cases: { name: string; settings: Setting[] }[] = [
       [`url.destination:.${kind}`, 'origin'],
     ] satisfies Setting[],
   })),
+  ...(['insteadOf', 'pushInsteadOf'] as const).flatMap(kind =>
+    [false, true].map(reset => ({
+      name: `remote-name ${kind} alias with explicit pushurls (reset=${reset})`,
+      settings: [
+        ['remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+        ...(reset
+          ? ([
+              ['remote.origin.url', 'old'],
+              ['remote.origin.url', ''],
+            ] satisfies Setting[])
+          : []),
+        ['remote.origin.pushurl', 'explicit:'],
+        ['remote.origin.pushurl', 'second:'],
+        [`url.destination:.${kind}`, 'origin'],
+        ['url.rewritten:.insteadOf', 'explicit:'],
+      ] satisfies Setting[],
+    }))
+  ),
+  {
+    name: 'remote-name alias with empty generated push URL and explicit pushurl',
+    settings: [
+      ['remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+      ['remote.origin.pushurl', 'explicit:'],
+      ['url..pushInsteadOf', 'origin'],
+    ],
+  },
+  {
+    name: 'remote-name fallback without rewrite keeps only explicit pushurl',
+    settings: [
+      ['remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+      ['remote.origin.pushurl', 'explicit:'],
+    ],
+  },
+  {
+    name: 'configured fetch URL suppresses generated pushInsteadOf with explicit pushurl',
+    settings: [
+      ['remote.origin.url', 'source:'],
+      ['remote.origin.pushurl', 'explicit:'],
+      ['url.generated:.pushInsteadOf', 'source:'],
+    ],
+  },
   {
     name: 'remote-name fallback after URL reset',
     settings: [
@@ -45,6 +86,15 @@ const cases: { name: string; settings: Setting[] }[] = [
     settings: [
       ['remote.origin.url', 'source:'],
       ['remote.origin.url', 'other:'],
+      ['url..pushInsteadOf', 'source:'],
+      ['url.destination:.pushInsteadOf', 'other:'],
+    ],
+  },
+  {
+    name: 'empty generated push URL resets preceding generated destinations',
+    settings: [
+      ['remote.origin.url', 'other:'],
+      ['remote.origin.url', 'source:'],
       ['url..pushInsteadOf', 'source:'],
       ['url.destination:.pushInsteadOf', 'other:'],
     ],

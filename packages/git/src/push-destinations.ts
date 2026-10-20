@@ -18,20 +18,22 @@ export async function resolvePushDestinations(repoPath: string, remote: string):
     });
   const urls = configuredUrls(settings, `remote.${remote}.url`);
   const pushUrls = configuredUrls(settings, `remote.${remote}.pushurl`);
-  if (!urls.length) urls.push(remote);
   const insteadOf = configuredRewrites(settings, '.insteadof');
   const pushInsteadOf = configuredRewrites(settings, '.pushinsteadof');
-  // Git applies insteadOf to explicit pushurls, but pushInsteadOf to original fallback URLs.
-  // Both resolution and newline validation must use this same NUL-delimited snapshot.
-  const pushed = urls.flatMap(url => {
+  const destinations = pushUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
+  // Git adds the remote-name fallback after rewriting configured URLs, so its
+  // generated push URL can append to (or, when empty, reset) explicit pushurls.
+  const aliasSources = urls.length ? (pushUrls.length ? [] : urls) : [remote];
+  for (const url of aliasSources) {
     const rewritten = rewriteUrl(url, pushInsteadOf);
-    return rewritten ? [rewritten] : [];
-  });
-  const destinations = pushUrls.length
-    ? pushUrls.map(url => rewriteUrl(url, insteadOf) ?? url)
-    : pushed.length
-      ? pushed
-      : urls.map(url => rewriteUrl(url, insteadOf) ?? url);
+    if (rewritten === undefined) continue;
+    if (rewritten) destinations.push(rewritten);
+    else destinations.length = 0;
+  }
+  if (!destinations.length) {
+    for (const url of urls.length ? urls : [remote])
+      destinations.push(rewriteUrl(url, insteadOf) ?? url);
+  }
   return destinations;
 }
 

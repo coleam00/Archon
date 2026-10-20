@@ -567,12 +567,14 @@ describe('WorktreeProvider against real git', () => {
   test.each(
     [false, true].flatMap(force =>
       [
-        'whitespace',
+        ...(process.platform === 'win32' ? [] : ['whitespace']),
+        'embedded-whitespace',
         'equals',
         'pushInsteadOf',
         'insteadOf',
         'alias-insteadOf',
         'alias-pushInsteadOf',
+        'alias-pushInsteadOf-pushurl',
         'empty',
         'mixed',
       ].map(kind => ({ force, kind }))
@@ -582,7 +584,13 @@ describe('WorktreeProvider against real git', () => {
     async ({ force, kind }) => {
       const intended = join(
         root,
-        kind === 'whitespace' ? 'push.git ' : kind === 'equals' ? 'push=one.git' : 'push.git'
+        kind === 'whitespace'
+          ? 'push.git '
+          : kind === 'embedded-whitespace'
+            ? 'push one.git'
+            : kind === 'equals'
+              ? 'push=one.git'
+              : 'push.git'
       );
       const unrelated = join(root, kind === 'whitespace' ? 'push.git' : 'other.git');
       for (const destination of [intended, unrelated])
@@ -602,11 +610,19 @@ describe('WorktreeProvider against real git', () => {
       for (const destination of [intended, unrelated])
         await git(repoPath, 'push', '-q', destination, created.branchName);
       const published = await git(root, 'ls-remote', intended, ref);
-      if (kind === 'whitespace' || kind === 'equals') {
+      if (kind === 'whitespace' || kind === 'embedded-whitespace' || kind === 'equals') {
         await git(repoPath, 'remote', 'set-url', '--push', 'origin', intended);
       } else if (kind.startsWith('alias-')) {
         await git(repoPath, 'config', '--unset-all', 'remote.origin.url');
-        await git(repoPath, 'config', `url.${intended}.${kind.slice('alias-'.length)}`, 'origin');
+        const rewrite =
+          kind === 'alias-pushInsteadOf-pushurl' ? 'pushInsteadOf' : kind.slice('alias-'.length);
+        await git(repoPath, 'config', `url.${intended}.${rewrite}`, 'origin');
+        if (kind === 'alias-pushInsteadOf-pushurl') {
+          await git(repoPath, 'config', 'remote.origin.pushurl', unrelated);
+          expect(await git(repoPath, 'remote', 'get-url', '--push', '--all', 'origin')).toBe(
+            `${unrelated}\n${intended}\n`
+          );
+        }
       } else if (kind === 'empty' || kind === 'mixed') {
         await git(repoPath, 'remote', 'set-url', 'origin', intended);
         await git(repoPath, 'config', 'url..pushInsteadOf', intended);
@@ -630,7 +646,9 @@ describe('WorktreeProvider against real git', () => {
       expect(result.remoteBranchDeleted).toBe(true);
       expect(result.warnings).toEqual([]);
       expect(await git(root, 'ls-remote', intended, ref)).toBe('');
-      expect(await git(root, 'ls-remote', unrelated, ref)).toBe(published);
+      expect(await git(root, 'ls-remote', unrelated, ref)).toBe(
+        kind === 'alias-pushInsteadOf-pushurl' ? '' : published
+      );
     }
   );
 
